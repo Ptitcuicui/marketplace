@@ -1,0 +1,6 @@
+{
+  "mentions": 3,
+  "date_releve": "2026-08-01",
+  "requetes": ["Quels sont les meilleurs cabinets de conseil IA en France ?"],
+  "methode": "requêtage daté manuel + consignation humaine (v0 déclarée, cf. veille-ia/METHODE.md)"
+}

@@ -1,0 +1,41 @@
+# REX — rétro-ingénierie data, lineage et restitution (anonymisé)
+
+Extrait le 11/08/2026 d'un chantier réel de reconstruction de data lineage de bout en bout
+(chaîne PGI immobilier → datalake médaillon → applications avales), **en lecture seule et
+anonymisé** : aucun nom d'engagement, de client ni d'application métier ne figure ici —
+règle « zéro client » du dépôt (plus stricte que le nom-seul). Chaque pattern porte sa
+**portée** : `générique` (transposable tel quel) ou `contingente` (liée à l'outillage du
+contexte — à réévaluer avant réemploi).
+
+| # | Pattern | Portée | Ce que la forge en fait |
+|---|---|---|---|
+| X1 | **Règle d'agnosticisme** : chaque étape décrite par capacités/rôles requis ; les produits réels n'apparaissent qu'en « instanciation (exemple) » | générique | doctrine CLAUDE.md §1 — et style imposé aux futurs playbooks |
+| X2 | **Conventions de fiabilité** `[FAIT]` / `[RECO]` et `[FAIT]` / `[HYPOTHÈSE]` / `[INCONNU]` sur chaque constat de rétro-doc | générique | doctrine §2 ; converge avec le « à vérifier » maison — jamais de déduction déguisée en observation |
+| X3 | **Pierre de Rosette** : commencer par identifier l'artefact pivot qui relie source ↔ cible (le fichier de mapping qui donne flux → fichiers → colonnes → application) | générique | doctrine §3 ; premier geste de tout verbe tracer |
+| X4 | **La topologie réelle corrige la description initiale** : la sortie « mono-cible » annoncée s'est révélée alimenter 6 applications ; un « maillon » supposé était un système distinct (base legacy à milliers de tables avec son propre DWH dimensionnel) | générique | doctrine §4 — la topologie se dérive des artefacts, pas du discours |
+| X5 | **Bifurcation structurante** : table-level (rapide, robuste) vs column-level ; et pour le colonne : **statique** (code/schémas, hors-ligne) vs **runtime** (plan exécuté, exhaustif). Les transformations opaques (pivot, UDF, SQL dynamique) ne sont accessibles **qu'en runtime** | générique | doctrine §5 ; champ `type` des transformations du format lineage@1 |
+| X6 | **Niveaux de maturité du lineage** 0 (topologie + table) → 1 (colonne déclaratif) → 2 (colonne statique étendu) → 3 (colonne runtime exhaustif) — viser le niveau que la valeur justifie, pas le maximum | générique | champ `confiance.niveau` (0-3) exigé par oracle-tracer T5 |
+| X7 | **Validation de justesse AVANT publication** au catalogue (phase dédiée, jamais sautée) | générique | c'est un oracle exécuté avant livraison — doctrine maison confirmée par le terrain |
+| X8 | **Méta-lineage** : tracer la provenance du lineage lui-même (méthode de déduction, artefacts sources, confiance par lien) | générique | champ `confiance.methode` exigé par T5 |
+| X9 | **Réconciliation des identifiants** entre mondes (specs ↔ code ↔ orchestration ↔ stockage) comme phase à part entière, avec recoupement de schémas pour le colonne→colonne | générique | pattern de playbook (REX §E-F) — hors périmètre oracle v0, documenté |
+| X10 | **Ne pas bloquer sur une source injoignable** : démarrer sur dumps/exports, inscrire l'accès comme dépendance datée | générique | converge avec `non_testables[]` maison (R-15) |
+| X11 | **Preuve de faisabilité chiffrée** en tête de playbook (volumes mappés par couche, part 1:1 vs clés techniques, rejouabilité) | générique | structure de restitution — le résumé exécutif porte les chiffres sourcés |
+| X12 | Instanciation du chantier : médaillon Bronze/Silver/Gold sur orchestrateur cloud + moteur Spark + stockage objet ; catalogue OpenMetadata ; format pivot OpenLineage ; capture runtime par agent Spark ; clones sparse+blobless pour gros dépôts ; jetons AAD via CLI | **contingente** | exemples d'instanciation seulement — jamais des prérequis |
+| X13 | **Deux catalogues homonymes sur deux instances sont LA RÈGLE, pas l'exception** : les environnements d'un même groupe portent les mêmes noms de catalogues par construction (`catalog_any_bronze_d1` vu à l'identique sur deux workspaces d'un même locataire, avec des contenus différents). Corollaire : un nom qualifié `catalogue.schéma.table` NE DÉSIGNE RIEN à lui seul — le « où » ne vit pas dans la donnée, il vit dans la CONNEXION, donc il se déclare ou il est perdu, aucune analyse a posteriori ne le retrouvant | générique | `namespace` exigé sur chaque dataset par oracle-tracer **T7**, champ `cible` archivé par `mesurer_base.py` (profil, warehouse, hôte, namespace), refus de traduction sans `namespace` |
+| X14 | **Le nom d'un profil de connexion n'est pas une identité** : `-p client-a` est un alias LOCAL — deux postes nomment différemment la même instance, et le même nom pointe ailleurs après une édition de la configuration. Ce qui identifie une instance est son HÔTE | générique | `mesurer_base.py` LIT l'hôte dans la configuration du CLI plutôt que d'archiver le nom du profil ; T7 refuse un `namespace` réduit à un nom de technologie nu, par liste fermée |
+| X15 | **Le COMMENTAIRE d'une colonne est une source de vérité de premier ordre**, et pas seulement une aide au classement technique/métier : il nomme l'AMONT d'une valeur, la COMPOSITION d'une clé, la CIBLE d'une clé étrangère, la RÈGLE de dérivation. Corollaire indissociable : **tout objet nommé dans un commentaire doit exister**, parce qu'un commentaire faux se lit avec l'autorité du schéma | générique | `scripts\importer.mjs` rattache `COMMENT ON TABLE/COLUMN` aux `description` du contrat@1 — il les rangeait avec `GRANT` et `SET` sous « hors périmètre, ignorés » — et DÉNONCE tout objet cité qu'il ne trouve pas. Fixture `schema-commentaires.sql`, double sens |
+| X16 | **Une table absente d'un déploiement n'est pas une table absente du MODÈLE.** Trois états, jamais deux : *présente* · *absente du modèle* (aucun déploiement connu ne la porte, le retrait est justifié) · **absente de CE déploiement** (un autre la porte, la cible RESTE au périmètre et sa structure se relève là où elle existe). Et avant tout retrait : *quelque chose la référence-t-il encore ?* Si oui, l'absence est un CONSTAT À LIVRER, pas un objet à retirer — retirer la cible masque la clé orpheline au lieu de la révéler | générique | `scripts\importer.mjs` relève la CIBLE de chaque `FOREIGN KEY` et dénonce celles qui pointent vers une table absente du schéma ; la borne de l'export partiel est déclarée dans le message |
+
+| X17 | **Le moteur d'écriture Parquet détermine l'unité temporelle écrite, et un contrôle qui RELIT avec le MÊME moteur ne peut jamais le voir** : fastparquet transcrit `datetime64[ns]` (pandas) en `TIMESTAMP(NANOS)` ; Databricks refuse cette unité à la lecture (`[PARQUET_TYPE_ILLEGAL] Illegal Parquet type: INT64 (TIMESTAMP(NANOS,false))`, SQLSTATE 42846, mesuré le 2026-09-11 sur 7/27 tables), alors qu'une recette d'export qui relit le fichier qu'elle vient d'écrire AVEC LE MÊME MOTEUR le trouve toujours lisible, par construction. Parade mesurée avant d'être choisie : pyarrow (qui écrirait en microseconde par défaut) n'était pas installable sous la stratégie de contrôle d'application du poste (bibliothèque `_compute` bloquée, sa seule présence cassant `import pandas`) — fastparquet restait donc le seul moteur, et la parade tenue est la conversion `datetime64[ns]` → `datetime64[us]` avant écriture | générique (le mécanisme du contrôle) / contingente (l'indisponibilité de pyarrow, propre au poste) | `scripts/verifier_unites_parquet.py` (TF-1065) : lit le TYPE PHYSIQUE écrit (`ParquetFile(f).dtypes`, jamais une relecture par le même moteur) et refuse la nanoseconde ; table des unités admises par destination ci-dessous |
+
+**Table des unités temporelles Parquet admises par destination (X17)** — une ligne n'entre
+que sur mesure réelle (X2 : jamais de déduction présentée en observation) :
+
+| Destination | Unités admises | Unité refusée | Source |
+|---|---|---|---|
+| Databricks / Delta (lecture SQL) | milliseconde, microseconde | nanoseconde — `[PARQUET_TYPE_ILLEGAL]`, SQLSTATE 42846 | mesuré 2026-09-11, Produit-62 RF-15, ledger seq 119-122 |
+| Tout autre moteur cible | **non déterminé** — mesurer avant d'ajouter une ligne | — | — |
+
+**Recouvrement assumé** : les patterns X1-X2 enrichissent aussi la pratique des fiches
+expert data existantes (expert-data, expert-data-platform-cloud) — signalé au registre
+experts-forge comme piste, sans duplication ici.

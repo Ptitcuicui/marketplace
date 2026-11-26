@@ -12,10 +12,18 @@ doctrine complète (gate R-33 bis, portes M de la MEP) est dans le README de la 
 
 ## 1. Trouver la forge (jamais simuler)
 
+Dans cet ordre : la forge du poste (`$FORGE_ROOT`, sinon `~/factory`), puis la copie livrée
+avec la mallette `factory-audit-securite`.
+
 ```bash
 R="${FORGE_ROOT:-$HOME/factory}"; F="$R/factory-forge-websec"
+[ -f "$F/README.md" ] || F="${CLAUDE_PLUGIN_ROOT}/forges/factory-forge-websec"
 test -f "$F/README.md" && echo "forge présente : $F" || echo "forge absente"
 ```
+
+Hors Claude Code, quand `${CLAUDE_PLUGIN_ROOT}` n'est pas remplacé, la copie livrée est dans
+`../../forges/factory-forge-websec` à partir du dossier de ce skill : la chercher là avant de
+conclure à son absence.
 
 Forge absente : le dire, proposer la phrase d'usage de la Factory
 (`Utilise https://github.com/Ptitcuicui/factory pour ce projet`). Aucun verdict inventé.

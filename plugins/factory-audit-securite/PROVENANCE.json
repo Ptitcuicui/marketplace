@@ -7,16 +7,26 @@
   "securite-web": {
     "depot": "factory-forge-websec",
     "chemin": "skills/securite-web",
-    "commit": "8635b45b82c4d3c93076be0374ffcf625aa15353"
+    "commit": "b49b4e049b76eb3b6d23b6911b153d83797e53d8"
   },
   "securite-agentique": {
     "depot": "factory-forge-agents-security",
     "chemin": "skills/securite-agentique",
-    "commit": "5779d1c3a91d7ef1c71327dea9748e387de3fedb"
+    "commit": "675acad00047121a4c884053a890fb491c6989a7"
   },
   "audit-qualite-tests": {
     "depot": "factory-forge-tests",
     "chemin": "skills/audit-qualite-tests",
     "commit": "7397e481edb2379cdbd84a555080e0c3f167c231"
+  },
+  "forge:factory-forge-agents-security": {
+    "depot": "factory-forge-agents-security",
+    "chemin": ".",
+    "commit": "675acad00047121a4c884053a890fb491c6989a7"
+  },
+  "forge:factory-forge-websec": {
+    "depot": "factory-forge-websec",
+    "chemin": ".",
+    "commit": "b49b4e049b76eb3b6d23b6911b153d83797e53d8"
   }
 }

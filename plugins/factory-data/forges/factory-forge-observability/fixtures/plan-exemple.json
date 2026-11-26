@@ -1,0 +1,38 @@
+{
+  "format": "forge-observability/plan@1",
+  "nom": "exemple-demo",
+  "sondes": [
+    {
+      "nom": "cpu-service-x",
+      "type": "commande",
+      "cadence": "horaire",
+      "commande": ["node", "fixtures/commande-metrique.mjs", "fixtures/etat/cpu.json"],
+      "champ_valeur": "valeur",
+      "seuils": { "max": 90 }
+    },
+    {
+      "nom": "qualite-data-clients",
+      "type": "oracle_externe",
+      "cadence": "quotidienne",
+      "commande": ["node", "fixtures/faux-oracle-data.mjs", "fixtures/etat/oracle.json", "--json-only"]
+    },
+    {
+      "nom": "mutants-forge-tests",
+      "type": "rapport_json",
+      "cadence": "par_commit",
+      "fichier": "fixtures/etat/rapport-tests.json",
+      "champs": ["resume.mutants_survivants", "resume.couverture_pct"],
+      "seuils": {
+        "resume.mutants_survivants": { "max_delta": 3 },
+        "resume.couverture_pct": { "min": 70 }
+      }
+    },
+    {
+      "nom": "citations-ia-marque",
+      "type": "manuel",
+      "cadence": "hebdomadaire",
+      "fichier": "fixtures/etat/veille-manuel.json",
+      "champ_valeur": "mentions"
+    }
+  ]
+}

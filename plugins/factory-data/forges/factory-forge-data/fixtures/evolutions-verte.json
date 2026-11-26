@@ -1,0 +1,457 @@
+{
+  "format": "forge-data/evolutions@1",
+  "id": "evolutions_silver_2026-09-08",
+  "couche": "silver",
+  "date": "2026-09-08",
+  "origine": {
+    "verbe": "projeter-evolutions",
+    "cible": "fixtures/evolutions-cible.sql",
+    "existant": "fixtures/evolutions-existant.sql",
+    "lineage": "fixtures/lineage-verte.json"
+  },
+  "comptes": {
+    "tables": 3,
+    "colonnes": 12,
+    "par_evolution": {
+      "inchangee": 6,
+      "colonne_corrigee": 1,
+      "colonne_ajoutee": 5
+    },
+    "tables_par_evolution": {
+      "table_completee": 1,
+      "table_deplacee": 1,
+      "table_creee": 1
+    },
+    "provenance_non_documentee": 2,
+    "par_provenance": {
+      "objets_resolus": 10,
+      "non_documentee": 2
+    },
+    "arbre_par_niveau": {
+      "schema": 2,
+      "table": 3,
+      "colonne": 12
+    }
+  },
+  "tables": [
+    {
+      "table": "catalog_any_silver_d1.ventes.ventes",
+      "evolution": "table_completee",
+      "origine": "catalog_any_silver_d1.ventes.ventes",
+      "colonnes": {
+        "total": 5,
+        "ajoutees": 1,
+        "corrigees": 1,
+        "inchangees": 3
+      }
+    },
+    {
+      "table": "catalog_any_silver_d1.ventes.clients",
+      "evolution": "table_deplacee",
+      "origine": "catalog_any_bronze_d1.brut.clients",
+      "colonnes": {
+        "total": 4,
+        "ajoutees": 1,
+        "corrigees": 0,
+        "inchangees": 3
+      }
+    },
+    {
+      "table": "servi.ventes_mensuelles",
+      "evolution": "table_creee",
+      "origine": null,
+      "colonnes": {
+        "total": 3,
+        "ajoutees": 3,
+        "corrigees": 0,
+        "inchangees": 0
+      }
+    }
+  ],
+  "arbre": [
+    {
+      "niveau": "schema",
+      "objet": "catalog_any_silver_d1.ventes",
+      "parent": null,
+      "statut": "schema_complete",
+      "statut_agrege": {
+        "table_completee": 1,
+        "table_deplacee": 1
+      }
+    },
+    {
+      "niveau": "table",
+      "objet": "catalog_any_silver_d1.ventes.ventes",
+      "parent": "catalog_any_silver_d1.ventes",
+      "statut": "table_completee",
+      "statut_agrege": {
+        "inchangee": 3,
+        "colonne_corrigee": 1,
+        "colonne_ajoutee": 1
+      }
+    },
+    {
+      "niveau": "colonne",
+      "objet": "catalog_any_silver_d1.ventes.ventes.id_commande",
+      "parent": "catalog_any_silver_d1.ventes.ventes",
+      "statut": "inchangee",
+      "statut_agrege": null
+    },
+    {
+      "niveau": "colonne",
+      "objet": "catalog_any_silver_d1.ventes.ventes.id_client",
+      "parent": "catalog_any_silver_d1.ventes.ventes",
+      "statut": "inchangee",
+      "statut_agrege": null
+    },
+    {
+      "niveau": "colonne",
+      "objet": "catalog_any_silver_d1.ventes.ventes.montant",
+      "parent": "catalog_any_silver_d1.ventes.ventes",
+      "statut": "colonne_corrigee",
+      "statut_agrege": null
+    },
+    {
+      "niveau": "colonne",
+      "objet": "catalog_any_silver_d1.ventes.ventes.pays",
+      "parent": "catalog_any_silver_d1.ventes.ventes",
+      "statut": "inchangee",
+      "statut_agrege": null
+    },
+    {
+      "niveau": "colonne",
+      "objet": "catalog_any_silver_d1.ventes.ventes.date_maj",
+      "parent": "catalog_any_silver_d1.ventes.ventes",
+      "statut": "colonne_ajoutee",
+      "statut_agrege": null
+    },
+    {
+      "niveau": "table",
+      "objet": "catalog_any_silver_d1.ventes.clients",
+      "parent": "catalog_any_silver_d1.ventes",
+      "statut": "table_deplacee",
+      "statut_agrege": {
+        "inchangee": 3,
+        "colonne_ajoutee": 1
+      }
+    },
+    {
+      "niveau": "colonne",
+      "objet": "catalog_any_silver_d1.ventes.clients.id_client",
+      "parent": "catalog_any_silver_d1.ventes.clients",
+      "statut": "inchangee",
+      "statut_agrege": null
+    },
+    {
+      "niveau": "colonne",
+      "objet": "catalog_any_silver_d1.ventes.clients.statut",
+      "parent": "catalog_any_silver_d1.ventes.clients",
+      "statut": "inchangee",
+      "statut_agrege": null
+    },
+    {
+      "niveau": "colonne",
+      "objet": "catalog_any_silver_d1.ventes.clients.remise",
+      "parent": "catalog_any_silver_d1.ventes.clients",
+      "statut": "inchangee",
+      "statut_agrege": null
+    },
+    {
+      "niveau": "colonne",
+      "objet": "catalog_any_silver_d1.ventes.clients.actif",
+      "parent": "catalog_any_silver_d1.ventes.clients",
+      "statut": "colonne_ajoutee",
+      "statut_agrege": null
+    },
+    {
+      "niveau": "schema",
+      "objet": "servi",
+      "parent": null,
+      "statut": "schema_cree",
+      "statut_agrege": {
+        "table_creee": 1
+      }
+    },
+    {
+      "niveau": "table",
+      "objet": "servi.ventes_mensuelles",
+      "parent": "servi",
+      "statut": "table_creee",
+      "statut_agrege": {
+        "colonne_ajoutee": 3
+      }
+    },
+    {
+      "niveau": "colonne",
+      "objet": "servi.ventes_mensuelles.mois",
+      "parent": "servi.ventes_mensuelles",
+      "statut": "colonne_ajoutee",
+      "statut_agrege": null
+    },
+    {
+      "niveau": "colonne",
+      "objet": "servi.ventes_mensuelles.pays",
+      "parent": "servi.ventes_mensuelles",
+      "statut": "colonne_ajoutee",
+      "statut_agrege": null
+    },
+    {
+      "niveau": "colonne",
+      "objet": "servi.ventes_mensuelles.total_ht",
+      "parent": "servi.ventes_mensuelles",
+      "statut": "colonne_ajoutee",
+      "statut_agrege": null
+    }
+  ],
+  "lignes": [
+    {
+      "table": "catalog_any_silver_d1.ventes.ventes",
+      "colonne": "id_commande",
+      "type": "BIGINT",
+      "evolution": "inchangee",
+      "provenance": {
+        "type": "objets_resolus",
+        "objets": [
+          {
+            "couche": "silver",
+            "catalogue": "catalog_any_silver_d1",
+            "schema": "ventes",
+            "table": "ventes",
+            "colonne": "id_commande",
+            "explication": "Identifiant de commande, repris du systeme amont de caisse",
+            "source_de_l_explication": "commentaire_ddl"
+          }
+        ]
+      }
+    },
+    {
+      "table": "catalog_any_silver_d1.ventes.ventes",
+      "colonne": "id_client",
+      "type": "BIGINT",
+      "evolution": "inchangee",
+      "provenance": {
+        "type": "objets_resolus",
+        "objets": [
+          {
+            "couche": "silver",
+            "catalogue": "catalog_any_silver_d1",
+            "schema": "ventes",
+            "table": "ventes",
+            "colonne": "id_client",
+            "explication": "colonne reprise telle quelle de catalog_any_silver_d1.ventes.ventes, même nom et même type",
+            "source_de_l_explication": "couche_existante"
+          }
+        ]
+      }
+    },
+    {
+      "table": "catalog_any_silver_d1.ventes.ventes",
+      "colonne": "montant",
+      "type": "DECIMAL(10,2)",
+      "evolution": "colonne_corrigee",
+      "provenance": {
+        "type": "objets_resolus",
+        "objets": [
+          {
+            "couche": "silver",
+            "catalogue": "catalog_any_silver_d1",
+            "schema": "ventes",
+            "table": "ventes",
+            "colonne": "montant",
+            "explication": "Montant TTC en euros, elargi de DECIMAL(8,2)",
+            "source_de_l_explication": "commentaire_ddl"
+          }
+        ]
+      }
+    },
+    {
+      "table": "catalog_any_silver_d1.ventes.ventes",
+      "colonne": "pays",
+      "type": "STRING",
+      "evolution": "inchangee",
+      "provenance": {
+        "type": "objets_resolus",
+        "objets": [
+          {
+            "couche": "silver",
+            "catalogue": "catalog_any_silver_d1",
+            "schema": "ventes",
+            "table": "ventes",
+            "colonne": "pays",
+            "explication": "colonne reprise telle quelle de catalog_any_silver_d1.ventes.ventes, même nom et même type",
+            "source_de_l_explication": "couche_existante"
+          }
+        ]
+      }
+    },
+    {
+      "table": "catalog_any_silver_d1.ventes.ventes",
+      "colonne": "date_maj",
+      "type": "TIMESTAMP_NTZ",
+      "evolution": "colonne_ajoutee",
+      "provenance": {
+        "type": "non_documentee",
+        "explication": "aucun commentaire DDL sur cette colonne, absente de l'état existant, et aucune sortie de lineage déclarée pour cette table",
+        "source_de_l_explication": "aucune"
+      }
+    },
+    {
+      "table": "catalog_any_silver_d1.ventes.clients",
+      "colonne": "id_client",
+      "type": "BIGINT",
+      "evolution": "inchangee",
+      "provenance": {
+        "type": "objets_resolus",
+        "objets": [
+          {
+            "couche": "amont",
+            "catalogue": "catalog_any_bronze_d1",
+            "schema": "brut",
+            "table": "clients",
+            "colonne": "id_client",
+            "explication": "colonne reprise telle quelle de catalog_any_bronze_d1.brut.clients, même nom et même type",
+            "source_de_l_explication": "couche_existante"
+          }
+        ]
+      }
+    },
+    {
+      "table": "catalog_any_silver_d1.ventes.clients",
+      "colonne": "statut",
+      "type": "STRING",
+      "evolution": "inchangee",
+      "provenance": {
+        "type": "objets_resolus",
+        "objets": [
+          {
+            "couche": "amont",
+            "catalogue": "catalog_any_bronze_d1",
+            "schema": "brut",
+            "table": "clients",
+            "colonne": "statut",
+            "explication": "Statut du client : actif, inactif ou suspendu",
+            "source_de_l_explication": "commentaire_ddl"
+          }
+        ]
+      }
+    },
+    {
+      "table": "catalog_any_silver_d1.ventes.clients",
+      "colonne": "remise",
+      "type": "DECIMAL(4,2)",
+      "evolution": "inchangee",
+      "provenance": {
+        "type": "objets_resolus",
+        "objets": [
+          {
+            "couche": "amont",
+            "catalogue": "catalog_any_bronze_d1",
+            "schema": "brut",
+            "table": "clients",
+            "colonne": "remise",
+            "explication": "colonne reprise telle quelle de catalog_any_bronze_d1.brut.clients, même nom et même type",
+            "source_de_l_explication": "couche_existante"
+          }
+        ]
+      }
+    },
+    {
+      "table": "catalog_any_silver_d1.ventes.clients",
+      "colonne": "actif",
+      "type": "BOOLEAN",
+      "evolution": "colonne_ajoutee",
+      "provenance": {
+        "type": "non_documentee",
+        "explication": "aucun commentaire DDL sur cette colonne, absente de l'état existant, et aucune sortie de lineage déclarée pour cette table",
+        "source_de_l_explication": "aucune"
+      }
+    },
+    {
+      "table": "servi.ventes_mensuelles",
+      "colonne": "mois",
+      "type": "DATE",
+      "evolution": "colonne_ajoutee",
+      "provenance": {
+        "type": "objets_resolus",
+        "objets": [
+          {
+            "couche": "amont",
+            "catalogue": null,
+            "schema": "brut",
+            "table": "exports_pgi",
+            "colonne": null,
+            "explication": "table déclarée en entrée du lineage dont servi.ventes_mensuelles est une sortie",
+            "source_de_l_explication": "mapping"
+          },
+          {
+            "couche": "amont",
+            "catalogue": null,
+            "schema": "referentiel",
+            "table": "transco_produits",
+            "colonne": null,
+            "explication": "table déclarée en entrée du lineage dont servi.ventes_mensuelles est une sortie",
+            "source_de_l_explication": "mapping"
+          }
+        ]
+      }
+    },
+    {
+      "table": "servi.ventes_mensuelles",
+      "colonne": "pays",
+      "type": "STRING",
+      "evolution": "colonne_ajoutee",
+      "provenance": {
+        "type": "objets_resolus",
+        "objets": [
+          {
+            "couche": "amont",
+            "catalogue": null,
+            "schema": "brut",
+            "table": "exports_pgi",
+            "colonne": null,
+            "explication": "table déclarée en entrée du lineage dont servi.ventes_mensuelles est une sortie",
+            "source_de_l_explication": "mapping"
+          },
+          {
+            "couche": "amont",
+            "catalogue": null,
+            "schema": "referentiel",
+            "table": "transco_produits",
+            "colonne": null,
+            "explication": "table déclarée en entrée du lineage dont servi.ventes_mensuelles est une sortie",
+            "source_de_l_explication": "mapping"
+          }
+        ]
+      }
+    },
+    {
+      "table": "servi.ventes_mensuelles",
+      "colonne": "total_ht",
+      "type": "DECIMAL(12,2)",
+      "evolution": "colonne_ajoutee",
+      "provenance": {
+        "type": "objets_resolus",
+        "objets": [
+          {
+            "couche": "amont",
+            "catalogue": null,
+            "schema": "brut",
+            "table": "exports_pgi",
+            "colonne": null,
+            "explication": "table déclarée en entrée du lineage dont servi.ventes_mensuelles est une sortie",
+            "source_de_l_explication": "mapping"
+          },
+          {
+            "couche": "amont",
+            "catalogue": null,
+            "schema": "referentiel",
+            "table": "transco_produits",
+            "colonne": null,
+            "explication": "table déclarée en entrée du lineage dont servi.ventes_mensuelles est une sortie",
+            "source_de_l_explication": "mapping"
+          }
+        ]
+      }
+    }
+  ]
+}

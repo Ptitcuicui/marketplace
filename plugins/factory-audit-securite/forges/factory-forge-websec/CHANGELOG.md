@@ -1,0 +1,584 @@
+# Journal des modifications — factory-forge-websec
+
+La forge n'a pas de numéro de version propre : ses tags `v0.1.0` à `v1.17.0` sont ceux des runs de
+version de l'écosystème, posés par le pilot. Les unités versionnées ici sont les oracles (constante
+`VERSION`, champ `version` de leur sortie) et les référentiels (frontmatter `version`). Ce journal
+commence le 28/10/2026 ; l'historique antérieur se lit dans `git log`.
+
+## 2026-11-16 — `oracle-dast` 0.4.0 : un rapport ZAP à 0 site rend SKIP « rien exploré », plus PASS (TF-2655)
+
+- **Effet** : un rapport dont `site[]` est vide, fourni par `--rapport` ou produit par un balayage, rend `SKIP` `DAST-RIEN-EXPLORE` (exit 2) au
+  lieu de `PASS`. Mesuré le 16/11/2026 sur l'état de départ (0.3.3) : le rapport `{"site": []}` rendait `PASS`, exit 0, « aucune alerte au-delà
+  des seuils ». Le fait d'origine (13/11/2026, chez un produit, 0.3.1, rapporté) : ZAP avait balayé la racine de l'API d'un service (404, aucun
+  lien), terminé en 60 s sur 0 site et 0 alerte. Version mineure : un verdict `PASS` devient `SKIP` pour ce rapport. `wstg-cas.md` passe à
+  0.2.7 (`oracle_dast: 0.4.0`) : aucun cas ni mode changé.
+- **Garde** : `oracles/self-test.mjs`, bloc TF-2655, et `fixtures/dast/rapport-zap-vide.json` : deux rouges (rapport fourni à 0 site, balayage
+  simulé dont ZAP rend ce rapport, 1 lancement) et un vert (un site exploré sans alerte reste `PASS`).
+- **Non fait** : (1) le seuil de requêtes de la décision : le rapport JSON de ZAP ne porte pas le nombre de requêtes, aucune source ne le
+  donne à l'oracle ; (2) le départ d'une API depuis sa définition OpenAPI (`-openapiurl`) : la forme de la commande de ZAP pour chacune des
+  trois voies (image Docker, `zap-baseline.py`, `zap.sh`) n'a pas été éprouvée contre un vrai ZAP, et le mandat n'a pas de champ pour cette
+  définition. Les deux sont dits dans `non_juge` et au README.
+
+## 2026-11-16 — `oracle-dast` 0.3.4 : le jeton de service Cloudflare Access en un seul en-tête n'est accepté que sous « Authorization » (TF-2649)
+
+- **Effet** : le mandat peut déclarer `en_tete_acces.jeton_service_access: true` pour une cible derrière Cloudflare Access. L'oracle refuse alors
+  (`FAIL` `DAST-AUTZ-CHAMPS`, rien n'est lancé) tout nom d'en-tête autre que `Authorization`, comparé sans tenir compte de la casse, et le
+  message dit le nom accepté et la forme de la valeur (objet JSON `{"cf-access-client-id":"…","cf-access-client-secret":"…"}`). Avant, un
+  balayage partait avec `X-<nom>` et Access ne lisait pas le jeton : le produit l'a découvert par un refus de l'API de Cloudflare
+  (« read_service_tokens_from_header must be one of [Authorization] », mesuré le 13/11/2026 chez un produit, rapporté, non rejoué ici).
+  README (tableau des champs et section « Jeton de service Cloudflare Access ») et en-tête de l'oracle le documentent. `wstg-cas.md` passe à
+  0.2.6 (`oracle_dast: 0.3.4`) : aucun cas ni mode changé.
+- **Garde** : `oracles/self-test.mjs`, cas TF-2649 : deux rouges (`X-Produit-84-Access`, `CF-Access-Token`) refusés avec le nom accepté cité,
+  `jeton_service_access` non booléen refusé, et le remède joué (`Authorization` et `authorization` avec une valeur JSON assemblée à
+  l'exécution) qui lance le balayage simulé sans reprendre la valeur au verdict. Mesuré le 16/11/2026 sur l'état de départ : le même mandat
+  avec `X-Produit-84-Access` rendait PASS et lançait ZAP (1 lancement).
+- **Non fait** : la forme de la valeur JSON n'est pas contrôlée (seul le nom l'est, comme la décision l'écrit) ; l'oracle ne devine pas qu'une
+  cible est derrière Access, le mandat le déclare.
+
+## 2026-11-15 — les manifestes de fixtures vulnérables ne sont plus lus par l'hébergeur comme des dépendances (TF-2579, D-220 (a))
+
+- **Effet** : les cinq fichiers des fixtures SCA vulnérables prennent un nom que l'hébergeur ne lit pas, le nom complet suivi de `.fixture`
+  (`package-lock.json.fixture` et son `package.json.fixture`, `requirements.txt.fixture`, `uv.lock.fixture`, `poetry.lock.fixture`). Les 155
+  alertes ouvertes (18 critiques, relevé en lecture rejoué le 15/11/2026, mêmes quatre manifestes) viennent de ces seuls manifestes ; l'hébergeur
+  devrait les clore de lui-même après la publication, à vérifier au relevé suivant (rien n'est fermé ni rejeté de notre côté). `oracle-sca` est
+  inchangé : le self-test recopie chaque fixture sous son vrai nom dans un dossier temporaire (`FXR`), le juge, puis retire le dossier.
+- **Déclaration** : `fixtures/sca/FIXTURES-VULNERABLES.json` nomme, pour chaque fixture, le chemin rangé et le nom rejoué (`rejoue_sous`), et porte la
+  liste des noms que l'hébergeur lit avec sa source (tableau des écosystèmes du graphe de dépendances de GitHub, relevé le 15/11/2026).
+- **Garde** : bloc TF-2539 du self-test, avec un rouge et son remède joué pour chacun des cinq fichiers (la fixture reprend son vrai nom : refusée ;
+  rangée sous `.fixture` : acceptée), un nom rangé qui n'est pas « nom rejoué + `.fixture` », un nom rejoué absent, une liste de noms sans source ;
+  et un contrôle que le rejeu ne se fait jamais dans le dépôt et que les dossiers temporaires sont retirés.
+
+## 2026-11-14 — les alertes de dépendances de l'hébergeur sont toutes des fixtures de l'oracle SCA, déclarées comme telles (TF-2539, part forge-websec)
+
+- **Effet** : l'hébergeur signalait 155 alertes de dépendances ouvertes sur la branche par défaut, dont 18 critiques (relevé en lecture le
+  14/11/2026, `gh api repos/Ptitcuicui/websec/dependabot/alerts --paginate`, rapporté, non rejoué par le self-test). Les 155
+  sont portées par quatre manifestes volontairement vulnérables de `fixtures/sca/` (`npm-vulnerable` : 5, `pip-vulnerable`, `uv-vulnerable`
+  et `poetry-vulnerable` : 50 chacun) ; aucune par un manifeste hors de ce dossier. La forge n'a aucune dépendance réelle, donc aucune
+  mise à jour à faire : monter ces versions retirerait le sens rouge d'`oracle-sca`. `fixtures/sca/FIXTURES-VULNERABLES.json` les déclare
+  (date, motif, épingle, compte relevé par manifeste) et dit que les dépendances réelles sont au nombre de zéro. Aucune alerte n'est fermée
+  chez l'hébergeur : c'est une publication, laissée à la session.
+- **Garde** : `oracles/self-test.mjs`, bloc TF-2539, avec un rouge par défaut : manifeste `*-vulnerable` non déclaré, déclaration sans manifeste,
+  épingle changée (`1.4.2` n'est pas `1.4`), motif vide, date invalide, totaux qui ne s'additionnent pas, dépendance réelle apparue hors
+  `fixtures/sca/` non déclarée (puis acceptée une fois déclarée), dépendance réelle déclarée mais absente. Mesuré le 14/11/2026 : le même bloc
+  rejoué contre l'état d'avant (aucune déclaration) refuse les quatre manifestes.
+
+## 2026-11-14 — `oracle-dast` 0.3.3 : le verdict et le référentiel disent ce que `-silent` retire, les règles bêta de ZAP (TF-2499)
+
+- **Effet** : depuis TF-2477, `-silent` empêche `zap-baseline.py` (`pscanrulesBeta`) et `zap-full-scan.py` (`pscanrulesBeta` et
+  `ascanrulesBeta`) d'installer leurs add-ons bêta depuis le réseau ; la couverture retirée n'était dite ni cas par cas ni au verdict.
+  `wstg-cas.md` (0.2.5, `oracle_dast: 0.3.3`) a une section « Ce que la voie Docker ne joue plus depuis -silent » : une ligne pour chacun
+  des 14 cas confiés à `oracle-dast`, avec son mode, le module bêta non joué et la règle retirée constatée. Une seule règle est constatée
+  retirée, « Source Code Disclosure - File Inclusion » (mesures de TF-2477 du 12 et 13/11/2026, rapportées, non rejouées), rangée sous
+  ATHZ-01 par son nom seulement. Le reste est dit non établi : la liste des règles de `pscanrulesBeta` et d'`ascanrulesBeta` n'a jamais été
+  lue (modules hors de l'image, non téléchargés), et « aucune connue » n'est pas « aucune ». Le verdict consigne
+  `synthese.balayage.regles_beta` (modules non joués selon le mode, `liste_lue: false`, `reactivees_par_le_reseau: false`, renvoi à la
+  section ; `jouees: "indéterminé"` pour un ZAP natif, dont la mise à jour n'est pas coupée). Aucune règle n'est réactivée par le réseau :
+  `-silent` est conservé, et le self-test refuse `-addonupdate` et `-addoninstall` dans la ligne de commande de l'image.
+- **Garde** : `oracles/self-test.mjs`, bloc TF-2499 (la section nomme chaque cas confié à `oracle-dast`, avec un rouge par défaut : cas omis, cas
+  confié après coup, module non nommé, section absente, mode divergent) et cas du volet Docker simulé (verdict des deux modes, ZAP natif, renvoi à
+  une section qui existe, aucun ajout de module). Mesuré le 14/11/2026 sur la voie Docker simulée : l'ancien oracle rend `regles_beta` indéfini, le
+  nouveau le consigne.
+
+## 2026-11-14 — `oracle-dast` 0.3.2 : le mode passif ne soumet plus aucun formulaire (TF-2498)
+
+- **Effet** : l'araignée de ZAP, en mode passif, soumettait le formulaire qu'elle trouvait (POST `/connexion`, corps
+  `identifiant=ZAP&secret=ZAP`, mesuré le 13/11/2026 sur la cible de fixture) : un mode qui « n'attaque pas » n'était pas en lecture
+  seule, et seule l'option `exclusions` du mandat l'empêchait. L'oracle passe maintenant `spider.processform=false` et
+  `spider.postform=false` à ZAP en mode passif (dans `-z`, sur la voie Docker comme sur `zap-baseline.py`) ; le formulaire reste lu,
+  il n'est pas envoyé. Le verdict le consigne (`synthese.balayage.formulaires`). Le mode actif n'est pas modifié : aucun de ces
+  réglages n'y est passé, `actif_autorise: true` reste exigé. `wstg-cas.md` passe à 0.2.4 (`oracle_dast: 0.3.2`), le README et
+  `scripts/preuve-dast-passif.mjs` disent et assertent « aucun POST ».
+- **Garde** : `oracles/self-test.mjs`, bloc TF-2498. Un ZAP simulé (`fixtures/dast/zap-simule.mjs`, désormais capable de jouer l'araignée
+  contre une origine locale désignée par `WEBSEC_DAST_SIMULE_ORIGINE`) parcourt la cible de fixture `cible-passive.mjs`, dans un processus
+  à part qui journalise chaque requête : en mode passif, aucun POST (la page du formulaire est lue) ; en mode actif, témoin, le POST part.
+  Mesuré le 14/11/2026, mêmes pages, même ZAP simulé : l'ancien oracle laisse partir 1 POST (`POST /connexion`), le nouveau 0.
+- **Assertion modifiée** : « mode passif → la passe baseline, une fois, sans option » (`!argv.includes("-z")`) devient « avec pour seules
+  options les deux réglages d'araignée » : le mode passif porte désormais un `-z`, par décision. L'assertion est plus stricte (texte
+  exact de `-z`), pas plus souple.
+- **Non prouvé** : que le VRAI ZAP lit ces deux réglages sous ces noms. L'image épinglée n'était pas sur le poste le 14/11/2026 (Docker
+  absent puis démarré, image non tirée : l'oracle ne télécharge jamais). Le banc prouve que l'oracle les passe ; la preuve réelle est
+  `node scripts/preuve-dast-passif.mjs`, à rejouer sur un poste qui porte l'image.
+
+## 2026-11-14 — `oracle-sca` 0.2.3 : un délai dépassé n'est plus un outil absent, et le délai de la sonde se règle (TF-2413, TF-2417)
+
+- **Effet** : la sonde `<outil> --version` avait 10 s en dur et rendait un simple oui/non : sur un poste chargé, `npm --version` a mis
+  39 s puis 20 s (npm 11.13.0 installé, 10/11/2026) et l'oracle rendait deux SKIP « npm absent du poste ». La sonde rend maintenant
+  l'état et la cause : « absent » (la commande n'existe pas), « délai » (« `npm --version` n'a pas répondu en n s (délai dépassé…) »,
+  remède : rejouer avec un délai plus long) ou « erreur » (code de sortie nommé). Même distinction pour `pip-audit` et `uvx` : quand aucune
+  voie pip ne sert, le manque dit la cause de chaque sonde, et « ni pip-audit ni uvx sur le poste » reste réservé à l'absence des deux.
+  Le délai (10 s par défaut, inchangé) se règle en secondes par `WEBSEC_SCA_DELAI_OUTIL_S` ; une valeur illisible est refusée (FAIL, la
+  variable nommée) au lieu d'être remplacée en silence. `WEBSEC_SCA_NPM` désigne la commande npm de la recette, comme les deux variables
+  pip existantes (la sonde et l'audit la lisent).
+- **Garde** : `oracles/self-test.mjs`, bloc TF-2413 / TF-2417, avec l'outil simulé rendu lent (`WEBSEC_SIM_LENT_MS`) ou en erreur
+  (`WEBSEC_SIM_VERSION_CODE`). Mesuré le 14/11/2026 sur un pip-audit et un uvx simulés qui répondent en 12 s : l'ancien oracle rend
+  « ni pip-audit ni uvx sur le poste » (ROUGE), le nouveau avec un délai de 1 s nomme le délai de chaque voie.
+
+## 2026-11-14 — `capturer.mjs` lit le fichier de capture en second argument, comme la table d'usage du README le prescrit (TF-2518)
+
+- **Effet** : la table d'usage prescrivait `node scripts\capturer.mjs <url> <capture.json>`, forme que le script ne lisait pas : le second
+  argument était ignoré, la capture partait sur la sortie standard, le fichier n'existait pas et `oracle-exposition` rendait SKIP
+  « capture introuvable » (un aller-retour chez un produit, le 30/10/2026). Le script lit désormais `<url> [<fichier.json> | --sortie <fichier.json>]` :
+  la forme prescrite écrit le fichier, la forme `--sortie` garde son comportement, sans fichier la capture part sur la sortie standard. Un fichier
+  nommé deux fois avec deux noms, ou un argument en trop, est refusé (code 2, rien d'écrit) au lieu d'être ignoré. L'URL se lit aussi derrière
+  `--timeout-ms <n>`, ce que `args.find` ne faisait pas.
+- **Garde** : `oracles/self-test.mjs`, bloc TF-2518, rejoue la forme prescrite contre une origine locale : ROUGE sur l'ancien script (fichier absent,
+  287 octets sur la sortie standard, mesurés le 14/11/2026), VERT sur le nouveau, puis `oracle-exposition` lit le fichier produit ; deux refus
+  propres (deux noms, argument en trop).
+
+## 2026-11-13 — README : plus de compte de recette en dur, et le verdict du gate n'est plus dit consommé par des « oracles M-1…M-5 » (TF-2490)
+
+- **Effet** : le README annonçait 229 PASS pour la recette ; mesurée le 13/11/2026 sur `main` (`ce9c4df`), elle en rend 277 (0 FAIL,
+  0 SKIP, exit 0). Il annonçait aussi 41 cas de self-test pour le volet DAST, que la sortie contredit (58 lignes PASS sous le titre du
+  volet DAST). Le
+  compte ne s'écrit plus : le README renvoie à la dernière ligne de la sortie de `oracles/self-test.mjs`. Il disait enfin le gate
+  consommé par « les oracles M-1…M-5 du pilot » : M-1…M-5 sont des étapes de `ETAPE-MEP.md` que la session du pilot exécute, et aucun
+  oracle du pilot ne lit le verdict (`git grep` de `websec_bloquant` et du verdict sur le pilot : seules `REGLES-PROJET.md` R-33 bis et
+  `references/ETAPES-RUN.md` le disent). La phrase nomme maintenant ce qui le consomme : la session, au dossier de MEP, non bloquant
+  par défaut, et le smoke post-déploiement qui joue `oracle-exposition`.
+- **Garde** : `oracles/self-test.mjs` refuse un README qui porte « n PASS », « n FAIL », « n SKIP », « n cas de self-test » ou
+  « oracles M-1… » (un vert sur le README réel, trois rouges sur des textes fautifs).
+
+## 2026-11-13 — `wstg-cas.md` : le référentiel dit, cas par cas, ce que relève le mode passif d'`oracle-dast`, et le self-test compare les règles citées à celles de l'image (TF-2476)
+
+- **Effet** : le référentiel ne disait pas ce que le mode passif relève (cookies, CORS, jeton CSRF), alors que TF-2460 l'avait fait pour
+  le mode actif. La colonne « Outillage » de SESS-02, CLNT-07, SESS-05 et INPV-01 nomme maintenant la règle passive de l'image qui les
+  vise, et la section « Ce que le mode passif d'oracle-dast couvre » dit pour chacun ce que la règle relève, ce qu'elle ne dit pas et
+  ce qui a été constaté. Les comptes de la section « Limites » passent de 21 à 19 cas `manuel` seuls et de 4 à 6 cas manuels avec une
+  part relevée par `oracle-dast` (recomptés par script : 19 + 6 + 7 + 7 = 39). Le fichier garde sa version 0.2.2, déjà incrémentée par
+  TF-2477 pour ce lot.
+- **Mesuré le 13/11/2026 avec le vrai ZAP** (`scripts/preuve-dast-passif.mjs`, image épinglée, 42 s, cible `fixtures/dast/cible-passive.mjs`,
+  8 requêtes reçues) : levées, « Cookie No HttpOnly Flag » et « Cookie without SameSite Attribute » (risque bas), « Cross-Domain
+  Misconfiguration » et « Absence of Anti-CSRF Tokens » (risque moyen) ; non levée, « Cookie Without Secure Flag » (cible servie en
+  HTTP) ; non essayées, « Loosely Scoped Cookie » et les deux règles de INPV-01. Aucune requête hors des routes de la cible. Aucune
+  alerte hors des règles de l'image. L'alerte CORS ne dit pas si c'est le joker ou l'origine reflétée qui l'a levée : le référentiel
+  le dit.
+- **Constat hors périmètre, à décider** : l'araignée du mode passif SOUMET le formulaire qu'elle trouve (un POST vers `/connexion`, corps
+  `identifiant=ZAP&secret=ZAP`). Le mode passif n'attaque pas, mais il n'est pas en lecture seule ; l'oracle ne coupe pas la
+  soumission, et seule `exclusions` du mandat l'empêche. Le référentiel et le README le disent ; l'oracle n'est pas modifié.
+- **Barrière** (classe `oracle-perimetre-de-non-mesure-non-publie`) : chaque nom entre « » de la colonne « Outillage » d'un cas confié à
+  `oracle-dast` se rattache au mode qui le précède dans la cellule et doit être, exactement, une règle passive (ou active) de
+  `referentiels/zap-regles.json` ; un cas confié au mode passif nomme une règle ; SESS-02, CLNT-07 et SESS-05 en nomment une ; les noms de
+  la section du mode passif sont des règles listées. Le contrôle a trouvé un défaut déjà présent : INPV-07 citait « Exponential Entity
+  Expansion », le nom exact de l'image est « Exponential Entity Expansion (Billion Laughs Attack) » (corrigé).
+- **Banc** : 8 contrôles ajoutés au self-test, 6 rouges à double sens (nom absent de l'image, règle active citée au mode passif, SESS-05
+  sans règle, mode passif sans règle, règle retirée de la liste, règle inventée dans la section). Joué contre le référentiel d'avant :
+  6 défauts (INPV-01 sans règle, « Exponential Entity Expansion », SESS-02, CLNT-07 et SESS-05 sans règle passive, section absente).
+  Rejeu complet du self-test : 252 PASS, 0 FAIL, 0 SKIP avant (commit de TF-2477), 260 PASS, 0 FAIL, 0 SKIP après (2 min 39, même
+  poste). Aucune assertion existante n'est modifiée.
+- **Reste non prouvé** : la cible de fixture passive est en HTTP ; l'effet de HTTPS sur « Cookie Without Secure Flag » n'est pas mesuré.
+  Aucune application riche ni authentifiée n'a été balayée en mode passif.
+
+## 2026-11-13 — `oracle-dast` 0.2.1 : l'image ZAP est épinglée par empreinte, la mise à jour des modules est coupée, les règles de l'image sont listées (TF-2477)
+
+- **Effet** : la voie Docker lançait `ghcr.io/zaproxy/zaproxy:stable`, une étiquette qui change d'image sans prévenir, et
+  `zap-baseline.py` / `zap-full-scan.py` lançaient `-addonupdate` puis installaient `pscanrulesBeta` (et `ascanrulesBeta` pour le
+  balayage complet) depuis le réseau : les règles qui tournaient n'étaient ni celles de l'image ni celles du référentiel. L'oracle
+  lance maintenant `ghcr.io/zaproxy/zaproxy@sha256:781a2bda…` (ZAP 2.17.0) et passe `-silent` à ZAP, que les deux scripts lisent pour
+  sauter la mise à jour. Une image absente du poste est un `SKIP` qui nomme la référence à tirer, sans repli sur `stable`.
+  `WEBSEC_DAST_IMAGE` désigne une autre image : sans empreinte ni version complète, le verdict le dit (`DAST-IMAGE-MOBILE`) et garde
+  l'identifiant local. Pour un ZAP natif, `synthese.balayage.maj_modules` dit que la mise à jour n'est pas maîtrisée.
+- **Liste des règles** : `referentiels/zap-regles.json` (56 noms du côté actif, 108 du côté passif, 7 add-ons) est lue dans l'image par
+  `scripts/lire-regles-zap.mjs`, sans réseau (deux conteneurs `--network none`). L'image porte DEUX versions de chaque add-on
+  (`ascanrules` 78 et 83, `pscanrules` 70 et 75, `domxss` 23 et 24…) : le script prend la plus haute et refuse d'écrire si les versions
+  que ZAP dit charger (`-cmd -silent -addonlist`) diffèrent, add-on par add-on. Une alerte dont le nom n'est pas dans la liste est
+  signalée (`DAST-REGLE-HORS-IMAGE`, info : jamais un changement de verdict) ; `Nom (variante)` est admis quand `Nom` est listé.
+- **Cause établie, et ce qui ne l'est pas** : la règle levée le 12/11/2026, « Source Code Disclosure - File Inclusion », n'est dans
+  aucun add-on de l'image ; le code de `zap-full-scan.py` (lu dans l'image) installe `ascanrulesBeta` depuis le réseau sauf `-silent`.
+  Que cette règle soit dans `ascanrulesBeta` n'est pas vérifié : ce module n'est pas dans l'image et n'a pas été téléchargé.
+- **Référentiel** : `wstg-cas.md` passe à 0.2.2, `oracle_dast: 0.2.1`, avec une section « Image et règles » et la source de la liste. La
+  barrière de TF-2460 a refusé l'ancien frontmatter (`oracle_dast: 0.2.0`) dès que l'oracle a changé de version : un FAIL constaté
+  au premier rejeu complet, puis corrigé.
+- **Image tirée ?** Non : l'image épinglée est la même que `stable` sur ce poste (empreinte lue, 3,71 Go, créée le 07/08/2026) ;
+  rien n'a été téléchargé. Un poste dont `stable` est plus récent doit `docker pull` la référence épinglée.
+- **Mesuré le 13/11/2026, avec le vrai ZAP, avant puis après** (`scripts/preuve-dast-actif.mjs`, mêmes trois scénarios, même cible de
+  fixture ; « avant » lu dans le journal de l'agent qui avait joué la preuve le 12/11 — rapporté, non rejoué ici) : le scénario passif A
+  passe de 240 s à 55 s puis 36 s (deux passes), le scénario actif B de 411 s à 138 s puis 142 s, le scénario actif C de 451 s à 217 s
+  puis 207 s. Les requêtes reçues par la cible en B passent de 958 à 661 puis 663, dont 659 sondes actives avant et 516 puis 517
+  après : la mise à jour coupée retire les règles bêta et le temps de démarrage. Les 16 assertions de la première passe tiennent ; la
+  seconde, qui ajoute « image épinglée et aucune alerte hors des règles de l'image » pour chaque scénario, en compte 19 : 19 PASS,
+  0 FAIL. `hors_liste` est vide aux trois balayages de la seconde passe : la règle « Source Code Disclosure - File Inclusion » levée
+  le 12/11/2026 ne l'est plus (le balayage actif B de la cible de fixture est le même qu'alors).
+- **Barrière** (classe `recette-verdict-non-prononcable`) : le self-test refuse une image par défaut qui n'est pas épinglée par
+  empreinte, une liste de règles qui décrit une autre image que celle de l'oracle (l'une ne change plus sans l'autre), un `-silent`
+  absent de la ligne de commande de l'image, et une alerte hors liste que l'oracle ne signale pas. La preuve réelle assertit en plus
+  qu'aucune alerte d'un balayage n'est hors de la liste.
+- **Banc** : 16 contrôles ajoutés, un Docker simulé (`fixtures/dast/docker-simule.mjs`, désigné par `WEBSEC_DAST_DOCKER`) qui enregistre
+  la ligne de commande sans lancer de conteneur, deux rapports de fixture (règle hors image, variante entre parenthèses) et la
+  variable `WEBSEC_DAST_REGLES` pour la liste illisible. Avant la correction, mêmes contrôles sur l'ancien oracle (PATH sans `docker`) :
+  239 PASS, 13 FAIL ; après : 252 PASS, 0 FAIL, 0 SKIP (236 PASS, 0 FAIL, 0 SKIP avant, même poste). Aucune assertion existante n'est
+  modifiée.
+- **Fusion avec `oracle-dast` 0.3.0** (TF-2485, TF-2486, commit `2e663e3` de `main`) : l'oracle fusionné porte la version 0.3.1 et garde les
+  deux apports. Le retrait du conteneur sur délai dépassé (0.3.0) passe par le même Docker que le reste (`WEBSEC_DAST_DOCKER`), pour
+  qu'un Docker simulé ne tombe pas sur le vrai. `wstg-cas.md` passe à 0.2.3 (la 0.2.2 de `main` portait déjà un autre contenu) avec
+  `oracle_dast: 0.3.1`. Les chiffres de recette de ce bloc sont ceux d'avant la fusion ; ceux d'après sont au commit de fusion.
+- **Reste non prouvé** : l'image épinglée n'a servi qu'à des balayages de fixtures locales ; ZAP natif (non épinglé, mise à jour non
+  coupée) et application riche ou authentifiée restent hors preuve. Les règles bêta ne tournent plus sur la voie Docker : une cible
+  qui n'était couverte que par elles ne l'est plus.
+
+## 2026-11-13 — `oracle-dast` 0.3.0 : `zap.bat` part sous Windows, et le délai de ZAP suit le débit du mandat (TF-2485, TF-2486)
+
+- **Constat** (lot de retours d'un produit du 12/11/2026, RP-70 et RP-71, classe `oracle-chemin-prescrit-inoperant-sur-sa-cible`) :
+  la 0.2.0 lançait ZAP par `spawnSync(…, { shell: false })`. Sous Node v24.16.0, un `.bat` ainsi lancé rend `EINVAL` : `zap.bat`, la forme
+  que l'oracle prescrit sous Windows, ne partait jamais, et le SKIP disait « lancé mais aucun rapport exploitable produit : sortie vide ».
+  Reproduit sur ce poste le 13/11/2026 avec un vrai `zap.bat` qui enveloppe le ZAP simulé, même message. Le délai était fixe, 30 min : à
+  10 requêtes par minute (un délai de 6 000 ms), environ 299 requêtes, contre 891 comptées au banc pour 4 routes.
+- **Effet** :
+  - `zap.bat` / `zap.cmd` passent par `cmd.exe /d /v:off /s /c`, chaque argument entre guillemets. Un argument qui porte `"` ou `%` rend
+    `SKIP` `DAST-LANCEMENT` sans rien lancer.
+  - ZAP natif tourne dans son propre dossier (`cwd`), avec `-dir` vers un dossier de travail jetable.
+  - Un lancement refusé par le système cite son code d'erreur, et le mot « lancé » a quitté ce message.
+  - Deux options neuves du mandat bornent la durée : `duree_max_minutes` et `plafond_requetes`. Sans elles, avec un débit, le délai se
+    déduit de 1000 requêtes plus 5 min, jamais moins de 30 min. Il est toujours borné par la fin de la fenêtre.
+  - Le délai dépassé arrête l'arbre de processus entier et retire le conteneur Docker nommé. Avant, sous Windows, seul `cmd.exe` serait
+    mort et java aurait continué le balayage au-delà du délai. Le SKIP `DAST-DELAI` dit la durée et sa source.
+- **Banc** : 17 contrôles ajoutés au self-test, 10 rouges et 7 verts. Le cas `.bat` réel rendait SKIP avant la correction ; après, 253 PASS, 0
+  FAIL, 0 SKIP (236 PASS avant, même poste, Node v24.16.0). Le délai dépassé est prouvé par un ZAP simulé, petit-enfant de `zap.bat`,
+  qui n'écrit jamais son marqueur de fin. Une seule assertion existante a dû suivre : la barrière TF-2460, par `wstg-cas.md` 0.2.2.
+- **Non prouvé** : le vrai ZAP natif sous Windows, faute d'installation sur ce poste. Le délai déduit suppose un plafond de requêtes : une
+  cible plus vaste est coupée, et le SKIP le dit. Les deux limites sont écrites dans `non_juge`.
+
+## 2026-11-12 — `wstg-cas.md` 0.2.1 : le référentiel dit ce que le mode actif d'`oracle-dast` couvre, et sous quelle autorisation (TF-2460)
+
+- **Effet** : le référentiel écrivait qu'`oracle-dast` ne lève que ce qu'une passe passive voit, vrai jusqu'à la 0.1.x, faux depuis le
+  mode actif réel de la 0.2.0 (TF-2444). Une section « Ce que le mode actif d'oracle-dast couvre » dit maintenant la forme de chaque mode,
+  l'autorisation exigée (fichier écrit, origine exacte, fenêtre, `actif_autorise: true`, instance dédiée, options `en_tete_acces`,
+  `debit_max_requetes_par_seconde`, `exclusions`), ce que l'oracle rend (des alertes ZAP, aucun identifiant WSTG) et ce qui n'est pas
+  couvert. La colonne « Outillage » nomme, pour 11 cas, la règle ZAP qui les vise et le mode ; 7 cas deviennent `oracle-dast` (ATHZ-01,
+  INPV-01, -05, -07, -11, -12, CLNT-04) et 4 restent manuels avec une part relevée (CONF-04, INPV-02, INPV-19, CLNT-01). Les comptes des
+  limites passent de « 31 manuels » à 21 manuels seuls, 4 partiels, 7 `oracle-dast`, 7 `oracle-exposition`.
+- **Mesuré le 12/11/2026, sur ce poste** : les noms des règles d'attaque active sont lus dans les modules `ascanrules` et `domxss` de l'image
+  `ghcr.io/zaproxy/zaproxy:stable` (ZAP 2.17.0), sans balayage. Un balayage actif réel de la cible de fixture locale (290 s, 950 requêtes
+  reçues, débit borné à 50 par seconde) a levé 4 alertes `high` (XSS reflété, injection SQL, XSS DOM, « Source Code Disclosure - File
+  Inclusion ») et 3 `medium`. Cette dernière règle n'est pas dans l'image : le balayage a chargé des règles que l'image n'a pas, cause non
+  vérifiée, et la liste des règles du référentiel est donc un minimum daté. Les cas ATHZ-01, INPV-02, -07, -11, -12, -19, CLNT-04 et CONF-04
+  ne reposent que sur le nom d'une règle : la forge ne les a jamais vus levés, et le référentiel le dit.
+- **Barrière** (classe `documentation-d-outil-differente-de-sa-sortie`) : le frontmatter porte `oracle_dast: 0.2.0`, la version décrite ;
+  le self-test la compare à la constante `VERSION` de l'oracle, et refuse une ligne de cas qui cite `oracle-dast` sans nommer `passif` ou
+  `actif`. Elle ne juge pas la prose : une version d'oracle qui change fait relire le référentiel, elle ne dit pas ce qu'il faut y écrire.
+- **Banc** : 5 contrôles ajoutés au self-test. Avant la correction, le contrôle vert rendait FAIL (« frontmatter sans `oracle_dast` ») sur le
+  fichier d'origine ; après, 236 PASS, 0 FAIL, 0 SKIP (231 PASS, 0 FAIL, 0 SKIP avant, même poste). Aucune assertion existante n'est modifiée.
+  Trois contrôles rouges, à double sens : champ absent, version périmée, cas sans mode.
+
+## 2026-11-12 — `oracle-sca` 0.2.2 : le délai de pip-audit direct suit celui d'uvx, et l'appel uvx est épinglé (TF-2455)
+
+- **Effet** : `pip-audit` lancé directement avait 90 s par appel, `uvx` 240 s. Sur `pip-vulnerable` (django 1.4, des
+  centaines d'avis), le premier met 85 à 174 s selon le réseau : un audit qui aurait réussi était rendu « indisponible »
+  (`délai de 90 s dépassé`), et le self-test d'un poste complet gardait un SKIP. Les deux voies ont maintenant 240 s par appel,
+  et `uvx` est appelé en `uvx --from pip-audit==2.10.1 pip-audit …`, la version que nomme le remède d'un SKIP « outil absent ».
+  Sans `--from`, uvx prenait la dernière version publiée et le verdict changeait avec elle. `synthese.pip.delai_s` dit le
+  délai de la voie qui a servi.
+- **Avant, mesuré le 12/11/2026 sur ce poste** : trois appels de `pip-audit` direct sur `pip-vulnerable` ont pris 85 s (par
+  l'oracle, FAIL rendu à temps), 90 s et 174 s ; le self-test intégral rendait 228 PASS, 0 FAIL, 1 SKIP, ce SKIP étant
+  `pip-vulnerable` en `délai de 90 s dépassé`.
+- **Après, même poste** : 231 PASS, 0 FAIL, 0 SKIP (17:49 à 17:54), `pip-vulnerable` rend FAIL avec `SCA-PIP` par la voie
+  directe ; la voie `uvx` épinglée rend FAIL en 127 s sur la même fixture (`outil` : `uvx pip-audit`, `delai_s` : 240).
+- **Banc** : 2 contrôles ajoutés à l'outil simulé : la trace de `outil-simule.mjs` garde le paquet nommé par `--from`, et le
+  self-test lit la version du remède de l'oracle pour la comparer à celle de l'appel (une seule source) ; les deux voies
+  portent le même `delai_s`, au moins 180 s. Double sens joué avec un `PATH` réduit à node, donc sans outil réel : le code de
+  départ avec les nouveaux contrôles rend 224 PASS, 2 FAIL (appel non épinglé, `delai_s` absent) ; le code corrigé rend 226
+  PASS, 0 FAIL. Aucune assertion existante n'est modifiée. Le délai lui-même n'a pas de cas déterministe : le prouver demanderait
+  un outil simulé de plus de 90 s ; il se lit par `delai_s` et par la mesure ci-dessus.
+
+## 2026-11-12 — `oracle-dast` 0.2.0 : le mode actif lance un vrai balayage actif, et l'autorisation porte en-tête, débit et exclusions (TF-2444)
+
+- **Effet** : `--mode actif` exigeait `actif_autorise: true` puis lançait quand même `zap-baseline.py`, la passe passive.
+  Il lance maintenant `zap-full-scan.py` (araignée, puis attaque active des URL trouvées), ou le balayage rapide de
+  `zap.sh` / `zap.bat`, et le mode passif reste sur `zap-baseline.py`. Un mode ne se rabat jamais sur l'autre : un ZAP
+  de la mauvaise forme rend un `SKIP` (`DAST-ACTIF-IMPOSSIBLE`, `DAST-PASSIF-IMPOSSIBLE`) et rien n'est lancé. Sans
+  `actif_autorise: true`, le mode actif reste refusé (`DAST-AUTZ-MODE`), avant toute émission.
+- **Options du mandat** : le fichier d'autorisation porte `en_tete_acces` (`{nom, valeur}` ou `{nom, valeur_env}`, pour ne
+  pas écrire un secret dans le mandat), `debit_max_requetes_par_seconde` (un fil, `ceil(1000/n)` ms entre deux requêtes) et
+  `exclusions` (chemins, préfixe compris). Elles valent dans les deux modes, car une limite que le mandat pose ne se tient
+  pas dans un seul. Une option mal formée, ou une variable d'en-tête absente, refuse le balayage (`DAST-AUTZ-CHAMPS`). La
+  valeur de l'en-tête ne sort pas du verdict ; la règle `replacer` de ZAP est bornée à l'origine autorisée.
+- **Constat traité sur la même ligne** : le balayage rapide de `zap.sh` / `zap.bat` (`-quickurl`, « The URL to attack » dans
+  l'aide de ZAP 2.17.0) servait le mode passif jusqu'ici, et attaquait. Il est maintenant refusé en passif.
+- **Avant, mesuré avec le vrai ZAP 2.17.0 (image Docker) contre `fixtures/dast/cible-locale.mjs`** : un balayage `--mode actif`
+  avec `actif_autorise: true` a livré 8 requêtes en 0,4 s, 0 sonde active (la route d'exclusion atteinte une fois, aucun
+  en-tête), en 219 s dont l'essentiel est le démarrage de ZAP.
+- **Après, même banc** (`scripts/preuve-dast-actif.mjs`, une exécution des scénarios A, B et C, 16 assertions, 16 PASS,
+  0 FAIL) : passif, 7 requêtes, 0 sonde active, 0 requête vers la route exclue, 1 requête privée sur 1 avec l'en-tête ;
+  actif sans option (témoin), 958 requêtes dont 659 sondes actives, 40 requêtes vers la route à exclure, 0 en-tête sur 39
+  requêtes privées, pic de 134 requêtes/s ; actif avec les trois options (borne de 10/s), 891 requêtes dont 634 sondes
+  actives, 0 vers la route exclue, l'en-tête sur 40 requêtes privées sur 40, pic de 9 requêtes/s. Une première série
+  (C seul, puis A et B) avait donné les mêmes verdicts. Essai séparé : une règle `replacer` dont `url` ne correspond pas à
+  la cible laisse la requête privée sans l'en-tête (0 sur 1), donc la clé borne bien la règle.
+- **Banc** : 28 cas ajoutés au self-test, avec un ZAP simulé (`fixtures/dast/zap-simule.mjs`) qui enregistre sa ligne de
+  commande sans rien émettre ; chaque cas force `WEBSEC_DAST_ZAP` sur lui, et le self-test ne lance toujours aucun scan.
+  Contre le code d'origine, les cas du mode actif échouent (obtenu SKIP : l'ancien code ne sait pas jouer le ZAP simulé),
+  ce qui ne reproduit pas le défaut : la reproduction est la mesure avec le vrai ZAP ci-dessus. Les 13 cas existants passent
+  sans modification d'assertion. Self-test intégral : 200 PASS, 0 FAIL, 1 SKIP avant (le SKIP : `pip-audit` direct au-delà de
+  90 s, étranger à l'item) ; 229 PASS, 0 FAIL, 0 SKIP après, soit 28 cas ajoutés et ce contrôle réseau qui passe cette fois.
+- **Reste non prouvé** : ZAP natif (aucune installation sur le poste ; `zap.sh` en balayage rapide jamais lancé), application
+  riche et authentifiée (la cible de preuve compte quatre routes). La valeur de l'en-tête figure dans la ligne de commande du
+  processus ZAP le temps du balayage, ce que le verdict déclare dans `non_juge`.
+
+## 2026-11-12 — `oracle-sca` 0.2.1 et self-test : le SKIP « pip-audit absent » nomme la commande épinglée, et uvx sert (TF-2398)
+
+- **Effet** : sur un poste sans `pip-audit` mais avec `uvx`, le self-test jouait les sens rouge et vert pip en SKIP
+  (« pip-audit absent du poste ») alors que l'oracle sait lancer `uvx pip-audit` depuis 0.2.0 ; il les joue maintenant par
+  `uvx`, et ces deux contrôles passent. Sur un poste sans les deux, chaque SKIP nomme la commande, lue du remède de l'oracle
+  (une seule source) : `pip install pip-audit==2.10.1` ou `uv tool install pip-audit==2.10.1`, ou installer `uv`.
+  Le remède du manque d'`oracle-sca` (« installer pip-audit ou uv ») donne la même commande ; la version 2.10.1 est celle
+  mesurée sur le poste le 12/11/2026. L'appel `uvx pip-audit` lui-même n'est pas épinglé (inchangé).
+- **Banc** : `runJson` prend un délai en paramètre ; les deux contrôles pip réels attendent 300 s, car `uvx` met 159 s à
+  résoudre `django==1.4` dans son environnement isolé (mesuré) et l'oracle lui laisse 240 s : à 120 s, un audit réussi
+  était lu `ILLISIBLE`. Aucune assertion n'est modifiée.
+- **Preuve** : 3 contrôles ajoutés (`pip-clean`, `uv-propre`, `poetry-propre` sans les deux outils → remède épinglé). Sur
+  l'état de départ avec ce banc : 197 PASS, 3 FAIL (remède « installer pip-audit ou uv »). Poste sans `pip-audit`, `uvx`
+  présent : 196 PASS, 0 FAIL, 2 SKIP avant ; 201 PASS, 0 FAIL, 0 SKIP après. Poste sans les deux : 196 PASS, 0 FAIL, 3 SKIP
+  nommant la commande. Poste complet : 200 PASS, 0 FAIL, 1 SKIP (`pip-audit` direct dépasse 90 s sur `pip-vulnerable`,
+  antérieur et non traité ici).
+
+## 2026-11-10 — `scripts/caviarder-jetons.mjs` : le nom d'un en-tête ou d'un paramètre est jugé par motif (TF-2394, D-197 (c))
+
+- **Effet** : un en-tête dont le nom contient `token`, `key`, `secret`, `auth`, `session` ou `password` (sans casse, séparateurs
+  `-`, `_`, `.` ignorés) est masqué à la capture. Avant, seul `X-Auth-Token` l'était par son nom : `X-API-Key`, `X-CSRF-Token`,
+  `X-Access-Token` et `x-amz-security-token` entraient en clair dans la capture versionnée avec le produit. Le même motif juge
+  les noms de paramètre d'URL et de paramètre de chemin, et la liste de paramètres se sépare maintenant sur `&` et sur `;` :
+  `caviarderUrl("…?a=1;token=zzz")` laissait `zzz` en clair (la valeur de `a` portait tout le reste).
+  Un en-tête à plusieurs valeurs est masqué élément par élément.
+- **Inchangé** : `Authorization` et `Proxy-Authorization` (schéma conservé), `Cookie`, `Set-Cookie`, `WWW-Authenticate`
+  (schéma, realm et error conservés) gardent leur traitement propre, qui passe avant le motif. Les en-têtes neutres sortent
+  octet pour octet.
+- **Portée dite** : sur l'adresse capturée et les URL d'en-tête, la position (TF-2306, TF-2390) masquait déjà `a=1;token=…`,
+  car la valeur de `a` est remplacée en entier. La forme fautive vivait dans `caviarderUrl` (par nom), qui sert aux valeurs
+  imbriquées et aux paramètres de chemin, et reste exportée. Les en-têtes à nom suspect, eux, fuyaient bien de bout en bout.
+- **Faux positifs mesurés** (registre IANA des champs HTTP, `field-names.csv`, 260 noms, relevé le 10/11/2026 ; une valeur neutre
+  passée à chaque nom) : 18 noms masqués. Quatre l'étaient déjà (Authorization, Proxy-Authorization, Cookie, Set-Cookie).
+  Les 14 autres : Authentication-Control, Authentication-Info, Proxy-Authentication-Info, Concealed-Auth-Export,
+  Optional-WWW-Authenticate, Proxy-Authenticate, CMCD-Session, CTA-Common-Access-Token, Include-Referred-Token-Binding-ID,
+  Lock-Token, Public-Key-Pins, Public-Key-Pins-Report-Only, Sec-Token-Binding, Sec-WebSocket-Key. Masqués à tort, sans secret :
+  les deux Public-Key-Pins (empreintes publiques), Sec-WebSocket-Key (nonce de poignée de main), Include-Referred-Token-Binding-ID
+  (drapeau) et les défis Proxy-Authenticate, Optional-WWW-Authenticate et Authentication-Control (schéma et realm, que
+  WWW-Authenticate garde lisibles). `Keep-Alive` n'est pas masqué : « keep » ne contient pas « key ». Hors registre :
+  `:authority` (pseudo-en-tête HTTP/2, jamais rendu par `fetch`) serait masqué. Côté paramètres d'URL, sur 32 noms usuels testés,
+  11 deviennent masqués : `token_type`, `keyword`, `keywords`, `author`, `authority`, `monkey`, `turkey`, `sessions`, `keyboard`,
+  `hotkey`, `passwordless`.
+- **Décision** : aucun n'est exempté. Aucun oracle de la forge ne lit ces noms, une liste d'exemption est l'endroit où un secret
+  se glisse, et la perte (lisibilité d'un nom ordinaire dans une capture) coûte moins qu'un secret versionné. Le choix est épinglé
+  par le banc (10 noms du registre et 4 noms d'URL attendus masqués) ; le revoir se fait en connaissance de ce banc.
+- **Attente revue, aucune relâchée** : le bord d'URL de TF-2107 qui lisait `token_type=x` lit `token_type=[caviardé]`. Le commentaire
+  qui disait `token_type` lisible est corrigé.
+- **Limites dites** : le motif ne couvre pas `signature`, `sig`, `csrf`, `jwt` ni `code` comme nom d'en-tête (`X-Amz-Signature`,
+  `Signature`, un en-tête `X-Csrf` sans « token » sortent en clair) ; ces mots restent jugés par la liste de noms pour les seuls
+  paramètres d'URL. Un secret porté par un en-tête au nom neutre (`X-Foo`) n'est pas vu. Les captures déjà écrites ne sont pas réécrites.
+- **oracle-exposition** : aucune règle ni `VERSION` ne change (0.2.0).
+- **Où** : `scripts/caviarder-jetons.mjs` (motif, séparateur `;`, branche des en-têtes), `oracles/self-test.mjs` (deux nouveaux
+  blocs, une attente revue), `README.md`.
+- **Preuve** : valeurs factices assemblées à l'exécution. Banc du caviardage sur le code d'avant : 4 PASS, 17 FAIL (neuf en-têtes,
+  le tableau, sept formes d'URL). De bout en bout, sur le `capturer.mjs` d'avant : 7 valeurs sur 8 survivent. Recette complète
+  après : 198 PASS, 0 FAIL, 0 SKIP. Un premier passage de la recette sur l'arbre propre avait rendu 167 PASS, 3 FAIL, les trois
+  sur `oracle-sca` (pip-audit lent sur le réseau du poste, fixtures pip et poetry rendues `ILLISIBLE`) ; ces fixtures rejouées une à
+  une rendent PASS, FAIL, FAIL attendus, et le passage suivant est vert.
+
+## 2026-11-10 — `scripts/capturer.mjs` : l'adresse capturée elle-même est caviardée par position (TF-2390)
+
+- **Effet** : reste de TF-2306. Le champ `url` de la capture (l'adresse passée en argument) et l'adresse du message
+  d'échec (`capture échouée pour …`) gardaient le caviardage par forme de nom : un lien d'accès passé en argument avec un
+  paramètre de nom ordinaire (`?meta=<JWT>`, `?s=<signature>`, `#id=<valeur>`) entrait en clair dans la capture
+  versionnée avec le produit. Désormais la valeur de chaque paramètre de requête et de fragment de l'adresse est
+  remplacée par `[caviardé]` quel que soit son nom, par la règle de TF-2306 (`caviarderUrlEnTete`), sans second code.
+  Restent lisibles : schéma, hôte, chemin et noms des paramètres
+  (`http://hôte/acces/ouvrir?kid=[caviardé]&meta=[caviardé]&page=[caviardé]#id=[caviardé]`).
+- **Défaut voisin trouvé en le reproduisant** : le MOTIF du message d'échec recopiait l'adresse en clair. `fetch` refuse
+  un identifiant `utilisateur:mot-de-passe@` (« Request cannot be constructed from a URL that includes credentials : … »)
+  et une adresse mal formée (« Failed to parse URL from … ») en citant l'adresse telle que passée ; le message d'échec
+  la reprenait derrière l'adresse caviardée. Le motif est maintenant filtré : l'adresse brute y est remplacée par sa forme
+  caviardée, puis toute autre adresse absolue du motif passe par `caviarderUrlsDeValeur`.
+- **Changement de comportement voulu** : `page=2` d'une adresse devient `page=[caviardé]`, comme dans une URL d'en-tête.
+  Trois attentes du banc, qui lisaient `page=2` (TF-2107, TF-2133 et le message d'échec de TF-2107), sont revues en
+  ce sens, aucune relâchée ; l'attente de TF-2133 sur un `redirect_uri` encodé passe de « seul son code est remplacé » à
+  « la valeur disparaît en entier ». La phrase de TF-2306 ci-dessous qui dit l'adresse capturée inchangée
+  est remplacée par cette entrée. `caviarderUrl` (par forme de nom) reste exporté et sert encore aux valeurs imbriquées.
+- **Limites dites** : celles de TF-2306, inchangées : un élément de requête sans `=` est tenu pour un nom (drapeau), donc un
+  jeton nu (`?<jeton>`) n'est pas vu ; un jeton en segment de chemin reste non traité. Les captures déjà écrites ne sont
+  pas réécrites. Un message du moteur qui citerait l'adresse sous une forme normalisée différente de celle passée est
+  filtré par la seule règle des adresses absolues `schéma://…` : une adresse relative ou tronquée dans un tel message
+  n'est pas vue.
+- **oracle-exposition** : aucune règle ni `VERSION` ne change (0.2.0) ; il ne lit de l'adresse que le schéma, conservé.
+- **Où** : `scripts/capturer.mjs` (deux appels, import), `oracles/self-test.mjs` (nouveau banc TF-2390, trois attentes
+  revues), `README.md`.
+- **Preuve** : le faux JWT de 684 caractères et les valeurs sont assemblés à l'exécution, jamais en clair dans le source.
+  Banc des seuls blocs de capture (TF-2095 à TF-2390, harnais jetable hors dépôt) sur l'ancien `capturer.mjs` avec le nouveau
+  banc : 61 PASS, 10 FAIL (7 contrôles de l'adresse, 3 attentes revues) ; puis, motif de l'échec ajouté et correction de
+  l'adresse seule : 72 PASS, 2 FAIL (les deux messages du moteur, valeurs survivantes 8 et 6) ; avec le correctif
+  complet : 74 PASS, 0 FAIL.
+
+## 2026-11-09 — `scripts/capturer.mjs` : la valeur de chaque paramètre d'une URL d'en-tête est caviardée par position (TF-2306)
+
+- **Effet** : troisième correction de la même classe (`capture-de-preuve-porte-un-jeton`, après TF-2107 et TF-2133). Une
+  redirection Cloudflare Access a laissé en clair le paramètre `meta` de `Location` (un JWT de 684 caractères) et la
+  signature `s` de `Report-To` : les deux corrections précédentes jugeaient la FORME du nom (`token`, `code`, `key`…), et
+  `meta` comme `s` n'en ont pas. La capture versionnée avec le produit a été prise par son balayage de secrets.
+  Désormais, dans toute URL portée par un en-tête, la valeur de chaque paramètre de requête ou de fragment est remplacée
+  par `[caviardé]` quel que soit son nom. Restent lisibles : schéma, hôte, chemin et noms des paramètres
+  (`…/app?kid=[caviardé]&meta=[caviardé]&redirect_url=[caviardé]`).
+- **Périmètre** : `Location`, `Content-Location`, `Link`, `Refresh` et les URL de `WWW-Authenticate` passent par la
+  nouvelle règle de position. Tout autre en-tête (`Report-To`, `Reporting-Endpoints`, `Content-Security-Policy` et son
+  `report-uri`…) est parcouru pour ses URL absolues `schéma://…`, y compris dans un JSON à barres `\/` et `&`
+  échappées ; le reste de la valeur (directives, `;`, JSON, `NEL`, `Access-Control-Allow-Origin`) sort octet pour octet.
+- **Changement de comportement voulu** : un paramètre sans jeton d'une URL d'en-tête (`state`, `lang`, `page`) perd
+  aussi sa valeur, et un `redirect_uri` encodé disparaît en entier avec son code. Six attentes de TF-2107 et TF-2133
+  ont été durcies en conséquence (aucune n'a été relâchée) ; l'URL capturée elle-même (champ `url`) garde le caviardage
+  par forme de nom de TF-2107 et TF-2133, inchangé et toujours testé.
+- **Limites dites** : un élément de requête sans `=` est tenu pour un nom (drapeau) et reste, donc un jeton nu sans nom
+  (`?<jeton>`) n'est pas vu ; une URL relative dans un en-tête autre que ceux de la liste (`report-uri /csp?t=…`) n'est
+  pas vue, faute de `schéma://` ; un jeton dans un segment de chemin reste non traité (limite de TF-2133). Les captures
+  déjà écrites ne sont pas réécrites.
+- **Où** : `scripts/caviarder-jetons.mjs` (`caviarderUrlEnTete`, `caviarderUrlsDeValeur`, `caviarderUrl` accepte le
+  traitement des paramètres en second argument), `scripts/capturer.mjs` (commentaire), `oracles/self-test.mjs`.
+- **oracle-exposition** : aucune règle ni `VERSION` ne change (0.2.0) ; la capture caviardée est lue comme avant, CSP
+  comprise (ni EX-1 ni EX-2 sur la fixture).
+- **Preuve** : le faux JWT de 684 caractères, les signatures et les valeurs sont assemblés à l'exécution dans le
+  self-test, jamais en clair dans le source. Sens rouge mesuré avant le code : 41 PASS, 16 FAIL (5 porteurs survivants,
+  5 contrôles vert du nouveau banc, 6 attentes durcies de TF-2107 et TF-2133), puis arrêt sur `caviarderUrlEnTete is not
+  a function` avant les 2 bancs de bords. Après : `node oracles/self-test.mjs` 154 PASS, 0 FAIL, 2 SKIP motivé
+  (`pip-audit` absent du poste) ; avant le changement 137 PASS, 0 FAIL, 2 SKIP. 17 contrôles ajoutés.
+
+## 2026-11-06 — `oracle-sca` 0.2.0 : uv.lock, poetry.lock, uvx, et un SKIP qui nomme son manque (TF-2272)
+
+- **Effet** : sur un produit Python géré par `uv` ou `poetry` (`pyproject.toml` + verrou, sans `requirements.txt`),
+  l'oracle rendait « aucun manifeste reconnu » puis, avec un `requirements.txt` exporté, un SKIP faute de
+  `pip-audit`. Il lit maintenant `uv.lock` et `poetry.lock`, audite leurs paquets de registre, lance `pip-audit` par
+  `uvx pip-audit` quand `pip-audit` est absent et `uvx` présent, et rend tout SKIP comme un manque nommé.
+- **Verrous** : blocs `[[package]]`, clés `name` et `version` de tête de bloc. Les paquets sont écrits épinglés dans un
+  requirements temporaire hors de la cible puis audités avec `--no-deps --disable-pip` (2,5 s mesurées contre 110 s
+  pour `pip-audit -r` qui résout dans un environnement isolé). Le projet lui-même (`source` `virtual` ou `editable`)
+  n'est pas une dépendance ; un paquet git, chemin, URL ou index privé n'est pas interrogeable et se nomme au manque.
+  Deux versions du même nom (marqueurs de résolution) passent en deux lots : `pip-audit` refuse le doublon, mesuré.
+- **Manque nommé** : sortie enrichie du champ `manques` (écosystème, manifeste, cause, remède) et, sur un SKIP, du
+  champ `motif` (« AUDIT NON JOUÉ, aucune dépendance jugée (ce n'est pas un PASS) — manque : … »). Un délai dépassé se
+  dit (« délai de 90 s dépassé ») au lieu de « sortie vide ». Verdicts, codes de sortie et seuils inchangés.
+- **Surcharge pour la recette** : `WEBSEC_SCA_PIP_AUDIT` et `WEBSEC_SCA_UVX` désignent la commande à lancer à la place de
+  `pip-audit` / `uvx` ; `fixtures/sca/outils/outil-simule.mjs` joue les deux sans réseau ni installation.
+- **Où** : `oracles/oracle-sca.mjs` (`VERSION` 0.1.0 → 0.2.0), `oracles/self-test.mjs`, `fixtures/sca/`.
+- **Preuve** : `node oracles/self-test.mjs` rejoué sur l'ancien `oracle-sca.mjs` avec les nouveaux cas : 119 PASS,
+  16 FAIL (les 16 nouveaux cas, tous en SKIP « aucun manifeste reconnu » ou sans champ `manques`). Avec le nouveau :
+  138 PASS, 0 FAIL, 1 SKIP motivé (`pip-audit -r requirements.txt` sur la fixture `pip-vulnerable` dépasse le délai de
+  90 s sur ce poste, antérieur à ce changement). 19 contrôles ajoutés, dont 3 avec l'outil réel (`pip-audit`, puis
+  `uvx` réel avec `pip-audit` déclaré absent).
+- **Limite dite** : un paquet que `pip-audit` saute lui-même (`skip_reason`) compte au total sans être nommé ; la copie
+  d'`oracle-sca` de `factory-forge-agents` (`.claude/skills/quality-oracles/scripts/oracle-sca.mjs`) est un autre code
+  et n'est pas touchée.
+
+## 2026-11-04 — `scripts/capturer.mjs` : cinq en-têtes de plus et l'URL encodée ne portent plus de jeton dans la capture (TF-2133)
+
+- **Effet** : même classe que TF-2107. Une capture versionnée ne garde plus en clair : les URL de `Content-Location`,
+  `Link` (chaque `<URL>` et `anchor="URL"`) et `Refresh` (`délai; url=URL`) ; la valeur entière de `X-Auth-Token` ;
+  dans `WWW-Authenticate`, le jeton nu d'un défi (`Negotiate …`), la valeur d'un paramètre de nom de jeton ou de
+  défi (`nonce`, `opaque`, `response`…) et l'URL à jeton d'une valeur (`resource_metadata=`). Schémas, `realm`,
+  `error`, `scope`, `qop` restent. Une valeur de paramètre qui est elle-même une URL ou une liste de paramètres
+  (`redirect_uri=https%3A%2F%2F…%3Fcode%3D…`, jusqu'à 3 niveaux de percent-encoding) est décodée avant d'être jugée,
+  caviardée, puis ré-encodée au même niveau ; une valeur sans jeton sort octet pour octet.
+- **Limite dite** : un jeton dans un segment de chemin (`/reset/<jeton>`) n'a ni nom ni forme à reconnaître sans
+  heuristique d'entropie, qui abîmerait des URL sans jeton ; il n'est pas traité. Les captures déjà écrites ne sont
+  pas réécrites.
+- **Où** : `scripts/caviarder-jetons.mjs` (`caviarderLien`, `caviarderRefresh`, `caviarderDefi`,
+  `caviarderValeurImbriquee`), appelé par `scripts/capturer.mjs` via `caviarderEnTetes` et `caviarderUrl`.
+- **oracle-exposition** : aucune règle ni `VERSION` ne change ; la capture caviardée est jugée comme avant (EX-1).
+- **Preuve** : `oracles/self-test.mjs` rejoue le vrai `capturer.mjs` contre une origine locale qui répond 302 avec
+  chaque porteur en clair. Sens rouge mesuré avant le code : 102 PASS, 16 FAIL (les 7 porteurs, 7 contrôles vert,
+  2 bancs de bords) ; après : 118 PASS, 0 FAIL. 19 contrôles ajoutés.
+
+## 2026-11-04 — `scripts/capturer.mjs` : l'URL, Location, Authorization et Cookie ne portent plus de jeton dans la capture (TF-2107)
+
+- **Effet** : même classe que TF-2095. Une capture versionnée ne garde plus en clair : les paramètres de forme
+  jeton de l'URL capturée et de l'en-tête `Location` (`token`, `access_token`, `id_token`, `code`, `key`, `apikey`,
+  `signature`, `sig`, `session`, `sid`, `jwt`, `secret`, `password`, tout nom qui se termine par `token`, `secret`,
+  `key`, `signature`, `password` ou `session`), dans la requête, le fragment et les paramètres de chemin
+  (`;jsessionid=`) ; l'identifiant `utilisateur:mot-de-passe@` d'une URL ; la valeur d'`Authorization` et de
+  `Proxy-Authorization` (le schéma `Bearer`, `Basic`, `Digest` reste) ; les valeurs d'un en-tête `Cookie`. Les
+  paramètres sans jeton (`state`, `lang`, `token_type`, `page`) et tous les autres en-têtes sortent octet pour octet.
+- **Où** : `scripts/caviarder-jetons.mjs` (nouveau, réutilise le caviardage de TF-2095), appelé par
+  `scripts/capturer.mjs` ; le message d'échec de capture ne recopie plus non plus le jeton de l'URL demandée.
+  Les captures déjà écrites ne sont pas réécrites.
+- **oracle-exposition** : aucune règle ni `VERSION` ne change, il ne lit de l'URL que le schéma. Vérifié : la
+  capture caviardée est jugée comme avant (EX-1) et aucun secret n'entre dans son verdict.
+- **Preuve** : `oracles/self-test.mjs` rejoue le vrai `capturer.mjs` contre une origine locale qui répond 302 avec
+  chaque porteur en clair. Sens rouge mesuré avant le câblage : 89 PASS, 10 FAIL (les 5 porteurs, 4 contrôles
+  vert, le message d'échec) ; après : 99 PASS, 0 FAIL. 16 contrôles ajoutés.
+
+## 2026-11-03 — `referentiels/revue-de-code.md` 1.0.0 (TF-2057, D-162 (a))
+
+- **Nouveau référentiel** : la consigne type d'une revue de code par un seul agent, le plafond de
+  300 000 jetons tenu par le pilot en tranches de 2 000 lignes (la suivante part si le cumul relevé
+  laisse 130 000 jetons de marge), le format du rapport et ses 4 statuts de constat : lu, relu, rejoué,
+  non confirmé. Source : l'étude 20261103k du pilot, option O2, et les 2 revues mesurées de TF-2057.
+- **Intégration** : l'étape de mise en production du pilot propose la revue à son entrée
+  (`ETAPE-MEP.md` § 1 quater) ; son oracle avertit en TM14 quand le dossier ne dit rien de la revue.
+  La forge ne bloque toujours aucune mise en production.
+- **Ni oracle, ni skill.** Aucun produit nommé, aucune faille. La recette `oracles/self-test.mjs` ne
+  change pas. Prochaine revue le 2026-12-01, avec la mesure des statuts.
+
+## 2026-11-03 — `scripts/capturer.mjs` : la valeur des cookies n'entre plus dans la capture (TF-2095)
+
+- **Effet** : une capture d'origine qui pose un cookie (jeton de session ou de formulaire) ne garde plus
+  sa valeur, remplacée par `[caviardé]` ; le nom et tous les attributs (Path, Domain, Expires, Max-Age,
+  Secure, HttpOnly, SameSite) restent, donc EX-8, EX-9 et EX-10 jugent la capture comme avant. Une capture
+  rangée sous `forge/etapes/websec` et versionnée ne fait plus entrer de jeton réel dans le dépôt.
+- **Où** : `scripts/caviarder-cookies.mjs` (nouveau), appelé par `scripts/capturer.mjs` avant l'écriture.
+  Les captures déjà écrites ne sont pas réécrites : celles qui portent une valeur restent à caviarder ou à purger.
+- **oracle-exposition** : ses constats nomment le cookie et jamais sa valeur ; vérifié sur une capture à
+  valeur en clair, la valeur n'est recopiée dans aucun constat. Aucune règle ni `VERSION` ne change.
+- **Preuve** : `oracles/self-test.mjs` rejoue le vrai `capturer.mjs` contre une origine locale à 3 cookies
+  (sens rouge : 0 valeur survivante dans le fichier, la sortie standard et les messages ; sens vert : noms
+  et attributs présents, EX-8 levée sur le seul cookie sans Secure). 8 contrôles ajoutés.
+
+## 2026-11-03 — `asvs-l1.md` 0.2.0, `wstg-cas.md` 0.2.0, `classes-attaque.md` 0.2.0 (TF-2071)
+
+- **`asvs-l1.md`** : 12 exigences L1 de l'ASVS 5.0.0 rejoignent la table, 4 pour chacune des classes
+  que les revues de code relèvent le plus : V8 (contrôle d'accès : V8.1.1, V8.2.1, V8.2.2, V8.3.1),
+  V5 (fichiers et SSRF par nom de fichier : V5.2.1, V5.2.2, V5.3.1, V5.3.2), V2 (logique métier :
+  V2.1.1, V2.2.1, V2.2.2, V2.3.1). Identifiants, niveaux et sens relus au tag `v5.0.0_release`. Une
+  note nomme les exigences voisines L2 et L3 non listées (SSRF général V1.3.6, limites et verrous
+  métier V2.3.2 à V2.4.1, archives V5.2.3, champ et locataires V8.2.3 et V8.4.1).
+- **`wstg-cas.md`** : 11 cas WSTG 4.2 s'ajoutent, de 28 à 39 : ATHZ-01 à ATHZ-04, BUSL-01, -02, -03,
+  -06, -08, -09 et INPV-19, chacun rattaché à une exigence L1. BUSL-04, -05 et -07 restent non
+  curés, motif dit : leur exigence est L2 ou L3.
+- **`classes-attaque.md`** : CA-02, CA-03 et CA-05 se rattachent aux exigences et cas retenus, et
+  cessent d'être des classes sans rattachement ; DN-1, MS-2, MS-4 et CA-06 sont mis à jour dans le
+  même sens. Daté du 03/11/2026.
+- **Ni oracle, ni skill.** La recette `oracles/self-test.mjs` ne lit pas les référentiels et ne
+  change pas : 77 PASS, 0 FAIL avant et après.
+
+## 2026-11-02 — `referentiels/classes-attaque.md` 0.1.0 (TF-2057, D-136 (a))
+
+- **Nouveau référentiel** des classes d'attaque qu'une revue de code doit chercher : 9 classes de base
+  et 117 classes fines des familles qui touchent un produit web, 36 autres nommées par groupe. Source :
+  `cloudflare/security-audit-skill`, licence MIT, commit `c1c8a8c1471069fb0e188eeaff69b8e8db6564a8`
+  (14/09/2026), avis de droits conservé dans le fichier. Daté du 02/11/2026, prochaine revue le
+  2027-02-02.
+- **Recoupement** de chaque classe avec `asvs-l1.md` et `wstg-cas.md`, et avec ce que les oracles de la
+  forge en lisent. Trois classes de base (contrôle d'accès, fichiers et SSRF, logique métier) n'ont
+  aucun rattachement curé ; l'écart est dit dans le fichier, non comblé.
+- **Ni oracle, ni skill, ni relecture de produit.** Aucun produit nommé, aucune faille réelle. La
+  recette `oracles/self-test.mjs` ne change pas.
+
+## 2026-10-28 — `oracle-exposition-statique` 0.1.0, `oracle-exposition` 0.2.0 (TF-1996, part websec)
+
+- **Nouvel oracle `oracles/oracle-exposition-statique.mjs`** : il juge le fichier `_headers` de
+  Cloudflare (Workers static assets ou Pages) avant tout déploiement. Il calcule les en-têtes que
+  chaque requête sondée recevrait, puis les juge par les règles EX-1 à EX-11, sans les recopier.
+- **Deux règles propres au fichier**, sourcées sur developers.cloudflare.com (lu le 28/10/2026) :
+  HD-1 pour la syntaxe, HD-2 pour les limites de 100 règles et de 2 000 caractères par ligne.
+- **`oracle-exposition` 0.2.0** : les onze règles passent dans la fonction exportée
+  `jugerEnTetes`. Sa sortie ne change pas : 16 sorties comparées avant et après, identiques hors
+  du champ `version`.
+- **Recette** : 16 contrôles ajoutés (8 fixtures sous `fixtures/exposition-statique/`), dont
+  3 équivalences entre une capture et un `_headers` qui pose les mêmes en-têtes. Rouge avant
+  l'oracle (61 PASS, 16 FAIL, exit 1), vert après (77 PASS, 0 FAIL, exit 0).
+
+## 2026-10-28 — `oracle-workflows` 0.1.0 (TF-2001)
+
+- **Nouvel oracle `oracles/oracle-workflows.mjs`** : il juge les workflows GitHub Actions d'un dépôt
+  sur 5 règles, WF-1 à WF-5 : permissions du `GITHUB_TOKEN`, épinglage par SHA complet,
+  `pull_request_target`, injection par contexte non fiable dans `run:`, secret long là où l'OIDC est
+  documenté. Chaque constat cite sa page de docs.github.com, lue le 28/10/2026.
+- **Lecteur YAML natif**, sans dépendance : il refuse ancres, alias, étiquettes et clés complexes,
+  et le fichier est alors dit non jugé. Comparé à PyYAML sur 30 fichiers, 30 lectures identiques.
+- **Verrou `actions.lock` pris en compte** (préversion publique de GitHub) : une référence inscrite
+  au verrou pour son workflow n'est plus relevée comme non épinglée.
+- **Recette** : 19 contrôles ajoutés à `oracles/self-test.mjs` (15 fichiers sous
+  `fixtures/workflows/`). Rouge avant l'oracle (42 PASS, 18 FAIL, exit 1), vert après (61 PASS,
+  0 FAIL, exit 0). La découverte des oracles en trouve 4 au lieu de 3.

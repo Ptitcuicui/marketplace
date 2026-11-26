@@ -1,0 +1,59 @@
+# factory-forge-websec
+
+Forge de **sécurité du produit web livré** — juge le produit, pas l'outillage agentique qui
+l'a construit (`factory-forge-agents-security`, délimitation croisée dans les deux README).
+Détail complet : `README.md`. Mandat d'origine : TF-0123
+(`factory-pilot/todo/TODO.jsonl`).
+
+## Garde-fous
+
+- **Invocation sur mandat humain uniquement**, via le pilot. Jamais d'audit spontané d'un
+  dépôt ou d'une URL tiers depuis cette forge.
+- **Outille, ne décide jamais.** Un verdict `FAIL` est un constat localisé, jamais un
+  blocage ou une correction automatique.
+- **Zéro API tierce payante, zéro dépendance npm propre.** `oracle-sca` et `oracle-dast`
+  délèguent à l'outillage déjà présent sur le poste (npm, pip-audit ou uvx, OWASP ZAP) — ils ne
+  l'installent jamais et rendent un **SKIP motivé** (jamais un PASS silencieux) quand cet
+  outillage ou le réseau manque.
+- **Aucun scan dynamique sans autorisation écrite.** `oracle-dast` est fail-closed : cible
+  nommée dans un fichier d'autorisation daté, en cours de validité, instance dédiée par
+  défaut, mode actif déclaré — sinon `FAIL` (exit 1) et rien n'est émis. Ce garde-fou
+  dual-use ne se désactive pas, et le self-test ne lance jamais de scan réel.
+- **Dépôt public : zéro donnée réelle.** Fixtures synthétiques uniquement — URLs, cookies et
+  dépendances fictives ou à CVE déjà publique.
+- **Référentiel cité, jamais recopié.** `referentiels/asvs-l1.md` (ASVS 5.0.0) et
+  `referentiels/wstg-cas.md` (WSTG 4.2) citent des identifiants sous CC BY-SA 4.0 et les
+  résument en une ligne française — ne jamais coller le texte intégral d'un standard dans ce
+  dépôt. Tout cas WSTG curé est rattaché à une exigence d'`asvs-l1.md` ; sans rattachement,
+  il n'entre pas.
+- **Classes d'attaque d'une revue de code.** `referentiels/classes-attaque.md` dérive du
+  `security-audit-skill` de Cloudflare (licence MIT, avis de droits conservé dans le fichier, commit
+  cité) : ne jamais en retirer l'avis, ne jamais y consigner une faille réelle ni nommer un produit.
+- **Revue de code d'un produit.** `referentiels/revue-de-code.md` fixe la consigne de l'agent, le
+  plafond de 300 000 jetons tenu par tranches et le format du rapport (D-162 (a), 03/11/2026). Une
+  revue n'a lieu que sur décision humaine qui nomme le produit ; son rapport reste chez le produit, et
+  aucune faille ni aucun nom de produit n'entre dans ce dépôt.
+- **Avant toute modification d'une règle** : rejouer `node oracles/self-test.mjs` (double
+  sens — verte passe, rouge échoue pour la bonne raison). Le volet `oracle-sca` peut
+  légitimement rendre des SKIP motivés selon l'outillage du poste — ce n'est pas un échec du
+  self-test, mais ce n'est pas non plus une preuve : ne pas la présenter comme telle.
+- **v0 : pas de pentest ; DAST prouvé sur une cible de fixture locale seulement.** `oracle-dast`
+  enveloppe ZAP : garde-fou et lecture de rapport par le self-test, modes passif et actif par
+  `scripts/preuve-dast-actif.mjs` (vrai ZAP par Docker, contre `fixtures/dast/cible-locale.mjs`,
+  jamais un service tiers). Un mode ne se rabat jamais sur l'autre : un ZAP de la mauvaise forme est
+  un `SKIP`. Applications riches et ZAP natif non prouvés. Limites détaillées dans
+  `README.md §Limites`, jamais promises au-delà.
+
+## Point d'entrée
+
+```
+node oracles/self-test.mjs                         # preuve intégrale
+node oracles/decouvrir-oracles.mjs                  # liste des oracles LUE SUR LE DISQUE (TF-1319, contrat du pilot)
+node scripts/capturer.mjs <url> --sortie c.json     # capture réelle
+node oracles/oracle-exposition.mjs c.json           # scan de l'exposition HTTP
+node oracles/oracle-exposition-statique.mjs <dossier>  # fichier _headers de Cloudflare, mêmes règles EX
+node oracles/oracle-sca.mjs <dossier-cible>          # scan des dépendances vulnérables
+node oracles/oracle-dast.mjs --cible <url> --autorisation <f.json> [--mode passif|actif]   # DAST, sur périmètre autorisé
+node scripts/preuve-dast-actif.mjs                   # preuve réelle du DAST, cible locale de fixture (Docker + image ZAP), hors self-test
+node oracles/oracle-workflows.mjs <dépôt>            # durcissement des workflows GitHub Actions (WF-1..WF-5)
+```
