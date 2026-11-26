@@ -6,6 +6,11 @@
 // Source unique : outils/mallettes.json. Les skills se corrigent dans leur forge ;
 // plugins/ et .claude-plugin/marketplace.json sont régénérés à chaque passage.
 // --check : n'écrit rien, rend 1 si la marketplace diffère de ce que l'assemblage produirait.
+// Forges embarquées : une mallette qui déclare `forges` dans mallettes.json reçoit une copie de
+// chaque forge sous plugins/<mallette>/forges/<forge>/. Ses skills la trouvent sans clone local,
+// et elle se met à jour avec la marketplace.
+// Fins de ligne : tout fichier texte est rendu en LF, quel que soit le poste qui assemble
+// (Windows en CRLF, Linux en LF) : deux postes produisent les mêmes octets.
 // Sortie : un rapport des références qui ne se résolvent pas dans un plugin (chemins en dur,
 // dépendances au pilot) — outils/rapport-construction.json.
 
@@ -58,6 +63,7 @@ function shaDepot(dossier) {
 const RE_SKILL = /(?:~|\$HOME|%USERPROFILE%|\$env:USERPROFILE)[\\/]\.claude[\\/]skills[\\/]([a-z0-9-]+)((?:[\\/][^\s`'"()<>\]|]*)?)/g;
 
 function transformer(texte, plugin, estMd, constats) {
+  texte = texte.replace(/\r\n/g, "\n");
   for (const { de, vers } of conf.substitutions) texte = texte.split(de).join(vers);
   if (estMd) {
     texte = texte.replace(RE_SKILL, (m, skill, reste) => {
@@ -82,8 +88,9 @@ function compter(texte, fichier, constats) {
 
 function poser(rel, contenu) { sortie.set(rel.split(path.sep).join("/"), Buffer.isBuffer(contenu) ? contenu : Buffer.from(contenu)); }
 
-function copierDossier(src, dest, plugin, constats) {
+function copierDossier(src, dest, plugin, constats, ignorer = () => false) {
   for (const f of lister(src)) {
+    if (ignorer(path.relative(src, f))) continue;
     const rel = path.join(dest, path.relative(src, f));
     if (TEXTE.test(f)) {
       let t = fs.readFileSync(f, "utf8");
@@ -93,6 +100,12 @@ function copierDossier(src, dest, plugin, constats) {
     } else poser(rel, fs.readFileSync(f));
   }
 }
+
+// Dans une forge embarquée, on ne reprend pas ce qui sert au dépôt et pas à l'outil : ses skills
+// (déjà assemblés par mallettes.json), sa config Claude Code, sa CI et ses réglages git.
+const forgeIgnoree = (rel) => /^(skills|\.claude|\.github)([\\/]|$)/.test(rel) || /^\.git(ignore|attributes)$/.test(rel);
+// Limites d'un plugin chargé dans claude.ai (claude.com/docs/cowork/guide/plugins, « Limits »).
+const LIMITE = { fichiers: 5000, octets: 200e6 };
 
 const entrees = [];
 for (const p of conf.plugins) {
@@ -116,6 +129,16 @@ for (const p of conf.plugins) {
     provenance["agents"] = { depot: p.agents.split("/")[0], chemin: p.agents.split("/").slice(1).join("/"), commit: shaDepot(path.join(RACINE, p.agents.split("/")[0])) };
   }
   if (p.extra) copierDossier(path.join(MARKETPLACE, p.extra), base, p.name, constats);
+  for (const forge of p.forges || []) {
+    const src = path.join(RACINE, forge);
+    if (!fs.existsSync(path.join(src, "README.md"))) throw new Error(`forge introuvable : ${src}`);
+    copierDossier(src, path.join(base, "forges", forge), p.name, constats, forgeIgnoree);
+    provenance["forge:" + forge] = { depot: forge, chemin: ".", commit: shaDepot(src) };
+  }
+  const fichiers = [...sortie.keys()].filter((k) => k.startsWith(base.split(path.sep).join("/") + "/"));
+  const octets = fichiers.reduce((n, k) => n + sortie.get(k).length, 0);
+  if (fichiers.length > LIMITE.fichiers || octets > LIMITE.octets)
+    throw new Error(`${p.name} dépasse la limite d'un plugin claude.ai : ${fichiers.length} fichiers, ${(octets / 1e6).toFixed(1)} Mo (max ${LIMITE.fichiers} fichiers, ${LIMITE.octets / 1e6} Mo)`);
 
   const manifeste = { name: p.name, displayName: p.displayName, description: p.description, author: conf.marketplace.owner, license: "MIT" };
   if (p.dependencies) manifeste.dependencies = p.dependencies;

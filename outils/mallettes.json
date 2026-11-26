@@ -82,6 +82,10 @@
         "factory-forge-websec/skills/securite-web",
         "factory-forge-agents-security/skills/securite-agentique",
         "factory-forge-tests/skills/audit-qualite-tests"
+      ],
+      "forges": [
+        "factory-forge-agents-security",
+        "factory-forge-websec"
       ]
     },
     {
@@ -95,6 +99,10 @@
         "factory-forge-agents/.claude/skills/data-quality-auditor",
         "factory-forge-data/skills/discipline-data",
         "factory-forge-observability/skills/veille-derive"
+      ],
+      "forges": [
+        "factory-forge-data",
+        "factory-forge-observability"
       ]
     },
     {

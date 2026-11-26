@@ -11,9 +11,26 @@ Marketplace de plugins Claude des consultants Factory. Un plugin = une mallette.
 | `factory-data` | Profilage d'un jeu de données, discipline de la donnée (assertions, lineage, restitution sourcée, data contract, modèle Gold, migration de rapport, anonymisation), veille de dérive. |
 | `factory-marketing` | Étude SEO et GEO d'un site (sur commande explicite), animation de réseaux sociaux avec accord humain par lot, clip de présentation. |
 
-Les skills qui enveloppent une forge (audit, sécurité, data, ops, SEO, runs) la cherchent sous
-`$FORGE_ROOT`, sinon `~/factory`. Forge absente : ils le disent et proposent la phrase d'usage de
+Les skills qui enveloppent une forge la cherchent sous `$FORGE_ROOT`, sinon `~/factory`, puis dans
+la copie que leur mallette embarque. Forge absente : ils le disent et proposent la phrase d'usage de
 la Factory, sans jamais simuler un verdict.
+
+## Forges embarquées
+
+Une mallette peut livrer ses forges avec ses skills : le consultant n'a rien à cloner, et la forge
+se met à jour avec la marketplace. `outils/mallettes.json` les déclare dans `forges` ;
+`construire.mjs` les copie sous `plugins/<mallette>/forges/<forge>/`, sans leurs `skills/`,
+`.claude/`, `.github/` ni réglages git.
+
+| Mallette | Forges embarquées |
+|---|---|
+| `factory-data` | `factory-forge-data`, `factory-forge-observability` |
+| `factory-audit-securite` | `factory-forge-agents-security`, `factory-forge-websec` |
+
+Pas encore embarquées : `factory-forge-audit` (paquets npm `ajv` et `js-yaml`),
+`factory-forge-tests` (Playwright et Chromium), `factory-forge-ops` (dépend du pilot),
+`factory-forge-seo-geo` (rendu JS par Playwright en option). Leurs skills demandent toujours la
+forge sur le poste.
 
 ## Installer (Claude Code)
 
@@ -33,7 +50,7 @@ dépend.
 
 **Ne modifiez jamais `plugins/` à la main.** Ce dossier est assemblé depuis les forges :
 
-1. Corriger le skill dans sa forge (dépôt `factory-forge-*`), sous ses règles.
+1. Corriger le skill ou la forge dans son dépôt (`factory-forge-*`), sous ses règles.
 2. Depuis la racine des dépôts : `node factory-marketplace/outils/construire.mjs`.
 3. `claude plugin validate .`, puis commit et push.
 
