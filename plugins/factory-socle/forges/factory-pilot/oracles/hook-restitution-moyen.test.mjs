@@ -1,0 +1,191 @@
+#!/usr/bin/env node
+/**
+ * hook-restitution-moyen.test.mjs — recette du NIVEAU MOYEN (étape 2 des niveaux d'intervention,
+ * en essai depuis le 01/10/2026 à la demande humaine ; étude
+ * `output/03-etudes/2026-09/20260925-etude-opportunite-niveaux-d-intervention.md`, « Le mécanisme qui
+ * empêche le raccourci »).
+ *
+ *   1. VERT — une recherche de 12 commandes de lecture rendue au format Moyen : laisse passer.
+ *   2. ROUGE — le cas du 08/09 (TF-0978) : commit et push, message déclaré « Niveau : Moyen » :
+ *      jugé Complexe, refus qui nomme l'escalade.
+ *   3. Forme : une pièce absente → refus MOYEN, avec le rappel court et non les 8 blocs.
+ *   4. Détecteur, dans les deux sens : écriture dans le dossier temporaire et redirections vers le
+ *      néant épargnées ; écriture du dépôt, redirection vers un fichier, outil connecté qui envoie,
+ *      agent qui peut écrire relevés.
+ *   5. Pré-vol : la forme Moyen jugée avant affichage, dans les deux sens.
+ *   6. État du dépôt : intact, aucun effet ; un fichier apparu pendant le tour, effet relevé.
+ * Joué par oracles/self-tests.mjs (I2).
+ */
+import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from "node:fs";
+import { join, dirname } from "node:path";
+import { tmpdir } from "node:os";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { detecterEffets, ecrituresDuTour, effetsGit, jugerFormeMoyen } from "./hook-restitution.mjs";
+
+const ICI = dirname(fileURLToPath(import.meta.url));
+const HOOK = join(ICI, "hook-restitution.mjs");
+const base = mkdtempSync(join(tmpdir(), "hook-moyen-"));
+let pass = 0;
+const echecs = [];
+const check = (nom, ok, detail = "") => { if (ok) pass++; else echecs.push(`${nom}${detail ? ` — ${detail}` : ""}`); };
+
+// La réponse de l'exemple de l'étude (21/09/2026), au format Moyen.
+const MOYEN = `Niveau : Moyen
+
+**La réponse.** Oui pour l'essentiel. Sur 25 travaux de communication relevés au registre, 16 sont appliqués et publiés, et aucun ne dort sur une branche. Il en reste 9 ouverts : 3 livrés en partie, 3 qui attendent une session chez un produit, 3 candidats non tranchés.
+
+**Preuves.**
+- \`todo/TODO.jsonl\` porte 25 travaux, dont 16 corrigés.
+- \`git branch -a --no-merged main\` ne rend rien.
+- Les 5 skills installés sont identiques à la forge.
+
+**Non vérifié.** Le résultat des oracles sur les travaux corrigés : leur présence est vérifiée, pas leur résultat.
+
+**Décision attendue.** Aucune.`;
+
+const humain = { type: "user", timestamp: new Date(Date.now() - 60_000).toISOString(),
+  message: { role: "user", content: "pourquoi les travaux de communication ne sont-ils pas tous appliqués ?" } };
+const outil = (name, input) => ({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", name, input }] } });
+const resultat = { type: "user", message: { role: "user", content: [{ type: "tool_result", content: "ok" }] } };
+const texte = (t) => ({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: t }] } });
+const transcript = (outils, final) => [humain, ...outils.flatMap((o) => [o, resultat]), texte(final)].map((e) => JSON.stringify(e)).join("\n");
+
+const jouer = (nom, outils, final, extra = {}) => {
+  const p = join(base, nom + ".jsonl");
+  writeFileSync(p, transcript(outils, final), "utf8");
+  // cwd hors dépôt git : seul le relevé des outils parle, le test ne dépend pas de l'état du pilot.
+  const r = spawnSync(process.execPath, [HOOK], { encoding: "utf8", cwd: base,
+    input: JSON.stringify({ session_id: "test-moyen", transcript_path: p, stop_hook_active: false, cwd: base, ...extra }) });
+  try { return JSON.parse(r.stdout || "null"); } catch { return null; }
+};
+
+try {
+  // 1. VERT
+  const lectures = Array.from({ length: 12 }, (_, i) => outil("Bash", { command: `grep -n motif${i} todo/TODO.jsonl 2>/dev/null | head -5` }));
+  const v = jouer("vert", lectures, MOYEN);
+  check("1 vert : 12 lectures + forme Moyen → laisse passer", v === null, JSON.stringify(v)?.slice(0, 200));
+
+  // 2. ROUGE — le cas du 08/09
+  const r = jouer("rouge", [...lectures.slice(0, 3), outil("Bash", { command: "git commit -m correctif" }), outil("Bash", { command: "git push origin main" })], MOYEN);
+  check("2 rouge : commit + push déclarés Moyen → jugé Complexe", r?.decision === "block" && /jugé Complexe/.test(r.reason) && /S1/.test(r.reason),
+    JSON.stringify(r)?.slice(0, 200));
+
+  // 3. FORME
+  const sansNonVerifie = MOYEN.replace(/\*\*Non vérifié\.\*\*[^\n]*\n\n/, "");
+  const f = jouer("forme", lectures, sansNonVerifie);
+  check("3 forme : pièce absente → refus MOYEN au rappel court", f?.decision === "block" && /MOYEN — pièce\(s\) absente\(s\) : Non vérifié/.test(f.reason)
+    && !/8 blocs numérotés/.test(f.reason), JSON.stringify(f)?.slice(0, 200));
+  const f2 = jouer("forme-deja", lectures, sansNonVerifie, { stop_hook_active: true });
+  // TF-1739 : la réécriture est REJUGÉE et son verdict AFFICHÉ à l'humain (systemMessage), sans second refus.
+  check("3 bis : forme en défaut déjà refusée une fois → pas de second refus, verdict de la réécriture affiché (TF-1739)",
+    f2 !== null && f2.decision === undefined && /réécriture/.test(f2.systemMessage || "") && /MOYEN — pièce/.test(f2.systemMessage || ""),
+    JSON.stringify(f2)?.slice(0, 200));
+  const long = MOYEN.replace("Aucune.", "Aucune. " + "mot ".repeat(350));
+  check("3 ter : 400 mots dépassés → écart nommé", jugerFormeMoyen(long).ecarts.some((e) => /au-delà des 400/.test(e)));
+  const dSansOptions = MOYEN.replace("Aucune.", "D-12 — faut-il publier ?");
+  check("3 quater : D-N sans recommandation ni tableau → écart nommé", jugerFormeMoyen(dSansOptions).ecarts.some((e) => /recommandation/.test(e)));
+  check("3 quinquies : forme de référence → aucun écart", jugerFormeMoyen(MOYEN).ecarts.length === 0, jugerFormeMoyen(MOYEN).ecarts.join(" ; "));
+
+  // 4. DÉTECTEUR — épargnés
+  const tmp = join(tmpdir(), "brouillon.md");
+  const epargnes = [
+    outil("Write", { file_path: tmp }),
+    outil("Bash", { command: "node -e \"const f = (x) => x > 2\" 2>&1 | head" }),
+    outil("Bash", { command: `git log -3 > ${join(tmpdir(), "log.txt").replace(/\\/g, "/")}` }),
+    outil("PowerShell", { command: "Get-ChildItem 2>$null" }),
+    outil("Agent", { subagent_type: "Explore", prompt: "cherche" }),
+    outil("mcp__claude_ai_Gmail__search_threads", { q: "x" }),
+    // TF-1418 (12/10/2026) : une copie vers le dossier temporaire de la session, nommé par son chemin ou sa variable.
+    outil("Bash", { command: `cp oracles/hook-restitution.mjs "$TEMP/copie.mjs"` }),
+    outil("Bash", { command: `git show HEAD:x.md > /dev/null; cp x.md ${join(tmpdir(), "x.md").replace(/\\/g, "/")}` }),
+    outil("PowerShell", { command: "Copy-Item x.md -Destination $env:TEMP\\x.md" }),
+    // TF-2034 (02/11/2026) : lister les remisages et les étiquettes lit, comme `git worktree list`.
+    outil("Bash", { command: "git stash list" }),
+    outil("Bash", { command: "git stash show -p stash@{0}" }),
+    outil("Bash", { command: "git tag -l" }),
+    outil("Bash", { command: "git tag --list 'v*'" }),
+    outil("Bash", { command: "git -C /c/dev/x stash list && git -C /c/dev/x tag -l" }),
+    // TF-2648 (16/11/2026) : lister les étiquettes avec un tri, un filtre ou un format lit aussi (le cas du 13/11 : `git tag --sort=-creatordate | head -10`),
+    // et une récupération vers le dossier temporaire de la session n'écrit rien dans le dépôt.
+    outil("Bash", { command: "git tag --sort=-creatordate | head -10" }),
+    outil("Bash", { command: "git tag --sort=-v:refname --list 'v*'" }),
+    outil("Bash", { command: "git tag --contains HEAD" }),
+    outil("Bash", { command: "git tag | tail -3" }),   // sans argument, `git tag` liste
+    outil("Bash", { command: "git tag --points-at HEAD" }),
+    outil("Bash", { command: "git tag -n5" }),
+    outil("Bash", { command: "git tag --merged main --format='%(refname:short)'" }),
+    outil("Bash", { command: `curl -sL -o ${join(tmpdir(), "page.html").replace(/\\/g, "/")} https://example.com/qualification` }),
+    outil("Bash", { command: `curl -s -o "$TEMP/x.json" -w '%{http_code}' https://example.com/api` }),
+    // TF-2688 (22/11/2026) : une adresse qui FINIT par `-d` suivie d'une espace n'est pas l'option `-d` de curl (le cas : `…/page-d -o f`, lu comme un POST).
+    outil("Bash", { command: `curl -s https://example.com/page-d -o "$TEMP/p.html"` }),
+    outil("Bash", { command: `curl -sL https://example.com/kebab-d | head -5` }),
+  ];
+  const e0 = detecterEffets(epargnes);
+  check("4 détecteur : temporaire, néant, flèche, Explore, lecture connectée → aucun effet", e0.length === 0, e0.join(" ; "));
+  // relevés
+  const releves = [
+    [outil("Write", { file_path: "C:/dev/factory-pilot/references/NIVEAUX.md" }), /écriture de/],
+    [outil("Bash", { command: "git log -1 > rapport.txt" }), /redirection vers rapport\.txt/],
+    [outil("Bash", { command: "sed -i 's/a/b/' x.md" }), /sed -i/],
+    [outil("PowerShell", { command: "Remove-Item x.md -Confirm:$false" }), /Remove-Item/],
+    [outil("mcp__claude_ai_Gmail__send_message", { to: "x" }), /outil connecté/],
+    [outil("Agent", { subagent_type: "general-purpose", prompt: "corrige" }), /Agent lancé/],
+    // TF-1418 : la copie hors du temporaire reste un effet, et une source temporaire ne suffit pas.
+    [outil("Bash", { command: "cp x.md references/x.md" }), /« cp »/],
+    [outil("Bash", { command: "cp /tmp/x.md references/x.md" }), /« cp »/],
+    [outil("Bash", { command: "cp x.md /tmp/x.md && git commit -m y" }), /git commit/],
+    // TF-2034 : le côté qui écrit de `stash` et de `tag` reste un effet (remède joué : seuls list/show/-l/--list sont épargnés).
+    [outil("Bash", { command: "git stash" }), /git stash/],
+    [outil("Bash", { command: "git stash pop" }), /git stash/],
+    [outil("Bash", { command: "git tag v1.0" }), /git tag/],
+    [outil("Bash", { command: "git tag -d v1.0" }), /git tag/],
+    // TF-2648 : le remède ne rend pas muet le côté qui écrit — créer, forcer, supprimer ou signer reste un effet, même derrière une option de liste.
+    [outil("Bash", { command: "git tag -a v1.1 -m 'x'" }), /git tag/],
+    [outil("Bash", { command: "git tag -f v1.0" }), /git tag/],
+    [outil("Bash", { command: "git tag --delete v1.0" }), /git tag/],
+    [outil("Bash", { command: "git tag -D v1.0" }), /git tag/],
+    [outil("Bash", { command: "git tag --sort=-creatordate -d v1.0" }), /git tag/],
+    [outil("Bash", { command: "git tag --list 'v*' -d v1.0" }), /git tag/],
+    // Un `curl -X POST` reste une écriture distante, même quand sa sortie va au dossier temporaire.
+    [outil("Bash", { command: "curl -X POST -o $TEMP/r.json https://example.com/api" }), /curl -X POST/],
+    // TF-2688 : le remède ne rend pas muet le vrai `-d` — l'option de données, seule ou après d'autres options, reste une écriture distante.
+    [outil("Bash", { command: "curl -s -d 'a=1' https://example.com/api" }), /curl -s -d/],
+    [outil("Bash", { command: "curl https://example.com/page-d -d 'a=1'" }), /curl https:\/\/example\.com\/page-d -d/],
+  ];
+  // TF-2648 : le MÊME jeu par le relevé que le hook de fin de tour joue, `git -C <dossier>` compris (`GIT_A_OPTIONS`).
+  const parRelevé = (cmd) => ecrituresDuTour([outil("Bash", { command: cmd })]);
+  for (const cmd of ["git -C /c/dev/x tag --sort=-creatordate", "git -C /c/dev/x tag --contains HEAD | head -3", `curl -sL -o "$TEMP/p.html" https://example.com/q`, "git tag --sort=-creatordate | head -10"])
+    check(`4 relevé (TF-2648) : « ${cmd} » est une lecture`, parRelevé(cmd).length === 0, parRelevé(cmd).join(" ; "));
+  for (const cmd of ["git -C /c/dev/x tag -d v1", "git -C /c/dev/x tag v2", "git -C /c/dev/x tag --sort=-creatordate -D v1"])
+    check(`4 relevé (TF-2648) : « ${cmd} » reste un effet`, parRelevé(cmd).length === 1 && /git tag/.test(parRelevé(cmd)[0]), parRelevé(cmd).join(" ; ") || "aucun effet");
+  for (const [o, re] of releves) {
+    const e = detecterEffets([o]);
+    check(`4 détecteur : ${o.message.content[0].name} relevé`, e.length === 1 && re.test(e[0]), e.join(" ; "));
+  }
+
+  // 6. ÉTAT DU DÉPÔT — un fichier écrit par un programme, hors de tout outil d'écriture.
+  const depot = join(base, "depot");
+  spawnSync("git", ["init", "-q", depot]);
+  const avant = new Date(Date.now() - 5_000).toISOString();
+  check("6 dépôt intact → aucun effet", effetsGit(depot, avant).length === 0, effetsGit(depot, avant).join(" ; "));
+  writeFileSync(join(depot, "ecrit-par-un-script.txt"), "x");
+  const eg = effetsGit(depot, avant);
+  check("6 bis : fichier apparu pendant le tour → effet relevé", eg.length === 1 && /ecrit-par-un-script/.test(eg[0]), eg.join(" ; "));
+
+  // 6 ter. TF-1943 (29/10/2026) — depuis un SOUS-DOSSIER du dépôt (le `cwd` d'une session qui a fait un `cd`), l'état git se lit encore : les chemins du mode porcelain
+  // partent de la racine du dépôt, et `join(cwd, chemin)` ne désignait rien — le fichier apparu pendant le tour n'était pas vu, un tour Moyen qui écrit passait.
+  mkdirSync(join(depot, "sous", "dossier"), { recursive: true });
+  const egSous = effetsGit(join(depot, "sous", "dossier"), avant);
+  check("6 ter : fichier apparu pendant le tour, état lu depuis un sous-dossier du dépôt → effet relevé", egSous.length === 1 && /ecrit-par-un-script/.test(egSous[0]), egSous.join(" ; ") || "aucun effet");
+
+  // 5. PRÉ-VOL
+  const pv = (t) => spawnSync(process.execPath, [HOOK, "--pre-vol"], { encoding: "utf8", input: t });
+  const pvOk = pv(MOYEN), pvKo = pv(sansNonVerifie);
+  check("5 pré-vol : forme Moyen de référence → exit 0", pvOk.status === 0, pvOk.stdout);
+  check("5 bis pré-vol : pièce absente → exit 1", pvKo.status === 1 && /Non vérifié/.test(pvKo.stdout), pvKo.stdout);
+} catch (e) { echecs.push(`harnais : ${String(e).slice(0, 200)}`); }
+finally { try { rmSync(base, { recursive: true, force: true }); } catch { /* toléré */ } }
+
+if (echecs.length) { console.error(`hook-restitution-moyen : FAIL (${pass} PASS)\n  - ` + echecs.join("\n  - ")); process.exit(1); }
+console.log(`hook-restitution-moyen : ${pass}/${pass} — niveau Moyen : recherche sans effet acceptée à sa forme, commit et push déclarés Moyen jugés Complexe (cas du 08/09), pièce absente refusée au rappel court, anti-boucle, bornes de 400 mots et de décision complète, détecteur d'effets dans ses deux sens, pré-vol de la forme`);

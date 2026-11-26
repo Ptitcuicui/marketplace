@@ -1,0 +1,546 @@
+#!/usr/bin/env node
+/**
+ * readme-dossiers.test.mjs — TF-0503 : la table des README ne porte AUCUNE date, donc un commit
+ * ne la périme plus. Et la dérive de STRUCTURE reste un défaut.
+ *
+ * Le fait fondateur, mesuré sept fois sur sept le 22/08/2026. La table portait une colonne
+ * « Dernier commit ». Régénérée par le hook AVANT le commit, elle annonçait « non versionné »
+ * pour les fichiers que ce commit était justement en train de versionner ; le hook la
+ * régénérait après, et l'arbre de travail ressortait SALE d'un commit qui venait de tout
+ * prendre. TF-0451 (21/08) avait atténué l'effet — une dérive de date seule devenait un
+ * avertissement à `--check` — mais le hook, lui, réécrivait le fichier quand même : l'effet
+ * revenait par la porte de l'écriture.
+ *
+ * La cause est retirée par décision humaine du 22/08 : « ne fais pas de boucle sur les dates
+ * des fichiers et/ou dossiers pour ne pas faire grossir inutilement les traitements ou les
+ * changements ». Plus de colonne, donc plus de `git log` sur l'arbre à chaque écriture, plus de
+ * balayage par dossier, et plus de tolérance à maintenir : ce qui fait DÉFAUT est la structure
+ * (fichier apparu, disparu, renommé) et le rôle non rédigé.
+ *
+ * La recette mesure les deux sens : la table est SANS date (et sans le mot qui la remplaçait),
+ * un vrai commit ne change RIEN au README (c'est le défaut d'origine, joué en dépôt réel), et
+ * une dérive de structure est TOUJOURS refusée.
+ *
+ * Joué par `oracles\self-tests.mjs` (I2).
+ */
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, readdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { spawnSync } from "node:child_process";
+import { retirer } from "../oracles/hook-ecriture.mjs";
+
+const ICI = dirname(fileURLToPath(import.meta.url));
+const OUTIL = join(ICI, "readme-dossiers.mjs");
+let pass = 0, fail = 0;
+const check = (nom, fn) => {
+  try { fn(); console.log(`  [PASS] ${nom}`); pass++; }
+  catch (e) { console.error(`  [FAIL] ${nom} — ${e.message}`); fail++; }
+};
+
+// TF-1133 (15/09/2026) — LE GÉNÉRATEUR PSEUDONYMISE CE QU'IL ÉCRIT (D-37), DONC CETTE RECETTE LUI
+// DONNE DES TABLES, ET CE SONT LES SIENNES. Sans elles, il lisait celles du canal confidentiel de ce
+// poste (origine « canal » mesurée) ; sur un clone frais, sans canal, il refusait à bon droit
+// d'écrire un index qu'il ne pouvait pas pseudonymiser, et la recette tombait sur ENOENT au premier
+// README attendu. Tables INVENTÉES, sous un dossier temporaire, désignées pour ce processus et ses
+// sous-processus seulement : jamais lues, copiées ni exportées depuis le canal (TF-0957).
+const TABLES = mkdtempSync(join(tmpdir(), "readme-tables-"));
+writeFileSync(join(TABLES, "_noms-interdits.json"), JSON.stringify({ noms: ["Zorglub"], identifiants: [], sigles: [], pseudonymes: { Zorglub: "Client-A" } }), "utf8");
+writeFileSync(join(TABLES, "_produits-pseudonymes.json"), JSON.stringify({ produits: {} }), "utf8");
+process.env.FORGE_NOMS_INTERDITS = join(TABLES, "_noms-interdits.json");
+process.env.FORGE_PRODUITS_PSEUDO = join(TABLES, "_produits-pseudonymes.json");
+
+const T = mkdtempSync(join(tmpdir(), "readme-sans-dates-"));
+mkdirSync(join(T, "input", "sous"), { recursive: true });
+mkdirSync(join(T, "output"), { recursive: true });
+writeFileSync(join(T, "input", "a.md"), "# Document A\n", "utf8");
+writeFileSync(join(T, "input", "b.md"), "# Document B\n", "utf8");
+
+const lancer = (extra = []) =>
+  spawnSync(process.execPath, [OUTIL, "--base", T, "--racines", "input,output", ...extra],
+    { encoding: "utf8" });
+const git = (...a) => spawnSync("git", ["-C", T, ...a], { encoding: "utf8" });
+
+// Un dépôt git RÉEL : c'est la seule façon de rejouer le défaut d'origine, qui n'apparaissait
+// qu'au moment où un fichier passait de « inconnu de git » à « versionné ».
+git("init", "-q", "-b", "main");
+git("config", "user.email", "recette@local");
+git("config", "user.name", "recette");
+git("config", "commit.gpgsign", "false");
+
+// Mise en place : générer, puis rédiger les rôles (un rôle non rédigé est un défaut à part).
+lancer();
+const README = join(T, "input", "README.md");
+for (const chemin of [README, join(T, "input", "sous", "README.md"), join(T, "output", "README.md")]) {
+  writeFileSync(chemin, readFileSync(chemin, "utf8")
+    .replace(/<!-- ROLE:DEBUT -->[\s\S]*?<!-- ROLE:FIN -->/,
+      "<!-- ROLE:DEBUT -->\nDossier de recette.\n<!-- ROLE:FIN -->"), "utf8");
+}
+// Le générateur PRÉSERVE le rôle mais réécrit sa mise en forme — sans ce second passage, le
+// témoin ne serait pas ce que `--check` attend, et la recette mesurerait son échafaudage.
+lancer();
+
+check("mise en place : arbre régénéré et rôles rédigés → --check PASS", () => {
+  const r = lancer(["--check"]);
+  if (r.status !== 0) throw new Error(`exit ${r.status} : ${(r.stderr || "").slice(0, 200)}`);
+});
+
+check("la table ne porte AUCUNE colonne de date — ni en-tête, ni « non versionné », ni date ISO", () => {
+  const t = readFileSync(README, "utf8");
+  if (/Dernier commit/.test(t)) throw new Error("l'en-tête « Dernier commit » est encore là");
+  if (/non versionné/.test(t)) throw new Error("« non versionné » subsiste — la colonne a survécu");
+  if (/\d{4}-\d{2}-\d{2}/.test(t)) throw new Error("une date ISO subsiste dans la table");
+  const entete = t.split("\n").find((l) => l.startsWith("| Élément"));
+  if (!entete) throw new Error("en-tête de table introuvable");
+  const colonnes = entete.split("|").filter((c) => c.trim()).length;
+  if (colonnes !== 4) throw new Error(`${colonnes} colonnes, 4 attendues (Élément, Type, Taille, Titre / nature)`);
+});
+
+check("aucun appel à `git log` : le générateur ne lit plus l'historique", () => {
+  const src = readFileSync(OUTIL, "utf8");
+  const appels = src.split("\n").filter((l) => !l.trim().startsWith("*") && !l.trim().startsWith("//"));
+  if (appels.some((l) => /"log"/.test(l))) throw new Error("un appel `git log` subsiste dans le code exécuté");
+});
+
+// LE DÉFAUT D'ORIGINE, joué tel quel : un commit qui versionne les fichiers ne doit RIEN changer.
+check("TF-0503 — un commit qui versionne les fichiers ne change PAS le README (le défaut d'origine)", () => {
+  const avant = readFileSync(README, "utf8");
+  git("add", "-A");
+  const c = git("commit", "-q", "-m", "recette : tout versionner");
+  if (c.status !== 0) throw new Error(`le commit de recette a échoué : ${(c.stderr || "").slice(0, 150)}`);
+  const r = lancer();
+  if (r.status !== 0) throw new Error(`régénération en échec : ${(r.stderr || "").slice(0, 200)}`);
+  if (readFileSync(README, "utf8") !== avant) throw new Error("le README a changé APRÈS le commit — le cycle est encore là");
+  const v = lancer(["--check"]);
+  if (v.status !== 0) throw new Error(`--check refuse après le commit (exit ${v.status}) : ${(v.stderr || "").slice(0, 200)}`);
+});
+
+const temoin = readFileSync(README, "utf8");
+
+check("dérive de STRUCTURE (une ligne de fichier retirée) → --check REFUSE, avec son motif", () => {
+  writeFileSync(README, temoin.split("\n").filter((l) => !l.startsWith("| `b.md`")).join("\n"), "utf8");
+  const r = lancer(["--check"]);
+  if (r.status !== 1) throw new Error(`exit ${r.status} attendu 1 — la structure n'est plus jugée`);
+  if (!/périmé/.test(r.stderr || "")) throw new Error("le motif du refus n'est pas dit");
+});
+
+// Ajouté AU DÉPÔT (`git add`) : un fichier non suivi n'entre pas dans l'index (TF-0914, TF-2068).
+check("un fichier AJOUTÉ au dossier reste un défaut", () => {
+  writeFileSync(README, temoin, "utf8");
+  writeFileSync(join(T, "input", "c.md"), "# Document C\n", "utf8");
+  git("add", "input/c.md");
+  const r = lancer(["--check"]);
+  if (r.status !== 1) throw new Error(`exit ${r.status} attendu 1`);
+});
+
+check("`--strict` a disparu sans casser l'appel : le drapeau est ignoré, le verdict est le même", () => {
+  writeFileSync(README, temoin, "utf8");
+  git("rm", "-q", "--cached", "input/c.md");
+  retirer(join(T, "input", "c.md")); // TF-2597 : `rmSync` ne retire rien sous un chemin accentué (Node 25.2.1, Windows)
+  lancer();
+  const sans = lancer(["--check"]);
+  const avec = lancer(["--check", "--strict"]);
+  if (sans.status !== avec.status) throw new Error(`verdicts divergents : ${sans.status} vs ${avec.status}`);
+  if (sans.status !== 0) throw new Error(`exit ${sans.status} attendu 0`);
+});
+
+// ---- TF-0914 : UN INDEX SUIVI NE PORTE PAS LE NOM D'UN FICHIER QUE LE DÉPÔT NE PORTE PAS -----
+//
+// Le 08/09, un lot déposé par un produit dont le nom réel n'est PAS connu du canal confidentiel
+// est resté non suivi le temps d'un arbitrage ; le hook a écrit ce nom dans l'index, qui est
+// suivi et publié. La pseudonymisation ne pouvait rien : elle ne substitue que ce qu'elle
+// connaît. La règle qui supprime la classe : hors de l'histoire du dépôt, hors de l'index.
+//
+// LES DEUX SENS, sur le même dossier et dans le même état de départ :
+//   · non suivi  → ABSENT de la table, et son NOMBRE dit sur le poste (jamais par omission) ;
+//   · suivi      → PRÉSENT, dès le commit qui le versionne et sans autre geste.
+// TF-2068 (03/11/2026) : le nombre s'écrivait au pied de l'index publié. Il dépend du poste : un
+// worktree ou l'autre poste, sans le fichier, régénéraient un autre pied, et RD2 y jugeait l'index
+// périmé. Même règle que D-20 (a) pour l'index d'output : le compte se lit sur le poste.
+const NOM_NON_SUIVI = "Client-X_Reporting - RETOURS - 20260908z.md";
+const avantNonSuivi = readFileSync(README, "utf8");
+writeFileSync(join(T, "input", NOM_NON_SUIVI), "# Retours d un produit dont le nom n est pas au canal\n", "utf8");
+const rNonSuivi = lancer();
+const sortieNonSuivi = (rNonSuivi.stdout || "") + (rNonSuivi.stderr || "");
+
+check("TF-0914 : un fichier NON SUIVI n'entre pas dans l'index, et le générateur DIT combien il en a écarté", () => {
+  const t = readFileSync(README, "utf8");
+  if (t.includes(NOM_NON_SUIVI)) throw new Error("le nom d'un fichier non suivi est écrit dans un index suivi et publié");
+  if (!/1 fichier\(s\) présent\(s\) sur ce poste et NON suivi\(s\) par git/.test(sortieNonSuivi))
+    throw new Error(`le générateur tait ce qu'il a écarté — un écart muet se lit comme un index complet (loi n° 3) : ${sortieNonSuivi.slice(0, 200)}`);
+});
+
+check("TF-2068 : un fichier NON SUIVI ne change pas l'index publié — il ne dépend pas du poste qui le régénère", () => {
+  if (readFileSync(README, "utf8") !== avantNonSuivi) throw new Error("l'index publié diffère selon qu'un fichier non suivi est présent sur le poste");
+});
+
+check("TF-0914 : le MÊME fichier, une fois COMMIS, entre dans l'index sans autre geste", () => {
+  git("add", "-A");
+  const c = git("commit", "-q", "-m", "recette : versionner le lot");
+  if (c.status !== 0) throw new Error(`commit de recette en échec : ${(c.stderr || "").slice(0, 150)}`);
+  lancer();
+  const t = readFileSync(README, "utf8");
+  if (!t.includes(NOM_NON_SUIVI)) throw new Error("un fichier SUIVI reste absent de l'index — la règle a mordu trop large");
+  if (/NON suivi\(s\) par git/.test(t)) throw new Error("le pied annonce encore un écart alors qu'il n'y en a plus");
+});
+
+// TF-1050 — UN LIVRABLE À STRUCTURE CLOSE NE REÇOIT AUCUN INDEX. Le cas du 11/09 en miniature :
+// une définition de modèle à trois niveaux. Marquée `.no-index`, elle ne reçoit rien et son
+// parent la compte pour un ; la même sans marqueur reçoit un README par niveau (le défaut).
+{
+  const B = mkdtempSync(join(tmpdir(), "readme-clos-"));
+  for (const d of ["clos", "ouvert"]) {
+    mkdirSync(join(B, "input", d, "definition", "tables"), { recursive: true });
+    writeFileSync(join(B, "input", d, "definition", "tables", "Dim Bien.tmdl"), "table\n", "utf8");
+  }
+  writeFileSync(join(B, "input", "clos", ".no-index"), "", "utf8");
+  spawnSync(process.execPath, [OUTIL, "--base", B, "--racines", "input"], { encoding: "utf8" });
+  check("TF-1050 vert — le dossier marqué `.no-index` ne reçoit AUCUN README, à aucun niveau", () => {
+    for (const d of ["clos", "clos/definition", "clos/definition/tables"])
+      if (existsSync(join(B, "input", d, "README.md"))) throw new Error(`un README est écrit dans le livrable à structure close : ${d}`);
+  });
+  check("TF-1050 — le parent le compte comme UN livrable à structure close", () => {
+    const t = readFileSync(join(B, "input", "README.md"), "utf8");
+    if (!/`clos\\` \| livrable à structure close \(1 fichier\)/.test(t)) throw new Error("le parent ne déclare pas le livrable clos comme une entrée unique");
+  });
+  check("TF-1050 rouge — le même dossier SANS marqueur reçoit un README par niveau (le défaut d'origine)", () => {
+    for (const d of ["ouvert", "ouvert/definition", "ouvert/definition/tables"])
+      if (!existsSync(join(B, "input", d, "README.md"))) throw new Error(`le témoin sans marqueur n'a pas son README en ${d} — la recette ne prouve plus rien`);
+  });
+  rmSync(B, { recursive: true, force: true });
+}
+
+// TF-1126 — UN FORMAT TIERS SE RECONNAÎT À SON MANIFESTE, SANS MARQUEUR. Le cas du 15/09 en
+// miniature : un projet Power BI (`.pbip` à la racine, un `.SemanticModel\` et un `.Report\`) que
+// personne n'a marqué. Il ne reçoit aucun README, et son décompte de fichiers ne bouge pas ; un
+// dossier ordinaire voisin reçoit toujours le sien (le sens vert qui prouve que la règle ne mord
+// pas trop large). Et un élément de format reconnu à son seul nom, hors projet, est clos aussi.
+{
+  const B = mkdtempSync(join(tmpdir(), "readme-tiers-"));
+  const P = join(B, "output", "Projet Power BI");
+  mkdirSync(join(P, "Modele.SemanticModel", "definition", "tables"), { recursive: true });
+  mkdirSync(join(P, "Modele.Report", "definition"), { recursive: true });
+  writeFileSync(join(P, "Modele.pbip"), "{}\n", "utf8");
+  writeFileSync(join(P, "Modele.SemanticModel", "definition", "tables", "Dim.tmdl"), "table\n", "utf8");
+  writeFileSync(join(P, "Modele.Report", "definition", "report.json"), "{}\n", "utf8");
+  mkdirSync(join(B, "output", "ordinaire", "sous"), { recursive: true });
+  writeFileSync(join(B, "output", "ordinaire", "sous", "note.md"), "# note\n", "utf8");
+  mkdirSync(join(B, "output", "Seul.SemanticModel", "definition"), { recursive: true });
+  writeFileSync(join(B, "output", "Seul.SemanticModel", "definition", "model.tmdl"), "model\n", "utf8");
+  const compte = (d) => { let n = 0; for (const e of readdirSync(d, { withFileTypes: true })) n += e.isDirectory() ? compte(join(d, e.name)) : 1; return n; };
+  const avant = compte(P);
+  spawnSync(process.execPath, [OUTIL, "--base", B, "--racines", "output"], { encoding: "utf8" });
+  check("TF-1126 vert — le projet au manifeste tiers ne reçoit AUCUN README, à aucune profondeur, et garde son décompte", () => {
+    for (const d of ["", "Modele.SemanticModel", "Modele.SemanticModel/definition", "Modele.SemanticModel/definition/tables", "Modele.Report", "Modele.Report/definition"])
+      if (existsSync(join(P, d, "README.md"))) throw new Error(`un README est écrit dans le format tiers : ${d || "(racine)"}`);
+    const apres = compte(P);
+    if (apres !== avant) throw new Error(`décompte ${avant} → ${apres}`);
+  });
+  check("TF-1126 — le parent nomme le manifeste qui a clos le dossier", () => {
+    const t = readFileSync(join(B, "output", "README.md"), "utf8");
+    if (!/`Projet Power BI\\` \| livrable à structure close \(3 fichiers\) .*manifeste tiers `Modele\.pbip`/.test(t)) throw new Error("le parent ne déclare pas le projet comme livrable clos par son manifeste");
+    if (!/`Seul\.SemanticModel\\` \| livrable à structure close .*reconnu à son nom/.test(t)) throw new Error("l'élément de format reconnu à son nom n'est pas déclaré clos");
+  });
+  check("TF-1126 vert — un dossier ordinaire voisin reçoit toujours son README, à chaque niveau", () => {
+    for (const d of ["ordinaire", "ordinaire/sous"])
+      if (!existsSync(join(B, "output", d, "README.md"))) throw new Error(`README manquant en ${d} — la règle mord trop large`);
+    if (existsSync(join(B, "output", "Seul.SemanticModel", "README.md"))) throw new Error("README écrit dans un élément de format reconnu à son nom");
+  });
+  rmSync(B, { recursive: true, force: true });
+}
+
+// TF-1055 — UN DOSSIER IGNORÉ PAR GIT N'A PAS DE LIEN DANS L'INDEX SUIVI. Le sas d'arrivée est
+// ignoré ; son README aussi. L'index suivi du parent y pointait : lien mort sur tout clone frais.
+{
+  const B = mkdtempSync(join(tmpdir(), "readme-ignore-"));
+  const gb = (...a) => spawnSync("git", ["-C", B, ...a], { encoding: "utf8" });
+  gb("init", "-q", "-b", "main");
+  mkdirSync(join(B, "input", "sas"), { recursive: true });
+  mkdirSync(join(B, "input", "suivi"), { recursive: true });
+  writeFileSync(join(B, ".gitignore"), "input/sas/\n", "utf8");
+  writeFileSync(join(B, "input", "sas", "lot.md"), "# lot\n", "utf8");
+  writeFileSync(join(B, "input", "suivi", "doc.md"), "# doc\n", "utf8");
+  gb("add", ".gitignore", "input/suivi/doc.md");
+  spawnSync(process.execPath, [OUTIL, "--base", B, "--racines", "input"], { encoding: "utf8" });
+  const t = readFileSync(join(B, "input", "README.md"), "utf8");
+  check("TF-1055 rouge → vert — le dossier ignoré n'a PAS de lien vers un README qu'aucun clone ne porte", () => {
+    if (/\]\(sas\/README\.md\)/.test(t)) throw new Error("l'index suivi pointe encore vers le README d'un dossier ignoré");
+    if (!/`sas\\` \| dossier ignoré par git/.test(t)) throw new Error("le dossier ignoré n'est pas déclaré comme tel");
+  });
+  check("TF-1055 vert — un dossier SUIVI garde son lien", () => {
+    if (!/\]\(suivi\/README\.md\)/.test(t)) throw new Error("le lien d'un dossier suivi a disparu — la règle mord trop large");
+  });
+  rmSync(B, { recursive: true, force: true });
+}
+
+// TF-1451 et TF-1452 (28/09/2026) — CHEZ UN PRODUIT, LE GÉNÉRATEUR N'ÉCRIT NI PSEUDONYME NI RÔLE DU
+// PILOT. Le fait : relancé chez un produit, il remplaçait le nom du produit par son pseudonyme dans le
+// bloc Rôle écrit à la main et dans les titres de la table ; à l'adoption, il posait en rôle d'input\ et
+// d'output\ les entrants et les livrables du pilot. Un dépôt de produit se reconnaît à `forge\`, comme
+// à l'ingestion (R-47) ; le même arbre sans `forge\` reste un dépôt publiable, pseudonymisé (D-37).
+{
+  const arbre = (avecForge) => {
+    const B = mkdtempSync(join(tmpdir(), avecForge ? "readme-produit-" : "readme-publiable-"));
+    if (avecForge) mkdirSync(join(B, "forge"), { recursive: true });
+    mkdirSync(join(B, "input"), { recursive: true });
+    mkdirSync(join(B, "output"), { recursive: true });
+    // « Zorglub » est le client des tables jetables de cette recette ; chez le produit, c'est son nom.
+    writeFileSync(join(B, "input", "cahier.md"), "# Cahier des charges de Zorglub\n", "utf8");
+    spawnSync(process.execPath, [OUTIL, "--base", B, "--racines", "input,output"], { encoding: "utf8" });
+    return B;
+  };
+  const P = arbre(true);
+  // TF-1452 proposait « un rôle de produit, ou un rôle vide qui le demande » ; TF-1637 (installation
+  // sans question) retient le rôle de produit : un rôle vide laissait deux README en défaut au premier
+  // contact. L'objet de la règle ne change pas : jamais le rôle du pilot chez un produit.
+  check("TF-1452, TF-1637 — chez un produit, input\\ et output\\ reçoivent un rôle de produit (R-1, R-2), jamais celui du pilot", () => {
+    const t = readFileSync(join(P, "input", "README.md"), "utf8") + readFileSync(join(P, "output", "README.md"), "utf8");
+    if (/Entrants du pilot|Livrables du pilot|familles `05-`/.test(t)) throw new Error("un rôle du pilot est posé chez le produit");
+    if (!/Entrants du projet fournis par l'humain \(R-1\)/.test(t) || !/Livrables du projet \(R-2\)/.test(t)) throw new Error("les deux README ne portent pas le rôle de produit (R-1, R-2)");
+    if (/rôle à rédiger/.test(t)) throw new Error("un README de produit garde le rôle vide alors qu'un rôle de produit existe");
+  });
+  writeFileSync(join(P, "input", "README.md"), readFileSync(join(P, "input", "README.md"), "utf8")
+    .replace(/<!-- ROLE:DEBUT -->[\s\S]*?<!-- ROLE:FIN -->/, "<!-- ROLE:DEBUT -->\nEntrants du projet Zorglub : cahiers et notes.\n<!-- ROLE:FIN -->"), "utf8");
+  spawnSync(process.execPath, [OUTIL, "--base", P, "--racines", "input,output"], { encoding: "utf8" });
+  check("TF-1451 — chez un produit, ni le rôle écrit à la main ni les titres de la table ne sont pseudonymisés", () => {
+    const t = readFileSync(join(P, "input", "README.md"), "utf8");
+    if (!t.includes("Entrants du projet Zorglub")) throw new Error(`le rôle écrit à la main a été réécrit : ${(t.match(/<!-- ROLE:DEBUT -->[\s\S]*?<!-- ROLE:FIN -->/) || [""])[0]}`);
+    if (!t.includes("Cahier des charges de Zorglub")) throw new Error("le titre du document a été réécrit dans la table");
+    if (/Client-A/.test(t)) throw new Error("un pseudonyme est écrit dans le dépôt du produit");
+  });
+  const B = arbre(false);
+  check("TF-1451 second sens — le même arbre SANS forge\\ reste pseudonymisé : un index publiable ne porte pas le nom", () => {
+    const t = readFileSync(join(B, "input", "README.md"), "utf8");
+    if (/Zorglub/.test(t)) throw new Error("un nom de client est écrit dans l'index d'un dépôt publiable");
+    if (!/Cahier des charges de Client-A/.test(t)) throw new Error("le titre n'est pas pseudonymisé dans un dépôt publiable");
+  });
+  rmSync(P, { recursive: true, force: true });
+  rmSync(B, { recursive: true, force: true });
+}
+
+// TF-1610 (12/10/2026) — CHEZ UN PRODUIT, `input\` EST EN LECTURE SEULE : aucun README n'est posé
+// dans un sous-dossier d'entrants que le run n'a pas lui-même doté d'un README. Le fait : 458 README
+// créés dans une arborescence de médias de l'humain (5 187 fichiers). Sens rouge : le même arbre sans
+// `forge\` reçoit ses README ; sens vert : le sous-dossier déjà doté d'un README reste indexé.
+{
+  const arbre = (avecForge) => {
+    const B = mkdtempSync(join(tmpdir(), avecForge ? "readme-ro-produit-" : "readme-ro-publiable-"));
+    if (avecForge) mkdirSync(join(B, "forge"), { recursive: true });
+    mkdirSync(join(B, "output"), { recursive: true });
+    mkdirSync(join(B, "input", "Media", "2026", "juin"), { recursive: true });
+    mkdirSync(join(B, "input", "notes", "sous"), { recursive: true });
+    writeFileSync(join(B, "input", "Media", "2026", "juin", "photo.txt"), "x\n", "utf8");
+    writeFileSync(join(B, "input", "notes", "n.md"), "# Note\n", "utf8");
+    writeFileSync(join(B, "input", "notes", "README.md"), "# input\\notes\\\n\n<!-- ROLE:DEBUT -->\nNotes du run.\n<!-- ROLE:FIN -->\n", "utf8");
+    writeFileSync(join(B, "input", "notes", "sous", "s.md"), "# S\n", "utf8");
+    spawnSync(process.execPath, [OUTIL, "--base", B, "--racines", "input,output"], { encoding: "utf8" });
+    return B;
+  };
+  const P = arbre(true);
+  check("TF-1610 vert — chez un produit, aucun README dans les sous-dossiers d'entrants sans README", () => {
+    for (const rel of [["Media"], ["Media", "2026"], ["Media", "2026", "juin"], ["notes", "sous"]])
+      if (existsSync(join(P, "input", ...rel, "README.md"))) throw new Error(`README posé dans input\\${rel.join("\\")}`);
+    if (!existsSync(join(P, "input", "README.md"))) throw new Error("le README de input\\ lui-même a disparu");
+  });
+  check("TF-1610 vert — le sous-dossier déjà doté d'un README reste indexé, et la table dit ce qui n'est pas indexé", () => {
+    const t = readFileSync(join(P, "input", "README.md"), "utf8");
+    if (!/\]\(notes\/README\.md\)/.test(t)) throw new Error("le sous-dossier doté d'un README n'est plus lié");
+    if (!/Media.*non indexé \(1 fichier\)/.test(t)) throw new Error("la table ne dit pas que Media n'est pas indexé");
+    if (/\]\(Media\/README\.md\)/.test(t)) throw new Error("lien mort vers un README de Media");
+  });
+  check("TF-1610 — un second passage ne réécrit rien (idempotence) et --check passe", () => {
+    const r = spawnSync(process.execPath, [OUTIL, "--base", P, "--racines", "input,output", "--check"], { encoding: "utf8" });
+    // le rôle de input\ et output\ est vide chez un produit : seul ce défaut-là est admis
+    const autres = (r.stderr || "").split("\n").filter((l) => /^\s*-/.test(l) && !/rôle non rédigé/.test(l));
+    if (autres.length) throw new Error(`défauts inattendus : ${autres.join(" | ")}`);
+  });
+  const B = arbre(false);
+  check("TF-1610 rouge — le même arbre SANS forge\\ reçoit ses README partout (le défaut d'origine)", () => {
+    if (!existsSync(join(B, "input", "Media", "2026", "juin", "README.md"))) throw new Error("la règle mord hors des produits");
+  });
+  rmSync(P, { recursive: true, force: true });
+  rmSync(B, { recursive: true, force: true });
+}
+
+// TF-1576 et TF-1620 (13/10/2026) — UN DOSSIER IGNORÉ DÉCLARÉ GARDE SA LIGNE QUAND IL EST ABSENT. Le
+// sas `_arrivee\` est ignoré par git ; dans un worktree ou un clone frais il n'existe pas, et la
+// régénération retirait la ligne versionnée qui le déclare (deux fois le 13/10). L'arbre jeté est un
+// « pilot » en miniature : le générateur et ses dépendances y sont copiés, car la table des rôles ne
+// vaut qu'au pilot.
+{
+  const P = mkdtempSync(join(tmpdir(), "readme-pilot-absent-"));
+  const SOURCE = join(ICI, "..");
+  for (const f of ["scripts/readme-dossiers.mjs", "scripts/lib-empreinte.mjs", "scripts/lib-confidentiel.mjs", "scripts/lib-parc.mjs", "todo/anonymiser-entrant.mjs"]) {
+    mkdirSync(dirname(join(P, f)), { recursive: true });
+    writeFileSync(join(P, f), readFileSync(join(SOURCE, f)));
+  }
+  const gp = (...a) => spawnSync("git", ["-C", P, ...a], { encoding: "utf8" });
+  gp("init", "-q", "-b", "main");
+  mkdirSync(join(P, "input", "00-retours", "_arrivee"), { recursive: true });
+  writeFileSync(join(P, ".gitignore"), "input/00-retours/_arrivee/\n", "utf8");
+  writeFileSync(join(P, "input", "00-retours", "doc.md"), "# doc\n", "utf8");
+  writeFileSync(join(P, "input", "00-retours", "_arrivee", "lot.md"), "# lot\n", "utf8");
+  gp("add", ".gitignore", "input/00-retours/doc.md");
+  const gen = () => spawnSync(process.execPath, [join(P, "scripts", "readme-dossiers.mjs"), "--base", P, "--racines", "input"], { encoding: "utf8" });
+  const lire = () => readFileSync(join(P, "input", "00-retours", "README.md"), "utf8");
+  gen();
+  const present = /`_arrivee\\` \| dossier ignoré par git/.test(lire());
+  check("TF-1576 vert — sas présent : la ligne du dossier ignoré déclaré est écrite", () => {
+    if (!present) throw new Error("ligne _arrivee absente alors que le dossier existe");
+  });
+  retirer(join(P, "input", "00-retours", "_arrivee"));
+  gen();
+  check("TF-1576 rouge → vert — sas absent (worktree, clone frais) : la ligne déclarée n'est PAS retirée", () => {
+    if (!/`_arrivee\\` \| dossier ignoré par git/.test(lire())) throw new Error("la ligne du sas absent a disparu de l'index (défaut d'origine)");
+  });
+  check("TF-1576 — l'index reste stable : un second passage ne réécrit rien", () => {
+    const avant = lire();
+    gen();
+    if (lire() !== avant) throw new Error("l'index change à la régénération suivante");
+  });
+  // Sens inverse : le dossier n'est plus ignoré par git (déclaration périmée) et il est absent → rien à
+  // lister, la ligne s'en va. La règle ne fabrique pas de ligne pour un dossier qui n'existe nulle part.
+  writeFileSync(join(P, ".gitignore"), "", "utf8");
+  gen();
+  check("TF-1576 sens inverse — dossier déclaré mais ni ignoré ni présent : aucune ligne fabriquée", () => {
+    if (/_arrivee/.test(lire())) throw new Error("une ligne est fabriquée pour un dossier qui n'est pas ignoré");
+  });
+  rmSync(P, { recursive: true, force: true });
+}
+
+// TF-1667 (14/10/2026) — LE GÉNÉRATEUR NE RÉÉCRIT PAS UN README RÉDIGÉ À LA MAIN ET N'ÉCRIT NI SOUS DES
+// FIXTURES NI DANS UN DOSSIER GELÉ. Le fait du 13/10 chez un produit : 41 README suivis rédigés à la main
+// remplacés par une table et un rôle « à rédiger », 20 README créés sous `__tests__\fixtures\`, 1 dans un
+// témoin que le CLAUDE.md du produit déclare gelé. Sens rouge : le même arbre SANS ces protections (un
+// README qui porte la marque, un dossier ordinaire) est bien régénéré — la règle ne mord pas trop large.
+{
+  const P = mkdtempSync(join(tmpdir(), "readme-redige-main-"));
+  mkdirSync(join(P, "forge"), { recursive: true });
+  mkdirSync(join(P, "input"), { recursive: true });
+  for (const d of [["03-Syntheses"], ["pack", "__tests__", "fixtures", "cas"], ["07-Standards", "baseline-20260710b"], ["genere"]])
+    mkdirSync(join(P, "output", ...d), { recursive: true });
+  const MAIN = "# Synthèses\n\nCe dossier porte les synthèses du projet, rédigées à la main.\n";
+  writeFileSync(join(P, "output", "03-Syntheses", "README.md"), MAIN, "utf8");
+  writeFileSync(join(P, "output", "03-Syntheses", "s.md"), "# S\n", "utf8");
+  writeFileSync(join(P, "output", "pack", "__tests__", "fixtures", "cas", "f.json"), "{}\n", "utf8");
+  writeFileSync(join(P, "output", "07-Standards", "baseline-20260710b", "norme.md"), "# Norme\n", "utf8");
+  writeFileSync(join(P, "output", "genere", "g.md"), "# G\n", "utf8");
+  writeFileSync(join(P, "CLAUDE.md"), "# Produit\n\n- Le témoin `output/07-Standards/baseline-20260710b/` est gelé : ne rien y écrire.\n", "utf8");
+  const r = spawnSync(process.execPath, [OUTIL, "--base", P, "--racines", "output"], { encoding: "utf8" });
+  check("TF-1667 rouge → vert — un README rédigé à la main (sans marque ni bloc ROLE) n'est PAS réécrit, et la sortie le dit", () => {
+    if (readFileSync(join(P, "output", "03-Syntheses", "README.md"), "utf8") !== MAIN) throw new Error("le README rédigé à la main a été réécrit (défaut d'origine)");
+    if (!/1 README rédigé\(s\) à la main .*préservé/.test(r.stdout || "")) throw new Error(`la préservation n'est pas dite : ${(r.stdout || "").slice(0, 200)}`);
+  });
+  check("TF-1667 rouge → vert — aucun README sous `__tests__` ni `fixtures`, le parent les compte comme un bloc clos", () => {
+    for (const rel of [["pack", "__tests__"], ["pack", "__tests__", "fixtures"], ["pack", "__tests__", "fixtures", "cas"]])
+      if (existsSync(join(P, "output", ...rel, "README.md"))) throw new Error(`README posé dans output\\${rel.join("\\")}`);
+    if (!/`__tests__\\` \| livrable à structure close .*dossier de tests ou de fixtures/.test(readFileSync(join(P, "output", "pack", "README.md"), "utf8")))
+      throw new Error("le parent ne déclare pas le dossier de tests");
+  });
+  check("TF-1667 rouge → vert — le dossier que le CLAUDE.md déclare gelé ne reçoit aucun README", () => {
+    if (existsSync(join(P, "output", "07-Standards", "baseline-20260710b", "README.md"))) throw new Error("README posé dans le témoin gelé (défaut d'origine)");
+    if (!/déclaré gelé par le CLAUDE\.md/.test(readFileSync(join(P, "output", "07-Standards", "README.md"), "utf8"))) throw new Error("le parent ne dit pas pourquoi le témoin n'est pas indexé");
+  });
+  check("TF-1667 sens rouge — un dossier ordinaire et un README qui porte la marque sont toujours régénérés", () => {
+    if (!existsSync(join(P, "output", "genere", "README.md"))) throw new Error("la règle mord trop large : le dossier ordinaire n'a pas de README");
+    const f = join(P, "output", "genere", "README.md");
+    writeFileSync(f, readFileSync(f, "utf8").replace("| `g.md` |", "| `ancien.md` |"), "utf8");
+    spawnSync(process.execPath, [OUTIL, "--base", P, "--racines", "output"], { encoding: "utf8" });
+    if (!/\| `g\.md` \|/.test(readFileSync(f, "utf8"))) throw new Error("un README généré périmé n'a pas été régénéré");
+  });
+  check("TF-1667 — `--racines` borné au dossier écrit ne touche aucun autre dossier", () => {
+    const Q = mkdtempSync(join(tmpdir(), "readme-borne-"));
+    mkdirSync(join(Q, "forge"), { recursive: true });
+    mkdirSync(join(Q, "output", "a"), { recursive: true });
+    mkdirSync(join(Q, "output", "b"), { recursive: true });
+    writeFileSync(join(Q, "output", "a", "x.md"), "# X\n", "utf8");
+    writeFileSync(join(Q, "output", "b", "y.md"), "# Y\n", "utf8");
+    spawnSync(process.execPath, [OUTIL, "--base", Q, "--racines", "output/a"], { encoding: "utf8" });
+    const ok = existsSync(join(Q, "output", "a", "README.md")) && !existsSync(join(Q, "output", "b", "README.md")) && !existsSync(join(Q, "output", "README.md"));
+    rmSync(Q, { recursive: true, force: true });
+    if (!ok) throw new Error("la borne --racines n'a pas tenu");
+  });
+  rmSync(P, { recursive: true, force: true });
+}
+
+// TF-1652 (14/10/2026) — JOUÉ DEPUIS LA RACINE D'UN PRODUIT SUR LA COPIE DU PILOT QU'IL PORTE
+// (`factory\`), LE GÉNÉRATEUR N'ÉCRIT RIEN DANS CETTE COPIE. Le fait du 13/10 : `node factory/scripts/
+// readme-dossiers.mjs` lancé depuis la racine d'un produit a régénéré 8 README dans `factory\`. Le refus
+// nomme la commande valable chez le produit, bornée au dossier écrit.
+{
+  const R = mkdtempSync(join(tmpdir(), "readme-produit-factory-"));
+  const F = join(R, "factory");
+  for (const f of ["scripts/readme-dossiers.mjs", "scripts/lib-empreinte.mjs", "scripts/lib-confidentiel.mjs", "scripts/lib-parc.mjs", "todo/anonymiser-entrant.mjs"]) {
+    mkdirSync(dirname(join(F, f)), { recursive: true });
+    writeFileSync(join(F, f), readFileSync(join(ICI, "..", f)));
+  }
+  mkdirSync(join(F, "input"), { recursive: true });
+  mkdirSync(join(F, "output"), { recursive: true });
+  mkdirSync(join(R, "forge"), { recursive: true });
+  const r = spawnSync(process.execPath, [join("factory", "scripts", "readme-dossiers.mjs")], { cwd: R, encoding: "utf8" });
+  check("TF-1652 — lancé depuis la racine du produit sans --base : refus, aucun README écrit dans factory\\", () => {
+    if (r.status !== 2) throw new Error(`exit ${r.status} au lieu du refus (2)`);
+    if (existsSync(join(F, "input", "README.md")) || existsSync(join(F, "output", "README.md"))) throw new Error("un README a été écrit dans la copie du pilot (défaut d'origine)");
+  });
+  check("TF-1652 — le refus nomme la commande valable chez un produit (--base . et --racines)", () => {
+    if (!/--base \. --racines/.test(r.stderr || "")) throw new Error(`commande produit absente du refus : ${(r.stderr || "").slice(-200)}`);
+  });
+  // TF-1903 (21/10/2026) — LE MÊME DÉPÔT, ÉCRIT AVEC UNE AUTRE CASSE DE LECTEUR, N'EST PAS UN AUTRE DÉPÔT. Le hook du
+  // pilot s'appelle désormais par `${CLAUDE_PROJECT_DIR}`, que l'extension VS Code écrit `c:\…`, depuis une session
+  // en `C:\…` : le 21/10, chaque écriture a été refusée « un autre dépôt ». Rouge ci-dessus (autre dépôt) gardé.
+  if (process.platform === "win32" && /^[A-Za-z]:/.test(F)) {
+    const autreCasse = (p) => (p[0] === p[0].toUpperCase() ? p[0].toLowerCase() : p[0].toUpperCase()) + p.slice(1);
+    const rc = spawnSync(process.execPath, [join(autreCasse(F), "scripts", "readme-dossiers.mjs"), "--silencieux"], { cwd: F, encoding: "utf8" });
+    check("TF-1903 — lancé depuis son dépôt par un chemin à la casse de lecteur différente : pas de refus", () => {
+      if (rc.status !== 0 || /un autre depot/.test(rc.stderr || "")) throw new Error(`exit ${rc.status} : ${(rc.stderr || "").slice(0, 200)}`);
+    });
+  }
+  rmSync(R, { recursive: true, force: true });
+}
+
+// ----- TF-2517 (14/11/2026) : la portée `--racines` se lit en entier, `--help` s'explique, un argument orphelin est refusé -----
+// Le 02/11/2026, lancé pour ré-indexer un seul dossier, le script a parcouru input\ et output\ en entier (6 README créés, 2 modifiés dans des dossiers sans
+// rapport) ; `--racines a b c` ne traitait que `a` (ledger seq 613) ; l'option n'avait aucune ligne d'explication et `--help` aucune réponse.
+{
+  const arbre = (nom) => {
+    const D = mkdtempSync(join(tmpdir(), `readme-racines-${nom}-`));
+    mkdirSync(join(D, "input"), { recursive: true }); mkdirSync(join(D, "output"), { recursive: true });
+    writeFileSync(join(D, "input", "a.md"), "# A\n", "utf8"); writeFileSync(join(D, "output", "b.md"), "# B\n", "utf8");
+    spawnSync("git", ["-C", D, "init", "-q", "-b", "main"], { encoding: "utf8" });
+    return D;
+  };
+  const jouer = (D, ...a) => spawnSync(process.execPath, [OUTIL, "--base", D, ...a], { encoding: "utf8" });
+  const P = arbre("plusieurs"), Q = arbre("orphelin"), H = arbre("aide");
+  check("TF-2517 rouge → vert — `--help` explique `--base`, `--racines` et `--help` à son usage, rend 0 et ne régénère rien", () => {
+    const r = jouer(H, "--help");
+    if (r.status !== 0) throw new Error(`exit ${r.status} attendu 0 : ${(r.stderr || "").slice(0, 200)}`);
+    for (const m of ["--racines", "--base", "--help", "PORTÉE"]) if (!(r.stdout || "").includes(m)) throw new Error(`l'usage ne dit pas « ${m} » : ${(r.stdout || "").slice(0, 300)}`);
+    if (existsSync(join(H, "input", "README.md")) || existsSync(join(H, "output", "README.md"))) throw new Error("`--help` a régénéré des README");
+  });
+  check("TF-2517 rouge → vert — `--racines input output` (valeurs séparées par une espace) traite TOUTES les racines : les deux README sont écrits, et `--check` nomme les deux", () => {
+    const r = jouer(P, "--racines", "input", "output");   // exit 1 : les rôles sont à rédiger, ce n'est pas un refus
+    if (r.status === 2) throw new Error(`refusé (exit 2) : ${(r.stderr || "").slice(0, 200)}`);
+    if (!existsSync(join(P, "input", "README.md"))) throw new Error("la première racine n'est pas traitée");
+    if (!existsSync(join(P, "output", "README.md"))) throw new Error("la seconde racine est ignorée en silence (le défaut de ledger seq 613)");
+    const c = jouer(P, "--check", "--racines", "input", "output");
+    if (c.status !== 1 || !/input/.test(c.stderr || "") || !/output/.test(c.stderr || "")) throw new Error(`--check devait refuser les rôles non rédigés des DEUX racines (exit ${c.status}) : ${(c.stderr || "").slice(0, 300)}`);
+  });
+  check("TF-2517 rouge → vert — `--racines` sans valeur est REFUSÉ (exit 2, motif dit) au lieu de planter ; la forme à virgule reste admise", () => {
+    const r = jouer(P, "--racines");
+    if (r.status !== 2 || !/sans valeur/.test(r.stderr || "")) throw new Error(`exit ${r.status} attendu 2, « sans valeur » absent : ${(r.stderr || "").slice(0, 200)}`);
+    const v = jouer(P, "--racines", "input,output");
+    if (v.status === 2) throw new Error(`la forme à virgule est refusée (exit 2) : ${(v.stderr || "").slice(0, 200)}`);
+  });
+  check("TF-2517 rouge → vert — un argument qui n'est la valeur d'aucune option (`output` nu) est REFUSÉ (exit 2, nommé) et rien n'est écrit, au lieu de régénérer input\\ et output\\ en entier", () => {
+    const r = jouer(Q, "output");
+    if (r.status !== 2 || !/non reconnu/.test(r.stderr || "") || !/« output »/.test(r.stderr || "")) throw new Error(`exit ${r.status} attendu 2, argument non nommé : ${(r.stderr || "").slice(0, 200)}`);
+    if (existsSync(join(Q, "input", "README.md")) || existsSync(join(Q, "output", "README.md"))) throw new Error("des README ont été écrits malgré le refus");
+    const ok = jouer(Q, "--racines", "output");
+    if (ok.status === 2 || !existsSync(join(Q, "output", "README.md")) || existsSync(join(Q, "input", "README.md"))) throw new Error(`la portée --racines output devait écrire output seul (exit ${ok.status})`);
+  });
+  for (const D of [P, Q, H]) rmSync(D, { recursive: true, force: true });
+}
+rmSync(T, { recursive: true, force: true });
+rmSync(TABLES, { recursive: true, force: true });
+console.log(`\nreadme-dossiers, table sans dates (TF-0503) : ${pass} PASS, ${fail} FAIL`);
+process.exit(fail ? 1 : 0);

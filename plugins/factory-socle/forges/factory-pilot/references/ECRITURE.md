@@ -1,0 +1,338 @@
+# Écriture — le plancher transverse des textes de la Factory
+
+Ce document fixe les règles d'écriture que tout texte produit par la Factory, ses forges et ses
+produits respecte, quel que soit son auteur. Il est né du mandat humain du 12/09/2026 (décisions
+D-1 (a) et D-3 (a) de la synthèse 20260911j) sur l'analyse L99
+`output\03-etudes\2026-09\20260911-L99-regles-d-ecriture-factory.md`. Vous y trouverez ce que le
+plancher exige, à quels textes il s'applique, qui le juge, et ce qu'il ne fait pas.
+
+**Le fait qui l'a fait naître.** La forme des textes est jugée à chaque tour (quarante et une
+règles de synthèse, trente et une règles de lisibilité HTML, 4 règles Markdown, deux
+glossaires) ; leur style ne l'était par rien. Les retours humains de lisibilité entraient au
+registre après livraison : treize chapitres réécrits en tête le 08/09 (TF-0932), une explication
+demandée 2 fois le 22/08 (TF-0511).
+
+**Ce que le plancher n'est pas.** Il ne sert pas à masquer l'usage d'une IA : le ledger continue de
+déclarer ce qui est généré. Il n'interdit aucun mot ni aucun signe isolé : un tiret d'incise est
+la ponctuation normale du français, « crucial » a sa place une fois. Il juge des densités et des
+structures, jamais un mot. Il n'est pas une voix : la voix d'un produit vit dans son `MARQUE.md`
+(contrat du skill `systeme-de-marque`) et se déploie au-dessus du plancher sans jamais le franchir.
+
+## Sources
+
+Deux familles, qui ne se mélangent pas. La famille A fonde les règles ; la famille B fonde la
+donnée de tournures, jamais une règle.
+
+| Famille | Source | Ce qu'on en prend |
+|---|---|---|
+| A — normes de rédaction | ISO 24495-1:2023, langage clair et simple | les quatre principes : pertinent, facile à trouver, compréhensible, utilisable |
+| A | Orwell (1946), Strunk & White, Pinker (2014), Gopen & Swan (1990), compilés par agent-style RULE-01..12 | concret, actif, sans mot inutile, sans cliché, information nouvelle en fin de phrase, phrases courtes |
+| A | contrat `voix.md` du skill `systeme-de-marque` | libellés d'action, erreurs, états vides |
+| B — catalogues de signes | Wikipédia FR « Aide : Identifier l'usage d'une IA générative », Wikipédia EN « Signs of AI writing », agent-style RULE-A..I, guides francophones 2026 | les familles de tournures de `references\tics-redactionnels.json`, datées, à densité |
+
+Le tableau se lit ligne par ligne ; une source de la famille B n'entre jamais dans la colonne
+des règles.
+
+## Typologie des textes couverts
+
+Un lecteur, un porteur, un juge par type. Le tableau se lit ligne par ligne ; la dernière colonne
+dit qui rend le verdict aujourd'hui, et « revue » signifie qu'aucun script ne juge encore.
+
+| Type | Textes | Lecteur | Porteur | Juge |
+|---|---|---|---|---|
+| T1 | prompts, skills, agents, `CLAUDE.md` | le modèle, puis l'humain qui relit | forge-agents, pilot | `oracle-claude-md` (N1-N4) ; style : `oracle-ecriture` |
+| T2 | livrables documentaires (Markdown, HTML, PowerPoint) | le destinataire nommé du livrable | forge-design (socle `factory-page-html`), pilot | M7-M18, L1-L31 ; style : `oracle-ecriture` (Markdown, et texte visible d'une page HTML depuis le 29/10/2026), revue (PowerPoint) |
+| T3 | restitutions et messages de fin de tour | l'humain qui décide | pilot | S1-S41 ; style : `oracle-ecriture` |
+| T4 | textes d'application : libellés, erreurs, états vides, aide, courriels transactionnels | l'utilisateur du produit | forge-design (`voix.md`), forge-development | C15 ; style : revue (lot de travaux forge-design) |
+| T5 | messages de commit, entrées de ledger | le relecteur d'histoire | pilot, forges | revue |
+
+**Exclus, jamais réécrits ni jugés** : le code et ses commentaires, les données et schémas, les
+termes machine (doctrine `glossaire-restitution.json` de forge-data : un terme machine ne bouge
+pas), les citations littérales, les textes contractuels (glossaire R-53), l'histoire (fichiers
+antérieurs non modifiés, `old\`, ledger).
+
+**Portée temporelle** : les textes neufs et les textes modifiés dans le tour. Jamais une
+réécriture du corpus. Les textes normatifs internes antérieurs à ce document sont listés dans
+`tics-redactionnels.json` (`anteriorite.chemins`) : l'oracle rend SKIP dessus, et chacun sera
+jugé à sa prochaine réécriture de fond.
+
+## Les règles
+
+21 règles, numérotées E-1 à E-21 — les douze du plancher d'origine, puis E-13 à E-21, nées de retours humains et de décisions datés. Chaque règle porte les types qu'elle vise, son juge et son
+statut : **mécanisée** (un script la joue), **déléguée** (un oracle existant la joue déjà) ou
+**revue** (aucun script ; elle se tient à la relecture, et c'est dit). Les exemples avant / après
+sont tirés de textes réels de la Factory.
+
+### E-1 — Le lecteur est nommé, et le texte ouvre par ce qui change pour lui
+*Types T2, T3, T4. Juge : S9 (restitutions), M7 / L7 (documents). Déléguée.*
+Un texte s'adresse à quelqu'un qui n'a pas vu le travail. Il ouvre par l'état, ce qui change et
+ce qui est attendu de lui, en langage du commanditaire.
+Avant (S9, cas fondateur) : « Tout s'est bien passé. » Après : « Les 19 contrôles passent ; il
+vous reste à valider la lecture de votre intention. »
+
+### E-2 — Une phrase porte une idée et un verbe
+*Tous types. Juge : `oracle-ecriture` EC-2 (phrases de plus de 35 mots en série). Mécanisée.*
+Viser 20 mots ; au-delà de trente-cinq, couper. Une phrase longue est une liberté ; trois
+d'affilée avertissent ; l'échec est posé au maximum du corpus PASS (sept d'affilée, mesuré sur
+171 textes le 12/09) et se resserre à chaque recalibrage.
+
+*Seuil de l'ASD-STE100, depuis le 22/11/2026 (D-230 (b)). Juge : `oracle-ecriture` EC-19, en avertissement.*
+
+Toute phrase de plus de 25 mots est signalée, avec sa ligne. C'est le seuil des phrases de description
+de l'ASD-STE100, l'anglais technique simplifié des manuels de maintenance aéronautique. Le fait : sur
+les 10 dernières synthèses, 84 phrases sur 524 (16 %) dépassaient 25 mots sans que rien ne le dise
+(source : étude `output/03-etudes/Factory - Étude - Statuts courts et ASD-STE100 - 20261122a.md`).
+
+L'avertissement ne fait jamais échouer un texte. Mesuré le 22/11 : il signale 251 synthèses sur 252.
+C'est voulu : il nomme les phrases à couper, et le seuil vit dans `plancher_ste` de la donnée.
+
+### E-3 — Un fait concret plutôt qu'un adjectif
+*Tous types. Juge : LC2 (chiffres sourcés), N3 (pourcentages avec formule), S3 (verdict factuel) ; famille `emphase-creuse` de EC-1. Déléguée et mécanisée.*
+Un chiffre, un nom, un chemin, une date, avec leur source. « Crucial », « robuste »,
+« incontournable » disent que l'auteur n'a pas le fait.
+Avant : « une amélioration significative ». Après : « 19 contrôles sur 19, contre 12 la veille ».
+
+### E-4 — Le texte prend position
+*Types T2, T3. Juge : S4 (décision en choix fermé avec recommandation), S16 (recommandation sourcée). Déléguée.*
+« D'un côté, de l'autre » sans conclusion n'est pas une réponse. Une décision porte une
+recommandation et sa source ; une analyse porte un verdict.
+
+### E-5 — Ne pas annoncer, dire ; ne pas résumer en fin de bloc
+*Tous types. Juge : familles `annonce-vide` et `cloture-resumante` de EC-1. Mécanisée.*
+« Il est important de noter que », « dans ce chapitre nous allons », « en résumé » sont des
+phrases lues pour rien. La synthèse vit une fois, en ouverture (M7, bloc 0).
+
+### E-6 — Supprimer le remplissage
+*Tous types. Juge : familles `transition-de-remplissage`, `formule-de-conversation` de EC-1. Mécanisée.*
+Un connecteur d'addition par réflexe (« de plus », « par ailleurs ») n'articule rien ; un reste
+de dialogue d'assistant (une invitation à ne pas hésiter, un espoir d'avoir aidé) n'a rien à
+faire dans un livrable.
+
+### E-7 — Pas de symétrie mécanique
+*Tous types. Juge : famille `parallelisme-mecanique` de EC-1 ; attaques répétées EC-5. Mécanisée (avertissement).*
+« Non seulement… mais aussi », « ce n'est pas X, c'est Y », la triade par réflexe, trois phrases
+qui commencent par le même mot : la forme affirmative dit la même chose en moins.
+
+### E-8 — Le tiret, la parenthèse et les deux-points ne remplacent pas la virgule ni le point
+*Tous types. Juge : famille `ponctuation-de-cadence` de EC-1 (densité). Mécanisée.*
+Un tiret d'incise par phrase au plus. Une phrase qui rebondit 3 fois se coupe en deux.
+Avant (synthèse du 10/09) : « ordre retenu : remesurer — pour les mesures —, refuser de signer —
+pour les chiffres —, jouer le remède — pour le gardien lui-même. » Après : « Ordre retenu :
+remesurer les mesures, refuser de signer les chiffres, puis jouer le remède sur le gardien. »
+
+### E-9 — L'emphase ne remplace pas la structure
+*Types T2, T3. Juge : EC-4 (gras de phrase entière, puces emoji), EC-3 (profondeur de puces). Mécanisée.*
+Pas de gras sur une phrase à l'intérieur d'un paragraphe ; pas d'emoji en puce ; jamais plus de
+deux niveaux de puces (S7 : « au troisième, on ne lit plus, on scanne »). Une ligne ou une puce
+qui ouvre en gras est une structure de gabarit (le verdict du bloc 2, la question d'une
+décision, le titre d'une puce du bloc 4) : elle n'est pas comptée, le gabarit prime. Le gras
+compté est celui qui surgit après du texte, au milieu d'une phrase : un avertit, cinq échouent
+(deux textes sur 171 le 12/09, de 73 à 193 mots en gras).
+
+### E-10 — Un sigle ou un identifiant porte son sens à son premier emploi
+*Tous types. Juge : S20, S23 (restitutions), M18 (Markdown), L18 / L30 (chapitre) (HTML), T2 (lecture par un tiers). Déléguée.*
+Le référentiel de jargon est une donnée fermée (`gabarits\JARGON-A-GLOSER.json`) qui grossit par
+les retours.
+Avant (TF-0511) : « justificatif fédéré, identité system-assigned, UAMI, constat H2 ». Après : la
+même explication sans aucun de ces termes, acceptée immédiatement.
+
+### E-11 — Une liste énumère, un raisonnement enchaîne
+*Types T2, T3. Juge : L12 (HTML, TF-1621, TF-1665) et TF-1390 (PPTX) ; pour le Markdown, depuis le 18/10/2026 (TF-1847), S80 d'`oracle-synthese` sur une restitution (bloquante) et EC-12 d'`oracle-ecriture` sur tout autre texte (avertissement) pour l'énumération numérotée « 1) … 2) … 3) » sur une même ligne, S81 pour les étapes d'un guide ; le sens inverse, revue.*
+Un paragraphe qui énumère devient une liste ; un raisonnement dont chaque pas dépend du
+précédent reste en prose. Découper une démonstration en puces casse le lien logique
+(`bonnes-pratiques.md` §3 du socle).
+
+Retour humain du 17/10/2026, mot pour mot : « J'ai déjà dit que lorsqu'il y avait des listes, il devait y avoir des puces et sous-puces affichées, ce qui n'est pas le cas ici. » Un guide de 4 étapes enchaînait chacune 3 à 6 gestes et son résultat attendu dans un paragraphe, et une option portait ses 3 gestes sur une ligne de tableau. Les deux sont des énumérations : chaque geste a sa ligne, en sous-puce sous son étape, et « Résultat attendu » ferme la liste. Avant : « Comment faire : 1) ouvrir un terminal ; 2) coller la commande ; 3) saisir le code. » Après : « Comment faire (b) : » suivi de 3 lignes numérotées.
+
+### E-12 — Le vocabulaire du lecteur, jamais celui du système
+*Types T2, T3, T4. Juge : `glossaire-restitution.json` (forge-data), contrat `voix.md` (T4). Revue.*
+*Juge (13/10/2026, TF-1392, TF-1394) : la rubrique « lecteur visé » d'`oracle-judge` (quality-oracles
+v2.17.0, `--lecteur-vise`) fait relire chaque unité par 2 relecteurs qui jouent le lecteur de la fiche
+de conception ; un constat n'est retenu que s'ils s'accordent, sa suite s'écrit dans `REVUE.md`, et la
+question qui revient d'une lecture à l'autre se montre à l'humain avant la remise. `oracle-ecriture`
+EC-11 signale une question de décision dont le paragraphe ne nomme rien. Les deux en avertissement,
+jamais bloquants (décisions D-2 (a) et D-3 (a)) ; revue le 2026-11-10.*
+Un terme de restitution est celui que le destinataire lit ; un terme machine reste dans le code.
+Avant (08/09, forge-data) : « grain » 33 fois dans un rapport. Après : « granularité »,
+zéro emploi restant. Pour T4 : un libellé nomme ce que la personne contrôle (« Enregistrer les
+modifications », pas « Valider ») ; une erreur dit ce qui s'est passé puis comment réparer ; un
+état vide invite à agir.
+
+### E-13 — Un exemple de nom masqué se décrit ou s'invente, il ne se cite pas
+
+Un texte qui explique un défaut d'anonymisation oppose souvent deux graphies d'un même nom
+(une clé en minuscules à tirets, le même nom en majuscules à espaces). Cité tel quel, l'exemple
+passe par la pseudonymisation, qui rend les deux graphies par le même pseudonyme : la phrase dit
+alors « X dans le nom, la clé étant X » et n'explique plus rien. Cela s'est produit 2 fois
+dans un même fichier le 10/09 (TF-1007), et un message de commit a dû être réécrit par un tiers.
+L'exemple se **décrit** (« la clé en minuscules à tirets, le nom en majuscules à espaces ») ou
+se prend à un **nom inventé**, comme les bancs le font avec leurs tables jetables.
+*Contrôle* : le hook de pré-commit (`todo\pre-commit-anonymise.mjs`) avertit quand un même
+pseudonyme remplace deux graphies différentes dans une même ligne.
+
+### E-14 — Une valeur, une heure, une date s'écrivent en chiffres
+*Types T1, T2, T3, T4. Juge : EC-9 (`oracle-ecriture.mjs`). Mécanisée.*
+
+Retour humain du 16/09/2026, mot pour mot : « Utilise des chiffres plutôt que l'écriture en toutes
+lettres pour les valeurs numériques, les heures et les dates. 7 septembre ou 7/09 plutôt que sept
+septembre, 8,8 Mo plutôt que huit virgule huit. » Le fait qui l'a provoqué : une restitution écrite
+le matin même rendait ses mesures en toutes lettres — « 8,8 mégaoctets », « cent
+32 révisions », « le 7 septembre ». *Un chiffre écrit en lettres cesse d'être
+comparable d'un coup d'œil* : le lecteur doit le reconstituer avant de le mettre en regard du
+suivant, et c'est exactement ce qu'un tableau de mesures existe pour lui épargner. La règle E-3 du
+plancher demande déjà « un chiffre, un nom, un chemin, une date, sourcés » ; celle-ci dit sous
+quelle FORME, parce que la première ne le disait pas et qu'on peut donc la satisfaire en lettres.
+
+**Ce qu'elle vise** : les valeurs suivies d'une unité ou d'un dénombrable (`8,8 Mo`, `132 révisions`,
+`5 pages`, `3,9 %`), les dates (`7 septembre`, `7/09`, `16/09/2026`) et les heures (`14h05`).
+**Ce qu'elle ne vise pas**, et la frontière est nette : l'article et le pronom (« un défaut », « une
+règle »), les locutions figées (« en deux temps », « des deux côtés »). Un premier jet exemptait
+aussi les nombres qui OUVRENT une phrase, où l'usage français préfère la lettre — l'exemption est
+retirée le 16/09/2026, parce que le juge ne l'implémentait pas et qu'une règle que son juge ignore
+n'existe pas. La consigne humaine ne portait pas cette nuance : une valeur s'écrit en chiffres,
+y compris en tête de phrase.
+
+Avant (16/09, restitution du pilot) : `huit virgule huit megaoctets sur les deux cent quatre-vingts du depot, soit trois pour cent`.
+Après : « 8,8 Mo compressés sur 280, soit 3,1 % ».
+
+**L'exemple du défaut vit entre accents graves, et il l'a appris à ses dépens.** L'outil de
+conversion des producteurs a « corrigé » cette ligne-ci au premier passage : il a mis en chiffres
+l'illustration du défaut qu'elle sert à montrer, et l'exemple ne montrait plus rien. C'est la même
+classe que celle payée le matin sur le juge des restitutions — *une règle qui balaie un texte non
+délimité finit par juger sa propre démonstration*. Un avant/après ne se protège pas par la
+prudence de qui écrit : il se protège par la forme que la règle elle-même déclare hors de portée.
+
+**Le NOM d'un livrable est du texte aussi** (constat du 16/09/2026, en exécutant la décision qui
+corrige les producteurs). Les index d'`output\` sont restés non conformes après la correction de
+leurs générateurs, et la cause était ailleurs : les valeurs en lettres venaient des NOMS de
+fichiers — `Synthese Mandat - Quinze items du registre traites…`, écrit le matin même. Un nom se
+lit dans un index, dans un onglet et dans un lien ; il porte donc la règle. Les livrables déjà
+remis ne se renomment pas (règle 5) : elle vaut pour les suivants. *Aucun oracle ne juge encore le
+nom* — EC-9 lit le contenu d'un `.md`, jamais son intitulé —, et c'est déclaré ici plutôt que promis.
+
+### E-15 — Un bloc de code qu'on RECOPIE sert tout lecteur ; un bloc qu'on EXÉCUTE ne sert qu'un exécutant
+*Type T2. Juge : EC-10 (`oracle-ecriture.mjs`), qui lit le lecteur déclaré du document. Mécanisée.*
+
+Retour humain du 15/09/2026, mot pour mot : « Les développeurs IA ne sont pas des codeurs, les
+lignes de code affichées doivent donc l'être uniquement si cela est strictement nécessaire. Pour
+voir les trigrammes déjà pris, pas la peine de code "az repos list...", un simple check sur l'URL
+du repo suffit. » Mesuré sur le livrable : 18 blocs de code, dont 4 commandes de console ; les 14
+autres — métadonnées de guide, arborescence de dépôt, motifs de nommage — se **recopient**, et
+aucun n'a été contesté.
+
+La distinction porte sur le GESTE que le bloc demande, pas sur sa longueur. Un bloc qu'on recopie
+(une arborescence, un motif de nommage, un en-tête à reproduire) sert tout lecteur, y compris
+celui qui n'ouvrira jamais un terminal. Un bloc qu'on exécute ne sert qu'un lecteur qui exécute :
+pour tous les autres, il remplace une action simple par une compétence qu'ils n'ont pas.
+
+**Le juge lit le lecteur, il ne le devine pas.** Un document qui déclare `role_destinataire`
+(règle D11 des gabarits) est jugé sur cette déclaration : si le lecteur est un exécutant, les
+commandes sont à leur place ; sinon elles sont un défaut, et la règle les nomme une à une. Un
+document qui ne déclare AUCUN lecteur rend SKIP, dit à voix haute — jamais PASS par silence.
+
+Avant (15/09, guide pour développeurs assistés par IA) : un bloc `az repos list --query …` pour
+vérifier qu'un trigramme est libre. Après : « ouvrez l'URL du dépôt — si elle répond, le trigramme
+est pris ».
+
+### E-16 — Une explication demandée se livre dans une fiche, et la restitution y renvoie
+*Types T2, T3. Juge : contrôle EXPLICATION de `oracles\hook-restitution.mjs`, en avertissement. Mécanisée en partie.*
+
+Retour humain du 12/10/2026, chez un produit, après deux diagnostics rendus en restitutions de 9 blocs : « Fournis le constat et les précos dans un fichier MD, simple, bref, lisible et exploitable », puis, la fiche reçue : « Fais en sorte que les explications données pour les futurs sujets respectent ce type de demande. » Le contenu utile existait dès le premier tour, dispersé entre les blocs avec les identifiants et le journal du tour, et le porteur a dû demander le fichier 2 fois.
+
+Quand l'humain demande une **explication** (expliquer, détailler, diagnostiquer, « fournis les précos », « donne le constat »), l'explication est un livrable. Elle se livre dans une **fiche datée**, nommée selon R-4, d'une page au plus (environ 800 mots) : un « En bref » de 3 à 4 puces chiffrées, le constat (un tableau, puis 3 à 5 constats titrés par leur verdict), les préconisations (un tableau « # · Action · Gain · Effort · Attention », 5 lignes au plus), ce qu'il n'y a pas à faire et pourquoi, l'ordre conseillé, une ligne de sources. C'est la forme que le porteur a jugée exploitable (RT-36 du même lot ; famille de gabarit candidate TF-1640). La restitution du tour reste due, avec sa forme jugée : elle **renvoie à la fiche** au bloc 4, au lieu d'en recopier le contenu dans ses blocs 4 et 8.
+
+Le contrôle EXPLICATION lit le dernier message humain, la forme de la réponse et les fichiers du tour : une demande d'explication rendue en restitution complète, sans fiche datée écrite ni citée, est signalée sous la réponse. Il ne bloque jamais, parce que la frontière entre une explication et un travail reste un jugement. Mesuré à l'entrée : 24 des 364 restitutions de produits depuis le 17/09 suivent un message que le motif lit comme une demande d'explication, et au moins 2 d'entre eux demandaient en fait un travail.
+
+Avant (12/10) : les coûts d'un abonnement expliqués dans les blocs 4 et 8 d'une restitution, identifiants et journal compris. Après : une fiche de 744 mots, jugée « simple, bref, lisible & exploitable », et une restitution qui la cite.
+
+### E-17 — Un écrit destiné à un tiers est court et dans la langue de son lecteur
+*Types T2, T4. Juge : EC-14 et EC-15 de `oracles\oracle-ecriture.mjs`, au statut A_REJOUER. Mécanisée.*
+
+Décision humaine D-78 (c) amendée du 26/10/2026, citée mot pour mot : « 78 : c, mais plutôt que de bloquer, cela doit être rejoué pour répondre aux exigences. Attention, si l'utilisateur est anglophone, l'anglais ne doit pas être un critère de blocage. Il faut s'adapter à la langue de l'utilisateur. » Le fait : 8 reprises en 7 jours sur la longueur et la forme de courriels et de fiches destinés à un tiers (« j'ai déjà demandé plusieurs fois »), une proposition à 94 défauts de concision rendue PASS par cet oracle, des réponses en anglais à un utilisateur francophone dans 3 sessions.
+
+Un écrit est destiné à un tiers quand son en-tête porte `destinataire:` avec une valeur qui n'est pas interne (`humain`, `orchestrateur`, `pilot`, `agent`, `forge`, `méthode`, `factory`, lues par leur premier mot), ou, sans en-tête `destinataire:`, quand le type de son nom R-4 (le champ Objet de « <Marque> - <Objet> - AAAAMMJJ<indice> ») est courriel, courrier, lettre ou fiche. Une fiche de conception est un document de travail, et `destinataire: humain` écarte la règle même sur un nom de courriel. Un tiers lit vite : un paragraphe de 3 phrases et 60 mots au plus, une phrase de 25 mots au plus, aucune énumération de plus de 3 éléments en prose (au-delà, garder les 3 qui comptent, ou une liste à puces, E-11).
+
+La langue dominante du texte est celle de son lecteur. Sans indication, c'est le français, parce que la Factory est francophone (règle 12 du `CLAUDE.md` global) ; pour un utilisateur ou un tiers qui lit une autre langue, on la déclare, `langue: en` en en-tête ou `--langue en` à l'appel, et le même texte passe. L'anglais n'est donc jamais une faute en soi : la réponse suit la langue de l'utilisateur (`references\PREFERENCES-PORTEUR.md`).
+
+Exemple de la recette d'oracle-ecriture (26/10) : un courriel de relance en un seul paragraphe de 90 mots et 4 phrases est à rejouer, avec sa ligne et ses mesures ; réécrit en 3 paragraphes de 2 phrases, avec la date attendue posée en question dans le dernier, il passe.
+### E-18 — Deux montants comparés disent ce que chacun comprend
+
+Un texte qui compare deux coûts porte la rubrique « Compris : … · Non compris : … · Conséquence : … » (décision humaine
+D-114 (a) du 02/11/2026). Le 19/10/2026, un livrable comparait 224 € à 320 € (source : le fait cité par D-114 (a)), pare-feu compris d'un seul côté, et
+6 relectures à l'aveugle ne l'ont pas relevé. `oracle-ecriture` EC-17 avertit sur une ligne qui oppose deux montants
+dans un texte sans cette rubrique. Il ne voit pas deux montants placés dans deux cellules d'un tableau.
+
+### E-20 — Un paragraphe porte un sujet et 6 phrases au plus
+*Types T1, T2, T3. Juge : `oracle-ecriture` EC-20, en avertissement. D-230 (b) du 22/11/2026.*
+
+L'ASD-STE100 limite un paragraphe à 6 phrases et à un sujet. La Factory ne bornait que les écrits à un
+tiers (E-17, 3 phrases). Un paragraphe de plus de 6 phrases est signalé, avec sa ligne ; on le coupe où
+le sujet change. Mesuré le 22/11 : 44 synthèses sur 252 et 36 études sur 113 en portaient au moins un.
+Un écrit à un tiers garde sa borne plus stricte de E-17.
+
+### E-21 — Une consigne commence par son verbe
+*Types T2, T3. Juge : `oracle-ecriture` EC-21, en avertissement. D-230 (b) du 22/11/2026.*
+
+Une consigne est une cellule d'une colonne « Action » (bloc 8 d'une restitution, préconisations d'une
+étude) ou un élément numéroté sous un titre d'étapes. Elle ouvre sur le verbe de l'action, à
+l'impératif ou à l'infinitif : « Relancez le banc », « Choisir une option ». L'infinitif compte comme
+l'impératif, parce que c'est la forme française des consignes techniques. Une négation (« Ne pas
+coller… ») ou un complément suivi d'une virgule (« Dans VS Code, ouvrir… ») avant le verbe est admis.
+Mesuré le 22/11 : 240 cellules « Action » sur 1 891 dans output/ (13 %) n'ouvraient pas sur un verbe
+(source : relevé de la session du 22/11/2026, consigné dans `evolution_1_9_0` de `references/tics-redactionnels.json`).
+Avant : « Revue de l'essai, boucle comprise ». Après : « Relire l'essai, boucle comprise ».
+
+### E-19 — Un message d'erreur reprend la saisie et donne la forme corrigée
+*Type : textes d'application. Juge : `oracles\oracle-erreurs-formulaire.mjs` de forge-design, règle EF3, sur l'instance servie.*
+
+Un refus de saisie dit ce que l'utilisateur a écrit, ce qui ne va pas et la forme attendue, sous le champ concerné. Le
+05/11/2026, un formulaire répondait « Refusé : CIBLE_INVALIDE » en bandeau en tête de page, sans champ désigné, et
+aucun des 15 juges du design ne l'a vu (TF-2172, demande du porteur). Exemple : « 10.0.0 n'est pas une adresse
+complète : écrivez 4 nombres séparés par des points, par exemple 192.0.2.10 ». Le code interne ne s'affiche jamais
+seul (E-12).
+
+## Précédence
+
+1. La structure imposée par un gabarit prime (blocs et tableaux de `RESTITUTION.md`, sections
+   d'une étude) : aucune règle de ce document ne s'y oppose.
+2. Le plancher (E-1 à E-21) ne se franchit pas.
+3. La voix du produit (`MARQUE.md`) se déploie au-dessus : ton, registre, vocabulaire choisi.
+4. Un conflit entre une règle de forge et ce document se tranche par la règle la plus stricte
+   (R-43 : renforcer oui, assouplir jamais) et se consigne au ledger.
+
+## Comment le plancher se joue
+
+- **Au moment d'écrire** : le hook `ecriture` (PostToolUse sur tout `.md`) joue
+  `oracles\oracle-ecriture.mjs` et imprime ses avertissements et ses échecs ; il ne bloque pas, il
+  dit. Chez un produit, `forge\hooks\factory.mjs ecriture` fait la même chose.
+- **Avant de remettre** : `node oracles\oracle-ecriture.mjs <texte.md>` doit rendre PASS ; un
+  avertissement se lit et se décide, un échec se corrige, un passage A_REJOUER se réécrit (voir « La boucle de réécriture »).
+- **Sur un corpus** : `node oracles\oracle-ecriture.mjs --baseline <dossier>` mesure le taux de
+  PASS ; il reste à 95 % ou plus sur les textes déjà jugés, sinon la donnée se recalibre, jamais
+  la règle ne se supprime.
+- **La donnée** : `references\tics-redactionnels.json`, datée et sourcée ; un retour humain de
+  lisibilité y ajoute une tournure, une famille ou un seuil ; l'oracle ne change pas. Chaque famille
+  porte `derniere_lecture` et `revue_prevue` : EC-13 avertit, sans jamais faire échouer un texte,
+  quand une revue est dépassée ou sans date (TF-1926, 19/10/2026). Relire une liste, c'est la
+  confronter de nouveau à ses sources, puis inscrire les deux dates.
+- **Ce que le plancher ne juge pas** est déclaré dans le `non_juge` de l'oracle : la justesse
+  d'une voix, la véracité, le jargon hors référentiel, les textes d'application (T4, lot de
+  travaux forge-design), un tic hors liste.
+
+## La boucle de réécriture (statut A_REJOUER)
+
+Décision humaine D-78 (c) amendée du 26/10/2026 : « plutôt que de bloquer, cela doit être rejoué pour répondre aux exigences ». EC-14 (concision d'un écrit à un tiers) et EC-15 (langue) ne font jamais échouer un texte. Elles rendent le statut A_REJOUER : le verdict reste PASS, et la sortie JSON porte `a_rejouer`, qui donne les passages (règle, ligne, mesure, extrait), une consigne de réécriture et la passe en cours. La session qui produit l'écrit réécrit elle-même, sans demander à l'humain :
+
+1. Lire `a_rejouer.passages` et `a_rejouer.consigne`, ou les lignes `À REJOUER` que le hook `ecriture` imprime après chaque écriture.
+2. Réécrire ces passages seulement, faits gardés, dans la langue du destinataire.
+3. Rejouer `node oracles\oracle-ecriture.mjs <texte.md> --passe <n>`, avec `--langue <code>` quand le lecteur n'est pas francophone.
+4. Trois passes au plus. Si des passages restent à rejouer après la troisième, remettre le texte avec les écarts restants nommés (règle, ligne, raison) dans le message de remise : ni quatrième passe, ni borne relâchée (G-2).
+
+C'est la forme de boucle bornée de `references\RUN-MANDAT.md` (pas 4) et de la clôture de forge-tests : 3 itérations, un échec dit plutôt que masqué. Le hook n'impose rien, il rappelle, comme pour toute la doctrine d'écriture ; la passe en cours se compte par `--passe`, et à la passe 3 la consigne dit de remettre avec les écarts nommés.
+## Mesure du gain
+
+Indicateurs relevés à la baseline du 12/09/2026 puis toutes les quatre semaines : retours humains
+de classe « jargon non glosé », « reprise de forme » et « explication demandée 2 fois » par
+semaine (registre des candidats) ; taux de PASS de l'oracle sur les textes neufs ; densité
+médiane de tirets d'incise sur les synthèses du mois. La candidature TF-1064 se clôt sur gains
+constatés.

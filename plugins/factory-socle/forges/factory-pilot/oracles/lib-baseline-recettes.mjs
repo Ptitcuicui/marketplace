@@ -1,0 +1,282 @@
+/**
+ * lib-baseline-recettes.mjs — le CLIQUET du nombre de cas par recette (TF-0681).
+ *
+ * ============================================================================================
+ * LE FAIT, ET IL EST ARRIVÉ DANS CE DÉPÔT
+ * ============================================================================================
+ *
+ * Le 26/08/2026, un fichier de recette a été ÉCRASÉ en en écrivant un nouveau. **Onze cas ont
+ * disparu** — le lot passe son propre juge, un produit conforme ne reçoit rien, l'artefact hors
+ * racine demande une déclaration, l'idempotence par contenu, et sept autres.
+ *
+ * **LE HARNAIS A RENDU TOUT VERT.** Il a joué le fichier, lu sa ligne de résumé, compté un OK.
+ * Le compte d'une recette est **AUTO-DÉCLARÉ** : le fichier annonce lui-même son total, et rien
+ * ne sait ce que ce total valait la veille. Le seul signal a été un caractère dans l'état du
+ * gestionnaire de versions, remarqué par hasard.
+ *
+ * *Un dépôt qui se mesure par des recettes est aveugle à la disparition de ses recettes.* C'est
+ * la classe de N-38 sur un autre objet : la couverture existe, elle est verte, et elle rassure
+ * sur une surface qu'elle ne couvre plus.
+ *
+ * ============================================================================================
+ * CE QUE CE CLIQUET FERME, ET CE QU'IL NE FERME PAS
+ * ============================================================================================
+ *
+ * IL FERME LA DISPARITION. Une baisse du nombre de cas est un ÉCHEC. Retirer un cas devient un
+ * geste ÉCRIT — `--appliquer` inscrit la nouvelle valeur et la date — jamais un effet de bord.
+ *
+ * IL NE FERME PAS LE MENSONGE. Le compte reste auto-déclaré : une recette pourrait annoncer un
+ * chiffre qu'elle ne joue pas. Fermer ce trou-là demanderait d'instrumenter chaque recette, et
+ * c'est un autre dispositif. **La borne est déclarée, pas comblée au juge.**
+ *
+ * IL NE JUGE PAS CE QU'IL NE SAIT PAS LIRE. Une recette dont le résumé ne porte aucun compte
+ * lisible est rendue NON JUGÉE, avec son nom — jamais tenue pour conforme par défaut. *Le
+ * silence d'une sonde n'est pas un verdict*, et une recette qui change son format de sortie
+ * sortirait autrement du cliquet sans que personne ne le voie.
+ *
+ * ============================================================================================
+ * L'ASYMÉTRIE, ET POURQUOI ELLE EST DANS CE SENS
+ * ============================================================================================
+ *
+ * Une HAUSSE inscrit la nouvelle valeur automatiquement : c'est un cliquet, et rien n'est perdu
+ * en montant. Exiger un geste humain à chaque cas ajouté produirait une friction dont on se
+ * débarrasse en désactivant le contrôle — le plus sûr moyen de le rendre inutile.
+ *
+ * Une BAISSE échoue. **L'effet de bord de l'écriture automatique est réel et il est borné** : le
+ * fichier de baseline change pendant une exécution du harnais, et seulement vers le haut.
+ */
+
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { resolve } from "node:path";
+
+/**
+ * Le compte de cas lu dans la ligne de résumé d'une recette. Deux formes cohabitent dans ce
+ * dépôt et les DEUX sont admises — imposer une forme unique ferait sortir du cliquet toutes les
+ * recettes existantes le jour où on la publierait :
+ *   · « … : 24 PASS, 0 FAIL »   → 24
+ *   · « … : 14/14 PASS (…) »    → 14
+ *
+ * Rend `null` quand rien n'est lisible. `null` n'est pas `0` : zéro cas serait un fait, illisible
+ * est un aveu.
+ */
+export function compteDe(resume, sortie = null) {
+  // LE COMPTE PEUT NE PAS ÊTRE DANS LA DERNIÈRE LIGNE. Deux oracles de ce dépôt rendent leur
+  // recette en JSON : leur dernière ligne est une accolade fermante, et leur compte vit dans le
+  // tableau `resultats`. Exiger une ligne de résumé les aurait laissés hors du cliquet pour une
+  // question de MISE EN FORME — la même erreur que d'exiger le mot « PASS ».
+  if (typeof sortie === "string" && sortie.trim().startsWith("{")) {
+    try {
+      const o = JSON.parse(sortie);
+      for (const champ of ["resultats", "cas"]) {
+        if (Array.isArray(o[champ]) && o[champ].length) return o[champ].length;
+      }
+    } catch { /* pas du JSON : on retombe sur la lecture textuelle */ }
+  }
+  if (typeof resume !== "string") return null;
+  // TF-0738 (01/09) — L'ORDRE DE LECTURE A ÉTÉ PAYÉ : le ratio nu passait en PREMIER et le
+  // motif n'est pas ancré, si bien qu'une DATE à barre oblique dans le libellé (« … du 01/09) :
+  // 6 PASS, 0 FAIL ») s'enregistrait comme un compte de 1 cas — une baseline fausse dès son
+  // premier passage, qui laisse ensuite cinq cas disparaître sans un mot. Deux corrections,
+  // toutes deux mesurées sur le corpus réel :
+  //   · « N PASS » se lit D'ABORD — quand le mot est là, il désigne le compte sans ambiguïté
+  //     (« 6 PASS, 0 FAIL », « 14/14 PASS ») ;
+  //   · à défaut, le DERNIER ratio de la ligne — le compte CLÔT un résumé (« Recette
+  //     cadence : 16/16 cas »), une date le commence.
+  // Le ratio reste admis sans « PASS » : l'exiger laissait 39 recettes sur 73 hors du cliquet
+  // au premier passage, et cette mesure-là n'a pas changé.
+  const pass = /(\d{1,4})\s*PASS\b/i.exec(resume);
+  if (pass) return Number(pass[1]);
+  // TF-1169 (17/09/2026) — UN RATIO QUI EST UNE DATE N'EST PAS UN COMPTE DE CAS, ET LE DÉFAUT DE
+  // TF-0738 EST REVENU PAR L'AUTRE BOUT DE LA LIGNE. Le 17/09, la recette du hook de restitution a
+  // rendu « hook-restitution : 23/23 — … du tour (17/09), hors format … ». Sans le mot « PASS », la
+  // lecture retombait sur le DERNIER ratio, et le dernier ratio était la DATE : le harnais a annoncé
+  // « 22 → 17 cas, 5 DISPARU(S) » sur une recette qui venait d'en GAGNER un, et a échoué. Coût : une
+  // recette complète du pilot de plus. Corriger « dernier » en « premier » aurait simplement renvoyé
+  // le défaut au bout d'où il venait le 01/09 — la position n'est pas l'invariant.
+  //
+  // L'INVARIANT EST LA FORME. Un compte de cas s'écrit N/N — les deux nombres sont ÉGAUX quand la
+  // recette est verte, et le cliquet ne compte QUE les recettes vertes (voir `confronter`) — ou bien
+  // il porte son mot juste après lui (« 16/16 cas », « 14/14 PASS »). Une date à barre oblique, elle,
+  // a un jour et un mois DIFFÉRENTS, le second au plus 12, et ne porte jamais ce mot. On écarte donc
+  // les ratios de forme DATE, on prend le premier ratio à nombres égaux, à défaut le dernier ratio
+  // restant — la lecture de TF-0738, qui garde les résumés qu'elle lisait déjà.
+  //
+  // SI TOUS LES RATIOS SONT DES DATES, la recette est rendue NON JUGÉE et le harnais la NOMME :
+  // illisible est un aveu, un compte inventé est une baseline fausse dont personne ne voit naître
+  // l'erreur.
+  const ratios = [...resume.matchAll(/(\d{1,4})\s*\/\s*(\d{1,4})/g)];
+  if (ratios.length) {
+    const estDate = (m) => {
+      const apres = resume.slice(m.index + m[0].length, m.index + m[0].length + 12);
+      if (/^\s*(?:cas|PASS)\b/i.test(apres)) return false;
+      const jour = Number(m[1]);
+      const mois = Number(m[2]);
+      return jour !== mois && jour >= 1 && jour <= 31 && mois >= 1 && mois <= 12;
+    };
+    const candidats = ratios.filter((m) => !estDate(m));
+    const egal = candidats.find((m) => Number(m[1]) === Number(m[2]));
+    if (egal) return Number(egal[1]);
+    if (candidats.length) return Number(candidats[candidats.length - 1][1]);
+    return null;
+  }
+  return null;
+}
+
+/**
+ * TF-1434 (28/09/2026) — UN CAS NON JOUÉ POUR UN MOTIF DÉCLARÉ N'EST PAS UN CAS PERDU.
+ *
+ * LE FAIT. `bootstrap.test.mjs` joue ses deux cas 5 bis (TF-1337) avec le contrôle de frontmatter
+ * de forge-agents, et les déclare NON JOUÉS sur un poste où ce contrôle manque. Le cliquet a été
+ * relevé de 17 à 19 le 27/09 sur le poste qui les joue (aa0f5f2) ; sur l'autre, la même recette
+ * rendait 17/17 et le harnais accusait « 19 → 17 cas, 2 DISPARU(S) » à CHAQUE passage, alors
+ * qu'aucun commit n'avait retiré un cas. Le cliquet protège « aucun cas retiré » et mesurait
+ * « combien de cas ont été joués », grandeur qui varie aussi avec le poste. Un harnais toujours
+ * rouge apprend à ne plus lire ses CAS PERDUS, y compris le jour où un cas disparaît vraiment.
+ *
+ * LA FORME DÉCLARÉE, FERMÉE. Une recette qui ne joue pas des cas sur ce poste l'écrit sur une ligne
+ * de sa sortie qui s'ouvre par `[NON JOUÉ] <n> cas`, suivie de ce qui n'est pas joué et pourquoi :
+ *   [NON JOUÉ] 2 cas — bootstrap 5 bis (TF-1337) : le contrôle de frontmatter de forge-agents est absent de ce poste
+ * Le cliquet compte alors les cas JOUÉS plus les cas DÉCLARÉS non joués : le relevé est le même
+ * d'un poste à l'autre pour un même code, et le harnais nomme chaque déclaration à chaque passage.
+ *
+ * CE QUE ÇA NE FERME PAS, ET C'EST DÉCLARÉ. La déclaration est auto-déclarée, comme le compte : une
+ * recette pourrait déclarer non joué un cas qu'elle a supprimé. La borne est celle du cliquet (en
+ * tête de ce fichier), et le harnais PUBLIE chaque déclaration : un non-jeu permanent se lit, il ne
+ * se cache pas. Une ligne qui dit « NON JOUÉ » hors de cette forme (sans crochets, sans « <n> cas »)
+ * n'est PAS lue : le cas manquant reste accusé, ce qui est le sens sûr.
+ */
+export const RE_NON_JOUE = /^\s*\[NON JOU[ÉE]S?\]\s+(\d{1,4})\s+cas\b[\s—:-]*(.*)$/;
+
+/** Les déclarations de cas non joués lues dans la sortie ENTIÈRE d'une recette : `[{ cas, motif }]`. */
+export function nonJouesDe(sortie) {
+  if (typeof sortie !== "string") return [];
+  const declarations = [];
+  for (const ligne of sortie.split(/\r?\n/)) {
+    const m = RE_NON_JOUE.exec(ligne);
+    if (m) declarations.push({ cas: Number(m[1]), motif: m[2].trim() });
+  }
+  return declarations;
+}
+
+/** La baseline sur disque. Un fichier absent n'est pas une erreur : c'est un premier passage. */
+export function lire(chemin) {
+  if (!existsSync(chemin)) return {};
+  try {
+    const brut = JSON.parse(readFileSync(chemin, "utf8"));
+    return brut && typeof brut === "object" && !Array.isArray(brut) ? brut : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Confronte les résultats du harnais à la baseline.
+ *
+ * `resultats` : `[{ nom, statut, resume }]`. Seules les recettes qui ont RÉUSSI sont comptées —
+ * une recette en échec a déjà son verdict, et lire son compte partiel ferait baisser la baseline
+ * pour une raison qui n'a rien à voir avec la disparition d'un cas.
+ *
+ * Rend `{ baisses, montees, nonLus, disparues, nonJoues, baseline }`. Le compte confronté est celui
+ * des cas JOUÉS plus celui des cas DÉCLARÉS non joués (`nonJouesDe`, TF-1434) ; `nonJoues` nomme
+ * chaque recette qui en déclare. La décision d'écrire appartient à l'appelant.
+ */
+export function confronter(resultats, baseline, jour) {
+  const baisses = [];
+  const montees = [];
+  const nonLus = [];
+  const nonJoues = [];
+  const suivante = { ...baseline };
+
+  for (const r of resultats) {
+    if (r.statut !== "OK") continue;
+    const joues = compteDe(r.resume, r.sortie);
+    if (joues === null) {
+      // UNE EXEMPTION SE DÉCLARE, ET ELLE SE VERSIONNE. Certaines entrées ne portent AUCUN
+      // compte de cas et n'en porteront jamais : un oracle d'état joué sur le parc réel rend
+      // « PASS sur le parc », pas un nombre de cas. Les compter à zéro ferait échouer le cliquet
+      // sur une absence normale ; les taire les rendrait indiscernables d'un oubli.
+      //
+      // La déclaration vit DANS le fichier de baseline — `{ "non_lu": true, "motif": "…" }` —
+      // parce qu'un motif qui ne vit que dans un message de console n'est ni relu ni opposable.
+      // Une entrée déclarée qui redevient lisible bascule automatiquement au cliquet : la
+      // déclaration est une exemption datée, jamais une porte ouverte.
+      const declare = baseline[r.nom] && baseline[r.nom].non_lu;
+      if (declare) suivante[r.nom] = baseline[r.nom];
+      else nonLus.push(r.nom);
+      continue;
+    }
+    // TF-1434 : les cas DÉCLARÉS non joués sur ce poste comptent, et chaque déclaration est rendue
+    // à l'appelant pour être nommée. Un cas non joué SANS déclaration lisible ne compte pas : il
+    // reste une baisse, et c'est voulu.
+    const declarations = nonJouesDe(r.sortie);
+    const declares = declarations.reduce((n, d) => n + d.cas, 0);
+    if (declares) nonJoues.push({ nom: r.nom, joues, nonJoues: declares, declarations });
+    const vu = joues + declares;
+    const connu = baseline[r.nom];
+    const avant = connu && Number.isInteger(connu.cas) ? connu.cas : null;
+    if (avant === null) {
+      suivante[r.nom] = { cas: vu, vu_le: jour };
+      montees.push({ nom: r.nom, avant: null, vu, nonJoues: declares });
+    } else if (vu > avant) {
+      suivante[r.nom] = { cas: vu, vu_le: jour };
+      montees.push({ nom: r.nom, avant, vu, nonJoues: declares });
+    } else if (vu < avant) {
+      baisses.push({ nom: r.nom, avant, vu, perdus: avant - vu, nonJoues: declares });
+    }
+  }
+  // TF-1082 (15/09/2026) — LE CLIQUET COMPTE AUSSI LES FICHIERS. Il comptait des CAS : une recette
+  // qui disparaissait ENTIÈRE sortait du passage sans un mot, son entrée restait à la baseline et
+  // personne ne la comparait plus. Les onze exemptions (`non_lu`) étaient plus exposées encore :
+  // sans compte, rien ne les protégeait de leur propre disparition. Toute entrée de la baseline
+  // absente du passage est désormais NOMMÉE ; l'entrée est gardée, jamais perdue en silence — son
+  // retrait est un geste écrit de l'appelant (`--appliquer`). Une recette présente et EN ÉCHEC
+  // n'est pas une disparition : elle a déjà son verdict.
+  const vus = new Set(resultats.map((r) => r.nom));
+  const disparues = Object.keys(baseline).filter((nom) => !vus.has(nom))
+    .map((nom) => ({ nom, exemption: Boolean(baseline[nom] && baseline[nom].non_lu), cas: baseline[nom] && Number.isInteger(baseline[nom].cas) ? baseline[nom].cas : null }));
+  return { baisses, montees, nonLus, disparues, nonJoues, baseline: suivante };
+}
+
+/**
+ * TF-2480 (13/11/2026) — UNE RECETTE JOUÉE DANS UN ARBRE DE CAMPAGNE NE RÉÉCRIT PLUS LA RÉFÉRENCE DE MAIN.
+ *
+ * LE FAIT. Le 12/11/2026, la recette entière d'un agent de campagne a réécrit `oracles/baseline-recettes.json` dans son arbre de travail (5 entrées
+ * relevées d'un coup, dont celles que d'autres lots avaient montées sur main) : une HAUSSE s'inscrit toute seule, et l'arbre d'un agent ne voit que
+ * son lot. Le fichier réécrit, fusionné, aurait porté dans main des comptes qui ne sont pas ceux de main. La référence se met à jour par son
+ * écrivain, joué dans main, là où tous les lots sont réunis.
+ *
+ * LA RÈGLE. Un arbre de travail git LIÉ (`git worktree add` : son répertoire git n'est pas le répertoire commun) est un arbre de campagne : le
+ * harnais y dit les hausses qu'il a vues et ne les inscrit pas. Deux gestes écrits gardent leur effet : `--appliquer` (accepter une baisse) et
+ * `--ecrire-baseline` (inscrire les hausses ici, sciemment, par exemple à la fusion). CE QUE ÇA NE FERME PAS : un arbre de campagne n'est reconnu que
+ * par git ; une copie du dépôt sans `.git` partagé (clone, archive) reste un arbre ordinaire, et `git` absent rend « arbre ordinaire ».
+ */
+const norme = (p) => { const n = resolve(p).replace(/[\\/]+$/, ""); return process.platform === "win32" ? n.toLowerCase() : n; };
+
+/** Vrai quand le répertoire git d'un arbre n'est pas le répertoire commun du dépôt (arbre lié). Pur. */
+export function arbreLie(repertoireGit, repertoireCommun) { return norme(repertoireGit) !== norme(repertoireCommun); }
+
+/** Vrai quand `racine` est un arbre de travail git lié ; faux ailleurs, `git` absent ou dépôt illisible compris. */
+export function arbreDeCampagne(racine) {
+  const lireGit = (option) => {
+    const r = spawnSync("git", ["rev-parse", option], { cwd: racine, encoding: "utf8" });
+    return !r.error && r.status === 0 && r.stdout.trim() ? resolve(racine, r.stdout.trim()) : null;
+  };
+  const g = lireGit("--git-dir"), c = lireGit("--git-common-dir");
+  return g && c ? arbreLie(g, c) : false;
+}
+
+/**
+ * La décision d'inscrire les hausses d'un bilan. `ordinaire` : inscrire (comportement d'origine, TF-0681) ; `campagne` : ne pas inscrire, sauf
+ * `forcer` (--ecrire-baseline) ; une baisse ou une disparition n'inscrit jamais ici (elles passent par --appliquer). Rend `{ ecrire, campagne }`.
+ */
+export function decisionInscription(bilan, { campagne = false, forcer = false } = {}) {
+  const hausses = bilan.montees.length > 0 && !bilan.baisses.length && !bilan.disparues.length;
+  return { ecrire: hausses && (!campagne || forcer), campagne: hausses && campagne && !forcer };
+}
+
+/** Écrit la baseline, triée par nom — un fichier versionné dont l'ordre bouge est illisible. */
+export function ecrire(chemin, baseline) {
+  const trie = Object.fromEntries(Object.keys(baseline).sort().map((k) => [k, baseline[k]]));
+  writeFileSync(chemin, JSON.stringify(trie, null, 1) + "\n", "utf8");
+}

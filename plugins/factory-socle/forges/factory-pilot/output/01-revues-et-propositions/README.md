@@ -1,0 +1,33 @@
+# output\01-revues-et-propositions\
+
+<!-- Généré par scripts\readme-dossiers.mjs : seul le bloc RÔLE se rédige à la main ; la table
+     se régénère à chaque ajout, modification ou suppression (hook PostToolUse, recette I4).
+     Ne pas éditer la table — modifier le dossier, relancer le script. -->
+
+## Rôle
+
+<!-- ROLE:DEBUT -->
+Revues d'écosystème (fiches d'audit des forges rejouées, synthèse trans-forges) et propositions de forge — rapports, maquettes HTML, notes ; un document par revue, nommage R-4 daté.
+<!-- ROLE:FIN -->
+
+## Contenu
+
+Contenu du dossier à la dernière régénération : chaque élément avec son type, sa taille et sa nature, les sous-dossiers pointant vers leur propre README.
+
+| Élément | Type | Taille | Titre / nature |
+|---|---|---|---|
+| [`old\`](old/README.md) | dossier (1 fichier) | — | Les revues et propositions REMISES qui ne sont plus la référence courante. Un livrable n'entre ici que pour une raison, et jamais pour être corrigé : *une nouve… |
+| `20260825-releve-heritage-produits.md` | fichier | 5,7 Ko | Relevé de l'héritage chez les produits — 25/08/2026 |
+| `Factory - Proposition Architecture - Circuit - 20260815d.md` | fichier | 5,4 Ko | Proposition d'architecture — le circuit de l'insatisfaction |
+| `Factory - Proposition Forge - Restitution lisible - 20260815a.md` | fichier | 11,0 Ko | Proposition — Doctrine « restitution lisible » pour forge-design |
+| `Factory - Proposition Forge - Tuyauterie cognitive - 20260809a.md` | fichier | 9,4 Ko | Factory — Proposition : optimisation de la tuyauterie cognitive — 2026-08-09 |
+| `Factory - Revue - Prompt amelioration de la boucle de relecture passe au crible L99 - 20261029b.md` | fichier | 29,8 Ko | Revue L99 du prompt « améliorer encore le score de la boucle de relecture » |
+| `Factory - Revue - Prompt amelioration de la boucle de relecture passe au crible L99 - 20261029b.md.boucle.json` | fichier | 49,1 Ko | JSON |
+| `Factory - Revue - Prompt strategie de lancement des agents passe au crible L99 - 20261029a.md` | fichier | 29,7 Ko | Revue L99 du prompt « nouvelle stratégie de lancement des agents » |
+| `Factory - Revue - Prompt strategie de lancement des agents passe au crible L99 - 20261029a.md.boucle.json` | fichier | 61,4 Ko | JSON |
+| `Factory - Revue D8 - Restitutions du 15-08 - 20260815c.md` | fichier | 3,7 Ko | Revue D8 « Lecture de données » — les trois restitutions migrées du 15/08 |
+| `Factory - Revue Forge - Écosystème - 20260808a.md` | fichier | 11,2 Ko | Factory — Revue stratégique de l'écosystème forge — 2026-08-08 |
+| `Factory - Revue Forge - Écosystème - 20260819a.md` | fichier | 6,0 Ko | Factory — Revue Forge — Écosystème — 20260819a |
+| `Produit-02 - Proposition Refonte - Rapport SEO - 20260815b.md` | fichier | 6,9 Ko | Proposition — Refonte du rapport d'audit SEO d'Produit-02.com |
+
+_12 fichier(s), 1 sous-dossier(s)_

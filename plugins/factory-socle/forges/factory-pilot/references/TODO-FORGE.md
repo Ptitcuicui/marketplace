@@ -1,0 +1,481 @@
+# TODO-FORGE — registre des améliorations, mode opératoire
+
+Référence chargée à la demande depuis le noyau `CLAUDE.md` (TF-0053).
+
+Le registre structuré des améliorations vit dans `todo\` : source unique `TODO.jsonl`
+(événements `creation`/`maj`/`ingestion`, écrivain unique : le pilot), vue générée `TODO.md`
+(jamais éditée), archive `TODO-ARCHIVE.jsonl` (ids jamais réutilisés), `oracle-todo.mjs`
+(R1-R11) à faire passer après toute écriture.
+
+**Les vues ne sont plus versionnées (D-4 (a), 16/09/2026, TF-0983).** `TODO.md`, `TODO.html`,
+`TODO-ARCHIVE.html`, `RECIDIVES.md` et `AVANCEMENT.md` sont dérivés des deux `.jsonl` et
+régénérables en une commande ; ils sont désormais ignorés par git. *Un contenu dérivé versionné
+multiplie par le nombre de régénérations le coût de toute erreur dans sa source* — mesuré le
+16/09 : un identifiant écrit UNE fois dans la source vit dans 50 révisions de cette source, 50 de
+`TODO.md` et 32 de `TODO.html`, soit 132 au total dont 82 dues aux seules vues. Effacer un nom de
+client de l'histoire coûtait donc 2,6 fois le travail nécessaire. Le poids, lui, n'était pas le
+sujet : 10,95 Mo compressés sur 280, soit 3,9 % du dépôt.
+
+**Ce qui se perd, et rien d'autre** : la lecture des vues sur l'hébergeur sans cloner. Vérifié
+fichier par fichier le 16/09 — aucun outil du parc ne les lit depuis l'HISTOIRE : `self-test.mjs`
+en prend l'empreinte sur le disque, `verifier-avance-publication.mjs` ne fait que les classer
+quand elles apparaissent dans un enregistrement. Toute version passée se régénère depuis la source
+de son époque. **Les régénérer**, après toute écriture au registre :
+
+```
+node todo\generer-vue.mjs && node todo\generer-page.mjs && node todo\generer-recidives.mjs
+node todo\generer-archive.mjs && node scripts\generer-avancement.mjs
+```
+
+*Ce que cette décision NE fait pas* : elle arrête l'amplification à venir, elle ne nettoie pas les
+82 révisions déjà écrites. Les deux remèdes sont complémentaires, jamais concurrents — le second
+reste ouvert et coûte, lui, le reclonage du parc et 106 empreintes de commit citées au registre
+qui deviendraient orphelines.
+
+**Écrire au registre : `node todo\journaliser.mjs --fichier <evenements.json>`** (TF-0413,
+20/08). Les événements y entrent **sans `ts`** — l'outil le STAMPE. Il refuse tout événement
+qui en porte un, sans rien écrire, et il ANNULE son écriture (fichier repris à l'octet près)
+si `oracle-todo` passait avant et échoue après. `--essai` montre ce qui serait écrit.
+*Pourquoi c'est un outil et pas une consigne* : les `ts` composés à la main étaient en avance
+de 2 h 40 à 7 h 30 sur l'heure réelle — dix clôtures sur six jours, aucune en retard, pendant
+que les événements écrits par `ingerer-lot.mjs` collaient au commit à la minute. Une heure
+qu'on écrit soi-même est une heure qu'on invente ; aucune durée n'était calculable au registre.
+**R11** constate le défaut (un `ts` postérieur à l'heure d'exécution est un FAIL, tolérance
+d'horloge de 2 min, antériorité déclarée en deçà du 20/08 18:30 Z) ; `journaliser.mjs` en
+supprime la cause. L'heure d'un fait RAPPORTÉ (décision d'hier, correction d'avant-hier) est
+une donnée : `date_decision`, `date_correction` — jamais `ts`, qui est l'heure de
+consignation.
+
+**Deux sessions, un seul compteur : ce qui est couvert et ce qui ne l'est pas** (TF-0394 puis
+TF-0481). Le préflight de `ingerer-lot.mjs` fait `git fetch` puis compare `HEAD..origin/main`
+sur les deux registres, et REFUSE l'ingestion si le distant a avancé — sinon les ids séquentiels
+repartiraient du mauvais maximum. C'est juste, et ça reste. **Depuis TF-1003 (14/09/2026), il juge
+ce qu'il protège** : un distant « en avance » en commits ne refuse que s'il porte une CRÉATION
+absente d'ici, ou frappée ailleurs sous le même id (autre `ts` de frappe). Deux histoires DIVERGENTES
+au même registre — la signature d'une réécriture non encore republiée — ingèrent, et le message
+nomme la divergence sans jamais proposer `git pull --rebase` (« à recloner, pas à fusionner »).
+
+Mais c'est un **check-then-act** : il regarde AVANT d'écrire. Il ne peut rien contre la fenêtre
+qui s'ouvre PENDANT l'ingestion — deux sessions qui frappent les mêmes numéros avant que l'une
+ait poussé. **Cette fenêtre a été payée trois fois** : une avant TF-0394, puis deux le 22/08 —
+cinq candidatures renumérotées le matin avec trois commits de rattrapage, et un `TF-0514` frappé
+pendant qu'une autre session publiait le sien le soir.
+
+Deux mécanismes s'y ajoutent, et **aucun des deux ne ferme la fenêtre** :
+
+- un **post-contrôle** après écriture : l'ingestion re-`fetch` et compare les ids qu'elle vient
+  de frapper à ceux d'`origin`. Il ne peut pas échouer — l'écriture est faite, annuler perdrait
+  le travail — mais il AVERTIT, nomme les ids en cause et donne la commande qui répare. La
+  fenêtre n'est pas fermée : elle cesse d'être découverte à la main, plus tard ;
+- **`node todo\renumeroter.mjs <ancien> <nouveau> --motif "…"`**, parce que le coût mesuré n'est
+  pas la collision mais la RENUMÉROTATION MANUELLE. L'outil REFUSE un motif de moins de
+  30 caractères, un id absent, et un id cible déjà pris — **archive comprise**, un numéro archivé
+  restant pris. Le motif s'annote dans le champ `source` de la création, à la suite de ce qui y
+  était : *un identifiant qui change sans que la raison soit lisible vaut moins qu'un identifiant
+  absent*, et l'histoire s'annote au lieu de se réécrire.
+
+**Les deux voies qui fermeraient vraiment la fenêtre sont écartées, et il vaut mieux dire
+pourquoi que les laisser croire possibles.** Frapper les ids AU PUSH suppose que tout l'aval
+(vues, oracle, TODO-PRODUIT) sache travailler sur des lots sans numéro : ce n'est pas un
+correctif, c'est un changement de modèle. Réserver un bloc atomiquement sur `origin`
+fonctionnerait — la mise à jour d'une référence git EST un compare-and-swap — mais elle exige de
+POUSSER pendant l'ingestion, et R-38 réserve le push au GO humain : un outil qui publie sans GO
+pour se protéger d'une collision échangerait un défaut contre une violation.
+
+**Une correction close REDESCEND chez les producteurs, ou elle se rouvre (R12, TF-0757, 02/09).**
+Trois récidives en quatre jours sur un seul projet ont montré que les retours MONTENT au registre
+et ne redescendent pas sous une forme qu'un producteur rencontre au moment où il produit — un
+registre de candidatures n'est pas une redescente. Toute clôture en `corrige` postérieure au
+02/09/2026 15:00 Z porte un champ **`descente`** : `regle` (la règle générique écrite au socle ou au
+gabarit, avec sa référence), `oracle` (le contrôle qui la joue), `digest` (la ligne du référentiel
+hérité par les produits), ou `non_mecanisable` (l'énoncé explicite et son motif). R12 refuse la
+clôture qui n'en porte aucun — et `journaliser.mjs` annule alors l'écriture. *Une correction qui vit
+dans le registre du pilot et nulle part chez le producteur n'est pas câblée* (loi n° 1). Les 600+
+clôtures antérieures restent de la prose : c'est déclaré, pas rattrapé.
+
+**Un écart d'audit sur un réglage de plateforme rouvre un retour vers la forge qui crée (R-66 point 5,
+D-178 (a) du 06/11/2026, TF-2232).** L'audit du cas témoin du 30/10/2026 comptait 7 écarts sur 30 qui étaient
+une option gratuite laissée à sa valeur d'origine ; les corriger chez le produit les referme pour lui, et le
+produit suivant les rouvre. À la réception d'un lot ou d'un rapport de campagne qui corrige un tel écart,
+`node scripts\ouvrir-retour-reglage.mjs --reglage <adresse> --ecart <identifiant> --produit <pseudonyme>`
+lit l'écart contre `references\REGLAGES-SURS-PAR-DEFAUT.json` : classé `defaut`, il rend la candidature vers
+`factory-forge-development`, à ingérer par `todo\ingerer-lot.mjs` avec l'identifiant de l'écart ; classé
+`decision`, il renvoie à la décision nommée et n'ouvre rien. Le script rend la candidature, il ne l'écrit pas
+au registre : l'écrivain reste `ingerer-lot.mjs`. Non câblé à l'ingestion : un sidecar qui nomme un réglage n'y
+déclenche pas l'aiguillage tout seul, c'est un geste du pilot à la réception.
+
+**Un retour porte sa CLASSE, et une récidive se COMPTE — jamais refusée (R13, mandat du 03/09/2026).**
+Mesuré au pas 0 du mandat, sur les 788 items du registre : **50** déclaraient une récidive en toutes
+lettres (« déjà corrigé », « reproduit », « récidive ») — 6 % du registre, en hausse chaque semaine
+d'août (1, 11, 15, 19) — et AUCUN champ ne permettait de les compter. Un classement automatique par
+famille de mots-clés a été essayé d'abord : 94 % de « récidives » sur les grandes familles, 321
+items dans plusieurs familles, 196 dans aucune — inexploitable, parce qu'une famille (« page
+HTML ») n'est pas un défaut (« polices distantes chargées »). D'où trois choses câblées le même
+jour. (1) **Le référentiel `todo\CLASSES.json`** — donnée datée (loi n° 4), deux niveaux : la
+FAMILLE sert à lire, la CLASSE sert à compter ; une classe est un défaut généralisé avec la règle
+où il vit, l'oracle qui la joue et les clôtures qui l'ont fondée (`fondee_par`, ids seulement —
+la date se lit au registre, N-6). Il se **lit au pilot** : le produit n'en reçoit qu'un relais (`forge\retours\CLASSES.json`,
+R-47, TF-1821), et le producteur qui écrit un lot lit au pilot ce qu'il doit déclarer. (2) **À l'ingestion**, tout
+retour d'un lot daté du 03/09 ou après porte `classe` ; absente ou inconnue, `ingerer-lot.mjs`
+REFUSE en nommant les clés proches — une classe nouvelle se crée dans le référentiel, jamais dans
+un sidecar. Le défaut vraiment neuf a sa sortie (TF-1128, 15/09/2026) : la clé RÉSERVÉE
+`classe-a-creer`, admise si la ligne porte `classe_proposee` {cle, famille, libelle} et que le `.md`
+nomme la clé ; le retour entre avec `classe: null` et `classe_a_creer`, et le pilot crée la classe
+puis rattache le retour (recette : `todo\ingerer-classe.test.mjs`, 13 cas). Un retour dont la classe est déjà close en `corrige` ENTRE, marqué `recidive_de`,
+avec l'oracle censé l'avoir attrapé : la récidive est la mesure de la descente, la refuser la
+cacherait. Une classe créée SANS clôture fondatrice moins de 30 jours après un retour d'une classe
+voisine est signalée `classe_suspecte` — la façon la moins chère de faire baisser un compteur est
+d'inventer des clés. (2 bis) **UN ITEM QUI N'EST PAS UN DÉFAUT PORTE `nature: "opportunite"` ET AUCUNE CLASSE**
+(décision humaine D-16 (a) du 22/09/2026). La classe est une classe de DÉFAUT : les 18 familles du
+référentiel n'en décrivent pas d'autre, et le compteur des récidives repose là-dessus. Or le
+registre reçoit aussi des items d'ÉTUDE D'OPPORTUNITÉ, qui demandent de CONSTRUIRE — un registre
+daté à tenir, un plan de mesure à poser, un palier à ouvrir. Leur attribuer une classe reviendrait
+à écrire qu'un manque de fonctionnalité est une faute, et à gonfler un compteur qui sert à mesurer
+la descente des corrections. Mesuré le 22/09 : sur 8 items ouverts sans classe, 3 étaient de cette
+nature. Le champ `nature` est donc DISTINCT de `classe` et mutuellement exclusif avec elle : un
+item porte l'une ou l'autre, jamais les deux, jamais aucune. `todo\journaliser.mjs` admet une
+création sans classe si et seulement si elle porte `nature: "opportunite"`, et refuse celle qui
+porte les deux. Ce qui n'est PAS ouvert par là : une opportunité reste une candidature ordinaire,
+elle se décide, elle se clôt, et sa clôture porte sa descente comme toute autre.
+
+(3) **R13** de l'oracle : une classe hors référentiel est un FAIL ; une
+récidive marquée est AVERTISSANTE (doctrine v2.5.0 de la restitution : elle se durcira sur corpus
+propre). (4) **Le DOUBLON STRICT est refusé à la porte** (TF-0956, 14/09) : une candidature dont
+le titre ET le contenu, après anonymisation et aux espaces et à la casse près, sont ceux d'une
+création du registre (actifs ou archive) ou d'une autre ligne du même lot, fait rejeter le lot en
+bloc, l'original nommé — un lot RENOMMÉ se rattache, il ne se ré-ingère pas (six doublons entrés
+ainsi le 08/09). **R14** de l'oracle juge ce qui entrerait par un autre chemin : un doublon strict
+postérieur à son seuil (14/09/2026 12:00 Z) se passe en `ecarte` (avec son `motif_ecart`, R7) ou
+se marque `doublon_de`, sans quoi il compte comme un item ouvert de plus. Les doublons
+antérieurs sont une antériorité déclarée au `non_juge`, jamais réécrite ; un
+quasi-doublon reste une piste de rapprochement, jamais un refus. **La vue `todo\RECIDIVES.md`** (`generer-recidives.mjs`, générée, jamais éditée)
+porte le taux de récidive par classe et par produit, le délai clôture → descente constatée (lu
+dans `todo\HERITAGE-RELEVES.jsonl`, que le hook d'ouverture du pilot écrit à chaque relevé
+R-47), le taux d'héritage par artefact, et la contre-métrique : classes créées par semaine et
+classes sans fondateur. Ce qui n'est pas mesurable y est dit, jamais mis à zéro. Recettes :
+`todo\ingerer-classe.test.mjs` (8 cas), `todo\self-test.mjs` (R13, 2 cas),
+`todo\generer-recidives.test.mjs` (5 cas). La cadence de relecture du référentiel — la revue
+des classes — est écrite dans `BOUCLE-AMELIORATION.md`.
+
+**Gouvernance** : tout entre en `candidat` ; seul un mandat humain (« décide TF-xxxx », un lot de
+décisions appliqué par `todo\appliquer-export.mjs` — format `TF-decisions-*.json`, produit
+par l'humain et non plus par la page (TF-0328) — ou un mandat global explicite) passe en `decide` — le décideur
+et la date sont tracés (R6). Transitions : candidat→decide→en_cours→corrige|ecarte→archive.
+Clôture `corrige` : `gains_constates`, `corrections_realisees`, `date_correction` exigés (R7).
+
+**Qui doit agir sur un sujet en cours** (règle R16, 13/10/2026, demande humaine « revoir les
+statuts avec Attente Produit, Attente Autre Poste ») : tout sujet `en_cours` porte un champ
+`attente`, en vocabulaire fermé. Le statut garde sa machine (R5) ; l'attente dit qui tient la suite.
+
+| `attente` | Qui doit agir | Complément exigé |
+|---|---|---|
+| `session` | la session y travaille | aucun |
+| `produit` | le produit, dont le lot de travaux est déposé | aucun |
+| `produit_absent` | le produit, absent de ce poste | aucun |
+| `autre_poste` | une session de l'autre poste | aucun |
+| `decision_humaine` | l'humain, qui doit trancher | aucun |
+| `geste_humain` | l'humain, pour un geste sans choix à trancher (rotation d'un identifiant) | aucun |
+| `echeance` | personne avant une date | `attente_jusqu_au` (AAAA-MM-JJ) |
+| `dependance` | un autre sujet du registre | `attente_de` (TF-####) |
+
+Toute mise à jour qui fait entrer un sujet en `en_cours`, ou qui change son reste, porte son
+`attente`. Un sujet décidé qui attend autre chose que la session la déclare aussi. Pour les autres,
+l'action se déduit (`todo/lib-action.mjs`) : un candidat attend la décision humaine, un décidé la
+session, un sujet clos plus rien. Les deux vues (`TODO.md` et `TODO.html`) portent deux colonnes,
+le statut en clair et l'action attendue, et comptent les sujets ouverts par action.
+
+**Intake** : lots des produits (règle 18), **lots des forges** (toute forge peut déposer un
+lot ciblant n'importe quelle forge — même gabarit, remise au sas `input\00-retours\_arrivee\`,
+préfixé du projet ou de la forge émettrice), demandes humaines directes ; candidatures hors lot :
+`input\01-candidatures\`. **Avant toute ingestion, confronter le lot au registre ET à
+l'archive** : un lot déjà traité par un autre canal part en `old\` sans ingestion (incident
+du 13/08 : 32 doublons créés puis retirés pour l'avoir omis). L'écriture DIRECTE dans
+TODO.jsonl par une autre session est **interdite** — toute candidature passe par un sidecar
+`.tf.jsonl` + `node todo\ingerer-lot.mjs <sidecar>`
+(validation atomique, idempotente par sha du lot, ids frappés à l'ingestion). Le contournement
+se détecte : règle **R10** de l'oracle (creation de session externe sans événement
+`ingestion` — incident TF-0049).
+
+**Le sas d'arrivée — le protocole de remise, domicilié ici parce que le sas est ignoré (TF-0981
+puis TF-1055, 14/09/2026).** `input\00-retours\_arrivee\` est IGNORÉ par git (`.gitignore`) : un
+lot peut y séjourner sous son nom réel sans qu'aucun `git add` puisse l'emporter. Son README local
+ne voyage donc pas, et un clone frais n'a pas le dossier : la règle vit ici.
+- **Qui y écrit, et quand** : le produit ou la forge émettrice, au moment de la remise — le `.md`
+  et son sidecar `.tf.jsonl`, tels qu'ils sont, nom réel compris. Jamais à la racine de
+  `input\00-retours\`, qui est suivie (`gabarits\RETOURS-FORGES.md` le prescrit au producteur).
+- **Deux gestes ensuite, deux verdicts** : `node todo\accueillir-lot.mjs` pseudonymise le nom et le
+  contenu et DÉPLACE le lot à la racine suivie ; puis `node todo\ingerer-lot.mjs <sidecar>` l'ingère.
+- **Ce qui le garde** : la règle LOT-SAS de `gabarits\oracle-lot-retours.mjs` refuse, à
+  l'ingestion, un lot posé à la racine sous un nom réel, en nommant le sas.
+- **Un lot refusé à la porte se REMONTE aussi au produit (demande humaine du 02/10/2026).** Mot pour
+  mot : « remonter aux produits pour qu'ils améliorent leurs retours la prochaine. A proposer dans une
+  réponse supplémentaire la prochaine fois que ça arrive, et expliquer pourquoi les produits n'ont pas
+  bien remontés leurs éléments, sachant qu'ils ont les bons formats fournis ». La restitution qui
+  pose la décision sur un lot refusé (dérogation ou renvoi) y joint donc deux choses. La première :
+  l'option de remonter le constat au produit, par un item portant `destinataire_produit` puis
+  `todo\emettre-travaux.mjs`. La seconde : la CAUSE mesurée en lecture seule chez le produit, jamais
+  supposée — version ENREGISTRÉE (`git show HEAD:`) et version sur disque de
+  `forge\retours\oracle-lot.mjs` et du gabarit, leurs dates comparées à l'heure de la remise, et le
+  verdict du contrôle de remise consigné au journal du produit avec ses règles jouées. Cas fondateur
+  (TF-1568 à TF-1570) : deux produits ont remis le 01/10 sous un contrôle en 1.0.0 et en 1.1.0,
+  antérieur à R-57, qui rendait PASS honnêtement ; les copies à jour ne sont arrivées sur leur disque
+  qu'après la remise.
+- **Un lot refusé pour sa FORME se traite d'office, sans question (D-241 (a) du 23/11/2026, consigne
+  permanente).** Mot pour mot : « Ne plus me poser la question, doit être la réponse standard à
+  traiter ». Quand l'ingestion refuse un lot pour une section exigée absente (R-45, R-46, R-57,
+  GFP-LOT), une famille ou une clé de classe hors du référentiel, ou un identifiant déjà pris, la
+  session ne pose plus de décision. Elle enchaîne 4 gestes. (1) Elle annote le lot à la réception
+  (R-49) : la clé de classe existante la plus proche, un identifiant renuméroté, la ligne « Annoté à
+  la réception ». (2) Elle l'ingère par `--derogation-fichier`, en citant D-241 (a). (3) Elle mesure
+  la cause chez le produit, en lecture seule, comme ci-dessus. (4) Elle remonte le constat par un
+  item `destinataire_produit` (classe `remise-sans-verdict`), puis `todo\emettre-travaux.mjs
+  --produit <dossier>`, le dossier se lisant dans la table des pseudonymes du canal confidentiel. La
+  restitution le dit au bloc 4, pas au bloc 3. Restent des décisions : un lot dont le CONTENU est en
+  cause (doublon, sujet hors périmètre, nom réel opposé à un pseudonyme), et un lot qu'aucune
+  dérogation ne fait passer.
+- Un sas **vide est l'état normal**. Un lot DÉJÀ suivi sous un nom réel ne relève pas du sas mais
+  de `todo\anonymiser-suivis.mjs`.
+- **Un produit privé déclaré de l'écosystème garde son nom** (règle humaine du 01/10/2026, mot pour
+  mot : « Les dépôts privés peuvent conserver des données de type nom » ; D-5 (a) du 17/09, D-36 (a)
+  du 01/10). `PRODUITS_DE_L_ECOSYSTEME` de `scripts\lib-parc.mjs` les déclare : l'accueil ne les
+  pseudonymise pas, puisqu'aucune table ne les porte, et l'écrivain de la table ne les y inscrit
+  jamais (TF-1505). La protection des noms vise les dépôts publics : le pilot et les 13 forges,
+  publics au 01/10/2026.
+
+**Ce qu’un lot n'a PAS remonté se déclare (R-45, 21/08).** Tout lot daté du 21/08 ou après
+porte une section « Remarques restées au produit » : chaque remarque que le produit a corrigée
+chez lui sans la remonter y figure avec son **verdict de généralisation** — non généralisable et
+pourquoi, ou généralisable et alors REMONTÉE. Aucun lot n'en a ? Il l'écrit. Câblé aux deux
+bouts : `ingerer-lot.mjs` REFUSE le lot (rejet atomique) et `oracle-boite-entree` **B6** le
+constate. *Ce qui se perd dans un tri silencieux n'est pas le défaut : c'est sa CLASSE* — largeur
+de lecture, tableaux illisibles au mobile, états vides absents ont tous commencé comme « un
+défaut de ce livrable-là ». La justesse du verdict n'est PAS jugée : un raisonnement écrit peut
+être faux et se corrige, un raisonnement absent est perdu pour tout le monde.
+
+**Ce qu'un document a coûté à son gabarit se déclare (R-46, 22/08).** Pendant de R-45, côté
+LIVRABLES. Tout lot daté du 22/08 ou après porte une section « Retours sur les documents
+produits » : pour chaque document tiré d'un gabarit de `gabarits\documents\`, le couple
+`gabarit` + `version_du_gabarit` qu'il affiche en en-tête, ce qui a manqué, ce qui a gêné le
+LECTEUR, ce qui a été ajouté à la main, et la portée. Aucun document issu d'un gabarit ? Le lot
+l'écrit. Câblé aux deux bouts — `ingerer-lot.mjs` REFUSE, `oracle-boite-entree` **B7**
+constate — et le fil est prescrit en amont par **G8** de `oracle-gabarits-documents`.
+*Pourquoi ce canal manquait* : celui qui existait parle des FORGES, jamais des DOCUMENTS. Les
+quatre premières familles de la bibliothèque ont été extraites en allant chercher à la main ce
+que les projets refaisaient — un gabarit barré par un projet, des runbooks réinventés quatre
+fois. Rien ne faisait remonter cette matière en continu.
+
+**Prouver la boîte vide, à l'ouverture de tout run** — `node oracles\oracle-boite-entree.mjs`
+(B1-B5, self-test 17/17, exit 0/1/2). Le 14/08, un lot `Produit-10 - RETOURS - 20260814b`
+(5 candidatures) est resté dans `input\00-retours\` sans être ingéré pendant qu'un autre lot
+du même jour l'était ; rien ne l'a signalé, et il a été trouvé par hasard en listant les
+fichiers non suivis avant de poser un tag. La leçon tient en une phrase : **un registre à jour
+ne dit rien de ce qui n'y est jamais entré** — l'oracle R1-R10 juge l'intégrité de ce qui est
+DEDANS, jamais l'existence de ce qui est resté DEHORS. Trois défauts, tous mesurés sur le cas
+réel : sidecar jamais ingéré (B1), sidecar édité APRÈS son ingestion — le registre en porte le
+nom mais plus le contenu (B2), lot `.md` remis sans sidecar, donc ingérable par aucun canal et
+invisible par construction (B3). Un sidecar brut au format produit est couvert par son dérivé
+`.normalise.tf.jsonl` ingéré, et `old\` reste hors périmètre : le canal d'échappement
+documenté plus haut n'est pas un défaut.
+
+**Un lot reçu sous un nom interdit se NETTOIE SUR DISQUE avant d'entrer, et une empreinte qui
+change par anonymisation se RE-CONSIGNE avec sa preuve (02/09).** Le lendemain de la passe
+d'anonymisation du 01/09 (D-37), la boîte rendait 23 constats B2 et 5 constats B1 pour ZÉRO
+édition : l'empreinte consignée était celle du fichier d'avant la passe. Trois pièces ferment ce
+trou. (1) `node todo\anonymiser-suivis.mjs --fichiers <chemin>…` nettoie une liste EXPLICITE,
+suivie ou non par git — c'est la voie d'un lot reçu avec un nom de client : contenu et nom
+réécrits sur disque avant `ingerer-lot`, l'original restant chez le produit ; le pilot n'ajoute
+jamais un lot brut au suivi. (2) `node todo\reempreinter-lot.mjs <sidecar>` consigne la nouvelle
+empreinte d'un sidecar déjà ingéré SEULEMENT s'il PROUVE que le contenu courant est la forme
+anonymisée du contenu ingéré : version retrouvée dans l'historique git (renommages compris), copie
+d'avant fournie par `--avant`, ou `--par-rapprochement` (titres du sidecar = créations consignées,
+en nombre égal) — tout le reste est REFUSÉ comme édition. L'événement est une `ingestion` sans
+`creations` portant un bloc `reempreinte` (empreinte d'avant, motif, preuve). `anonymiser-suivis`
+l'appelle lui-même sur chaque sidecar qu'il réécrit : celui qui change un contenu est le seul à
+tenir la preuve. (3) Deux lots d'un même produit remis le même jour sous le même indice par deux
+sessions se **réindexent** à la réception (indice suivant libre, note en tête du `.md`, source du
+sidecar suivie) : deux lots sous un même nom ne s'ordonnent pas — classe TF-0750, transposée aux
+lots. Recettes : `todo\reempreinter-lot.test.mjs` (12 cas), `todo\ingerer-anonymise-fichier.test.mjs`
+(l'événement d'ingestion passe par la même substitution que la candidature — RT-11 du Produit-12).
+
+**Réécrire l'historique d'un dépôt est un geste humain décidé, outillé par un mode opératoire
+fixe (TF-0752, D-38 (a), 03/09).** Nettoyer l'arbre ne nettoie pas le passé : le 01/09, la porte
+de publication rendait 200 constats dans l'historique seul du pilot. La séquence jouée, et à
+rejouer telle quelle sur tout dépôt qui publie : (1) **sauvegarde entière** — `git bundle create
+<hors-dépôt>/<dépôt>-avant-filter-repo.bundle --all`, vérifiée par `git bundle verify`, HEAD
+d'avant consigné à côté ; (2) **règles dérivées des tables, jamais écrites à la main** —
+`node scripts\generer-remplacements-historique.mjs <dossier>` produit `remplacements.txt`
+(contenus + messages) et `filename-callback.py` (noms de fichiers) depuis les deux tables du CANAL
+CONFIDENTIEL (`<racine>\_confidentiel\tables\`, dépôt privé `factory-confidentiel`, D-28 (a) du 07/09 — avant cette
+date, deux fichiers libres `_noms-interdits.json` et `_produits-pseudonymes.json` à la racine du parc, que
+`scripts\fusionner-tables-confidentielles.mjs` fait entrer au canal une fois par poste), lues au moment du geste ; (3) **réécriture** —
+`git filter-repo --replace-text <dossier>\remplacements.txt --replace-message <même fichier>
+--filename-callback "$(cat <dossier>\filename-callback.py)" --force` (répondre N si l'outil
+propose de continuer une passe d'un autre jour) ; (4) **remettre `origin`**, que l'outil retire ;
+(5) **juger** — `oracle-nom-client-publie .` doit rendre PASS, historique compris ; un constat
+restant se traite en corrigeant le GÉNÉRATEUR (pas le fichier de règles) et en rejouant (3)-(5).
+Ce que la première passe a appris : un sigle se remplace insensible à la casse, comme la porte le
+juge — 96 constats tenaient à un identifiant de run en minuscules. Après le geste, deux choses
+restent humaines : la publication forcée (`git push --force`, R-38) et toute autre copie locale du
+dépôt, devenue incompatible avec la nouvelle histoire (à recloner, pas à fusionner). **Ce que la troisième passe a appris (05/09, forge-development, TF-0813)** : la mesure qui DÉCIDE une réécriture se fait sur un clone à BRANCHE UNIQUE de ce qui est publié — 89 constats vivaient dans une branche locale jamais poussée, l'histoire publiée était verte ; et une branche protégée sur GitHub refuse tout push forcé — vérifier la protection AVANT de réécrire, sinon la passe ne se publie pas. **Ce que la quatrième passe a appris (07/09, forge-design, forge-tests, forge-development, D-10)** : hors de `c:\dev`, la porte ne trouve pas les deux tables et rend SKIP, jamais PASS — les désigner par `FORGE_NOMS_INTERDITS` et `FORGE_PRODUITS_PSEUDO` avant de juger un clone frais ; et la porte lit `git log --all`, qui compte les **arborescences de travail liées** (`git worktree list`) : une arborescence d'une session antérieure, détachée sur l'ancienne histoire, a gardé 79 commits atteignables sur un clone local pourtant réaligné (262 commits vus pour 183) — retirer son enregistrement (`git worktree prune` après suppression de `.git\worktrees\<nom>`) fait partie du diagnostic d'un clone rebâti ; enfin `git filter-repo` se lance par `python -m git_filter_repo` sur un poste où `git filter-repo` répond « Function not implemented ». **Et la copie locale de l'AUTRE poste se rebâtit par l'outil, plus à la main (D-12 a, 07/09, TF-0877)** : `node bootstrap.mjs --rebatir <dépôt> [--essai]` (`scripts\rebatir-clone.mjs`, recette `scripts\rebatir-clone.test.mjs`) refuse un arbre sale, sauvegarde le clone entier en paquet vérifié sous `<racine>\_sauvegardes\`, exporte le delta propre au poste en patches, retire l'enregistrement des arborescences liées, réaligne sur `origin/main`, rejoue les patches (`git am --3way`, arrêt en exit 1 au premier conflit, patch conservé), joue la porte de publication avec les deux tables de la racine — et ne pousse jamais. **Le diagnostic d'un clone rebâti ÉNUMÈRE les références, il ne récite plus une liste de vecteurs (TF-1008, 14/09)** : après l'arborescence liée et la branche de sauvegarde, le remisage (`refs/stash`) a gardé le 10/09 306 commits de l'ancienne histoire dans un clone déclaré rebâti — la porte rendait PASS en les classant antériorités, ce qui ne veut pas dire qu'ils avaient disparu. `rebatir-clone` rend donc `references_divergentes` : chaque référence qui n'est pas un ancêtre de HEAD, avec ses commits propres ; il n'en supprime aucune (R-29). Ce que git ne synchronise pas entre deux postes se copie à la main : les deux tables (`_noms-interdits.json`, `_produits-pseudonymes.json`) et, après `--pull`, la copie installée des skills (`oracle-skills --appliquer`, joué par `--pull`).
+
+**Tout clone de vérification porte `git clone --single-branch -c core.longpaths=true` (TF-1015, 10/09/2026)** : sans l'option, le checkout a refusé 22 fichiers — 19 sidecars d'oracle et 3 synthèses — et le dépôt est arrivé sans arbre de travail.
+Et il se pose sur un **préfixe court** : le plafond de R-4 (chemin relatif + 34 de sidecar ≤ 150, `.oracles/` et `.oracles-historique.jsonl` mesurés le 01/10/2026 ; 26 avant TF-1500) laisse 110 caractères de préfixe admissible, un bac à sable de session en consomme couramment 130.
+
+**Le canal confidentiel (D-28 (a), 07/09/2026).** Ce qui ne doit jamais entrer dans un dépôt publié et
+doit pourtant voyager entre les postes et remonter des produits et des forges vit dans UN dépôt privé,
+`factory-confidentiel`, cloné en `<racine>\_confidentiel\` : les deux tables de pseudonymisation
+(`tables\`) et les entrants confidentiels (`entrants\`, un fichier par remise avec son en-tête, traités puis
+déplacés en `traites\`). Le bootstrap le tire à chaque ouverture, le clone s'il manque, le compte en
+DÉFAUT s'il est en retard, et joue son oracle (`oracle-confidentiel.mjs` : privé chez l'hébergeur,
+tables valides, aucun secret, entrants en forme, un pseudonyme par produit). Le fait qui l'a imposé :
+deux postes ont étendu chacun leur table libre pendant deux jours sans aucun lien — mêmes numéros par
+chance, pas par construction. Règle : toute extension d'une table se commet et se pousse dans la foulée ;
+`scripts\lib-confidentiel.mjs` est le seul endroit qui sait où lire les tables (variable d'environnement,
+canal, sinon ancien fichier libre EN LE DISANT). **Un identifiant technique inconnu des tables se fait
+qualifier à l'ingestion (TF-0966, 15/09/2026)** : après la substitution, `ingerer-lot.mjs` relève les
+formes `MAJUSCULES_SOULIGNÉES` et `schema.table` absentes du vocabulaire public du pilot
+(`todo\identifiants-techniques.mjs`), les NOMME à l'écran et en compte le nombre à l'événement
+d'ingestion (`identifiants_a_qualifier`, jamais les noms). Confidentiel : l'inscrire à la table des
+noms interdits du canal et rectifier les items ; sinon, rien. Avertissement et non refus : mesuré le
+15/09, 42 créations sur 350 en portent au moins un. Le vocabulaire public exclut les recettes et les
+fixtures, dont les identifiants sont inventés pour être relevés.
+
+**La propagation d'une correction se MESURE, elle ne se souhaite pas (TF-0689, 01/09).** Le
+champ `produits_beneficiaires` est de la prose — 73 items clos en portaient au 27/08, aucun
+n'était opposable à personne, et un produit nommé bénéficiaire a livré DEUX FOIS sans le
+correctif à quatre jours de sa clôture. Trois pièces ferment la boucle : (1) une clôture PEUT
+porter `criteres_beneficiaires` — `{familles_de_gabarit: ["gd-…"], types_de_livrable: ["…"]}`,
+structure fermée confrontable au marqueur G4 des documents et au 2ᵉ segment des noms datés ;
+(2) le produit tient `forge\socle-adopte.jsonl` — une ligne `{tf, date_adoption, preuve}` par
+adoption, la preuve étant un FAIT (fichier, commande, empreinte, commit) ; (3)
+`oracles\oracle-propagation.mjs <dossier produit>` confronte les deux (P1-P2, self-test 8/8) et
+est joué À CHAQUE LOT REMIS par `ingerer-lot.mjs`, en avertissement jamais en blocage — un
+produit n'est jugé QUE sur ce qu'il PRODUIT (pas de production concernée = SANS_OBJET). Bornes
+déclarées : les 600+ items archivés avant la convention restent de la prose ; la véracité des
+preuves d'adoption relève du produit.
+
+**Étude d'opportunité (TF-0155)** : avant de passer en `decide` un candidat qui **crée un
+objet durable** (R-31), **touche ≥ 3 forges ou le noyau**, ou **porte un gain ≥ 3 avec une
+preuve ≤ 2**, l'instruire via `gabarits\ETUDE-OPPORTUNITE.md` (livrable :
+`output\03-etudes\`), jugée par `oracles\oracle-etude-opportunite.mjs` (E1-E7, self-test
+`--self-test`). Sous le seuil : décision directe, pas de péage.
+
+**À chaque campagne** : mettre à jour les items (date_correction, corrections_realisees,
+**gains_constates exigés à la clôture**, version_forge_corrigee, produits_beneficiaires) puis
+régénérer la vue **et la page** (`generer-page.mjs` → `TODO.html`, consultation humaine en
+LECTURE SEULE : les cases à décider et les commentaires ont été retirés le 12/08 sous mandat
+humain, les décisions se prenant hors page — cette prescription a survécu six jours à son objet,
+et TF-0318 a été instruit dessus ; TF-0328). Le self-test
+(`node todo\self-test.mjs`, fixtures à double sens) après toute évolution de l'outillage.
+
+Consulter le registre à l'ouverture de tout run. `BOUCLE-AMELIORATION.md` reste le journal
+narratif : il référence les ids TF, il ne duplique plus les listes.
+
+**Un gain de coût ou de durée se remesure en service (décision humaine D-118 (a) du 02/11/2026, TF-1954).** Une clôture peut porter
+`remesure` : `commande` et sa valeur visée (`duree_max_s` ou `sortie`), `avertissement` (l'expression d'un avertissement d'ouverture
+qui doit avoir disparu), `apres_jours` (7 par défaut). Le champ est facultatif ; **R18** refuse celui qui ne pourrait pas se rejouer.
+À sa date, `oracles\hook-ouverture.mjs` joue la commande par `todo\remesurer.mjs`, 2 au plus par ouverture, l'inscrit une fois au
+journal `todo\observabilite\remesures.jsonl`, et dit l'écart ; il nomme aussi l'avertissement que son relevé porte encore. Un écart
+se signale, il ne rouvre rien. *Le fait* : une correction du pre-push close le 13/10/2026 sur 36 s, 52 s et 41 s mesurées à blanc ;
+25 envois réels ont ensuite attendu jusqu'au 20/10, dont 9 coupés par le délai de 600 s. **Quand le poser** : toute correction dont
+le gain déclaré est une durée ou un coût ; un gain à blanc reste une présomption tant que sa remesure n'a pas parlé.
+
+## Revue hebdomadaire accélérée (demande humaine du 01/10/2026)
+
+**Ce qui change pour le porteur** : les propositions ne lui arrivent plus une à une. Une fois par
+semaine, il reçoit 7 propositions au plus, chacune en une décision au format du bloc 3 de
+`gabarits\RESTITUTION.md`, et il les tranche en une ligne (« D-40 a, D-41 c »). La demande, mot pour
+mot : « validation accélérée, plus fréquent, toutes les semaines, mais avec un affichage des
+propositions claires, simples, précis, sur les avantages/inconvénients et impacts + choix de
+décisions, type a, b, & c ». Elle répond à l'étape récurrente de l'étude
+`output\03-etudes\20261001-etude-opportunite-rsi-et-ssl.md`, où chaque amélioration proposée attend
+une décision humaine.
+
+1. **La fiche.** Une candidature n'est présentée que si elle porte un champ `fiche_decision` complet,
+   écrit par `todo\journaliser.mjs` en `creation` ou en `maj` : `question` (sans le point
+   d'interrogation, ajouté au rendu), puis, au **format B** depuis la décision humaine du
+   17/10/2026 (`gabarits\RESTITUTION.md` v2.41.0, règle S78) : `de_quoi` (l'objet, nommé ; une
+   valeur sensible masquée, première et dernière lettre visibles), `probleme` (ce qui est en jeu,
+   un ou deux chiffres qui changent la décision), `pourquoi_vous` (le motif qui revient à l'humain,
+   en une phrase), `options.a`, `options.b`, `options.c` (chacune `libelle`, `effet` — ce qui se
+   passe concrètement après ce choix, et ce qu'il ne fait pas —, `cout` en complexité × durée,
+   `retour` — possible et comment, impossible, ou sans objet), `recommandation` (`a`, `b` ou `c`),
+   `source`, et `pourquoi` en option. L'option (c) est le repli : elle s'applique sans réponse. Une
+   fiche ne s'invente pas : un fait non mesuré se dit « non mesuré ». Le test avant d'écrire : un
+   lecteur qui n'a que la fiche rendue peut-il trancher ? Sans vocabulaire interne (« porte »,
+   « tables », « oracle » se remplacent par ce qu'ils font), sans identifiant ni renvoi à un numéro
+   de ligne ; le numéro du sujet s'ajoute au rendu, en fin de titre. Les fiches d'avant le
+   17/10/2026, à `avantages`, `inconvenients`, `impacts` et `exclusions`, restent au registre et se
+   listent « à instruire » jusqu'à leur réécriture.
+2. **Le rappel.** `oracles\hook-ouverture.mjs` dit à chaque ouverture du pilot combien de
+   propositions sont prêtes et si la revue est due, c'est-à-dire si la dernière a 7 jours ou plus.
+3. **Le dossier.** `node todo\revue-hebdo.mjs --depuis <prochain D-N> --sortie <dossier>` rend les
+   propositions prêtes par valeur décroissante, 7 au plus, reporte les suivantes, et liste « à
+   instruire » celles dont la fiche est incomplète, avec les champs manquants. Le dossier se range
+   dans `output\04-plans\` au nommage de la règle R-4 ; la correspondance D-N → TF-#### s'ajoute à
+   `todo\observabilite\revues-hebdo.jsonl`, qui date la revue. **Depuis le 04/11/2026 (TF-2116)**, le
+   dossier ajoute une section « Modèles des fournisseurs tiers » : `oracles\oracle-modeles-tiers.mjs`
+   est joué ici (processus fils borné à 120 s ; 49 s mesurés le 03/11 sur 57 dépôts, trop long pour
+   l'ouverture, qui répond en moins de 45 s), et la section rend les identifiants arrêtés (MT1), ceux
+   qui s'arrêtent dans moins de 90 jours (MT2) et l'âge du référentiel (MT4). Quand MT4 avertit, elle
+   nomme le geste de session qui le rafraîchit (relire les pages des fournisseurs, redater
+   `references\MODELES-TIERS.json`) : la revue le nomme, elle ne le fait pas. Un contrôle qui ne s'est pas
+   joué est dit « non mesuré » avec sa raison. `--sans-modeles-tiers` saute la section. **Cadence
+   mensuelle depuis le 04/11/2026** (réponse humaine « A2 & A3 : Tous les mois suffit ») : l'oracle ne se
+   rejoue que si le dernier contrôle mesuré du journal a 30 jours ou plus ; sinon la section donne la date du
+   dernier contrôle et celle du prochain. `--modeles-tiers-forcer` le rejoue quand même.
+4. **L'affichage.** La restitution du tour reprend les décisions du dossier EN ENTIER à son bloc 3,
+   comme toute décision : c'est là que le porteur les lit.
+5. **La réponse.** Chaque sélecteur reçu se consigne par `todo\journaliser.mjs` : (a) ou (b) font
+   passer la candidature en `decide` avec l'option retenue, (c) la laisse `candidat`, et elle
+   revient à la revue suivante.
+6. **Le tri, avant tout (R-58, décision humaine du 01/10/2026).** La fiche porte `ressort` :
+   `{humain: true, motif}` quand la décision revient au porteur (`depense`, `publication`,
+   `irreversible`, `doctrine`, `arbitrage`, `produit`), `{humain: false, pourquoi}` sinon. Le dossier
+   ne pose que les premières ; les secondes y figurent sous « Mises en œuvre sans vous, pour
+   information », et la session les exécute dans le même tour : `decide` avec pour décideur « R-58 »,
+   puis la clôture ordinaire. Une fiche sans `ressort` est listée à instruire. Mesuré sur la première
+   revue : 6 décisions sur 7 n'avaient pas à être posées.
+
+Contrôle : `node todo\revue-hebdo.mjs --self-test` (rendu au format du bloc 3, candidature décidée
+écartée, fiche incomplète listée avec ses manques).
+
+## Insatisfactions — l'autre registre, et pourquoi il est séparé (TF-0287, 15/08)
+
+Une **insatisfaction** n'est pas une amélioration : elle se **rouvre** (« ça ne va
+toujours pas »), elle porte un délai dépôt→release, et son instruction est un dossier à
+six blocs. Ce cycle de vie n'entre pas dans TF (candidat → décidé → corrigé → archivé) :
+forcer l'un dans l'autre aurait déformé les deux (étude 20260815d, option O3 écartée).
+
+- **Dépôt** : l'humain écrit UNE phrase et dépose ses captures — `gabarits\INSATISFACTION.md`,
+  nommé `INSATISFACTION - <produit|a-identifier> - AAAAMMJJ<lettre>.md`, dans le canal des
+  lots (`<produit>\forge\retours\` ou `<pilot>\input\00-retours\`). **Aucun sidecar exigé
+  de lui** : c'est l'instruction qui le produira. Il n'écrit **jamais** le protocole.
+- **Registre** : `insatisfactions\REGISTRE.jsonl` (écrivain unique : toi) — événements
+  `depot` · `reouverture` · `instruction` · `cloture` ; vue `REGISTRE.md` générée.
+- **Instruction** : `gabarits\AGENT-INSATISFACTION.md` (= AGENT-CAMPAGNE + les six blocs :
+  reproduction aux conditions réelles · cause racine produit · **gates en défaut vérifiés,
+  jamais présumés** (inexistant / aveugle / jamais joué — R-35) · solutions par
+  destinataire · correctif et release par la voie du produit sous décision humaine ·
+  retours forge en lot standard).
+**Remise d'un artefact réclamé (TF-0364, 18/08)** — quatrième canal, pour un cas que les trois
+autres ne couvraient pas : le registre constate qu'un objet lui manque, il le **demande**, et
+l'humain le **remet**. Le 18/08, TF-0326 a réclamé le skill `pilote-de-mission` (introuvable
+dans les 15 dépôts) ; il est arrivé à plat dans `input\`, et le traitement a fonctionné **parce
+qu'une session était là pour faire le lien** — rien dans les fichiers ne reliait la remise à
+l'item. Canal : `input\03-artefacts\` (notice sur place). Partage des rôles identique aux
+insatisfactions : **l'humain dépose, il n'écrit aucun protocole** ; c'est le pilot qui écrit le
+sidecar `<fichier>.remise.json` (`repond_a` en `TF-xxxx`, `provenance`, `date`) en traitant la
+remise. Contrôle : **B5** d'`oracle-boite-entree` — toute remise non rattachée est dénoncée,
+nommée, avec le champ qui manque. Un artefact remis passe son contrôle d'admission avant tout
+versionnement (pour un skill : `oracle-scan-agentdef.mjs`, R-33 ter), et ses consignes sont
+**décrites, jamais exécutées**.
+
+- **Contrôles** : `oracle-insatisfactions.mjs` (I1-I4 — il **publie aussi la mesure** :
+  réouvertures et délai) et `oracle-boite-entree.mjs` **B4** (un dépôt jamais entré au
+  registre est dénoncé ; B3 se tait sur ces fichiers, l'absence de sidecar y est voulue).
+- **La mesure** : réouvertures par dossier, **cible zéro**. Un compteur qui monte accuse
+  l'instruction, pas les forges.
+
+Les constats d'une instruction reviennent au registre TF par la voie normale (candidats,
+décision humaine) : les deux registres se parlent, ils ne se confondent pas.

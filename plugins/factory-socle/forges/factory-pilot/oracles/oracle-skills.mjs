@@ -1,0 +1,2026 @@
+#!/usr/bin/env node
+/**
+ * oracle-skills.mjs — les skills et hooks qui S'EXÉCUTENT sont-ils ceux que les dépôts VERSIONNENT ?
+ *
+ * Pourquoi il existe. Un skill vit en deux exemplaires : la source, versionnée dans une forge,
+ * et la COPIE INSTALLÉE, qui est celle que la session invoque réellement. Cette copie vit sous
+ * `~/.claude/skills/` TANT QUE la variable de plateforme `CLAUDE_CONFIG_DIR` n'est pas posée —
+ * quand elle l'est, le harnais charge le répertoire qu'elle désigne, et lui seul. Cet en-tête a
+ * longtemps écrit « sous `~/.claude/skills/` » sans cette réserve, et c'était FAUX : le 09/09/2026
+ * l'oracle a rendu PASS sur 24 skills alignés dont la session n'en chargeait aucun (TF-0995, K10).
+ * La résolution ne vit plus ici : `scripts/lib-config-installee.mjs` en est le seul endroit. Rien ne les liait. Mesure du 15/08, en livrant la règle L14 : sur 20 skills
+ * versionnés, **4 divergeaient et 5 n'étaient pas installés du tout**. Autrement dit, neuf
+ * skills sur vingt n'étaient pas ce que le dépôt croyait livrer — dont `quality-oracles`, cité
+ * comme loi transversale : la version qui s'exécutait n'était pas la version versionnée.
+ *
+ * C'est la maladie de R-35 d'un cran plus haut : non pas un contrôle que rien n'appelle, mais
+ * un correctif livré qui n'atteint jamais l'endroit où il servirait. Une règle corrigée dans un
+ * dépôt et absente de la copie installée n'a strictement aucun effet.
+ *
+ * Règles (binaires) :
+ *   K1  tout skill versionné dans une forge est installé ;
+ *   K2  la copie installée est IDENTIQUE à sa source (hors artefacts d'atelier et fins de ligne) ;
+ *   K3  deux forges ne revendiquent pas le même nom de skill — sinon « la » source n'existe pas ;
+ *   K4  un skill installé SANS source versionnée est DÉCLARÉ, jamais mis en échec : il
+ *       appartient à l'humain, l'oracle n'a pas à en juger ;
+ *   K5  une copie installée EN AVANCE sur sa source (version déclarée plus haute) interdit
+ *       l'application : c'est le dépôt qui est en retard, pas la copie.
+ *   K6  même contrat pour les HOOKS (`<forge>\.claude\hooks\` → `~\.claude\hooks\`) : divergence
+ *       en échec, hook installé sans source versionnée déclaré et non jugé (comme K4), copie en
+ *       avance protégée (comme K5).
+ *   K9  le RELEVÉ des champs de frontmatter des SKILL.md versionnés — déclaratif, JAMAIS en
+ *       échec (TF-0475) : il dit quels champs le parc pose et lesquels il ne pose nulle part,
+ *       pour les trois mécanismes d'isolation (`context`), de cadrage (`paths`) et de retrait
+ *       d'outil (`disallowed-tools`). Les noms sont VÉRIFIÉS contre la documentation de la
+ *       plateforme depuis le 23/08 — le premier jet en portait un qui n'existe pas, ce qui est
+ *       exactement le défaut que ce relevé existe pour ne pas commettre.
+ *   K7  le CÂBLAGE d'un hook versionné — déclaré, JAMAIS en échec : `<forge>\.claude\settings.json`
+ *       dit ce que la forge attend, `~\.claude\settings.json` dit ce qui s'exécute vraiment ;
+ *       l'écart est nommé avec la commande qui le poserait.
+ *   K8  une entrée de câblage INSTALLÉE pointe-t-elle un FICHIER QUI EXISTE — déclaré, JAMAIS en
+ *       échec, même gouvernance que K7 : un câblage vers un chemin mort se lit « câblé ».
+ *   K10 OÙ cet oracle a-t-il regardé — déclaré, JAMAIS en échec : la racine de configuration
+ *       mesurée ET la variable qui l'a décidée, en PASS comme en FAIL, plus ce qui manque à
+ *       cette racine (`skills\`, `CLAUDE.md` de niveau poste) avec le geste qui répare.
+ *
+ * K6 (TF-0290). Le gate C7 `qo-gate-write.mjs` — celui qui bloque l'écriture de TOUT livrable,
+ * cinq blocages réels dans la seule journée du 15/08 — ne vivait qu'en copie installée : aucune
+ * forge ne le versionnait, donc aucune correction n'était traçable ni rejouable, et un effacement
+ * de `~\.claude` l'aurait détruit en silence. Le trou était invisible PAR CONSTRUCTION : K1-K5 ne
+ * regardent que les skills. Un hook est un fichier, pas un dossier : K6 compare fichier à fichier.
+ *
+ * K7 (TF-0297). K6 juge l'INTÉGRITÉ d'un hook installé, pas son CÂBLAGE : un hook sain, copie
+ * conforme à sa source, mais qu'aucun `settings.json` ne référence ne s'exécute JAMAIS. C'est la
+ * loi transverse n°1 appliquée aux hooks — toute affordance est câblée ou n'existe pas. État réel
+ * du poste au 17/08, découvert en livrant K6 : ce même `qo-gate-write.mjs` est désormais versionné
+ * chez forge-agents, mais ni installé ni câblé — et rien ne le disait. K7 confronte les deux
+ * câblages, celui que les forges DÉCRIVENT et celui qui S'EXÉCUTE, et rend l'écart lisible.
+ *
+ * Pourquoi K7 est DÉCLARATIF et jamais FAIL. Cet oracle se joue à l'ouverture de TOUT run (R-35) :
+ * un FAIL y suspend l'ouverture. Or l'état actuel — C7 versionné, non câblé — est une décision
+ * humaine PENDANTE : câbler un hook engage toutes les sessions du poste (R-29, dépenses et gates
+ * restent humains). Un K7 bloquant briquerait donc toutes les ouvertures de run tant que cette
+ * décision n'est pas prise, et un gate qu'on apprend à contourner ne protège plus rien (même motif que
+ * R-33 bis pour le verdict websec). K7 rend PASS avec ses constats en clair, et `non_juge` dit pourquoi il ne bloque pas.
+ * Le passage de K7 en bloquant sera une décision humaine, pas une décision d'oracle.
+ *
+ * K10 (TF-0995, 09/09/2026). Toute la chaîne d'alignement résolvait la copie installée par
+ * `join(homedir(), ".claude")`, écrit en dur — huit sites. Le harnais, lui, charge le répertoire
+ * désigné par `CLAUDE_CONFIG_DIR` quand elle est posée. Mesure du 09/09 sur une session ouverte
+ * avec `CLAUDE_CONFIG_DIR=%USERPROFILE%\.claude-b` : 24 skills sous `~\.claude\skills`, ZÉRO sous
+ * le répertoire réellement chargé, K1 et K2 verts, `bootstrap` écrivant « Poste prêt — skills
+ * alignés », et le noyau de niveau poste jamais chargé — donc pas non plus la loi transverse
+ * `quality-oracles`. Le défaut s'est payé côté humain (une formule du lexique d'invocation traitée
+ * sans son skill) et a été trouvé par CONTESTATION, pas par un contrôle.
+ *
+ * Ce que K10 ajoute une fois la résolution corrigée. La correction seule suffit à faire rougir K1
+ * quand la racine chargée est vide — c'est voulu, et son remède est mécanique (`--appliquer`).
+ * K10 couvre ce que K1 ne peut pas voir : le `CLAUDE.md` de niveau poste, qu'aucune règle ne
+ * regardait. Et surtout il NOMME, dans tous les cas, la racine mesurée et la variable qui l'a
+ * décidée. C'est la moitié qui manquait : les artefacts étaient bien là, alignés, à jour, et aucun
+ * verdict ne disait où l'on avait regardé — un verdict qui ne le dit pas ne se conteste pas.
+ * Classe `controle-ancre-sur-un-chemin-que-la-session-ne-charge-pas` (famille `regle-morte`).
+ *
+ * K8 (TF-0305). K7 confronte deux CÂBLAGES ; il ne vérifie pas que la commande câblée pointe un
+ * fichier qui EXISTE. Or une entrée dont la commande désigne un chemin mort — hook désinstallé,
+ * chemin recopié de travers, sous-dossier aplati — se lit « câblée » dans le settings installé :
+ * exactement la même assurance qu'un gate vivant, sans aucune de ses propriétés. C'est la maladie
+ * du câblage absent, un cran plus loin, et K7 seul ne peut pas la voir. K8 résout donc la commande
+ * de chaque entrée installée que K7 confronte, et déclare celles dont le fichier n'existe NI au
+ * chemin résolu, NI en copie installée, NI en source versionnée.
+ *
+ * Prudence de K8, et pourquoi elle est constitutive. Un `settings.json` porte des lignes de SHELL,
+ * pas des chemins : `bash .queue/gates/g0-budget.sh` se résout depuis le dossier de la session,
+ * `CMD=$(python3 -c …) ; …` n'a pas de fichier lisible. Deviner produirait des « chemins morts »
+ * faux, et une trouvaille noyée dans ses propres faux positifs ne trouve plus rien (leçon TF-0289).
+ * K8 ne juge donc que ce qui se résout par LECTURE SEULE — chemin absolu, `~`, variables
+ * d'environnement présentes — et DÉCLARE tout le reste non jugé, en disant pourquoi.
+ *
+ * Ce que K7 ne touche pas. `--appliquer` n'écrit JAMAIS dans le `settings.json` installé : poser un
+ * câblage est un acte humain. Et le settings installé PORTE des entrées personnelles (hooks de
+ * tableau de bord, réglages) : elles ne sont ni jugées, ni listées, ni comptées — même prudence que
+ * K4. Seul le câblage ATTENDU par les forges est confronté.
+ *
+ * Ce qui est EXCLU du diff (TF-0289), et déclaré comme tel au verdict : les sidecars d'oracles
+ * (`*.oracles*.json[l]`, convention TF-0065 « hors dépôt ») et les artefacts d'atelier. Mesure du
+ * 15/08 : K2 annonçait « 8 fichier(s) » chez experts-forge dont 2 vrais, « 12 » chez
+ * ameliore-le-design dont 8 vrais — et le message tronquait à 4, donc le vrai défaut pouvait ne
+ * pas être affiché du tout. Un contrôle qui noie sa trouvaille dans son propre bruit ne trouve
+ * rien : les divergences de CONTENU sont désormais listées ENTIÈREMENT, en tête.
+ *
+ * Ce qu'il ne juge PAS : le contenu d'un skill, sa qualité, son opportunité. Et il ne peut pas
+ * EMPÊCHER une édition de la copie installée — il la voit au run suivant, il ne la verrouille
+ * pas. Un verrou réel demanderait un lien symbolique, écarté le 15/08 : 20 sources dans 3
+ * dépôts vers un seul dossier, des jonctions qui cassent au premier déplacement de dépôt.
+ *
+ * Usage : node oracle-skills.mjs [--racine <dossier des forges>] [--installes <dossier>]
+ *                               [--installes-hooks <dossier>] [--settings-installe <fichier>]
+ *         node oracle-skills.mjs --appliquer   # copie source → installé (K1, K2 et K6), en
+ *                                              # rejouant la vérification native des dépôts qui
+ *                                              # CONSOMMENT les skills touchés, avant et après
+ *         node oracle-skills.mjs --appliquer --sans-consommateurs   # propage SANS les rejouer,
+ *                                              # et le DÉCLARE au verdict (suites longues, TF-0965)
+ *         node oracle-skills.mjs --rejouer-consommateurs   # rejoue les SEULS dépôts en rouge neuf ouvert (TF-2048),
+ *                                              # sans rien propager, et lève la trace de ceux qui passent ; exit 1 si un rouge reste
+ *         node oracle-skills.mjs --rejouer-tous-consommateurs   # rejoue TOUS les dépôts de la table (D-135 (a)) : « rouge-neuf » pour un dépôt qui
+ *                                              # échoue sans rouge ouvert, « leve » pour un rouge ouvert qui passe ; lancé en arrière-plan, une fois par
+ *                                              # semaine, par l'ouverture du pilot ; exit 0 rien ne reste rouge, 1 un dépôt échoue, 2 un rejeu tourne déjà
+ *         node oracle-skills.mjs --purger      # orphelins de la copie → quarantaine datée (K2)
+ *         node oracle-skills.mjs --self-test
+ * Exit : 0 PASS · 1 FAIL (y compris un consommateur qui passait et ne passe plus) · 2 non jugeable.
+ *
+ * --purger (TF-0254). `--appliquer` copie la source VERS la copie installée, il ne touche
+ * jamais à ce que la copie contient EN PLUS (sauvegardes `.avant-*`, lockfiles générés à
+ * l'usage, fixtures locales d'un run) : 11 orphelins constatés sur 3 skills après application,
+ * K2 restait FAIL. `--purger` déplace ces orphelins sous `<installes>\.quarantaine\<horodatage>\
+ * <skill>\` — un déplacement, jamais une suppression sèche — et le liste au verdict (`purge`).
+ */
+// Exit : 0 = conforme · 1 = defaut MESURE. Cet oracle n'a AUCUN chemin « je ne peux pas
+// mesurer » : il ne depend d'aucun outil externe (seule exception, TF-1611 : git, pour confronter une copie aux etats anterieurs de sa source ; sans git, K11 garde son verdict) et lit des fichiers du depot. Le declarer
+// vaut mieux que de le taire — un contrat muet laisse croire qu'un 1 peut etre une panne
+// d'environnement (TF-0648).
+import {
+  existsSync, readFileSync, readdirSync, statSync, lstatSync, mkdirSync, copyFileSync, writeFileSync,
+  mkdtempSync, renameSync, rmSync, appendFileSync, utimesSync, symlinkSync,
+} from "node:fs";
+import { empreinteFichier, empreinteTexte } from "../scripts/lib-empreinte.mjs";
+import { spawnSync } from "node:child_process";
+import { basename, dirname, join, resolve, relative, sep } from "node:path";
+import { fileURLToPath } from "node:url";
+import { homedir, tmpdir } from "node:os";
+import { racineConfigInstallee, skillsInstalles, hooksInstalles, settingsInstalle as settingsInstalleDe } from "../scripts/lib-config-installee.mjs";
+import { postesParDefaut } from "./oracle-amorcage-poste.mjs";
+import { retirer } from "./hook-ecriture.mjs"; // TF-2597 : `fs.rmSync` ne retire rien, sans erreur, sous un chemin accentué (Node 25.2.1, Windows)
+// TF-0965 — la table des dépôts consommateurs (DONNÉE datée) et le geste avant/après.
+import { encadrer, ecrireTrace, evenementNonRejoue, evenementsDePropagation, executerRejeuHebdomadaire, jouer as jouerConsommateur, lireTable, rougesOuverts, traceRouges } from "./consommateurs-skills.mjs";
+
+// TF-1878 : l'environnement d'un appel git SANS les variables GIT_* héritées (GIT_DIR, GIT_WORK_TREE,
+// GIT_INDEX_FILE… posées par un hameçon git ou par une session). Lu à CHAQUE appel, pas à l'import :
+// la recette pose un GIT_DIR piège le temps d'un cas.
+const envSansGit = () => Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^GIT_/i.test(k)));
+
+const VERSION = "1.3.0"; // 1.3.0 : K8 (le câblage installé pointe-t-il un fichier qui existe — TF-0305)
+const ORACLE = "oracle-skills";
+const ICI = dirname(fileURLToPath(import.meta.url));
+
+// Artefacts d'atelier : produits par l'exécution, jamais par l'auteur. Les comparer ferait
+// diverger deux copies identiques dès qu'on a joué un oracle d'un côté.
+const IGNORES = new Set(["__pycache__", ".oracles", ".pytest_cache", "node_modules", ".venv"]);
+// Sauvegardes laissées à côté d'un fichier édité (`SKILL.md.bak-20260407`). Elles n'ont rien à
+// faire dans un dépôt et ne sont pas non plus un défaut de la copie : on ne les compare pas, et
+// surtout on ne les EFFACE pas — c'est un fichier de l'humain, pas un artefact de la forge.
+const IGNORE_MOTIF = /\.bak(?:[-.]\w+)?$/i;
+// Sidecars d'oracles (TF-0289). Le hook C7 dépose à côté de chaque fichier jugé son cache, son
+// journal et son historique — `SKILL.md.oracles.json`, `.oracles-cache.json`,
+// `_oracles-journal-historique.jsonl`. Convention TF-0065 : ils vivent HORS dépôt, sont
+// régénérables, et ne sont jamais exécutés. Les comparer faisait diverger deux copies identiques
+// dès qu'un oracle avait tourné d'un seul côté : 6 des 8 « divergences » annoncées chez
+// experts-forge le 15/08. Le séparateur autorisé devant `oracles` est `.` ou `_`, JAMAIS `-` :
+// `references/registre-oracles.json` est un référentiel versionné, pas un sidecar, et une
+// divergence dessus doit rester un échec (fixture rouge dédiée).
+const SIDECAR_ORACLES = /[._]oracles[\w-]*\.jsonl?$/i;
+// Journaux d'usage (complément TF-0306, 17/08) : `_routages-journal*.jsonl` est APPENDU à
+// l'exécution dans CHAQUE copie (route-experts.mjs:52) — les deux divergent structurellement
+// et sync-skills l'ignore à raison. Le comparer rendrait K2 rouge à toute ouverture de run.
+const JOURNAUX_USAGE = /^_routages-journal[\w-]*\.jsonl$/i;
+// Ce que le diff écarte, en une phrase — reprise TELLE QUELLE dans le verdict : une exclusion
+// muette est un mensonge par omission, l'oracle doit dire ce qu'il ne regarde pas.
+const LIBELLE_EXCLUS = "hors sidecars d'oracles (*.oracles*.json[l], convention TF-0065), journaux d'usage (_routages-journal*.jsonl, TF-0306) et artefacts d'atelier (__pycache__, .venv, node_modules, .pytest_cache, .bak) : gitignorés, régénérables, jamais exécutés";
+// Deux conventions de chemin coexistent : forge-agents publie sous `.claude/skills/`,
+// conception et design sous `skills/`. Les deux sont lues — imposer l'une des deux serait un
+// autre chantier, et l'oracle n'a pas à trancher une convention pour pouvoir mesurer.
+const SOUS_CHEMINS = [join(".claude", "skills"), "skills"];
+// Les hooks n'ont qu'une convention : `<forge>\.claude\hooks\`, à côté du `settings.json` qui les
+// câble. Une seule est lue — inventer la seconde avant qu'elle existe serait deviner.
+const SOUS_CHEMIN_HOOKS = join(".claude", "hooks");
+// Le câblage d'un hook (K7) : `<forge>\.claude\settings.json` versionné dit ce que la forge
+// ATTEND, `~\.claude\settings.json` dit ce qui s'exécute. Même dossier que les hooks, à côté
+// d'eux — c'est le fichier que le harnais lit, pas une convention inventée ici.
+const SOUS_CHEMIN_SETTINGS = join(".claude", "settings.json");
+// Une commande de hook peut faire 2 Ko (une ligne de shell avec du Python embarqué). Le NOM du
+// hook est la trouvaille, la commande n'est qu'un indice de recopie : elle se résume.
+const PLAFOND_COMMANDE = 160;
+
+const NON_JUGE = [
+  "le CONTENU d'un skill, sa qualité, son opportunité — cet oracle compare deux copies, il ne lit pas",
+  "les skills personnels de l'humain (sans source versionnée) : déclarés par K4, jamais jugés",
+  "les hooks installés sans source versionnée : déclarés par K6, jamais jugés (même contrat que K4)",
+  `les sidecars d'oracles et les artefacts d'atelier : le diff de K2 et K6 est calculé ${LIBELLE_EXCLUS} (TF-0289)`,
+  "un hook sans version déclarée ne peut pas bénéficier de la protection « en avance » : la comparaison de versions demande qu'elle soit écrite des DEUX côtés (même limite que K5 pour un skill sans frontmatter)",
+  "une édition FUTURE de la copie installée — l'oracle la verra au run suivant, il ne la verrouille pas",
+  "le CÂBLAGE des hooks (K7) est DÉCLARÉ, jamais mis en échec : cet oracle s'ouvre à tout run (R-35) et un FAIL y suspend l'ouverture, alors que câbler un hook engage toutes les sessions du poste — c'est une décision humaine (R-29). Bloquer sur une décision pendante briquerait toutes les ouvertures, et un gate qu'on apprend à contourner ne protège plus rien (motif que R-33 bis donne pour le verdict websec). Le passage de K7 en bloquant est une décision humaine, pas une décision d'oracle",
+  "les entrées PERSONNELLES du `settings.json` installé (tableau de bord, réglages, hooks de l'humain) : ni jugées, ni listées, ni comptées — seul le câblage attendu par les forges est confronté (même prudence que K4)",
+  "un câblage versionné qui référence un script HORS `<forge>\\.claude\\hooks\\` (ex. `.queue/gates/*.sh`) : il est de portée PROJET, chargé par le harnais quand la session s'ouvre dans ce dépôt, le settings utilisateur n'a pas à le porter — K7 ne confronte que les hooks dont une forge versionne le fichier",
+  "K7 confronte sur le NOM du fichier de hook, pas sur le chemin complet : la copie installée vit ailleurs que sa source, comparer les chemins ne dirait rien. Conséquence assumée et déclarée : deux scripts homonymes dans deux arborescences se confondraient — un constat de trop, jamais un blocage",
+  "`--appliquer` n'écrit JAMAIS dans le `settings.json` installé : il pose le FICHIER d'un hook (K6), il ne le câble pas",
+  "l'EXISTENCE du fichier câblé (K8) est DÉCLARÉE, jamais mise en échec : même gouvernance que K7 — cet oracle s'ouvre à tout run (R-35), réparer un câblage engage toutes les sessions du poste (R-29), et un FAIL y suspendrait l'ouverture",
+  "une commande installée que K8 ne sait pas résoudre par LECTURE SEULE est déclarée non jugée, jamais devinée : commande shell composée (sous-shell, opérateur, redirection), chemin relatif à la session (câblage de portée projet), variable d'environnement absente de l'environnement de l'oracle. Un faux « chemin mort » coûterait plus que le vrai ne rapporte",
+  "K8 ne juge que les entrées de câblage INSTALLÉES que K7 confronte déjà (celles dont la commande nomme un hook versionné) : le câblage personnel de l'humain n'est ni résolu, ni listé, ni compté (même prudence que K4)",
+  "K8 ne juge pas ce que le fichier câblé CONTIENT, ni s'il est exécutable, ni si son interpréteur est installé : il répond à une seule question, le fichier existe-t-il",
+  "`--appliquer` n'installe ni ne câble rien au titre de K8 : un chemin mort se répare à la main (R-29)",
+  "K10 dit OÙ l'oracle a regardé et ce que cette racine porte ; il ne juge PAS que le harnais charge bien ce répertoire — cela dépend de la plateforme, pas d'un fichier lisible. Il est DÉCLARATIF, jamais en échec (même gouvernance que K7 et K8) : quand la racine chargée est vide, ce sont K1 et K6 qui rougissent, et leur remède est mécanique (`--appliquer`)",
+  "K10 ne juge pas le CONTENU du `CLAUDE.md` de niveau poste : il constate sa présence, pas ce qu'il prescrit",
+  "les dépôts CONSOMMATEURS non déclarés (TF-0965) : le rejeu avant/après ne porte que sur les entrées de `oracles\\consommateurs-skills.json`, une table DATÉE qu'un humain tient à jour. Un consommateur absent de la table n'est pas mesuré, et aucune découverte automatique ne le remplacerait — deviner qui consomme un skill à partir d'une recherche de texte ferait rejouer des suites de vingt minutes sur des dépôts qui n'ont qu'une mention en prose",
+  "les PRODUITS du parc, qui consomment aussi la copie installée : le pilot n'exécute rien chez un produit sans mandat humain. Leur mesure passe par un run qui leur est demandé",
+  "ce que la propagation casse AILLEURS que dans une vérification native : un consommateur dont la suite ne couvre pas la règle neuve passera au vert des deux côtés. Le rejeu prouve une NON-RÉGRESSION mesurée, jamais une absence d'effet",
+  "un consommateur rejoué et INDÉTERMINÉ (délai dépassé, lancement impossible) : déclaré tel quel, jamais compté pour un vert — une suite qui n'a pas fini n'a rien prouvé",
+  "la TRACE des rouges neufs (TF-2048) ne se remplit que sur une propagation qui rejoue les consommateurs : `bootstrap.mjs --pull` passe `--sans-consommateurs` à chaque ouverture, et n'y laisse qu'un événement « non-rejoue » ; un consommateur cassé par une propagation d'ouverture n'est vu qu'au prochain `--appliquer` mesuré, `--rejouer-consommateurs` ou rejeu hebdomadaire (D-135 (a) : `--rejouer-tous-consommateurs`, lancé en arrière-plan par l'ouverture du pilot au plus une fois par 7 jours — un rouge y est donc vu avec 7 jours de retard au plus, et un rejeu coupé ou un dépôt INDÉTERMINÉ n'a rien jugé)",
+];
+
+function racineForges() {
+  return process.env.FORGE_ROOT || resolve(ICI, "..", "..");
+}
+
+function listeSkills(dossier) {
+  if (!existsSync(dossier)) return [];
+  return readdirSync(dossier, { withFileTypes: true })
+    .filter((d) => d.isDirectory() && existsSync(join(dossier, d.name, "SKILL.md")))
+    .map((d) => d.name);
+}
+
+/** Toutes les sources versionnées : nom -> [chemins], pour que K3 puisse voir un doublon. */
+function sources(racine) {
+  const par_nom = new Map();
+  if (!existsSync(racine)) return par_nom;
+  for (const depot of readdirSync(racine, { withFileTypes: true })) {
+    if (!depot.isDirectory() || !depot.name.startsWith("factory-forge-")) continue;
+    for (const sous of SOUS_CHEMINS) {
+      const base = join(racine, depot.name, sous);
+      for (const nom of listeSkills(base)) {
+        if (!par_nom.has(nom)) par_nom.set(nom, []);
+        par_nom.get(nom).push(join(base, nom));
+      }
+    }
+  }
+  return par_nom;
+}
+
+/** Toutes les sources de hooks versionnées : chemin relatif au dossier de hooks -> [chemins].
+ *  Un hook est un FICHIER (`qo-gate-write.mjs`), pas un dossier : la clé est son chemin relatif,
+ *  ce qui couvre aussi un éventuel sous-dossier sans avoir à le prévoir. */
+function sourcesHooks(racine) {
+  const par_nom = new Map();
+  if (!existsSync(racine)) return par_nom;
+  for (const depot of readdirSync(racine, { withFileTypes: true })) {
+    if (!depot.isDirectory() || !depot.name.startsWith("factory-forge-")) continue;
+    const base = join(racine, depot.name, SOUS_CHEMIN_HOOKS);
+    if (!existsSync(base)) continue;
+    for (const rel of fichiers(base)) {
+      if (!par_nom.has(rel)) par_nom.set(rel, []);
+      par_nom.get(rel).push(join(base, rel));
+    }
+  }
+  return par_nom;
+}
+
+/** Version déclarée dans un texte : frontmatter `version: "1.2.3"` d'un SKILL.md, ou
+ *  `const VERSION = "1.2.3"` d'un script de hook. Rien d'autre — un « v1.2 » en prose n'est pas
+ *  une déclaration, et deviner ferait de K5/K6 un garde-fou qui se déclenche au hasard. */
+function versionDeclaree(texte) {
+  const m = texte.match(
+    /^\s*(?:\/\/\s*|#\s*|\*\s*)?(?:(?:export\s+)?(?:const|let|var)\s+)?version\s*[:=]\s*["']?v?([\d]+(?:\.[\d]+)*)/im);
+  return m ? m[1] : null;
+}
+
+/** Version déclarée en frontmatter du SKILL.md, si elle existe. */
+function version(dossier) {
+  const f = join(dossier, "SKILL.md");
+  if (!existsSync(f)) return null;
+  return versionDeclaree(readFileSync(f, "utf8"));
+}
+
+/** Version déclarée dans un fichier de hook, si elle existe. */
+function versionFichier(f) {
+  return existsSync(f) ? versionDeclaree(readFileSync(f, "utf8")) : null;
+}
+
+/** -1, 0, 1 — comparaison numérique segment par segment (« 2.10.0 » > « 2.9.0 »). */
+function comparerVersions(a, b) {
+  const xa = a.split(".").map(Number), xb = b.split(".").map(Number);
+  for (let i = 0; i < Math.max(xa.length, xb.length); i += 1) {
+    const d = (xa[i] || 0) - (xb[i] || 0);
+    if (d) return d > 0 ? 1 : -1;
+  }
+  return 0;
+}
+
+function fichiers(dossier, prefixe = "") {
+  const out = [];
+  for (const e of readdirSync(dossier, { withFileTypes: true })) {
+    if (IGNORES.has(e.name) || IGNORE_MOTIF.test(e.name) || SIDECAR_ORACLES.test(e.name) || JOURNAUX_USAGE.test(e.name)) continue;
+    const rel = prefixe ? `${prefixe}/${e.name}` : e.name;
+    if (e.isDirectory()) out.push(...fichiers(join(dossier, e.name), rel));
+    else out.push(rel);
+  }
+  return out.sort();
+}
+
+/** Identiques ? Les fins de ligne ne comptent pas : git les normalise, l'auteur n'y est pour rien. */
+function memeContenu(a, b) {
+  const x = readFileSync(a);
+  const y = readFileSync(b);
+  if (x.equals(y)) return true;
+  const texte = (buf) => buf.toString("utf8").replace(/\r\n/g, "\n");
+  return texte(x) === texte(y);
+}
+
+/** Écarts structurés : manquants (à copier), divergents (contenu différent), orphelins (en
+ *  trop dans la copie — ni versionnés, ni à copier, à purger). */
+function analyserEcarts(src, dst) {
+  const fs_src = fichiers(src);
+  const fs_dst = existsSync(dst) ? fichiers(dst) : [];
+  const set_dst = new Set(fs_dst);
+  const set_src = new Set(fs_src);
+  const manquants = [];
+  const divergents = [];
+  for (const f of fs_src) {
+    if (!set_dst.has(f)) { manquants.push(f); continue; }
+    if (!memeContenu(join(src, f), join(dst, f))) divergents.push(f);
+  }
+  const orphelins = fs_dst.filter((f) => !set_src.has(f));
+  return { manquants, divergents, orphelins };
+}
+
+/** Écart RACONTÉ (TF-0289) : combien, de quelle nature, et lesquels.
+ *
+ *  L'ancienne forme concaténait les trois natures puis tronquait à 4 — donc quand un skill portait
+ *  6 fichiers absents et 2 vraies divergences de contenu, le message affichait 4 absents et
+ *  passait les deux divergences sous silence. Le défaut que K2 existe pour trouver était le seul
+ *  à ne pas être montré. Les divergences de CONTENU passent donc en tête et ne sont JAMAIS
+ *  tronquées ; les manquants et les orphelins, qui se résument par un compte, sont plafonnés.
+ */
+const PLAFOND_LISTE = 4;
+function decrireEcart({ manquants, divergents, orphelins }) {
+  const total = manquants.length + divergents.length + orphelins.length;
+  const borner = (liste, suffixe) => (liste.length > PLAFOND_LISTE
+    ? [...liste.slice(0, PLAFOND_LISTE).map((f) => `${f} ${suffixe}`), `et ${liste.length - PLAFOND_LISTE} autre(s) ${suffixe}`]
+    : liste.map((f) => `${f} ${suffixe}`));
+  const nature = [
+    divergents.length ? `${divergents.length} divergence(s) de contenu` : null,
+    manquants.length ? `${manquants.length} absent(s) de la copie` : null,
+    orphelins.length ? `${orphelins.length} en trop dans la copie` : null,
+  ].filter(Boolean).join(", ");
+  return {
+    total,
+    nature,
+    liste: [
+      ...divergents, // jamais tronqués : c'est la trouvaille
+      ...borner(manquants, "(absent de la copie)"),
+      ...borner(orphelins, "(en trop dans la copie)"),
+    ].join(", "),
+  };
+}
+
+// ---- TF-1012 (10/09/2026) · UN ÉCRASEMENT LAISSE UNE TRACE, ET SA DATE NE PROUVE RIEN --------
+// Le 10/09, une copie installée portait six lignes de plus que sa source ; une propagation l'a
+// écrasée sans trace, et la date du fichier ÉCRASÉ était celle de la SOURCE — `copyFileSync` passe
+// par CopyFileW sur ce poste, qui copie l'horodatage de dernière écriture. Un lecteur a conclu
+// « rien n'a bougé » d'une date qui disait l'inverse. Donc : chaque écrasement réel est JOURNALISÉ
+// (chemin, empreinte d'avant, empreinte d'après, heure réelle du geste) dans un journal HORS du
+// dépôt, et une copie dont l'empreinte a changé depuis sa dernière propagation journalisée est
+// relevée (K11) — sans consulter aucune date — et jamais écrasée.
+// Le format UNIQUE du parc (N-7, `scripts\lib-empreinte.mjs`), fins de ligne normalisées : avec
+// core.autocrlf, un fichier reposé en CRLF sans qu'un octet de contenu change ne doit pas passer
+// pour une copie modifiée — c'est aussi ce que `memeContenu` tient pour identique.
+const empreinte = (p) => empreinteFichier(p);
+const cleJournal = (p) => resolve(p).toLowerCase();
+
+// ---- TF-1099 (14/09/2026) · UNE SOURCE EN COURS DE MODIFICATION NE SE PROPAGE PAS ----------------
+// `bootstrap.mjs --pull` joue `--appliquer` à chaque ouverture de session : des états INTERMÉDIAIRES
+// d'arbres en cours de campagne (fichiers modifiés, commits non publiés) ont ainsi été recopiés vers
+// la copie installée, que toutes les sessions du poste exécutent. `--sauf-sources <dépôt,…>` nomme
+// les dépôts sources à épargner : leurs skills et hooks ne sont ni comparés ni propagés, et c'est
+// DÉCLARÉ (K12) — jamais tu. C'est le lanceur qui mesure l'état des dépôts ; l'oracle obéit.
+let SAUF_SOURCES = [];
+
+// LE MODÈLE DE DISTRIBUTION (décision humaine du 25/11/2026, C4) : les skills du parc arrivent dans Claude par la marketplace de
+// plugins, jamais par une copie dans `~/.claude/skills`. Modèle « marketplace » (défaut) : K1, K2, K5 et K11 (la copie installée)
+// sont sans objet et `--appliquer` ne copie AUCUN skill ; K15 déclare toute copie résiduelle d'un skill du parc (elle ferait
+// doublon avec le plugin), K14 juge que la marketplace est à jour avec les forges. Modèle « copie » (`--modele copie`, ou
+// FORGE_MODELE_SKILLS=copie) : le contrat d'avant, intact, que la recette continue de prouver.
+let MODELE = process.env.FORGE_MODELE_SKILLS === "copie" ? "copie" : "marketplace";
+const enCoursDeModification = (p) => SAUF_SOURCES.some((d) => cleJournal(p).startsWith(d.endsWith(sep) ? d : d + sep));
+function journalPropagation(installes) {
+  return process.env.FORGE_JOURNAL_PROPAGATION || join(dirname(installes), "propagations-skills.jsonl");
+}
+/** La dernière entrée journalisée de chaque cible. */
+function lireJournal(journal) {
+  const derniers = new Map();
+  if (!existsSync(journal)) return derniers;
+  for (const l of readFileSync(journal, "utf8").split("\n")) {
+    try { const e = JSON.parse(l); if (e && e.cible) derniers.set(cleJournal(e.cible), e); } catch { /* ligne illisible ignorée */ }
+  }
+  return derniers;
+}
+/** La copie a-t-elle changé depuis ce que la dernière propagation y a posé ? (null si jamais journalisée) */
+function modifieeDepuisPropagation(cible, derniers) {
+  const e = derniers.get(cleJournal(cible));
+  if (!e || !e.sha_apres || !existsSync(cible)) return null;
+  return empreinte(cible) !== e.sha_apres ? e : null;
+}
+// TF-1611 (13/10/2026) — UNE COPIE IDENTIQUE À UN ÉTAT ANTÉRIEUR DE LA SOURCE N'EST PAS UN TRAVAIL PROPRE.
+// Le 07/10, la copie installée de factory-page-html (check_html.py, render_page.py) était identique
+// aux blobs de deux commits de sa source : un état périmé, sans travail propre. K11 la déclarait
+// pourtant « modifiée après sa dernière propagation » (l'empreinte journalisée n'était plus la sienne)
+// et `--appliquer` refusait de l'écraser, le poste restait non prêt à l'ouverture. Avant de conclure à
+// un travail non versionné, la copie est donc confrontée aux blobs de l'HISTORIQUE git de sa source
+// (100 derniers commits du fichier). Borne : sans git, ou hors d'un dépôt, la confrontation ne dit
+// rien et K11 garde son verdict d'origine — l'oracle ne devient pas plus permissif faute d'outil.
+function identiqueAUnEtatAnterieurDeLaSource(srcFichier, cible) {
+  try {
+    const git = (cwd, ...a) => spawnSync("git", ["-C", cwd, ...a], { encoding: "utf8", timeout: 20000, maxBuffer: 32 * 1024 * 1024, env: envSansGit() });
+    const top = git(dirname(srcFichier), "rev-parse", "--show-toplevel");
+    if (top.status !== 0) return false;
+    const racineDepot = top.stdout.trim();
+    // TF-2578 : le chemin du fichier DANS son dépôt se lit chez git (`--show-prefix`) ; `relative(racineDepot, srcFichier)` comparait le chemin que git rend (long, réel)
+    // à celui qu'on lui a donné (alias court 8.3, lien) : un chemin sans rapport, l'historique interrogé sur un fichier qui n'existe pas, K11 maintenue à tort.
+    const prefixe = git(dirname(srcFichier), "rev-parse", "--show-prefix");
+    const rel = prefixe.status === 0 ? `${prefixe.stdout.trim()}${basename(srcFichier)}` : relative(racineDepot, srcFichier).split(sep).join("/");
+    const log = git(racineDepot, "log", "--format=%H", "--max-count=100", "--", rel);
+    if (log.status !== 0) return false;
+    const present = empreinte(cible);
+    for (const sha of log.stdout.split(/\r?\n/).filter(Boolean)) {
+      const blob = git(racineDepot, "show", `${sha}:${rel}`);
+      if (blob.status === 0 && empreinteTexte(blob.stdout) === present) return true;
+    }
+  } catch { /* pas de confrontation possible : K11 garde son verdict */ }
+  return false;
+}
+/** Écrase (ou pose) une cible depuis sa source, et le JOURNALISE. Ne fait rien si le contenu est déjà là. */
+function ecraser(srcFichier, cible, trace) {
+  if (existsSync(cible) && memeContenu(srcFichier, cible)) return false;
+  const avant = existsSync(cible) ? empreinte(cible) : null;
+  mkdirSync(dirname(cible), { recursive: true });
+  copyFileSync(srcFichier, cible);
+  const e = { ts: new Date().toISOString(), contexte: trace.contexte, cible, source: srcFichier, sha_avant: avant, sha_apres: empreinte(cible) };
+  try { appendFileSync(trace.journal, JSON.stringify(e) + "\n", "utf8"); } catch { /* un journal injoignable ne bloque pas la propagation */ }
+  trace.derniers.set(cleJournal(cible), e);
+  return true;
+}
+
+function copier(src, dst, trace, epargner = new Set()) {
+  for (const f of fichiers(src)) {
+    if (epargner.has(f)) continue;
+    ecraser(join(src, f), join(dst, f), trace);
+  }
+}
+
+/** Horodatage de quarantaine — à la seconde, pour que deux purges le même jour ne collisionnent
+ *  pas. Jamais devinée : lue sur l'horloge au moment de l'appel. */
+function horodatageQuarantaine() {
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+}
+
+/** Déplace (jamais ne supprime) les fichiers orphelins de `dst` sous une quarantaine datée. */
+function purgerOrphelins(dst, nom, orphelins, racineQuarantaine, horodatage) {
+  const deplaces = [];
+  for (const f of orphelins) {
+    const source = join(dst, f);
+    const cible = join(racineQuarantaine, horodatage, nom, f);
+    mkdirSync(dirname(cible), { recursive: true });
+    renameSync(source, cible);
+    deplaces.push(f);
+  }
+  return deplaces;
+}
+
+/** K6 (TF-0290) — les HOOKS installés sont-ils ceux que les forges versionnent ?
+ *
+ *  Même contrat que K1/K2/K4/K5 pour les skills, transposé au fichier : divergence en échec en
+ *  disant QUEL fichier et QUELLE copie s'exécute, copie en avance protégée, hook installé sans
+ *  source versionnée déclaré et non jugé (il appartient à l'humain), hook versionné non installé
+ *  déclaré aussi — installer un hook est un acte humain, `--appliquer` le pose sur demande.
+ *  Pas de purge ici : un fichier installé sans source n'est pas un orphelin d'un dossier de
+ *  skill, c'est peut-être le hook personnel de l'humain. On ne déplace pas ce qu'on ne juge pas.
+ *  Écrit dans `findings` et `applique` du jugement principal.
+ */
+function jugerHooks(racine, installes, appliquer, findings, applique, trace = { journal: journalPropagation(installes), derniers: new Map(), contexte: "hook" }) {
+  const par_nom = sourcesHooks(racine);
+  const poses = existsSync(installes) ? fichiers(installes) : [];
+  const set_poses = new Set(poses);
+  const personnels = poses.filter((rel) => !par_nom.has(rel));
+  const absents = [];
+  let compares = 0;
+  let echec = false;
+
+  for (const [rel, chemins] of [...par_nom].sort()) {
+    const src = chemins[0];
+    const dst = join(installes, rel);
+    if (chemins.length === 1 && enCoursDeModification(src)) continue; // TF-1099 : déclaré en K12 par juger()
+    if (chemins.length > 1) {
+      // Même raison que K3 : sans source unique, il n'y a rien à comparer et surtout rien à
+      // appliquer — `--appliquer` prendrait la première venue, c'est-à-dire arbitrerait en
+      // silence un conflit entre deux forges.
+      echec = true;
+      findings.push({
+        regle: "K6", statut: "FAIL", ou: rel,
+        message: `hook revendiqué par ${chemins.length} sources (${chemins.map((c) => relative(racine, c)).join(", ")}) — « la » source n'existe pas, la copie installée ne peut pas être arbitrée`,
+      });
+      continue;
+    }
+    if (!set_poses.has(rel)) {
+      if (appliquer) {
+        ecraser(src, dst, { ...trace, contexte: `hook ${rel}` });
+        applique.push(`hook ${rel} (installé)`);
+        continue;
+      }
+      absents.push(`${rel} (source : ${relative(racine, src)})`);
+      continue;
+    }
+    compares += 1;
+    if (memeContenu(src, dst)) continue;
+    // Protection K5 transposée : une copie installée qui déclare une version PLUS HAUTE est en
+    // avance, et l'écraser détruirait du travail au nom de la synchronisation.
+    const vs = versionFichier(src), vd = versionFichier(dst);
+    if (vs && vd && comparerVersions(vd, vs) > 0) {
+      echec = true;
+      findings.push({
+        regle: "K6", statut: "FAIL", ou: rel,
+        message: `la copie installée du hook est EN AVANCE (${vd} > ${vs}) — protection K5 : \`--appliquer\` refuse d'écraser une version par une plus ancienne, c'est la SOURCE qui doit être mise à jour d'abord`,
+      });
+      continue;
+    }
+    if (appliquer) { ecraser(src, dst, { ...trace, contexte: `hook ${rel}` }); applique.push(`hook ${rel} (remis à niveau)`); continue; }
+    echec = true;
+    findings.push({
+      regle: "K6", statut: "FAIL", ou: rel,
+      message: `la copie installée ${join(installes, rel)} DIVERGE de sa source ${relative(racine, src)} — c'est la COPIE INSTALLÉE qui s'exécute à chaque outil, la version versionnée n'a aucun effet (\`--appliquer\` pour la remettre à niveau) · diff calculé ${LIBELLE_EXCLUS}`,
+    });
+  }
+
+  // Déclarations — toujours émises, échec ou pas : ce qui n'est pas jugé doit être DIT, sinon
+  // l'absence de verdict se lit comme une absence de sujet (c'est ainsi que le gate C7 est resté
+  // invisible jusqu'au 15/08).
+  const declarations = [];
+  if (compares) declarations.push(`${compares} hook(s) installé(s) comparé(s) à leur source versionnée`);
+  else declarations.push(`aucun hook installé sous ${installes} — rien à comparer`);
+  if (personnels.length) declarations.push(`${personnels.length} hook(s) installé(s) sans source versionnée, déclarés et non jugés : ${personnels.join(", ")}`);
+  if (absents.length) declarations.push(`${absents.length} hook(s) versionné(s) NON installé(s), déclarés — poser un hook est un acte humain (\`--appliquer\` l'installe) : ${absents.join(", ")}`);
+  findings.push({
+    regle: "K6", statut: "PASS", ou: "(déclarations)",
+    message: echec
+      ? `${declarations.join(" · ")} — voir les échecs K6 ci-dessus pour les divergences`
+      : `${declarations.join(" · ")} — aucune divergence`,
+  });
+}
+
+/** Les entrées de hook d'un `settings.json` — `{ erreur }` si le fichier manque ou ne se lit pas.
+ *
+ *  Forme lue (celle du harnais) : `hooks: { <Événement>: [ { matcher?, hooks: [ { command } ] } ] }`.
+ *  Tout est défensif : un settings.json est un fichier que l'humain édite à la main, et un oracle
+ *  qui plante sur une virgule en trop ne dit plus rien du tout — il déclare, il ne casse pas.
+ */
+function lireCablages(fichier) {
+  if (!fichier || !existsSync(fichier)) return { erreur: `absent (${fichier})` };
+  let brut;
+  try { brut = JSON.parse(readFileSync(fichier, "utf8")); }
+  catch (e) { return { erreur: `illisible (${e.message})` }; }
+  const entrees = [];
+  const hooks = brut && typeof brut === "object" ? brut.hooks : null;
+  if (hooks && typeof hooks === "object") {
+    for (const [evenement, groupes] of Object.entries(hooks)) {
+      for (const groupe of Array.isArray(groupes) ? groupes : []) {
+        const matcher = groupe && typeof groupe.matcher === "string" ? groupe.matcher : null;
+        for (const h of Array.isArray(groupe?.hooks) ? groupe.hooks : []) {
+          if (h && typeof h.command === "string") entrees.push({ evenement, matcher, commande: h.command });
+        }
+      }
+    }
+  }
+  return { entrees };
+}
+
+/** Le câblage ATTENDU par les forges : toutes les entrées des `settings.json` versionnés. */
+function cablagesVersionnes(racine) {
+  const entrees = [];
+  const illisibles = [];
+  if (!existsSync(racine)) return { entrees, illisibles };
+  for (const depot of readdirSync(racine, { withFileTypes: true })) {
+    if (!depot.isDirectory() || !depot.name.startsWith("factory-forge-")) continue;
+    const f = join(racine, depot.name, SOUS_CHEMIN_SETTINGS);
+    if (!existsSync(f)) continue;
+    const lu = lireCablages(f);
+    if (lu.erreur) { illisibles.push(`${depot.name} : ${lu.erreur}`); continue; }
+    for (const e of lu.entrees) entrees.push({ ...e, forge: depot.name });
+  }
+  return { entrees, illisibles };
+}
+
+function resumerCommande(commande) {
+  const plat = commande.replace(/\s+/g, " ").trim();
+  return plat.length > PLAFOND_COMMANDE ? `${plat.slice(0, PLAFOND_COMMANDE)}…` : plat;
+}
+
+// K8 — ce qui rend une commande NON RÉSOLUBLE par lecture seule. Un sous-shell, un opérateur ou
+// une redirection veut dire que le fichier réellement exécuté dépend d'une exécution : on ne le
+// devine pas (cas réel : le hook `graphify` de forge-audit_client-a, 800 caractères de shell).
+const OPERATEURS_SHELL = /\$\(|`|\|\||&&|[|;]|>>|[<>]/;
+// Extensions par lesquelles un script de hook se reconnaît. Le jeton qui en porte une est le
+// FICHIER exécuté — pas l'interpréteur (`node`, `bash`, `C:\…\node.exe`) ni un drapeau.
+const EXTENSIONS_SCRIPT = /\.(?:mjs|cjs|js|ts|sh|bash|py|ps1|bat|cmd)$/i;
+
+/** Le jeton d'une commande qui désigne le FICHIER exécuté, ou `null` si la lecture ne le donne pas.
+ *  Les guillemets sont respectés (un chemin peut porter une espace) et les drapeaux écartés. */
+function jetonScript(commande) {
+  const nus = (commande.match(/"[^"]*"|'[^']*'|\S+/g) || [])
+    .map((j) => j.replace(/^["']|["']$/g, ""))
+    .filter((j) => j && !j.startsWith("-"));
+  return nus.find((j) => EXTENSIONS_SCRIPT.test(j))
+      || nus.find((j) => /[\\/]/.test(j) && !j.includes("="))
+      || null;
+}
+
+/** TF-0337 — REANCRE le chemin de script d'une commande sur un fichier absolu connu.
+ *  Un settings VERSIONNÉ porte sa commande en relatif : c'est l'idiome correct pour un gate de
+ *  portée PROJET, chargé quand la session s'ouvre dans ce dépôt. Recopiée telle quelle dans le
+ *  settings UTILISATEUR, la même commande ne se résout depuis aucun dossier fiable — et
+ *  `resoudreChemin` (K8) la déclarerait aussitôt « chemin relatif ». Conseiller le report sans
+ *  réancrer revenait donc à faire câbler un hook que l'oracle voisin déclare mort.
+ *  Rend `null` quand il n'y a rien à réancrer (commande déjà absolue ou ancrée `~`, ou illisible). */
+function commandeReancree(commande, fichierAbsolu) {
+  const jeton = jetonScript(commande);
+  if (!jeton) return null;
+  if (/^(?:[A-Za-z]:[\/]|[\/]|~)/.test(jeton)) return null;
+  return commande.replace(jeton, fichierAbsolu);
+}
+
+/** Résolution PRUDENTE d'une commande vers un chemin absolu : `{ chemin }` ou `{ indecidable }`.
+ *  Ce qui est résolu : `~`, `$VAR`, `${VAR}`, `%VAR%` présentes dans l'environnement, chemin déjà
+ *  absolu. Tout le reste rend un motif, qui sera DÉCLARÉ — jamais un verdict deviné. */
+function resoudreChemin(commande) {
+  if (OPERATEURS_SHELL.test(commande)) {
+    return { indecidable: "commande shell composée (sous-shell, opérateur ou redirection) — le fichier réellement exécuté ne se lit pas" };
+  }
+  const jeton = jetonScript(commande);
+  if (!jeton) return { indecidable: "aucun chemin de fichier lisible dans la commande" };
+  let manquante = null;
+  const chemin = jeton
+    .replace(/^~(?=$|[\\/])/, homedir())
+    .replace(/\$\{(\w+)\}|\$(\w+)|%(\w+)%/g, (jetonVar, accolade, dollar, pourcent) => {
+      const nom = accolade || dollar || pourcent;
+      const valeur = process.env[nom];
+      if (!valeur) { manquante = nom; return jetonVar; }
+      return valeur;
+    });
+  if (manquante) {
+    return { indecidable: `variable d'environnement \`${manquante}\` absente de l'environnement de l'oracle — le chemin ne se résout pas sans la deviner` };
+  }
+  if (!/^(?:[A-Za-z]:[\\/]|[\\/])/.test(chemin)) {
+    return { indecidable: `chemin relatif « ${jeton} » — il se résout depuis le dossier de la session, que l'oracle ne connaît pas (câblage de portée projet)` };
+  }
+  return { chemin };
+}
+
+/** Queue de chemin après `.claude\hooks\`, sinon le nom du fichier. C'est la clé de RÉ-ANCRAGE :
+ *  un `--installes-hooks` peut déplacer la copie que l'oracle regarde, et `~` ne pointerait pas là. */
+function queueHook(chemin) {
+  const plat = chemin.replace(/\\/g, "/");
+  const m = plat.match(/\.claude\/hooks\/(.+)$/i);
+  return m ? m[1] : basename(plat);
+}
+
+/** OÙ vit le fichier câblé — `null` s'il ne vit NULLE PART. Trois questions, la première verte
+ *  suffit : le chemin résolu tel quel, la copie installée ré-ancrée, la source versionnée. */
+function ouVitLeFichierCable(chemin, installesHooks, hooks) {
+  if (existsSync(chemin)) return "chemin résolu";
+  const queue = queueHook(chemin);
+  if (existsSync(join(installesHooks, queue))) return "copie installée";
+  if (hooks.has(queue)) return "source versionnée";
+  return null;
+}
+
+/** K8 (TF-0305) — les entrées de câblage INSTALLÉES que K7 confronte pointent-elles un fichier qui
+ *  EXISTE ? Déclaratif par construction, comme K7 (voir `non_juge`) : n'émet que des findings PASS,
+ *  n'écrit rien, ne répare rien. Un chemin mort se répare à la main (R-29). */
+function jugerCheminsCables(confrontees, installesHooks, hooks, installe, appliquer, findings) {
+  const declarations = [];
+  if (installe.erreur) {
+    declarations.push(`câblage installé ${installe.erreur} — aucune commande installée à résoudre`);
+  } else if (confrontees.length === 0) {
+    declarations.push("aucune entrée de câblage installée confrontée par K7 — aucun fichier à résoudre (le câblage personnel n'est pas résolu : il n'est pas jugé)");
+  } else {
+    const morts = [], vivants = [], indecidables = [];
+    for (const e of confrontees) {
+      const ou = e.matcher ? `${e.evenement}, matcher « ${e.matcher} »` : e.evenement;
+      const r = resoudreChemin(e.commande);
+      if (r.indecidable) {
+        indecidables.push(`${ou} « ${resumerCommande(e.commande)} » : ${r.indecidable}`);
+        continue;
+      }
+      const vit = ouVitLeFichierCable(r.chemin, installesHooks, hooks);
+      if (vit) { vivants.push(`${basename(r.chemin)} (${vit})`); continue; }
+      morts.push(`${ou} → ${r.chemin} INTROUVABLE — ni à ce chemin, ni en copie installée sous ${installesHooks}, ni en source versionnée par une forge (commande « ${resumerCommande(e.commande)} »)`);
+    }
+    if (vivants.length) declarations.push(`${vivants.length} câblage(s) installé(s) dont le fichier exécuté EXISTE : ${vivants.join(", ")}`);
+    if (morts.length) declarations.push(`${morts.length} CÂBLAGE(S) VERS UN CHEMIN MORT — l'entrée se lit « câblée » et le hook ne s'exécutera JAMAIS (loi transverse n°1 : même maladie que le câblage absent, un cran plus loin) : ${morts.join(" ; ")}`);
+    if (indecidables.length) declarations.push(`${indecidables.length} commande(s) installée(s) NON RÉSOLUE(S) par lecture seule, déclarées et non jugées : ${indecidables.join(" ; ")}`);
+  }
+  if (appliquer) declarations.push("`--appliquer` n'a rien installé ni câblé au titre de K8 : un chemin mort se répare à la main (R-29)");
+  findings.push({
+    regle: "K8", statut: "PASS", ou: "(déclarations)",
+    message: `${declarations.join(" · ")} — K8 DÉCLARE, il ne met jamais en échec (même gouvernance que K7, voir non_juge)`,
+  });
+}
+
+/** K7 (TF-0297) — un hook versionné est-il CÂBLÉ ?
+ *
+ *  K6 compare deux copies d'un fichier ; K7 compare deux CÂBLAGES. Un hook dont la copie installée
+ *  est parfaite mais qu'aucun `settings.json` ne référence ne s'exécute jamais : c'est un gate mort
+ *  qui se lit comme un gate sain (loi transverse n°1).
+ *
+ *  DÉCLARATIF PAR CONSTRUCTION : ce jugement n'émet que des findings PASS. Voir `non_juge` pour la
+ *  raison de gouvernance (R-35, R-29 ; motif de R-33 bis pour le verdict websec). N'écrit jamais dans le settings installé, même
+ *  sous `--appliquer` : câbler est un acte humain.
+ */
+function jugerCablage(racine, fichierSettings, installesHooks, appliquer, findings) {
+  const hooks = sourcesHooks(racine);
+  const attendus = cablagesVersionnes(racine);
+  const installe = lireCablages(fichierSettings);
+  const declarations = [];
+  // Les entrées INSTALLÉES que la confrontation a touchées — le périmètre exact de K8 (TF-0305).
+  // Dédoublonnées : une même entrée peut nommer deux hooks versionnés, elle ne se résout qu'une fois.
+  const confrontees = new Map();
+  const confronter = (entrees) => {
+    for (const e of entrees) confrontees.set([e.evenement, e.matcher, e.commande].join("\u0000"), e);
+  };
+  if (attendus.illisibles.length) {
+    declarations.push(`${attendus.illisibles.length} settings.json versionné(s) non exploitable(s), déclarés : ${attendus.illisibles.join(" ; ")}`);
+  }
+
+  if (hooks.size === 0) {
+    declarations.push(`aucun hook versionné sous ${racine} — aucun câblage à confronter`);
+  } else {
+    // Confrontation par NOM de fichier : la source vit dans une forge, la copie installée ailleurs.
+    const manquants = [], nulle_part = [], hors_source = [];
+    let cables = 0;
+    for (const [rel, chemins] of [...hooks].sort()) {
+      const nom = basename(rel);
+      const decl = attendus.entrees.filter((e) => e.commande.includes(nom));
+      const pose = (installe.entrees || []).filter((e) => e.commande.includes(nom));
+      if (decl.length && installe.erreur) continue; // confrontation non concluante, dite plus bas
+      confronter(pose);
+      if (decl.length && pose.length) { cables += 1; continue; }
+      if (decl.length) {
+        const d = decl[0];
+        const ou = [d.evenement, d.matcher ? `matcher « ${d.matcher} »` : null].filter(Boolean).join(", ");
+        const reancree = commandeReancree(d.commande, chemins[0]);
+        const conseil = reancree
+          ? `reporter cette entrée dans ${fichierSettings} en y portant la commande RÉANCRÉE « ${resumerCommande(reancree)} » — la commande versionnée est RELATIVE (idiome correct pour un gate de portée projet) et ne se résoudrait, dans le settings utilisateur, depuis aucun dossier fiable : K8 la déclarerait « chemin relatif », donc un câblage mort (TF-0337)`
+          : `reporter cette entrée dans ${fichierSettings}`;
+        manquants.push(`${nom} — attendu par ${d.forge} (settings versionné : ${ou}) commande « ${resumerCommande(d.commande)} », ABSENT du câblage installé : ${conseil}`);
+        continue;
+      }
+      if (pose.length) {
+        hors_source.push(`${nom} (source : ${relative(racine, chemins[0])})`);
+        continue;
+      }
+      if (!installe.erreur) nulle_part.push(`${nom} (source : ${relative(racine, chemins[0])})`);
+    }
+    if (installe.erreur) {
+      declarations.push(`câblage installé ${installe.erreur} — la confrontation n'est pas concluante : ${hooks.size} hook(s) versionné(s) ne peuvent être ni confirmés câblés ni déclarés non câblés`);
+    } else {
+      if (cables) declarations.push(`${cables} hook(s) versionné(s) attendu(s) par une forge ET câblé(s) dans le settings installé`);
+      if (manquants.length) declarations.push(`${manquants.length} CÂBLAGE(S) MANQUANT(S) — le hook est versionné et attendu, mais rien ne l'exécute (loi transverse n°1) : ${manquants.join(" ; ")}`);
+      if (nulle_part.length) declarations.push(`${nulle_part.length} hook(s) versionné(s) dont le câblage n'est décrit NULLE PART — ni dans un settings.json versionné, ni dans le câblage installé : ${nulle_part.join(", ")} — un gate versionné que rien n'appelle ne s'exécute jamais (décrire l'entrée attendue dans le settings.json versionné de sa forge la rendrait recâblable)`);
+      if (hors_source.length) declarations.push(`${hors_source.length} hook(s) câblé(s) dans le settings installé sans qu'aucun settings.json versionné le décrive — le câblage existe mais n'est pas reproductible depuis les dépôts : ${hors_source.join(", ")}`);
+      if (!cables && !manquants.length && !nulle_part.length && !hors_source.length) {
+        declarations.push(`${hooks.size} hook(s) versionné(s), aucun écart de câblage`);
+      }
+    }
+  }
+  declarations.push("le câblage personnel de l'humain n'est ni listé ni compté (même prudence que K4)");
+  if (appliquer) declarations.push(`\`--appliquer\` n'a PAS touché ${fichierSettings} : câbler un hook est un acte humain (R-29)`);
+  findings.push({
+    regle: "K7", statut: "PASS", ou: "(déclarations)",
+    message: `${declarations.join(" · ")} — K7 DÉCLARE, il ne met jamais en échec (voir non_juge)`,
+  });
+  // K8 : un câblage confronté par K7 pointe-t-il un fichier qui EXISTE ? (TF-0305)
+  jugerCheminsCables([...confrontees.values()], installesHooks, hooks, installe, appliquer, findings);
+}
+
+/* ---- K9 · le RELEVÉ des champs de frontmatter (TF-0475, 23/08/2026) --------------------------
+ *
+ * MESURE FONDATRICE, refaite ici à chaque recette au lieu d'être refaite à la main : les SKILL.md
+ * que le parc versionne portent tous exactement `name` et `description`, plus `metadata` sur
+ * certains et un `version` hors référentiel sur d'autres. Les autres champs documentés par la
+ * plateforme sont posés NULLE PART — dont les trois seuls mécanismes capables d'ISOLER un
+ * contexte, de CADRER un déclenchement et de RESTREINDRE un outil.
+ *
+ * POURQUOI CE RELEVÉ EST DÉCLARATIF ET NON UN ÉCHEC, et c'est un choix qui se défend : écrire des
+ * clés de frontmatter que la plateforme ignorerait serait EXACTEMENT une affordance non câblée —
+ * la première loi transverse, prise à l'envers. Le nom exact des champs et leur effet réel
+ * appartiennent à la documentation de la plateforme, qui n'est pas dans ce dépôt. L'oracle rend
+ * donc le FAIT, daté et reproductible ; le câblage reste une décision humaine informée, et il
+ * commence par vérifier les noms de champs contre la documentation courante.
+ *
+ * Ce que le relevé rend visible à chaque recette, et qui ne se voyait qu'une fois dans une
+ * candidature : combien de skills, combien de champs distincts, et lesquels manquent.
+ */
+function relevePreambule(par_nom, findings) {
+  // LES NOMS SONT VERIFIES contre la reference de frontmatter de Claude Code (consultee le
+  // 23/08/2026 sur autorisation humaine), et le premier jet en portait un qui N'EXISTE PAS :
+  // « isolation ». C'est la demonstration de ce que ce releve dit lui-meme — une cle non verifiee
+  // est un bouton qui ne fait rien. Trois mecanismes, trois champs reels :
+  const MECANISMES = [
+    ["paths", "cadrage du declenchement par motif de chemin"],
+    ["disallowed-tools", "retrait d'un outil du pool pendant qu'un skill est actif"],
+    ["context", "isolation de contexte (valeur `fork`)"],
+  ];
+  const CHAMPS_MECANIQUES = MECANISMES.map(([c]) => c);
+  const parChamp = new Map();
+  let lus = 0;
+  for (const [nom, chemins] of [...par_nom].sort()) {
+    const src = chemins[0];
+    let texte = "";
+    try { texte = readFileSync(join(src, "SKILL.md"), "utf8"); } catch { continue; }
+    const m = /^---\r?\n([\s\S]*?)\r?\n---/.exec(texte);
+    if (!m) continue;
+    lus += 1;
+    for (const ligne of m[1].split(/\r?\n/)) {
+      const c = /^([A-Za-z][A-Za-z0-9_-]*)\s*:/.exec(ligne);
+      if (!c) continue;                       // ligne indentée d'un bloc : c'est une sous-clé
+      const liste = parChamp.get(c[1]) || [];
+      liste.push(nom);
+      parChamp.set(c[1], liste);
+    }
+  }
+  if (!lus) return;
+  const absents = CHAMPS_MECANIQUES.filter((c) => !parChamp.has(c));
+  findings.push({
+    regle: "K9", statut: "PASS", ou: `${lus} SKILL.md versionnés`,
+    message: `relevé des champs de frontmatter : ` +
+      [...parChamp].sort((a, b) => b[1].length - a[1].length)
+        .map(([c, l]) => `${c} (${l.length})`).join(", ") +
+      (absents.length
+        ? ". MECANISME(S) NON CABLE(S) : " +
+          MECANISMES.filter(([c]) => absents.includes(c)).map(([c, quoi]) => `${quoi} (${c})`).join(" ; ") +
+          ". Ce relevé est un FAIT, pas un verdict — mais les noms de champs, eux, sont désormais " +
+          "VÉRIFIÉS contre la documentation de la plateforme (23/08/2026). Le cas `context: fork` " +
+          "attend une version : son compagnon `background: false`, qui rend le résultat DANS le " +
+          "tour, est donné pour v2.1.218 et le poste tourne en 2.1.169 — l'écrire aujourd'hui " +
+          "rendrait un verdict après la décision qu'il devait éclairer (TF-0475)"
+        : ". les trois mécanismes sont câblés au moins une fois"),
+  });
+}
+
+function juger(racine, installes, appliquer = false, purger = false,
+               installesHooks = join(dirname(installes), "hooks"),
+               settingsInstalle = join(dirname(installes), "settings.json"),
+               config = racineConfigInstallee(),
+               env = process.env) {
+  const findings = [];
+  const par_nom = sources(racine);
+  if (par_nom.size === 0) {
+    // Ni skills, ni hooks : sans forge sous cette racine il n'y a rien à comparer, et le dire
+    // vaut mieux que de rendre un PASS sur K6 seul — un non-jugement muet se lit comme un vert.
+    return {
+      verdict: "SKIP", findings,
+      motif: `aucune source de skill sous ${racine} — les hooks et leur câblage ne sont pas jugés non plus (K6, K7 et K8 sans racine de forges n'ont rien à comparer)`,
+    };
+  }
+  const applique = [];
+  const purge = [];
+  const racineQuarantaine = join(installes, ".quarantaine");
+  const horodatage = horodatageQuarantaine();
+  const journal = journalPropagation(installes);
+  const trace = { journal, derniers: lireJournal(journal), contexte: "skill" };
+
+  // K9 · le relevé, avant tout jugement : il décrit le parc, il n'en juge rien.
+  relevePreambule(par_nom, findings);
+
+  // K3 d'abord : sans source unique, K1 et K2 n'ont pas de sens pour ce nom.
+  const ambigus = new Set();
+  for (const [nom, chemins] of par_nom) {
+    if (chemins.length > 1) {
+      ambigus.add(nom);
+      findings.push({
+        regle: "K3", statut: "FAIL", ou: nom,
+        message: `revendiqué par ${chemins.length} sources (${chemins.map((c) => relative(racine, c)).join(", ")}) — « la » source n'existe pas, la copie installée ne peut pas être arbitrée`,
+      });
+    }
+  }
+
+  if (MODELE === "marketplace") {
+    // K15 — une copie d un skill du parc dans la racine installée fait doublon avec le plugin : déclarée, jamais en échec, jamais
+    // supprimée par l'oracle (retirer un fichier du poste est un geste humain, R-29).
+    const residuelles = [...par_nom.keys()].filter((n) => !ambigus.has(n) && existsSync(join(installes, n))).sort();
+    findings.push({
+      regle: "K15", statut: "PASS", ou: installes,
+      message: residuelles.length
+        ? `${residuelles.length} copie(s) RÉSIDUELLE(S) d'un skill du parc dans ${installes}, qui font doublon avec les plugins de la marketplace : ${residuelles.join(", ")} — les retirer à la main (geste humain)`
+        : `aucune copie d'un skill du parc dans ${installes} : les skills viennent de la marketplace (modèle du 25/11/2026)`,
+    });
+    // K14 — la marketplace est-elle à jour avec les forges ? Son propre contrôle le dit (`construire.mjs --check`).
+    const outil = join(racine, "factory-marketplace", "outils", "construire.mjs");
+    if (!existsSync(outil)) {
+      findings.push({ regle: "K14", statut: "PASS", ou: "(marketplace)", message: `marketplace absente de ${racine} : son alignement sur les forges n'est pas jugé (déclaré)` });
+    } else {
+      const r = spawnSync(process.execPath, [outil, "--racine", racine, "--check"], { encoding: "utf8", timeout: 120000 });
+      findings.push(r.status === 0
+        ? { regle: "K14", statut: "PASS", ou: "factory-marketplace", message: "la marketplace est à jour avec les sources des forges (construire.mjs --check)" }
+        : { regle: "K14", statut: "FAIL", ou: "factory-marketplace", message: `la marketplace est EN RETARD sur les forges : ${String(r.stderr || r.stdout).trim().split(/\r?\n/)[0].slice(0, 160)} — node factory-marketplace/outils/construire.mjs, puis valider et enregistrer` });
+    }
+  }
+
+  const reportes = [];
+  for (const [nom, chemins] of (MODELE === "marketplace" ? [] : [...par_nom].sort())) {
+    if (ambigus.has(nom)) continue;
+    const src = chemins[0];
+    const dst = join(installes, nom);
+    if (enCoursDeModification(src)) { reportes.push(nom); continue; }
+    if (!existsSync(dst)) {
+      if (appliquer) { copier(src, dst, { ...trace, contexte: `skill ${nom}` }); applique.push(`${nom} (installé)`); continue; }
+      findings.push({
+        regle: "K1", statut: "FAIL", ou: nom,
+        message: `versionné dans ${relative(racine, src)} mais JAMAIS installé — la session ne peut pas l'invoquer (\`--appliquer\` pour l'installer)`,
+      });
+      continue;
+    }
+    let { manquants, divergents, orphelins } = analyserEcarts(src, dst);
+
+    // --purger : les orphelins ne sont ni copiés par --appliquer ni un défaut de contenu — ce
+    // sont des fichiers que la copie installée porte EN PLUS (sauvegarde, lockfile, fixture
+    // locale). On les déplace, jamais on ne les efface, et ils sortent du calcul de l'écart.
+    if (purger && orphelins.length) {
+      const deplaces = purgerOrphelins(dst, nom, orphelins, racineQuarantaine, horodatage);
+      purge.push(`${nom} : ${deplaces.length} orphelin(s) mis en quarantaine sous ${relative(installes, join(racineQuarantaine, horodatage, nom))} (${deplaces.join(", ")})`);
+      orphelins = [];
+    }
+
+    const diff = decrireEcart({ manquants, divergents, orphelins });
+    if (diff.total) {
+      // K5 — GARDE-FOU, et il a servi le jour même de son écriture. `prompt-analyzer-l99`
+      // installé était en 2.2.0 quand la source du dépôt en était à 2.1.0 : un
+      // `--appliquer` naïf aurait ÉCRASÉ une version par une plus ancienne, c'est-à-dire
+      // détruit du travail au nom de la synchronisation. La copie installée n'est pas
+      // toujours la copie en retard, et l'oracle ne doit jamais le présumer.
+      const vs = version(src), vd = version(dst);
+      if (vs && vd && comparerVersions(vd, vs) > 0) {
+        findings.push({
+          regle: "K5", statut: "FAIL", ou: nom,
+          message: `la copie installée est EN AVANCE (${vd} > ${vs}) — c'est le DÉPÔT qui est en retard ; \`--appliquer\` refuse d'écraser une version par une plus ancienne, la source doit être mise à jour d'abord`,
+        });
+        continue;
+      }
+      // K11 (TF-1012) — une copie installée modifiée APRÈS sa dernière propagation journalisée porte
+      // un travail que la source n'a pas : elle est relevée, et `--appliquer` ne l'écrase pas.
+      const modifiees = divergents.filter((f) => modifieeDepuisPropagation(join(dst, f), trace.derniers)
+        && !identiqueAUnEtatAnterieurDeLaSource(join(src, f), join(dst, f)));
+      if (modifiees.length) {
+        findings.push({
+          regle: "K11", statut: "FAIL", ou: nom,
+          message: `${modifiees.length} fichier(s) de la copie installée modifié(s) APRÈS sa dernière propagation (${modifiees.join(", ")}) — `
+            + `l'empreinte présente n'est plus celle que le journal ${journal} y a posée : la copie porte un travail que la source versionnée n'a pas, et \`--appliquer\` refuse de l'effacer. `
+            + "Reporter ce travail dans la source (ou le retirer), puis rejouer. Sa DATE ne le montre pas : sur ce poste, la copie préserve l'horodatage de la source (CopyFileW)",
+        });
+      }
+      if (appliquer) { copier(src, dst, { ...trace, contexte: `skill ${nom}` }, new Set(modifiees)); applique.push(`${nom} (${diff.total - modifiees.length} fichier(s) remis à niveau${modifiees.length ? `, ${modifiees.length} épargné(s) — K11` : ""})`); continue; }
+      findings.push({
+        regle: "K2", statut: "FAIL", ou: nom,
+        message: `la copie installée DIVERGE de ${relative(racine, src)} sur ${diff.total} fichier(s) — ${diff.nature} : ${diff.liste} — c'est la copie qui s'exécute · diff calculé ${LIBELLE_EXCLUS}`,
+      });
+    }
+  }
+
+  if (reportes.length) {
+    findings.push({
+      regle: "K12", statut: "PASS", ou: "(sources en cours de modification)",
+      message: `${reportes.length} skill(s) de source(s) EN COURS DE MODIFICATION ni comparé(s) ni propagé(s) : ${reportes.join(", ")} — `
+        + "arbre modifié ou commits non publiés au dépôt source, déclarés par le lanceur (--sauf-sources) ; leur copie installée reste celle d'avant, et ils le seront sur un état propre et publié (TF-1099)",
+    });
+  }
+
+  // K6 : les hooks, même contrat que les skills (TF-0290).
+  jugerHooks(racine, installesHooks, appliquer, findings, applique, { ...trace, contexte: "hook" });
+  // K7 : leur CÂBLAGE — déclaré, jamais en échec (TF-0297). K8 y est adossé : le câblage installé
+  // pointe-t-il un fichier qui existe (TF-0305) — même gouvernance déclarative.
+  jugerCablage(racine, settingsInstalle, installesHooks, appliquer, findings);
+
+  // K4 : ce qui est installé sans source versionnée appartient à l'humain. Déclaré, pas jugé.
+  const personnels = listeSkills(installes).filter((n) => !par_nom.has(n));
+
+  const vues = new Set(findings.map((f) => f.regle));
+  const total = par_nom.size;
+  const sansObjet = "sans objet — modèle marketplace (25/11/2026) : aucune copie installée n'est attendue";
+  for (const [regle, message] of [
+    ["K1", MODELE === "marketplace" ? `${total} skill(s) versionné(s) : ${sansObjet}` : `${total} skill(s) versionné(s), tous installés`],
+    ["K2", MODELE === "marketplace" ? sansObjet : `chaque copie installée est identique à sa source (${LIBELLE_EXCLUS})`],
+    ["K3", "aucun nom de skill revendiqué par deux forges"],
+    ["K5", MODELE === "marketplace" ? sansObjet : "aucune copie installée en avance sur sa source"],
+    ["K11", MODELE === "marketplace" ? sansObjet : `aucune copie installée modifiée depuis sa dernière propagation journalisée (${journal})`],
+  ]) if (!vues.has(regle)) findings.push({ regle, statut: "PASS", message });
+  findings.push({
+    regle: "K4", statut: "PASS",
+    message: personnels.length
+      ? `${personnels.length} skill(s) personnel(s) sans source versionnée, déclarés et non jugés : ${personnels.join(", ")}`
+      : "aucun skill installé sans source versionnée",
+  });
+  // K10 (TF-0995) · OÙ cet oracle a-t-il regardé, et est-ce bien ce que la session charge ?
+  // DÉCLARATIF, jamais en échec — même gouvernance que K7 et K8 : cet oracle s'ouvre à tout run
+  // (R-35), et poser une racine de configuration engage toutes les sessions du poste (R-29). Sa
+  // valeur n'est pas de bloquer, c'est de rendre le verdict CONTESTABLE : le 09/09, 24 skills
+  // étaient déclarés alignés et zéro chargé, et rien dans la sortie ne disait où l'on avait
+  // regardé. Un verdict qui ne nomme pas le répertoire mesuré ne se conteste pas.
+  {
+    const aSkills = existsSync(join(config.racine, "skills"));
+    const aNoyau = existsSync(join(config.racine, "CLAUDE.md"));
+    const manques = [];
+    if (!aSkills) manques.push("le dossier skills (aucun skill invocable par la session)");
+    if (!aNoyau) manques.push("le fichier CLAUDE.md (le noyau de niveau poste, qui porte la loi transverse « tout livrable passe par quality-oracles », n'est pas chargé)");
+    findings.push({
+      regle: "K10", statut: "PASS", ou: config.racine,
+      message: manques.length === 0
+        ? `racine de configuration mesurée : ${config.racine} — décidée par ${config.decidee_par} ; elle porte bien un dossier skills et un CLAUDE.md de niveau poste`
+        : `racine de configuration mesurée : ${config.racine} — décidée par ${config.decidee_par}. Il y MANQUE ${manques.join(" et ")}. `
+          + `Les autres règles de cet oracle peuvent être VERTES sur un parc que la session ne charge pas : c'est le défaut du 09/09 (24 skills alignés, 0 invocable). `
+          + `Remède : node bootstrap.mjs --pull propage les skills vers cette racine (oracle-skills --appliquer) ; le CLAUDE.md de niveau poste s'y copie depuis ${join(homedir(), ".claude", "CLAUDE.md")}`
+          + `${config.variable ? ` ; ou retirer ${config.variable} pour revenir au défaut ~/.claude` : ""}`,
+    });
+  }
+
+  // K13 (TF-1292, 02/10/2026) · CHAQUE PROFIL DE POSTE CONNU EST ÉNUMÉRÉ, ET SA NATURE DITE.
+  //
+  // LE FAIT, mesuré le 22/09/2026 : ce poste porte deux profils (~/.claude, ~/.claude-b), chacun
+  // avec son propre settings.json et son propre CLAUDE.md. `~/.claude/skills` est un répertoire
+  // RÉEL ; `~/.claude-b/skills` est un LIEN SYMBOLIQUE vers lui. La propagation des skills n'écrit
+  // QU'UNE FOIS, dans la racine que K10 mesure — c'est le lien qui fait paraître le second profil
+  // peuplé, pas le mécanisme. Si le lien était retiré, ou si un profil neuf naissait sans lien, ce
+  // profil perdrait TOUS ses skills en silence et K1/K10 continueraient de rendre PASS : ils ne
+  // regardent que la racine résolue, jamais combien de profils existent.
+  //
+  // DÉCLARATIF, comme K10 : cette règle ne juge pas qu'un lien soit un défaut (il peut être la
+  // convention retenue, loi transverse n°3 — alors déclarée), elle dit ce qu'il y a, sur chaque
+  // profil CONNU (`oracle-amorcage-poste::postesParDefaut`, la même source que
+  // `verifier-hook-poste.mjs`, pour qu'un poseur et son juge ne divergent jamais).
+  {
+    const profils = postesParDefaut(env);
+    const etats = profils.map((profil) => {
+      const cheminSkills = join(profil, "skills");
+      let nature;
+      try {
+        const st = lstatSync(cheminSkills);
+        nature = st.isSymbolicLink() ? "LIEN SYMBOLIQUE"
+          : st.isDirectory() ? "répertoire réel"
+          : "ni répertoire ni lien (chemin occupé autrement)";
+      } catch { nature = "absent"; }
+      return `${profil} : ${nature}`;
+    });
+    findings.push({
+      regle: "K13", statut: "PASS", ou: profils.join(" ; ") || "(aucun profil résolu)",
+      message: profils.length
+        ? `${profils.length} profil(s) de poste connu(s) — ${etats.join(" · ")}. Un lien symbolique n'est pas la ` +
+          "propagation : il peut MASQUER qu'elle n'a écrit qu'une fois (TF-1292, 22/09/2026) — un profil neuf créé " +
+          "sans ce lien perdrait ses skills en silence, et K1/K10 ne le verraient pas."
+        : "aucun profil de poste résolu — rien à énumérer",
+    });
+  }
+
+  findings.sort((a, b) => a.regle.localeCompare(b.regle) || (a.statut === "FAIL" ? -1 : 1));
+
+  return {
+    verdict: findings.some((f) => f.statut === "FAIL") ? "FAIL" : "PASS",
+    findings,
+    applique: appliquer ? applique : undefined,
+    purge: purger ? purge : undefined,
+  };
+}
+
+// ---- self-test : chaque règle dans les DEUX sens ----------------------------------------------
+function selfTest() {
+  // Les cas historiques prouvent le modèle « copie » (contrat d'avant le 25/11/2026) ; les cas du modèle marketplace suivent.
+  const modeleAvant = MODELE; MODELE = "copie";
+  const base = mkdtempSync(join(tmpdir(), "skills-"));
+  const racine = join(base, "forges");
+  const inst = join(base, "installes");
+  const poser = (chemin, contenu) => { mkdirSync(dirname(chemin), { recursive: true }); writeFileSync(chemin, contenu); };
+
+  const src = join(racine, "factory-forge-agents", ".claude", "skills");
+  poser(join(src, "alpha", "SKILL.md"), "# alpha\n");
+  poser(join(src, "alpha", "scripts", "x.py"), "print(1)\n");
+  poser(join(inst, "alpha", "SKILL.md"), "# alpha\n");
+  poser(join(inst, "alpha", "scripts", "x.py"), "print(1)\n");
+
+  const cas = [];
+  const echoue = (r, regle) => r.findings.some((f) => f.regle === regle && f.statut === "FAIL");
+
+  let r = juger(racine, inst);
+  cas.push(["vert  — source et copie identiques", r.verdict === "PASS"]);
+
+  // K2 bis : les fins de ligne ne sont PAS un écart — git les normalise, pas l'auteur.
+  writeFileSync(join(inst, "alpha", "SKILL.md"), "# alpha\r\n");
+  r = juger(racine, inst);
+  cas.push(["K2    — CRLF vs LF n'est pas un écart", !echoue(r, "K2")]);
+
+  // K2 : un vrai écart de contenu.
+  writeFileSync(join(inst, "alpha", "scripts", "x.py"), "print(2)\n");
+  r = juger(racine, inst);
+  cas.push(["K2    — copie installée divergente", echoue(r, "K2")]);
+
+  // --appliquer remet à niveau, et le verdict repasse au vert.
+  juger(racine, inst, true);
+  r = juger(racine, inst);
+  cas.push(["      — --appliquer remet la copie à niveau", r.verdict === "PASS"]);
+
+  // K1 : versionné, jamais installé.
+  poser(join(src, "beta", "SKILL.md"), "# beta\n");
+  r = juger(racine, inst);
+  cas.push(["K1    — skill versionné non installé", echoue(r, "K1")]);
+  juger(racine, inst, true);
+  cas.push(["      — --appliquer l'installe", existsSync(join(inst, "beta", "SKILL.md"))]);
+
+  // K3 : deux forges revendiquent le même nom.
+  poser(join(racine, "factory-forge-design", "skills", "beta", "SKILL.md"), "# beta bis\n");
+  r = juger(racine, inst);
+  cas.push(["K3    — même nom dans deux forges", echoue(r, "K3")]);
+  // …et --appliquer REFUSE de trancher : la copie ne doit pas bouger.
+  const avant = readFileSync(join(inst, "beta", "SKILL.md"), "utf8");
+  juger(racine, inst, true);
+  cas.push(["K3 bis— --appliquer n'arbitre pas un doublon",
+            readFileSync(join(inst, "beta", "SKILL.md"), "utf8") === avant]);
+
+  // K5 : la copie installée est EN AVANCE. C'est le cas réel du 15/08 —
+  // prompt-analyzer-l99 installé en 2.2.0, source du dépôt en 2.1.0. Les deux sens comptent :
+  // en avance -> refus d'appliquer ET contenu préservé ; en retard -> comportement normal.
+  const frontmatter = (v, titre) => ["---", `version: "${v}"`, "---", `# ${titre}`, ""].join("\n");
+  poser(join(src, "gamma", "SKILL.md"), frontmatter("1.0.0", "gamma"));
+  poser(join(inst, "gamma", "SKILL.md"), frontmatter("2.2.0", "gamma ameliore"));
+  r = juger(racine, inst);
+  cas.push(["K5    — copie installée en avance sur sa source", echoue(r, "K5")]);
+  const avantG = readFileSync(join(inst, "gamma", "SKILL.md"), "utf8");
+  juger(racine, inst, true);
+  cas.push(["K5 bis— --appliquer n'écrase PAS une version plus récente",
+            readFileSync(join(inst, "gamma", "SKILL.md"), "utf8") === avantG]);
+  // Sens inverse : source en avance, l'application se fait normalement.
+  poser(join(src, "gamma", "SKILL.md"), frontmatter("3.0.0", "gamma refondu"));
+  juger(racine, inst, true);
+  cas.push(["K5 ter— source en avance : l'application se fait",
+            /3\.0\.0/.test(readFileSync(join(inst, "gamma", "SKILL.md"), "utf8"))]);
+
+  // Une sauvegarde laissée dans la copie n'est ni comparée ni effacée — cas réel :
+  // `SKILL.md.bak-20260407` traînait à côté de prompt-analyzer-l99.
+  poser(join(inst, "alpha", "SKILL.md.bak-20260407"), "# vieille version\n");
+  r = juger(racine, inst);
+  cas.push(["      — une sauvegarde .bak n'est pas un écart",
+            !r.findings.some((f) => f.regle === "K2" && f.statut === "FAIL" && f.ou === "alpha")]);
+
+  // --purger (TF-0254) : `--appliquer` copie la source vers la copie mais ne touche jamais aux
+  // orphelins que la copie porte EN PLUS (sauvegarde `.avant-*`, lockfile généré, fixture
+  // locale) — 11 constatés sur 3 skills le 15/08, K2 restait FAIL après application.
+  poser(join(src, "delta", "SKILL.md"), "# delta\n");
+  poser(join(inst, "delta", "SKILL.md"), "# delta\n");
+  poser(join(inst, "delta", "SKILL.md.avant-purge"), "# delta ancienne\n"); // sauvegarde orpheline
+  poser(join(inst, "delta", "package-lock.json"), "{}\n"); // lockfile jamais versionné
+  r = juger(racine, inst);
+  cas.push(["K2    — orphelins dans la copie installée", echoue(r, "K2")]);
+
+  // Rouge : --appliquer SEUL ne purge rien, les orphelins restent, K2 reste FAIL.
+  juger(racine, inst, true);
+  r = juger(racine, inst);
+  cas.push(["      — --appliquer seul laisse les orphelins (rouge)",
+            echoue(r, "K2")
+            && existsSync(join(inst, "delta", "package-lock.json"))
+            && existsSync(join(inst, "delta", "SKILL.md.avant-purge"))]);
+
+  // Vert : --purger déplace les orphelins en quarantaine datée — jamais de suppression —
+  // et K2 repasse au vert.
+  const rPurge = juger(racine, inst, false, true);
+  r = juger(racine, inst);
+  cas.push(["      — --purger déplace les orphelins, K2 repasse au vert", !echoue(r, "K2")]);
+  cas.push(["      — les orphelins ne sont pas supprimés du disque, seulement déplacés",
+            !existsSync(join(inst, "delta", "package-lock.json"))
+            && !existsSync(join(inst, "delta", "SKILL.md.avant-purge"))
+            && (rPurge.purge || []).some((m) => m.includes("delta") && m.includes("package-lock.json"))]);
+  const quarantaine = join(inst, ".quarantaine");
+  const retrouve = existsSync(quarantaine)
+    && readdirSync(quarantaine, { recursive: true }).some((f) => String(f).includes("package-lock.json"));
+  cas.push(["      — les fichiers purgés sont retrouvables sous .quarantaine", retrouve]);
+
+  // K11 (TF-1012) — le cas du 10/09 : une copie installée ENRICHIE après sa propagation, dont la
+  // date ne dit rien (ramenée à celle d'avant). Rouge : relevée, et `--appliquer` l'épargne.
+  // Vert : une copie à jour ne dit rien. Le journal vit sous le parc temporaire, jamais au poste.
+  const journalTest = join(base, "propagations-skills.jsonl");
+  poser(join(src, "epsilon", "SKILL.md"), "# epsilon v1\n");
+  juger(racine, inst, true);
+  const cibleE = join(inst, "epsilon", "SKILL.md");
+  const lignesJ = existsSync(journalTest) ? readFileSync(journalTest, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)) : [];
+  const entreeE = lignesJ.filter((e) => cleJournal(e.cible) === cleJournal(cibleE)).pop();
+  cas.push(["K11   — la pose d'un fichier est JOURNALISÉE (cible, empreintes d'avant et d'après, heure réelle)",
+            !!entreeE && entreeE.sha_avant === null && /^[0-9a-f]{64}$/.test(entreeE.sha_apres || "") && !Number.isNaN(Date.parse(entreeE.ts))]);
+  const dateAvant = statSync(cibleE).mtime;
+  writeFileSync(cibleE, "# epsilon v1\nsix lignes ajoutées sur la copie installée\n");
+  utimesSync(cibleE, dateAvant, dateAvant);
+  poser(join(src, "epsilon", "SKILL.md"), "# epsilon v2\n");
+  r = juger(racine, inst);
+  cas.push(["K11   — copie modifiée APRÈS sa propagation : relevée, alors que sa date n'a pas bougé", echoue(r, "K11")]);
+  juger(racine, inst, true);
+  cas.push(["K11 bis— --appliquer n'efface PAS le travail porté par la copie installée",
+            readFileSync(cibleE, "utf8").includes("six lignes ajoutées")]);
+  poser(join(src, "zeta", "SKILL.md"), "# zeta\n");
+  juger(racine, inst, true);
+  r = juger(racine, inst);
+  cas.push(["K11   — copie à jour après propagation : aucun constat",
+            !r.findings.some((f) => f.regle === "K11" && f.statut === "FAIL" && f.ou === "zeta")]);
+  // Nettoyage : les cas suivants attendent un parc sans K11 en échec.
+  retirer(join(src, "epsilon"));
+  retirer(join(inst, "epsilon"));
+
+  // K11 (TF-1611) — une copie IDENTIQUE à un état antérieur de sa source n'est pas un travail propre :
+  // ni relevée par K11, ni épargnée par `--appliquer`. Rouge : une copie qui diffère de TOUS les états
+  // de l'historique reste relevée et épargnée (le garde ne devient pas permissif).
+  const depotAgents = join(racine, "factory-forge-agents");
+  const gitT = (...a) => spawnSync("git", ["-C", depotAgents, "-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false", ...a], { encoding: "utf8", env: envSansGit() });
+  gitT("init", "-q", "-b", "main");
+  poser(join(src, "iota", "SKILL.md"), "# iota v1\n");
+  gitT("add", "-A"); gitT("commit", "-q", "-m", "iota v1");
+  poser(join(src, "iota", "SKILL.md"), "# iota v2\n");
+  gitT("add", "-A"); gitT("commit", "-q", "-m", "iota v2");
+  juger(racine, inst, true);
+  const cibleI = join(inst, "iota", "SKILL.md");
+  writeFileSync(cibleI, "# iota v1\n"); // état périmé, identique au blob du premier commit
+  r = juger(racine, inst);
+  cas.push(["K11   — copie identique à un état ANTÉRIEUR de la source : pas de K11 (K2 la dit en retard)",
+            !echoue(r, "K11") && echoue(r, "K2")]);
+  // TF-2578 (15/11/2026) : la MÊME confrontation, la source désignée par un autre NOM de son dossier (un lien ; sur ce poste, l'alias court 8.3 du dossier
+  // temporaire, dont le chemin porte un caractère non ASCII, que git rend en chemin long). Le chemin de la source dans son dépôt se lit chez git, pas dans
+  // une différence de chemins : sans cela l'historique n'est jamais interrogé sur le bon fichier, et la copie périmée redevient « modifiée » (K11).
+  {
+    const racineAlias = join(base, "forges-alias");
+    let lien = true;
+    try { symlinkSync(racine, racineAlias, "junction"); } catch { lien = false; }
+    if (lien) {
+      const ra = juger(racineAlias, inst);
+      cas.push(["K11   — la même copie, la source désignée par un autre nom de son dossier (lien, alias court 8.3) : pas de K11 (le chemin se lit chez git)",
+                !echoue(ra, "K11") && echoue(ra, "K2")]);
+    }
+  }
+  juger(racine, inst, true);
+  cas.push(["K11 ter— --appliquer écrase une copie identique à un état antérieur", readFileSync(cibleI, "utf8") === "# iota v2\n"]);
+  writeFileSync(cibleI, "# iota v1\nlignes propres à la copie\n"); // diffère de tous les états de l'historique
+  r = juger(racine, inst);
+  cas.push(["K11   — copie qui diffère de TOUT l'historique : toujours relevée", echoue(r, "K11")]);
+  juger(racine, inst, true);
+  cas.push(["K11 ter— …et toujours épargnée par --appliquer", readFileSync(cibleI, "utf8").includes("lignes propres")]);
+  retirer(join(src, "iota"));
+  retirer(join(inst, "iota"));
+
+  // K11 (TF-1878, 19/10/2026) — LES VARIABLES GIT_* D'UN HAMEÇON NE DOIVENT PAS DÉTOURNER LA CONFRONTATION.
+  // Le fait : sous un `GIT_DIR` hérité (hameçon git, session qui l'exporte), les deux cas TF-1611 ci-dessus
+  // rendaient « 96/98 » — la confrontation à l'historique et les `git commit` de la recette visaient le dépôt
+  // de l'hameçon au lieu du dépôt de la source. Pire : `git add -A` + `git commit` de la recette s'écrivaient
+  // alors dans CE dépôt (un commit « iota v1 » constaté dans le dépôt réel en le reproduisant, défait).
+  // Le banc pose donc un dépôt LEURRE, désigné par GIT_DIR/GIT_WORK_TREE le temps du cas, et rejoue le
+  // scénario TF-1611 : sans lui, un GIT_DIR vers un dépôt réel ferait écrire la recette dans ce dépôt.
+  {
+    const leurre = join(racine, "leurre-hamecon");
+    mkdirSync(leurre, { recursive: true });
+    spawnSync("git", ["-C", leurre, "init", "-q", "-b", "main"], { encoding: "utf8", env: envSansGit() });
+    const sauve = { dir: process.env.GIT_DIR, arbre: process.env.GIT_WORK_TREE };
+    process.env.GIT_DIR = join(leurre, ".git");
+    process.env.GIT_WORK_TREE = leurre;
+    try {
+      poser(join(src, "kappa", "SKILL.md"), "# kappa v1\n");
+      gitT("add", "-A"); gitT("commit", "-q", "-m", "kappa v1");
+      poser(join(src, "kappa", "SKILL.md"), "# kappa v2\n");
+      gitT("add", "-A"); gitT("commit", "-q", "-m", "kappa v2");
+      juger(racine, inst, true);
+      const cibleK = join(inst, "kappa", "SKILL.md");
+      writeFileSync(cibleK, "# kappa v1\n"); // état périmé, identique au blob du premier commit
+      r = juger(racine, inst);
+      cas.push(["K11 hameçon — sous un GIT_DIR hérité, une copie identique à un état ANTÉRIEUR n'est toujours pas un travail propre",
+                !echoue(r, "K11") && echoue(r, "K2")]);
+      juger(racine, inst, true);
+      cas.push(["K11 hameçon — …et --appliquer l'écrase toujours", readFileSync(cibleK, "utf8") === "# kappa v2\n"]);
+    } finally {
+      if (sauve.dir === undefined) delete process.env.GIT_DIR; else process.env.GIT_DIR = sauve.dir;
+      if (sauve.arbre === undefined) delete process.env.GIT_WORK_TREE; else process.env.GIT_WORK_TREE = sauve.arbre;
+    }
+    retirer(join(src, "kappa"));
+    retirer(join(inst, "kappa"));
+  }
+
+  // K12 (TF-1099) — une source EN COURS DE MODIFICATION n'est ni comparée ni propagée, et c'est
+  // déclaré. Rouge d'origine : sans l'exclusion, `--appliquer` recopiait l'état intermédiaire.
+  const srcDesign = join(racine, "factory-forge-design", "skills");
+  poser(join(srcDesign, "eta", "SKILL.md"), "# eta, état intermédiaire de campagne\n");
+  poser(join(inst, "eta", "SKILL.md"), "# eta installé\n");
+  SAUF_SOURCES = [cleJournal(join(racine, "factory-forge-design"))];
+  const rK12 = juger(racine, inst, true);
+  cas.push(["K12   — source en cours : --appliquer n'écrase PAS la copie installée",
+            readFileSync(join(inst, "eta", "SKILL.md"), "utf8").includes("installé")]);
+  cas.push(["K12   — et c'est DÉCLARÉ, jamais tu", rK12.findings.some((f) => f.regle === "K12" && /eta/.test(f.message))]);
+  SAUF_SOURCES = [];
+  r = juger(racine, inst);
+  cas.push(["K12   — la même source hors exclusion : l'écart redevient visible (K2)",
+            r.findings.some((f) => f.regle === "K2" && f.statut === "FAIL" && f.ou === "eta")]);
+  juger(racine, inst, true);
+  cas.push(["K12   — et un état propre se propage", readFileSync(join(inst, "eta", "SKILL.md"), "utf8").includes("intermédiaire")]);
+  retirer(join(srcDesign, "eta"));
+  retirer(join(inst, "eta"));
+
+  // K4 : un skill personnel est déclaré, jamais mis en échec.
+  poser(join(inst, "perso", "SKILL.md"), "# perso\n");
+  r = juger(racine, inst);
+  cas.push(["K4    — skill personnel déclaré, non jugé",
+            !r.findings.some((f) => f.regle === "K4" && f.statut === "FAIL")
+            && r.findings.some((f) => f.regle === "K4" && /perso/.test(f.message))]);
+
+  // K9 (TF-0475) : le RELEVÉ des champs de frontmatter. Deux sens, sur un parc fabriqué — le
+  // relevé doit DIRE ce qui manque quand rien ne le porte, et cesser de le dire dès qu'un skill
+  // le porte. Il reste déclaratif dans les deux cas : jamais un échec.
+  const baseK9 = mkdtempSync(join(tmpdir(), "skills-k9-"));
+  const racineK9 = join(baseK9, "forges");
+  const instK9 = join(baseK9, ".claude", "skills");
+  const srcK9 = join(racineK9, "factory-forge-agents", ".claude", "skills");
+  poser(join(srcK9, "alpha", "SKILL.md"), "---\nname: alpha\ndescription: un skill\n---\n# alpha\n");
+  poser(join(instK9, "alpha", "SKILL.md"), "---\nname: alpha\ndescription: un skill\n---\n# alpha\n");
+  let rK9 = juger(racineK9, instK9);
+  const k9 = () => rK9.findings.filter((f) => f.regle === "K9");
+  cas.push(["K9    — relevé rendu, et jamais en échec",
+            k9().length === 1 && k9()[0].statut === "PASS"]);
+  cas.push(["K9    — les champs posés sont COMPTÉS, et les mécanismes absents NOMMÉS",
+            /name \(1\)/.test(k9()[0].message) && /allowed-tools/.test(k9()[0].message)]);
+  cas.push(["K9    — le relevé dit que les noms de champs sont VÉRIFIÉS, et pourquoi `context` attend",
+            /VÉRIFIÉS contre la documentation/.test(k9()[0].message)
+            && /v2\.1\.218/.test(k9()[0].message)]);
+  poser(join(srcK9, "beta", "SKILL.md"), "---\nname: beta\ndescription: un autre\ndisallowed-tools: Write Edit\npaths: **/*.md\ncontext: fork\ndisable-model-invocation: true\n---\n# beta\n");
+  poser(join(instK9, "beta", "SKILL.md"), "---\nname: beta\ndescription: un autre\ndisallowed-tools: Write Edit\npaths: **/*.md\ncontext: fork\ndisable-model-invocation: true\n---\n# beta\n");
+  rK9 = juger(racineK9, instK9);
+  cas.push(["K9    — dès qu'un skill porte les trois mécanismes, le relevé cesse de les réclamer",
+            k9().length === 1 && /les trois mécanismes sont câblés/.test(k9()[0].message)]);
+  // Le nettoyage suit la convention du fichier : les autres fixtures laissent leur base au
+  // temporaire, jugee sans importance. On fait pareil plutot que d'importer un outil de plus.
+
+  // ---- TF-0289 : les sidecars d'oracles ne sont pas des divergences, et les VRAIES ne sont plus
+  // tronquées. Base neuve : les cas précédents laissent volontairement un doublon K3 derrière eux,
+  // donc plus aucun verdict global vert n'y est possible.
+  const base2 = mkdtempSync(join(tmpdir(), "skills-sidecars-"));
+  const racine2 = join(base2, "forges");
+  const inst2 = join(base2, ".claude", "skills");
+  const src2 = join(racine2, "factory-forge-agents", ".claude", "skills");
+  poser(join(src2, "sigma", "SKILL.md"), "# sigma\n");
+  poser(join(src2, "sigma", "references", "registre-oracles.json"), '{"oracles":[]}\n');
+  poser(join(inst2, "sigma", "SKILL.md"), "# sigma\n");
+  poser(join(inst2, "sigma", "references", "registre-oracles.json"), '{"oracles":[]}\n');
+  // Sidecars du hook C7 déposés du SEUL côté où un oracle a tourné — cas réel des 15 fichiers
+  // trouvés sous experts-forge, contre-expertise et write-an-expert le 15/08.
+  poser(join(inst2, "sigma", "SKILL.md.oracles.json"), '{"verdict":"PASS"}\n');
+  poser(join(inst2, "sigma", "SKILL.md.oracles-cache.json"), "{}\n");
+  poser(join(inst2, "sigma", ".oracles-cache.json"), "{}\n");
+  poser(join(inst2, "sigma", "_oracles-journal-historique.jsonl"), "{}\n");
+  poser(join(inst2, "sigma", "references", "regles.md.oracles-historique.jsonl"), "{}\n");
+  poser(join(inst2, "sigma", "__pycache__", "x.pyc"), "octets\n");
+  // Journal d'usage APPENDU des deux côtés avec des contenus différents (complément TF-0306) :
+  // structurellement divergent, jamais un écart.
+  poser(join(src2, "sigma", "_routages-journal.jsonl"), '{"usage":1}\n');
+  poser(join(inst2, "sigma", "_routages-journal.jsonl"), '{"usage":1}\n{"usage":2}\n');
+  r = juger(racine2, inst2);
+  cas.push(["K2    — sidecars d'oracles et __pycache__ ne sont pas des écarts (TF-0289)",
+            r.verdict === "PASS"]);
+  cas.push(["K2    — un journal d'usage divergent n'est pas un écart (TF-0306)",
+            r.verdict === "PASS" && NON_JUGE.some((l) => /_routages-journal/.test(l))]);
+
+  // Rouge : une VRAIE divergence de contenu reste détectée sous le bruit des sidecars.
+  writeFileSync(join(inst2, "sigma", "SKILL.md"), "# sigma trafique dans la copie\n");
+  r = juger(racine2, inst2);
+  const k2 = r.findings.find((f) => f.regle === "K2" && f.statut === "FAIL");
+  cas.push(["K2    — une vraie divergence de SKILL.md reste détectée",
+            Boolean(k2) && k2.message.includes("1 divergence(s) de contenu : SKILL.md")]);
+  cas.push(["K2    — le verdict DÉCLARE ce qu'il exclut (message ET non_juge)",
+            Boolean(k2) && /sidecars d'oracles/.test(k2.message)
+            && NON_JUGE.some((l) => /sidecars d'oracles/.test(l))]);
+
+  // Garde-fou du motif : `references/registre-oracles.json` est un référentiel VERSIONNÉ, pas un
+  // sidecar — le séparateur `-` ne doit pas ouvrir l'exclusion, sinon TF-0289 rendrait aveugle
+  // exactement là où K2 sert.
+  writeFileSync(join(inst2, "sigma", "SKILL.md"), "# sigma\n");
+  writeFileSync(join(inst2, "sigma", "references", "registre-oracles.json"), '{"oracles":["trafique"]}\n');
+  r = juger(racine2, inst2);
+  const k2b = r.findings.find((f) => f.regle === "K2" && f.statut === "FAIL");
+  cas.push(["K2    — `registre-oracles.json` n'est PAS un sidecar : sa divergence échoue",
+            Boolean(k2b) && /references\/registre-oracles\.json/.test(k2b.message)]);
+
+  // Troncature : 6 vraies divergences de contenu + 6 fichiers absents de la copie. L'ancienne
+  // forme listait les absents d'abord puis coupait à 4 — les 6 divergences pouvaient n'apparaître
+  // NULLE PART, c'est-à-dire le défaut cherché rendu invisible par le message même qui l'annonce.
+  for (let i = 1; i <= 6; i += 1) {
+    poser(join(src2, "sigma", "scripts", `d${i}.mjs`), `export const n = ${i};\n`);
+    poser(join(inst2, "sigma", "scripts", `d${i}.mjs`), `export const n = ${i * 10};\n`);
+    poser(join(src2, "sigma", "absents", `a${i}.md`), `# a${i}\n`);
+  }
+  r = juger(racine2, inst2);
+  const k2c = r.findings.find((f) => f.regle === "K2" && f.statut === "FAIL");
+  cas.push(["K2    — les 6 vraies divergences sont TOUTES visibles, jamais tronquées",
+            Boolean(k2c) && [1, 2, 3, 4, 5, 6].every((i) => k2c.message.includes(`scripts/d${i}.mjs`))]);
+  cas.push(["K2    — les absents restent plafonnés et COMPTÉS, pas listés à l'infini",
+            Boolean(k2c) && /et 2 autre\(s\) \(absent de la copie\)/.test(k2c.message)]);
+
+  // ---- TF-0290 : K6, les HOOKS. Le gate C7 `qo-gate-write.mjs` a bloqué cinq écritures le 15/08
+  // sans qu'aucune forge le versionne — et K1-K5 ne pouvaient pas le voir : ils ne regardent que
+  // les skills. Un hook est un fichier : la comparaison se fait fichier à fichier.
+  const base3 = mkdtempSync(join(tmpdir(), "hooks-"));
+  const racine3 = join(base3, "forges");
+  const inst3 = join(base3, ".claude", "skills");
+  const instH = join(base3, ".claude", "hooks");
+  const src3 = join(racine3, "factory-forge-agents", ".claude", "skills");
+  const srcH = join(racine3, "factory-forge-agents", ".claude", "hooks");
+  const hook = (v, corps) => `#!/usr/bin/env node\nconst VERSION = "${v}";\n// ${corps}\n`;
+  poser(join(src3, "omega", "SKILL.md"), "# omega\n");
+  poser(join(inst3, "omega", "SKILL.md"), "# omega\n");
+  poser(join(srcH, "qo-gate-write.mjs"), hook("1.0.0", "gate C7"));
+  poser(join(instH, "qo-gate-write.mjs"), hook("1.0.0", "gate C7"));
+  r = juger(racine3, inst3, false, false, instH);
+  cas.push(["K6    — hook installé identique à sa source versionnée",
+            r.verdict === "PASS"
+            && r.findings.some((f) => f.regle === "K6" && /1 hook\(s\) installé\(s\) comparé/.test(f.message))]);
+
+  // Rouge : la copie installée a été éditée — c'est ELLE que le harnais exécute à chaque outil.
+  writeFileSync(join(instH, "qo-gate-write.mjs"), hook("1.0.0", "gate C7 trafique en local"));
+  r = juger(racine3, inst3, false, false, instH);
+  const k6 = r.findings.find((f) => f.regle === "K6" && f.statut === "FAIL");
+  cas.push(["K6    — hook installé divergent de sa source", Boolean(k6)]);
+  cas.push(["K6    — le verdict nomme le FICHIER et dit quelle copie s'exécute",
+            Boolean(k6) && k6.message.includes("qo-gate-write.mjs")
+            && /COPIE INSTALLÉE qui s'exécute/.test(k6.message)]);
+  juger(racine3, inst3, true, false, instH);
+  r = juger(racine3, inst3, false, false, instH);
+  cas.push(["K6    — --appliquer remet le hook à niveau",
+            !r.findings.some((f) => f.regle === "K6" && f.statut === "FAIL")
+            && readFileSync(join(instH, "qo-gate-write.mjs"), "utf8")
+               === readFileSync(join(srcH, "qo-gate-write.mjs"), "utf8")]);
+
+  // Un hook installé SANS source versionnée appartient à l'humain : déclaré, jamais mis en échec
+  // (même contrat que K4 pour un skill personnel).
+  poser(join(instH, "mon-hook-perso.mjs"), "// hook de l'humain\n");
+  r = juger(racine3, inst3, false, false, instH);
+  cas.push(["K6    — hook sans source versionnée : déclaré, non jugé",
+            r.verdict === "PASS"
+            && r.findings.some((f) => f.regle === "K6" && /mon-hook-perso\.mjs/.test(f.message))]);
+
+  // TF-0289 vaut aussi pour K6 : un sidecar déposé à côté d'un hook n'est pas un écart.
+  poser(join(instH, "qo-gate-write.mjs.oracles-cache.json"), "{}\n");
+  r = juger(racine3, inst3, false, false, instH);
+  cas.push(["K6    — un sidecar d'oracle à côté d'un hook n'est pas un écart",
+            r.verdict === "PASS"
+            && !r.findings.some((f) => f.regle === "K6" && /oracles-cache/.test(f.message))]);
+
+  // Protection K5 transposée : la copie installée déclare une version PLUS HAUTE — l'écraser
+  // détruirait du travail au nom de la synchronisation. Les deux sens comptent.
+  poser(join(srcH, "qo-gate.mjs"), hook("1.0.0", "gate C6"));
+  poser(join(instH, "qo-gate.mjs"), hook("2.3.0", "gate C6 ameliore sur le poste"));
+  r = juger(racine3, inst3, false, false, instH);
+  cas.push(["K6    — copie installée d'un hook EN AVANCE sur sa source",
+            r.findings.some((f) => f.regle === "K6" && f.statut === "FAIL" && /EN AVANCE/.test(f.message))]);
+  const avantH = readFileSync(join(instH, "qo-gate.mjs"), "utf8");
+  juger(racine3, inst3, true, false, instH);
+  cas.push(["K6 bis— --appliquer n'écrase PAS un hook installé plus récent",
+            readFileSync(join(instH, "qo-gate.mjs"), "utf8") === avantH]);
+  poser(join(srcH, "qo-gate.mjs"), hook("3.0.0", "gate C6 refondu au dépôt"));
+  juger(racine3, inst3, true, false, instH);
+  cas.push(["K6 ter— source de hook en avance : l'application se fait",
+            /3\.0\.0/.test(readFileSync(join(instH, "qo-gate.mjs"), "utf8"))]);
+
+  // Hook versionné mais JAMAIS installé : déclaré, pas mis en échec — poser un hook est un acte
+  // humain (il faut aussi le câbler dans settings.json). `--appliquer` le pose sur demande.
+  poser(join(srcH, "gates", "g0-budget.sh"), "#!/bin/bash\nexit 0\n");
+  r = juger(racine3, inst3, false, false, instH);
+  cas.push(["K6    — hook versionné non installé : déclaré, jamais en silence",
+            r.verdict === "PASS"
+            && r.findings.some((f) => f.regle === "K6" && /NON installé\(s\)/.test(f.message)
+                                      && /g0-budget\.sh/.test(f.message))]);
+  juger(racine3, inst3, true, false, instH);
+  cas.push(["K6    — --appliquer installe le hook versionné absent",
+            existsSync(join(instH, "gates", "g0-budget.sh"))]);
+
+  // Deux forges revendiquent le même hook : `--appliquer` ne tranche pas (même raison que K3).
+  poser(join(racine3, "factory-forge-tests", ".claude", "hooks", "qo-gate-write.mjs"),
+        hook("1.0.0", "autre gate, autre forge"));
+  r = juger(racine3, inst3, false, false, instH);
+  cas.push(["K6    — même nom de hook dans deux forges : la source n'existe pas",
+            r.findings.some((f) => f.regle === "K6" && f.statut === "FAIL" && /2 sources/.test(f.message))]);
+  const avantD = readFileSync(join(instH, "qo-gate-write.mjs"), "utf8");
+  juger(racine3, inst3, true, false, instH);
+  cas.push(["K6 bis— --appliquer n'arbitre pas un hook revendiqué deux fois",
+            readFileSync(join(instH, "qo-gate-write.mjs"), "utf8") === avantD]);
+
+  // ---- TF-0297 : K7, le CÂBLAGE. Un hook dont la copie installée est parfaite mais qu'aucun
+  // `settings.json` ne référence ne s'exécute JAMAIS (loi transverse n°1). K7 est DÉCLARATIF par
+  // construction — chaque cas vérifie donc AUSSI que le verdict reste PASS : un K7 bloquant
+  // briquerait toutes les ouvertures de run sur une décision humaine pendante (R-35 ; motif de R-33 bis pour le verdict websec).
+  const base4 = mkdtempSync(join(tmpdir(), "cablage-"));
+  const racine4 = join(base4, "forges");
+  const inst4 = join(base4, ".claude", "skills");
+  const instH4 = join(base4, ".claude", "hooks");
+  const settings4 = join(base4, ".claude", "settings.json"); // le câblage INSTALLÉ
+  const src4 = join(racine4, "factory-forge-agents", ".claude", "skills");
+  const srcH4 = join(racine4, "factory-forge-agents", ".claude", "hooks");
+  const settingsV4 = join(racine4, "factory-forge-agents", ".claude", "settings.json"); // VERSIONNÉ
+  const cablage = (commandes) => JSON.stringify(
+    { hooks: { PostToolUse: [{ matcher: "Write|Edit", hooks: commandes.map((c) => ({ type: "command", command: c })) }] } },
+    null, 1);
+  // Entrée personnelle de l'humain : elle vit dans le settings installé et ne référence AUCUN hook
+  // versionné. Elle ne doit apparaître dans aucun message — ni jugée, ni listée, ni comptée.
+  const CMD_PERSO = 'node -e "tableau-de-bord-perso"';
+  const k7de = (r) => r.findings.find((f) => f.regle === "K7");
+  poser(join(src4, "kappa", "SKILL.md"), "# kappa\n");
+  poser(join(inst4, "kappa", "SKILL.md"), "# kappa\n");
+  poser(join(srcH4, "qo-gate-write.mjs"), hook("1.0.0", "gate C7"));
+  poser(join(instH4, "qo-gate-write.mjs"), hook("1.0.0", "gate C7"));
+  // Le settings versionné déclare le gate C7 ET un gate de portée PROJET (`.queue/gates/…`, cas
+  // réel de forge-agents) : ce dernier n'est pas un hook versionné sous `.claude\hooks\`, il est
+  // chargé quand la session s'ouvre dans le dépôt — K7 n'a pas à le réclamer au poste.
+  poser(settingsV4, cablage(["node ~/.claude/hooks/qo-gate-write.mjs --niveau note",
+                             "bash .queue/gates/g0-budget.sh"]));
+  poser(settings4, cablage(["node C:/Users/humain/.claude/hooks/qo-gate-write.mjs --niveau note",
+                            CMD_PERSO]));
+
+  r = juger(racine4, inst4, false, false, instH4, settings4);
+  let k7 = k7de(r);
+  cas.push(["K7    — hook versionné, attendu par sa forge ET câblé : aucun écart",
+            r.verdict === "PASS" && Boolean(k7) && k7.statut === "PASS"
+            && /1 hook\(s\) versionné\(s\) attendu\(s\) par une forge ET câblé/.test(k7.message)
+            && !/CÂBLAGE\(S\) MANQUANT/.test(k7.message)]);
+  cas.push(["K7    — le câblage PERSONNEL de l'humain n'est ni listé ni compté",
+            Boolean(k7) && !k7.message.includes("tableau-de-bord-perso")]);
+  cas.push(["K7    — un câblage de portée PROJET n'est pas réclamé au poste",
+            Boolean(k7) && !/g0-budget/.test(k7.message)]);
+
+  // Rouge (déclaratif) : le câblage installé perd l'entrée du gate C7 — c'est l'état réel du poste
+  // au 17/08. Le hook est versionné, attendu, sain… et rien ne l'exécute.
+  poser(settings4, cablage([CMD_PERSO]));
+  r = juger(racine4, inst4, false, false, instH4, settings4);
+  k7 = k7de(r);
+  cas.push(["K7    — hook versionné et attendu, ABSENT du câblage installé : déclaré",
+            Boolean(k7) && /CÂBLAGE\(S\) MANQUANT\(S\)/.test(k7.message)
+            && k7.message.includes("qo-gate-write.mjs")]);
+  cas.push(["K7    — le constat nomme la commande et le geste qui la poserait",
+            Boolean(k7) && k7.message.includes("--niveau note")
+            && k7.message.includes(settings4)]);
+  // TF-0337 — la fixture ci-dessus déclare sa commande avec `~`, DÉJÀ ancrée : rien à réancrer,
+  // et le conseil doit rester nu. C'est la contre-épreuve du cas suivant.
+  cas.push(["K7    — commande versionnée déjà ancrée (~) : le conseil ne réancre rien (TF-0337)",
+            Boolean(k7) && !/RÉANCRÉE/.test(k7.message)]);
+
+  // Le cas RÉEL de TF-0337 : le settings versionné porte la commande en RELATIF (idiome correct
+  // d'un gate de portée projet). Recopiée telle quelle dans le settings UTILISATEUR, elle ne se
+  // résout depuis aucun dossier fiable — K8 la déclarerait « chemin relatif ». Le conseil doit
+  // donc porter la commande réancrée sur le fichier versionné, chemin absolu.
+  poser(settingsV4, cablage(["node .claude/hooks/qo-gate-write.mjs --niveau note",
+                             "bash .queue/gates/g0-budget.sh"]));
+  r = juger(racine4, inst4, false, false, instH4, settings4);
+  k7 = k7de(r);
+  cas.push(["K7    — commande versionnée RELATIVE : le conseil porte la commande RÉANCRÉE, chemin absolu (TF-0337)",
+            Boolean(k7) && /RÉANCRÉE/.test(k7.message)
+            && /RÉANCRÉE « [^»]*qo-gate-write\.mjs/.test(k7.message)
+            && /RÉANCRÉE « node (?:[A-Za-z]:[\\/]|[\\/])/.test(k7.message)]);
+  cas.push(["K7    — et il DIT pourquoi : recopiée nue, K8 la déclarerait morte (TF-0337)",
+            Boolean(k7) && /K8 la déclarerait/.test(k7.message)]);
+  // On rétablit la fixture ancrée pour les cas qui suivent.
+  poser(settingsV4, cablage(["node ~/.claude/hooks/qo-gate-write.mjs --niveau note",
+                             "bash .queue/gates/g0-budget.sh"]));
+  r = juger(racine4, inst4, false, false, instH4, settings4);
+  k7 = k7de(r);
+
+  cas.push(["K7    — DÉCLARATIF : câblage manquant, et le verdict reste PASS (R-35 ; motif de R-33 bis pour le verdict websec)",
+            r.verdict === "PASS"
+            && !r.findings.some((f) => f.regle === "K7" && f.statut !== "PASS")]);
+
+  // Hook versionné dont le câblage n'est décrit NULLE PART — ni settings versionné, ni installé.
+  poser(join(srcH4, "qo-gate.mjs"), hook("1.0.0", "gate C6"));
+  r = juger(racine4, inst4, false, false, instH4, settings4);
+  k7 = k7de(r);
+  cas.push(["K7    — hook versionné dont le câblage n'est décrit NULLE PART",
+            r.verdict === "PASS" && Boolean(k7) && /NULLE PART/.test(k7.message)
+            && /qo-gate\.mjs \(source/.test(k7.message)]);
+
+  // Câblé au poste sans qu'aucun settings versionné le décrive : le câblage existe mais n'est pas
+  // reproductible depuis les dépôts — l'effacement du settings installé le perdrait sans trace.
+  poser(join(srcH4, "hook-maison.mjs"), hook("1.0.0", "hook maison"));
+  poser(settings4, cablage([CMD_PERSO, "node ~/.claude/hooks/hook-maison.mjs"]));
+  r = juger(racine4, inst4, false, false, instH4, settings4);
+  k7 = k7de(r);
+  cas.push(["K7    — câblé au poste sans description versionnée : déclaré, non reproductible",
+            r.verdict === "PASS" && Boolean(k7)
+            && /sans qu'aucun settings\.json versionné le décrive/.test(k7.message)
+            && k7.message.includes("hook-maison.mjs")]);
+
+  // `--appliquer` pose des FICHIERS de hook, il ne CÂBLE rien : câbler engage toutes les sessions
+  // du poste, c'est un acte humain (R-29). Vérifié à l'octet.
+  const avantS = readFileSync(settings4);
+  const rApp = juger(racine4, inst4, true, false, instH4, settings4);
+  cas.push(["K7    — --appliquer ne touche JAMAIS au settings installé (R-29)",
+            readFileSync(settings4).equals(avantS)
+            && /n'a PAS touché/.test(k7de(rApp).message)]);
+
+  // Settings installé absent : K7 ne peut ni confirmer ni infirmer un câblage — il le DIT, au lieu
+  // de déclarer à tort que tout est décâblé.
+  r = juger(racine4, inst4, false, false, instH4, join(base4, ".claude", "settings-absent.json"));
+  k7 = k7de(r);
+  cas.push(["K7    — câblage installé absent : confrontation non concluante, dite et non devinée",
+            r.verdict === "PASS" && Boolean(k7) && /absent/.test(k7.message)
+            && /n'est pas concluante/.test(k7.message)
+            && !/CÂBLAGE\(S\) MANQUANT/.test(k7.message)]);
+
+  // Un settings.json versionné cassé à la main ne fait pas planter l'oracle : il est déclaré.
+  poser(settingsV4, "{ hooks: pas du json,\n");
+  r = juger(racine4, inst4, false, false, instH4, settings4);
+  k7 = k7de(r);
+  cas.push(["K7    — settings.json versionné illisible : déclaré, l'oracle ne plante pas",
+            r.verdict === "PASS" && Boolean(k7) && /non exploitable/.test(k7.message)
+            && k7.message.includes("factory-forge-agents")]);
+
+  // ---- TF-0305 : K8, l'EXISTENCE du fichier câblé. Une entrée installée vers un chemin mort se lit
+  // « câblée » chez K7 — même assurance qu'un gate vivant, aucune de ses propriétés. K8 est
+  // déclaratif comme K7 : chaque cas vérifie donc AUSSI que le verdict reste PASS.
+  const base5 = mkdtempSync(join(tmpdir(), "chemins-"));
+  const racine5 = join(base5, "forges");
+  const inst5 = join(base5, ".claude", "skills");
+  const instH5 = join(base5, ".claude", "hooks");
+  const settings5 = join(base5, ".claude", "settings.json"); // le câblage INSTALLÉ
+  const src5 = join(racine5, "factory-forge-agents", ".claude", "skills");
+  const srcH5 = join(racine5, "factory-forge-agents", ".claude", "hooks");
+  const settingsV5 = join(racine5, "factory-forge-agents", ".claude", "settings.json"); // VERSIONNÉ
+  const k8de = (r) => r.findings.find((f) => f.regle === "K8");
+  const enUrl = (p) => p.replace(/\\/g, "/"); // une commande de settings.json s'écrit avec des /
+  // Entrée personnelle de l'humain, câblée vers un chemin MORT : elle ne doit apparaître dans aucun
+  // message de K8 — le settings personnel n'est ni résolu, ni listé, ni compté (prudence de K4).
+  const CMD_PERSO_MORTE = "node C:/nulle-part/mon-tableau-de-bord-perso.mjs";
+  poser(join(src5, "lambda", "SKILL.md"), "# lambda\n");
+  poser(join(inst5, "lambda", "SKILL.md"), "# lambda\n");
+  poser(join(srcH5, "qo-gate-write.mjs"), hook("1.0.0", "gate C7"));
+  poser(join(instH5, "qo-gate-write.mjs"), hook("1.0.0", "gate C7"));
+  poser(settingsV5, cablage(["node ~/.claude/hooks/qo-gate-write.mjs --niveau note"]));
+  // Une seule variable change d'un cas à l'autre : la commande INSTALLÉE. Le reste du décor est
+  // identique — c'est ce qui rend la paire vert/rouge comparable.
+  const jugerK8 = (installee) => {
+    poser(settings5, cablage([CMD_PERSO_MORTE, installee]));
+    return juger(racine5, inst5, false, false, instH5, settings5);
+  };
+
+  // Vert : le câblage installé pointe le fichier réellement posé.
+  r = jugerK8(`node ${enUrl(join(instH5, "qo-gate-write.mjs"))} --niveau note`);
+  let k8 = k8de(r);
+  cas.push(["K8    — câblage installé vers un fichier PRÉSENT : aucun chemin mort",
+            r.verdict === "PASS" && Boolean(k8) && k8.statut === "PASS"
+            && /1 câblage\(s\) installé\(s\) dont le fichier exécuté EXISTE/.test(k8.message)
+            && !/CHEMIN MORT/.test(k8.message)]);
+  cas.push(["K8    — le câblage PERSONNEL de l'humain n'est ni résolu ni listé, mort ou vif",
+            Boolean(k8) && !k8.message.includes("mon-tableau-de-bord-perso")]);
+
+  // Rouge (déclaratif) : la MÊME entrée, un chemin recopié de travers — le sous-dossier n'existe ni
+  // en copie installée, ni en source versionnée. C'est le trou de TF-0305, dans les deux sens.
+  const chemin_mort = enUrl(join(instH5, "legacy", "qo-gate-write.mjs"));
+  r = jugerK8(`node ${chemin_mort} --niveau note`);
+  k8 = k8de(r);
+  cas.push(["K8    — câblage installé vers un CHEMIN MORT : déclaré, le hook ne s'exécutera jamais",
+            Boolean(k8) && /CÂBLAGE\(S\) VERS UN CHEMIN MORT/.test(k8.message)
+            && k8.message.includes(chemin_mort)]);
+  cas.push(["K8    — le constat dit les TROIS endroits regardés (chemin, copie, source)",
+            Boolean(k8) && /ni à ce chemin, ni en copie installée sous .+, ni en source versionnée/.test(k8.message)]);
+  cas.push(["K8    — K7 lit cette même entrée « câblée » : exactement le trou que K8 comble",
+            /ET câblé/.test(k7de(r).message)]);
+  cas.push(["K8    — DÉCLARATIF : chemin mort, et le verdict reste PASS (R-35 ; motif de R-33 bis pour le verdict websec)",
+            r.verdict === "PASS"
+            && !r.findings.some((f) => f.regle === "K8" && f.statut !== "PASS")]);
+
+  // Preuve inverse (mutant) : le MÊME câblage, mot pour mot, avec le fichier posé à ce chemin —
+  // plus rien à déclarer. Sans elle, « déclare tout » passerait pour « détecte les chemins morts ».
+  poser(join(instH5, "legacy", "qo-gate-write.mjs"), hook("1.0.0", "gate C7 rangé sous legacy/"));
+  r = juger(racine5, inst5, false, false, instH5, settings5);
+  k8 = k8de(r);
+  cas.push(["K8    — le MÊME câblage, fichier posé : plus aucun chemin mort (preuve inverse)",
+            r.verdict === "PASS" && Boolean(k8) && !/CHEMIN MORT/.test(k8.message)
+            && /dont le fichier exécuté EXISTE/.test(k8.message)]);
+
+  // `~` est résolu, et la queue de chemin RÉ-ANCRÉE sur le dossier de hooks que l'oracle regarde :
+  // sans ce ré-ancrage, tout `--installes-hooks` déplacé lirait « mort » à tort.
+  r = jugerK8("node ~/.claude/hooks/qo-gate-write.mjs --niveau note");
+  k8 = k8de(r);
+  cas.push(["K8    — `~` résolu et queue ré-ancrée sur le dossier de hooks regardé",
+            r.verdict === "PASS" && Boolean(k8) && !/CHEMIN MORT/.test(k8.message)
+            && /\((?:copie installée|chemin résolu)\)/.test(k8.message)]);
+
+  // Variable d'environnement présente : résolue. Absente : NON JUGÉE — jamais devinée.
+  process.env.PILOT_TEST_HOOKS_K8 = instH5;
+  r = jugerK8("node %PILOT_TEST_HOOKS_K8%/qo-gate-write.mjs");
+  k8 = k8de(r);
+  cas.push(["K8    — variable d'environnement présente : le chemin est résolu",
+            r.verdict === "PASS" && Boolean(k8) && !/CHEMIN MORT/.test(k8.message)
+            && /dont le fichier exécuté EXISTE/.test(k8.message)]);
+  r = jugerK8("node $PILOT_TEST_ABSENTE_K8/qo-gate-write.mjs");
+  k8 = k8de(r);
+  cas.push(["K8    — variable absente : non résolue, DÉCLARÉE, jamais devinée morte",
+            r.verdict === "PASS" && Boolean(k8) && !/CHEMIN MORT/.test(k8.message)
+            && /NON RÉSOLUE\(S\)/.test(k8.message)
+            && k8.message.includes("PILOT_TEST_ABSENTE_K8")]);
+
+  // Chemin relatif : il se résout depuis le dossier de la session, que l'oracle ne connaît pas.
+  // Cas réel — le settings versionné de forge-agents écrit `node .claude/hooks/qo-gate-write.mjs`.
+  r = jugerK8("node .claude/hooks/qo-gate-write.mjs");
+  k8 = k8de(r);
+  cas.push(["K8    — chemin relatif à la session : non jugé, motif déclaré",
+            r.verdict === "PASS" && Boolean(k8) && !/CHEMIN MORT/.test(k8.message)
+            && /chemin relatif/.test(k8.message)]);
+
+  // Commande shell composée : le fichier exécuté dépend d'une exécution. Cas réel — le hook
+  // `graphify` de forge-audit_client-a, 800 caractères de shell avec sous-shell et `case`.
+  r = jugerK8('CMD=$(cat x) ; node ~/.claude/hooks/qo-gate-write.mjs || true');
+  k8 = k8de(r);
+  cas.push(["K8    — commande shell composée : non jugée, motif déclaré",
+            r.verdict === "PASS" && Boolean(k8) && !/CHEMIN MORT/.test(k8.message)
+            && /commande shell composée/.test(k8.message)]);
+
+  // Fichier non posé mais VERSIONNÉ par une forge : ce n'est pas un chemin mort au sens de K8 —
+  // K6 le déclare déjà « versionné non installé », et K8 ne redit pas ce qui est déjà dit.
+  poser(join(srcH5, "gates", "g9-controle.sh"), "#!/bin/bash\nexit 0\n");
+  r = jugerK8("bash ~/.claude/hooks/gates/g9-controle.sh");
+  k8 = k8de(r);
+  cas.push(["K8    — fichier absent du poste mais versionné : vivant, pas mort",
+            r.verdict === "PASS" && Boolean(k8) && !/CHEMIN MORT/.test(k8.message)
+            && /g9-controle\.sh \(source versionnée\)/.test(k8.message)]);
+
+  // Aucune entrée installée confrontée par K7 (état réel du poste au 17/08) : K8 le DIT, au lieu de
+  // rendre un vert muet qui se lirait comme « tous les câblages sont vivants ».
+  poser(settings5, cablage([CMD_PERSO_MORTE]));
+  r = juger(racine5, inst5, false, false, instH5, settings5);
+  k8 = k8de(r);
+  cas.push(["K8    — aucune entrée confrontée : dit, et non passé sous silence",
+            r.verdict === "PASS" && Boolean(k8) && /aucune entrée de câblage installée confrontée/.test(k8.message)
+            && !k8.message.includes("mon-tableau-de-bord-perso")]);
+
+  // Settings installé absent : rien à résoudre, et K8 ne l'invente pas.
+  r = juger(racine5, inst5, false, false, instH5, join(base5, ".claude", "settings-absent.json"));
+  k8 = k8de(r);
+  cas.push(["K8    — câblage installé absent : aucune commande à résoudre, dit",
+            r.verdict === "PASS" && Boolean(k8) && /aucune commande installée à résoudre/.test(k8.message)
+            && !/CHEMIN MORT/.test(k8.message)]);
+
+  // `--appliquer` n'installe ni ne câble rien au titre de K8 : réparer un câblage engage toutes les
+  // sessions du poste (R-29). Vérifié à l'octet sur le settings, et sur le fichier manquant.
+  const chemin_mort2 = enUrl(join(instH5, "jamais-pose", "qo-gate-write.mjs"));
+  jugerK8(`node ${chemin_mort2}`);
+  const avantS5 = readFileSync(settings5);
+  const rApp5 = juger(racine5, inst5, true, false, instH5, settings5);
+  cas.push(["K8    — --appliquer ne pose pas le fichier manquant et ne recâble rien (R-29)",
+            readFileSync(settings5).equals(avantS5) && !existsSync(chemin_mort2)
+            && /CHEMIN MORT/.test(k8de(rApp5).message)
+            && /n'a rien installé ni câblé au titre de K8/.test(k8de(rApp5).message)]);
+
+  // ---- K10 (TF-0995) · la fixture à DEUX racines de configuration ------------------------------
+  // C'est la recette que le lot du 09/09 demande, et elle doit ÉCHOUER là où l'oracle rendait PASS.
+  // Deux racines : l'une PEUPLÉE (les skills y sont installés), l'autre VIDE. `CLAUDE_CONFIG_DIR`
+  // pointe tour à tour sur l'une et sur l'autre. Avant la correction, la résolution était écrite en
+  // dur sur `~/.claude` : les deux cas rendaient le MÊME verdict, et le cas « racine vide » passait
+  // au vert. C'est exactement le 09/09 — 24 skills alignés, zéro chargé.
+  const base10 = mkdtempSync(join(tmpdir(), "skills-k10-"));
+  const racine10 = join(base10, "forges");
+  const src10 = join(racine10, "factory-forge-agents", ".claude", "skills");
+  poser(join(src10, "alpha", "SKILL.md"), "# alpha\n");
+  const peuple = join(base10, "config-peuple");
+  const vide = join(base10, "config-vide");
+  poser(join(peuple, "skills", "alpha", "SKILL.md"), "# alpha\n");
+  poser(join(peuple, "CLAUDE.md"), "# noyau de poste\n");
+  mkdirSync(vide, { recursive: true });
+
+  // Sens VERT : la racine chargée est celle qui porte les skills.
+  const cfgP = racineConfigInstallee({ CLAUDE_CONFIG_DIR: peuple });
+  const instP = skillsInstalles({ CLAUDE_CONFIG_DIR: peuple }).chemin;
+  let r10 = juger(racine10, instP, false, false, join(peuple, "hooks"), join(peuple, "settings.json"), cfgP);
+  const k10P = r10.findings.find((f) => f.regle === "K10");
+  cas.push(["K10   — racine chargée peuplée : PASS, et le verdict NOMME la racine et sa variable",
+            r10.verdict === "PASS" && Boolean(k10P)
+            && k10P.message.includes(peuple) && k10P.message.includes("CLAUDE_CONFIG_DIR")]);
+
+  // Sens ROUGE : la racine chargée est VIDE. La résolution partagée y emmène `installes`, et K1
+  // rougit — alors qu'avant la correction, `installes` restait sur `~/.claude/skills` et passait.
+  const cfgV = racineConfigInstallee({ CLAUDE_CONFIG_DIR: vide });
+  const instV = skillsInstalles({ CLAUDE_CONFIG_DIR: vide }).chemin;
+  r10 = juger(racine10, instV, false, false, join(vide, "hooks"), join(vide, "settings.json"), cfgV);
+  const k10V = r10.findings.find((f) => f.regle === "K10");
+  cas.push(["K10   — racine chargée VIDE : l'oracle ÉCHOUE là où il rendait PASS (K1)",
+            r10.verdict === "FAIL" && echoue(r10, "K1")]);
+  cas.push(["K10   — racine vide : le CLAUDE.md de poste manquant est DIT avec son remède",
+            Boolean(k10V) && k10V.statut === "PASS" && k10V.message.includes(vide)
+            && k10V.message.includes("CLAUDE.md") && k10V.message.includes("bootstrap.mjs --pull")]);
+
+  // La résolution elle-même, dans ses trois sens — c'est elle que les huit sites partagent.
+  cas.push(["K10   — CLAUDE_CONFIG_DIR décide la racine quand elle est posée",
+            racineConfigInstallee({ CLAUDE_CONFIG_DIR: vide }).racine === resolve(vide)]);
+  cas.push(["K10   — FORGE_SKILLS_INSTALLES reste PRIORITAIRE (voie des recettes)",
+            skillsInstalles({ CLAUDE_CONFIG_DIR: vide, FORGE_SKILLS_INSTALLES: instP }).chemin === resolve(instP)]);
+  cas.push(["K10   — une variable posée à la chaîne VIDE est traitée comme absente",
+            racineConfigInstallee({ CLAUDE_CONFIG_DIR: "   " }).variable === null]);
+
+  // ---- K13 (TF-1292, 02/10/2026) · le LIEN SYMBOLIQUE qui masque une propagation partielle ------
+  // Deux profils de poste fabriqués : le premier porte un RÉPERTOIRE RÉEL de skills, le second un
+  // LIEN SYMBOLIQUE vers lui — exactement la forme mesurée le 22/09. `postesParDefaut` est piloté
+  // par l'environnement injecté (CLAUDE_CONFIG_DIR), donc le second profil « -b » se fabrique à côté
+  // du premier pour correspondre à la convention `${racine}-b` de la fonction partagée.
+  const base12 = mkdtempSync(join(tmpdir(), "skills-k13-"));
+  const profilA = join(base12, "poste-a");
+  const profilB = `${profilA}-b`;
+  poser(join(profilA, "skills", "alpha", "SKILL.md"), "# alpha\n");
+  mkdirSync(profilB, { recursive: true });
+  symlinkSync(join(profilA, "skills"), join(profilB, "skills"), "junction");
+  const cfg12 = racineConfigInstallee({ CLAUDE_CONFIG_DIR: profilA });
+  const r13 = juger(racine10, skillsInstalles({ CLAUDE_CONFIG_DIR: profilA }).chemin, false, false,
+    join(profilA, "hooks"), join(profilA, "settings.json"), cfg12, { CLAUDE_CONFIG_DIR: profilA });
+  const k13 = r13.findings.find((f) => f.regle === "K13");
+  cas.push(["K13   — les DEUX profils connus sont énumérés, le premier nommé « répertoire réel »",
+            Boolean(k13) && k13.statut === "PASS" && k13.message.includes(`${profilA} : répertoire réel`)]);
+  cas.push(["K13   — le second profil, dont skills n'est qu'un LIEN vers le premier, est nommé « LIEN SYMBOLIQUE »",
+            Boolean(k13) && k13.message.includes(`${profilB} : LIEN SYMBOLIQUE`)]);
+  cas.push(["K13   — le message dit ce que le lien MASQUE, sans quoi l'énumération ne se contesterait pas",
+            Boolean(k13) && /MASQUER/.test(k13.message)]);
+  // Sens rouge sur l'ANCIEN comportement : avant TF-1292, aucune règle ne distinguait un profil
+  // réel d'un profil lié — l'absence de K13 dans les findings EST le défaut mesuré le 22/09.
+  const base12b = mkdtempSync(join(tmpdir(), "skills-k13b-"));
+  const seul = join(base12b, "poste-seul");
+  poser(join(seul, "skills", "alpha", "SKILL.md"), "# alpha\n");
+  const cfgSeul = racineConfigInstallee({ CLAUDE_CONFIG_DIR: seul });
+  const rSeul = juger(racine10, skillsInstalles({ CLAUDE_CONFIG_DIR: seul }).chemin, false, false,
+    join(seul, "hooks"), join(seul, "settings.json"), cfgSeul, { CLAUDE_CONFIG_DIR: seul });
+  const kSeul = rSeul.findings.find((f) => f.regle === "K13");
+  cas.push(["K13   — un profil ABSENT (ni répertoire ni lien) est nommé « absent », pas confondu avec un lien",
+            Boolean(kSeul) && kSeul.message.includes(`${seul}-b : absent`)]);
+
+  // ---- TF-1133 · CRITÈRE « PARC ABSENT » : aucune installation à comparer ------------------------
+  // Vert : racine PAR DÉFAUT inexistante, rien d'imposé — un runner hébergé ; l'oracle se déclare
+  // sans objet. Rouges : une racine qui existe, une racine DÉSIGNÉE par variable (le défaut du 09/09,
+  // K10), un dossier d'installation imposé — tous restent jugés.
+  const absente10 = join(base10, "config-absente");
+  cas.push(["SANS OBJET — racine par défaut INEXISTANTE et rien d'imposé : aucune installation à comparer (runner, TF-1133)",
+            installationAbsente({ config: { racine: absente10, variable: null }, installesImpose: false }) === true]);
+  cas.push(["SANS OBJET — refusé si la racine par défaut EXISTE, même vide : elle est jugée",
+            installationAbsente({ config: { racine: vide, variable: null }, installesImpose: false }) === false]);
+  cas.push(["SANS OBJET — refusé si la racine est DÉSIGNÉE par CLAUDE_CONFIG_DIR, même inexistante : K10 la juge",
+            installationAbsente({ config: { racine: absente10, variable: "CLAUDE_CONFIG_DIR" }, installesImpose: false }) === false]);
+  cas.push(["SANS OBJET — refusé si le dossier des skills installés est IMPOSÉ (--installes, FORGE_SKILLS_INSTALLES)",
+            installationAbsente({ config: { racine: absente10, variable: null }, installesImpose: true }) === false]);
+
+  rmSync(base10, { recursive: true, force: true });
+
+  // ---- MODÈLE MARKETPLACE (25/11/2026, C4) : aucune copie attendue, aucune copie faite ----------------------------------------------
+  MODELE = "marketplace";
+  {
+    const bm = mkdtempSync(join(tmpdir(), "oracle-skills-mkt-"));
+    const racineM = join(bm, "racine"), instM = join(bm, "config", "skills");
+    const src = join(racineM, "factory-forge-agents", ".claude", "skills", "s-parc");
+    mkdirSync(src, { recursive: true }); writeFileSync(join(src, "SKILL.md"), "---\nname: s-parc\n---\n");
+    mkdirSync(instM, { recursive: true });
+    const regle = (r, k) => (r.findings || []).filter((f) => f.regle === k);
+    const propre = juger(racineM, instM, false, false, join(bm, "config", "hooks"), join(bm, "config", "settings.json"), { racine: join(bm, "config"), variable: null });
+    cas.push(["VERT marketplace — un skill du parc NON installé n'est plus un K1 FAIL, et K15 dit qu aucune copie n existe",
+              !regle(propre, "K1").some((f) => f.statut === "FAIL") && /aucune copie d'un skill du parc/.test(regle(propre, "K15")[0]?.message || "")]);
+    cas.push(["VERT marketplace — sans marketplace dans la racine, K14 se déclare non jugé (jamais un FAIL inventé)",
+              regle(propre, "K14")[0]?.statut === "PASS" && /absente/.test(regle(propre, "K14")[0]?.message || "")]);
+    const applique = juger(racineM, instM, true, false, join(bm, "config", "hooks"), join(bm, "config", "settings.json"), { racine: join(bm, "config"), variable: null });
+    cas.push(["ROUGE → VERT marketplace — --appliquer ne copie AUCUN skill dans la racine installée (le refus du 25/11/2026)",
+              !existsSync(join(instM, "s-parc")) && !(applique.applique || []).some((a) => /s-parc/.test(a))]);
+    mkdirSync(join(instM, "s-parc"), { recursive: true }); writeFileSync(join(instM, "s-parc", "SKILL.md"), "copie résiduelle\n");
+    const residu = juger(racineM, instM, false, false, join(bm, "config", "hooks"), join(bm, "config", "settings.json"), { racine: join(bm, "config"), variable: null });
+    cas.push(["ROUGE marketplace — une copie résiduelle d'un skill du parc est NOMMÉE par K15 (doublon avec le plugin), sans échec ni suppression",
+              /RÉSIDUELLE.*s-parc/.test(regle(residu, "K15")[0]?.message || "") && regle(residu, "K15")[0]?.statut === "PASS" && existsSync(join(instM, "s-parc"))
+              && !regle(residu, "K2").some((f) => f.statut === "FAIL")]);
+    const outil = join(racineM, "factory-marketplace", "outils"); mkdirSync(outil, { recursive: true });
+    writeFileSync(join(outil, "construire.mjs"), "process.exit(process.argv.includes('--check') ? 1 : 0);\n");
+    const enRetard = juger(racineM, instM, false, false, join(bm, "config", "hooks"), join(bm, "config", "settings.json"), { racine: join(bm, "config"), variable: null });
+    cas.push(["ROUGE marketplace — une marketplace en retard sur les forges est un K14 FAIL, avec son remède",
+              regle(enRetard, "K14")[0]?.statut === "FAIL" && /construire\.mjs/.test(regle(enRetard, "K14")[0]?.message || "") && enRetard.verdict === "FAIL"]);
+    writeFileSync(join(outil, "construire.mjs"), "process.exit(0);\n");
+    const aJour = juger(racineM, instM, false, false, join(bm, "config", "hooks"), join(bm, "config", "settings.json"), { racine: join(bm, "config"), variable: null });
+    cas.push(["VERT marketplace — une marketplace à jour rend K14 PASS", regle(aJour, "K14")[0]?.statut === "PASS" && /à jour/.test(regle(aJour, "K14")[0]?.message || "")]);
+    rmSync(bm, { recursive: true, force: true });
+  }
+  MODELE = modeleAvant;
+
+  let bons = 0;
+  for (const [nom, tenu] of cas) {
+    console.log(`  [${tenu ? "OK    " : "ECHEC "}] ${nom}`);
+    if (tenu) bons += 1;
+  }
+  console.log(`Self-test oracle-skills : ${bons}/${cas.length}`);
+  return bons === cas.length ? 0 : 1;
+}
+
+/**
+ * TF-1133 (15/09/2026) — CRITÈRE « PARC ABSENT » de cet oracle : il n'y a AUCUNE installation à
+ * comparer. La racine de configuration est celle PAR DÉFAUT (aucune variable ne la désigne), aucun
+ * dossier d'installation n'est imposé, et elle n'existe pas : un runner hébergé, ou un poste sans
+ * Claude Code. Sur un clone frais avec les dépôts frères, l'oracle y rendait K1 FAIL sur chaque skill
+ * versionné — « jamais installé » là où rien ne peut l'être. Une racine DÉSIGNÉE et vide reste jugée :
+ * c'est le défaut du 09/09 que K10 existe pour attraper.
+ */
+function installationAbsente({ config, installesImpose, existe = existsSync }) {
+  return config.variable === null && !installesImpose && !existe(config.racine);
+}
+
+// ---- entrée -----------------------------------------------------------------------------------
+const args = process.argv.slice(2);
+if (args.includes("--modele")) MODELE = args[args.indexOf("--modele") + 1] === "copie" ? "copie" : "marketplace";
+if (args.includes("--self-test")) process.exit(selfTest());
+
+const lire = (drapeau, defaut) => {
+  const i = args.indexOf(drapeau);
+  return i >= 0 && args[i + 1] ? resolve(args[i + 1]) : defaut;
+};
+const racine = lire("--racine", racineForges());
+// TF-0995 : la racine de configuration se résout par lib-config-installee, qui lit d'abord
+// `CLAUDE_CONFIG_DIR` — la variable que le HARNAIS charge. Avant, ce défaut était `~/.claude`
+// écrit en dur : l'oracle jugeait un parc que la session ne lisait pas, et rendait PASS dessus.
+const config = racineConfigInstallee();
+const installes = lire("--installes", skillsInstalles().chemin);
+// Les hooks installés sont le frère du dossier des skills — déduit plutôt que redemandé, pour
+// qu'un `--installes` de test emmène ses hooks avec lui.
+const installes_hooks = lire("--installes-hooks", join(dirname(installes), "hooks"));
+// Le câblage installé est le frère des deux autres — même déduction.
+const settings_installe = lire("--settings-installe", join(dirname(installes), "settings.json"));
+if (installationAbsente({ config, installesImpose: args.includes("--installes") || skillsInstalles().variable === "FORGE_SKILLS_INSTALLES" })) {
+  const motif = `aucune installation à comparer : la racine de configuration par défaut ${config.racine} n'existe pas et aucune variable `
+    + "ne la désigne (runner hébergé, ou poste sans Claude Code) — K1 à K11 ne sont pas jugés ; une racine désignée et vide, elle, l'est (K10, TF-1133)";
+  process.stdout.write(JSON.stringify({ oracle: ORACLE, version: VERSION, racine, racine_config: config.racine, config_decidee_par: config.decidee_par,
+    installes, verdict: "SKIP", motif, findings: [], non_juge: NON_JUGE }, null, 1) + "\n");
+  process.exit(2);
+}
+const appliquer = args.includes("--appliquer");
+const purger = args.includes("--purger");
+const sansConsommateurs = args.includes("--sans-consommateurs");
+SAUF_SOURCES = lire("--sauf-sources", "").split(",").map((s) => s.trim()).filter(Boolean).map((s) => cleJournal(s));
+
+// ---- TF-0965 · CE QUE LA PROPAGATION CASSE CHEZ CEUX QUI CONSOMMENT LA COPIE INSTALLÉE ----------
+//
+// La dérive versionné↔installé était mesurée sur le PILOT ; le bruit d'une règle neuve tombait chez
+// les dépôts qui CONSOMMENT la copie sans en être propriétaires — forge-tests le 08/09 puis le
+// 14/09, forge-design le 14/09. Trois fois la même mécanique : la cause vit hors du dépôt, elle
+// change sous lui, et sa suite rouge est imputée à un état préexistant.
+//
+// LE GESTE, calqué sur `todo\journaliser.mjs` : relever les consommateurs des skills qu'on S'APPRÊTE
+// à toucher (d'où la passe à blanc ci-dessous — les savoir APRÈS coup ne permet plus de mesurer
+// l'avant), jouer leur vérification native AVANT, propager, la rejouer APRÈS, et NOMMER tout dépôt
+// qui passait et ne passe plus. Jamais de retour arrière, jamais de blocage : elle signale (R-29).
+//
+// `--sans-consommateurs` existe parce que ces suites sont longues (jusqu'à vingt minutes chez
+// forge-tests) et que `bootstrap.mjs --pull` tourne à chaque ouverture de session. Le mode est
+// TOUJOURS déclaré dans la sortie : un raccourci silencieux se lirait comme une mesure verte.
+const propagation = () => juger(racine, installes, appliquer, purger, installes_hooks, settings_installe, config);
+// TF-2048 (02/11/2026) — la trace d'un rouge neuf de consommateur, que `hook-ouverture.mjs` relit (voir consommateurs-skills.mjs).
+const cheminTraceRouges = traceRouges(installes);
+const noterTrace = (evts) => { const t = ecrireTrace(cheminTraceRouges, evts); return { chemin: cheminTraceRouges, ecrit: t.ecrit, ...(t.erreur ? { erreur: t.erreur } : {}) }; };
+// --rejouer-consommateurs : rejoue la vérification native des SEULS dépôts en rouge ouvert, sans rien propager, et lève la trace de ceux qui
+// passent. C'est le remède que l'ouverture nomme une fois le consommateur (ou la règle neuve) corrigé. Exit 0 rien ne reste ouvert, 1 un rouge persiste.
+if (args.includes("--rejouer-consommateurs")) {
+  const ouverts = rougesOuverts(cheminTraceRouges).ouverts;
+  const table = lireTable();
+  const resultats = ouverts.map((e) => {
+    const entree = (table.consommateurs || []).find((c) => c.depot === e.depot);
+    return entree ? jouerConsommateur(entree, racine) : { depot: e.depot, commande: e.commande, statut: "SKIP", motif: "dépôt absent de la table des consommateurs — non rejoué" };
+  });
+  const ts = new Date().toISOString();
+  const trace = noterTrace(resultats.filter((r) => r.statut === "PASS").map((r) => ({ ts, evenement: "leve", depot: r.depot, commande: r.commande || null })));
+  const restent = resultats.filter((r) => r.statut !== "PASS").map((r) => ({ depot: r.depot, statut: r.statut, motif: r.motif || null, extrait: r.extrait || null }));
+  process.stdout.write(JSON.stringify({ oracle: ORACLE, version: VERSION, mode: "--rejouer-consommateurs", racine, ouverts: ouverts.map((e) => e.depot),
+    leves: resultats.filter((r) => r.statut === "PASS").map((r) => r.depot), restent, trace }, null, 1) + "\n");
+  process.exit(restent.length ? 1 : 0);
+}
+// D-135 (a) du 02/11/2026 — le rejeu de TOUS les dépôts de la table, que l'ouverture du pilot lance une fois par semaine en arrière-plan. La logique, le verrou
+// et l'état vivent dans `consommateurs-skills.mjs` (la table se lit comme partout : `FORGE_TABLE_CONSOMMATEURS` désigne une table de recette).
+if (args.includes("--rejouer-tous-consommateurs")) {
+  const r = executerRejeuHebdomadaire({ trace: cheminTraceRouges, racine, table: lireTable() });
+  process.stdout.write(JSON.stringify({ oracle: ORACLE, version: VERSION, mode: "--rejouer-tous-consommateurs", racine, ...r }, null, 1) + "\n");
+  process.exit(r.statut === "deja-en-cours" ? 2 : r.depots?.some((d) => d.statut === "FAIL") ? 1 : 0);
+}
+let consommateurs;
+let rapport;
+if (appliquer && !sansConsommateurs) {
+  const aBlanc = juger(racine, installes, false, false, installes_hooks, settings_installe, config);
+  const skillsTouches = [...new Set((aBlanc.findings || [])
+    .filter((f) => f.statut === "FAIL" && (f.regle === "K1" || f.regle === "K2")).map((f) => f.ou).filter(Boolean))];
+  const enc = encadrer({ skills: skillsTouches, racine, propager: propagation });
+  rapport = enc.resultat;
+  const trace = noterTrace(evenementsDePropagation(enc, { ouverts: rougesOuverts(cheminTraceRouges).ouverts.map((e) => e.depot) }));
+  consommateurs = { mode: "mesuré", mesure_le: enc.mesure_le, skills_touches: enc.skills_touches,
+    depots: enc.consommateurs, motif: enc.motif, avant: enc.avant, apres: enc.apres, findings: enc.findings, trace };
+} else {
+  rapport = propagation();
+  if (appliquer) {
+    consommateurs = { mode: "--sans-consommateurs", depots: [], findings: [], trace: noterTrace(evenementNonRejoue(rapport.applique)),
+      motif: "les dépôts qui CONSOMMENT la copie installée n'ont PAS été rejoués autour de cette propagation "
+        + "— une règle neuve du socle peut avoir rendu rouge une suite verte sans que rien ne le dise (TF-0965). "
+        + `Pour le savoir : node oracles/oracle-skills.mjs --racine "${racine}" --appliquer` };
+  }
+}
+const { verdict, findings, motif, applique, purge } = rapport;
+// Les constats des consommateurs rejoignent le corps du verdict : un constat rangé dans un bloc à
+// part n'est lu par personne (classe constat-non-bloquant-jamais-lu, D-6 (a) du 14/09).
+const findingsRendus = [...findings, ...(consommateurs?.findings || [])];
+process.stdout.write(JSON.stringify(
+  { oracle: ORACLE, version: VERSION, racine, racine_config: config.racine, config_decidee_par: config.decidee_par,
+    installes, installes_hooks, settings_installe, verdict, motif, applique, purge, consommateurs,
+    findings: findingsRendus, non_juge: NON_JUGE },
+  null, 1) + "\n");
+// Un DÉFAUT chez un consommateur sort en 1, BRUYAMMENT — la propagation, elle, a déjà eu lieu et
+// n'est ni annulée ni retenue : ce code de retour dit qu'il y a quelque chose à lire, pas qu'il
+// faut recommencer.
+const defautConsommateur = (consommateurs?.findings || []).some((f) => f.statut === "FAIL");
+process.exit(verdict === "FAIL" || defautConsommateur ? 1 : verdict === "SKIP" ? 2 : 0);

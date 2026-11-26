@@ -1,0 +1,456 @@
+#!/usr/bin/env node
+/**
+ * oracle-enclenchement.test.mjs — recette à DOUBLE SENS du juge d'enclenchement (TF-1319).
+ *
+ * Le juge rend VERT quand chaque oracle découvert d'une forge mobilisée a son verdict au ledger du
+ * run ; ses fixtures rouges prouvent qu'il sait REFUSER, par la règle nommée (EN1), une promesse
+ * non servie — y compris quand elle est citée dans une entrée composite ou consignée sans verdict.
+ * Le sens vert porte autant : un juge qui accuserait un SKIP consigné, ou un verdict servi sans
+ * promesse, serait contourné dans la semaine — l'étude du 19/08 le nomme comme le risque propre
+ * d'un juge des juges.
+ *
+ * TOUT SE JOUE SUR UN PARC JETABLE : de fausses forges, chacune avec sa découverte au contrat
+ * `factory/decouverte-oracles@1`, qui lit son propre dossier. Le mécanisme de confrontation, lui,
+ * n'est PAS simulé : c'est le vrai `forge_tests/confrontation.py`, COPIÉ depuis le parc du poste —
+ * un mécanisme factice ne prouverait que lui-même. Sans forge-tests clonée ni Python, la recette ne
+ * peut rien prouver ici : elle le dit en une ligne sans compte, et le harnais la nomme au lieu de
+ * la compter.
+ *
+ * Joué par `oracles\self-tests.mjs` (I1 via la table partagée, I2 comme tout `*.test.mjs`).
+ */
+import { spawnSync } from "node:child_process";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { juger, nomNormalise, forgeCanonique, interpretePython, MECANISME, NON_JUGE } from "./oracle-enclenchement.mjs";
+
+const ICI = dirname(fileURLToPath(import.meta.url));
+const PARC_REEL = process.env.FORGE_ROOT ? resolve(process.env.FORGE_ROOT) : resolve(ICI, "..", "..");
+const MECANISME_REEL = join(PARC_REEL, MECANISME);
+
+if (!existsSync(MECANISME_REEL) || !interpretePython()) {
+  // TF-1477 — la forme comptée (TF-1434), lue par `nonJouesDe` : sans elle, le cliquet du harnais
+  // (oracles\self-tests.mjs) range cette recette parmi les « sans compte lisible » au lieu de
+  // compter ses 38 cas comme déclarés non joués sur ce poste.
+  console.log(`  [NON JOUÉ] 38 cas —${existsSync(MECANISME_REEL)
+    ? "aucun interpréteur Python"
+    : `forge-tests absente (${MECANISME_REEL})`} : le mécanisme de confrontation réel n'est pas joignable`);
+  process.exit(0);
+}
+
+let pass = 0, fail = 0;
+const check = (nom, fn) => {
+  try { fn(); console.log(`  [PASS] ${nom}`); pass++; }
+  catch (e) { console.error(`  [FAIL] ${nom} — ${e.message}`); fail++; }
+};
+
+// ---- le parc jetable ------------------------------------------------------------------------------
+// La fausse découverte LIT SON DOSSIER, comme les vraies : aucune liste de noms dans cette recette.
+const FAUSSE_DECOUVERTE = [
+  'import { existsSync, readdirSync } from "node:fs";',
+  'import { basename, dirname, join } from "node:path";',
+  'import { fileURLToPath } from "node:url";',
+  'const racine = join(dirname(fileURLToPath(import.meta.url)), "..");',
+  'const d = join(racine, "oracles");',
+  'const oracles = existsSync(d) ? readdirSync(d).filter((f) => /^oracle-[a-z0-9-]+[.]mjs$/.test(f)).sort()',
+  '  .map((f) => ({ nom: f.slice(0, -4), chemin: "oracles/" + f })) : [];',
+  // TF-1841 : une forge-boîte à outils range ses oracles sous ses skills, comme forge-agents.
+  'const sk = join(racine, ".claude", "skills");',
+  'if (existsSync(sk)) for (const s of readdirSync(sk).sort()) { const sc = join(sk, s, "scripts");',
+  '  if (existsSync(sc)) for (const f of readdirSync(sc).filter((f) => /^oracle-[a-z0-9-]+[.]mjs$/.test(f)).sort())',
+  '    oracles.push({ nom: f.slice(0, -4), chemin: ".claude/skills/" + s + "/scripts/" + f }); }',
+  'console.log(JSON.stringify({ contrat: "factory/decouverte-oracles@1", forge: basename(racine), racine, regle: "fixture", oracles, non_juge: [] }));',
+].join("\n");
+
+const T = mkdtempSync(join(tmpdir(), "enclenchement-"));
+let n = 0;
+const poser = (p, contenu = "// fixture\n") => { mkdirSync(dirname(p), { recursive: true }); writeFileSync(p, contenu, "utf8"); };
+
+/** Un parc : `forges` = { nom: [oracles] | "sans-entree" | "casse" }, plus forge-tests et son mécanisme réel. */
+function parc(forges, { avecMecanisme = true } = {}) {
+  const racine = join(T, `parc${++n}`);
+  mkdirSync(racine, { recursive: true });
+  if (avecMecanisme) {
+    const dest = join(racine, MECANISME);
+    mkdirSync(dirname(dest), { recursive: true });
+    copyFileSync(MECANISME_REEL, dest);
+  }
+  for (const [nom, def] of Object.entries(forges)) {
+    const depot = join(racine, nom);
+    mkdirSync(depot, { recursive: true });
+    if (def === "sans-entree") { poser(join(depot, "README.md"), "# forge sans oracle\n"); continue; }
+    if (def === "casse") { poser(join(depot, "oracles", "decouvrir-oracles.mjs"), 'console.log("ceci n est pas du JSON");\n'); continue; }
+    poser(join(depot, "oracles", "decouvrir-oracles.mjs"), FAUSSE_DECOUVERTE);
+    // TF-1841 : `{ racine: [oracles], skills: { skill: [oracles] } }` pour une forge-boîte à outils.
+    const { racine: aLaRacine = [], skills = {} } = Array.isArray(def) ? { racine: def } : def;
+    for (const o of aLaRacine) poser(join(depot, "oracles", `${o}.mjs`));
+    for (const [s, os] of Object.entries(skills)) {
+      poser(join(depot, ".claude", "skills", s, "SKILL.md"), `# ${s}\n`);
+      for (const o of os) poser(join(depot, ".claude", "skills", s, "scripts", `${o}.mjs`));
+    }
+  }
+  return racine;
+}
+
+/** Un ledger : seq et ts calculés ; le premier élément est le run_open. */
+function ledger(racine, entrees) {
+  const p = join(racine, `ledger-${++n}.jsonl`);
+  const lignes = entrees.map((e, i) => JSON.stringify({ seq: i + 1, ts: `2026-09-23T10:${String(i).padStart(2, "0")}:00Z`, ...e }));
+  writeFileSync(p, lignes.join("\n") + "\n", "utf8");
+  return p;
+}
+const ouvrir = (extra = {}) => ({ type: "run_open", run: "r1", schema_ledger: "1.0", ...extra });
+
+/**
+ * Une forge VERSIONNÉE : un premier état avec oracle-h1, un second qui ajoute oracle-h2. C'est la
+ * seule façon de rejouer le défaut mesuré le 23/09 sur un ledger réel — un run réclamé d'un oracle
+ * né APRÈS lui — et c'est la version consignée au `run_open` qui doit le trancher, pas le disque.
+ */
+function forgeVersionnee(racine) {
+  const depot = join(racine, "factory-forge-histoire");
+  const git = (...a) => {
+    const r = spawnSync("git", ["-C", depot, ...a], { encoding: "utf8" });
+    if (r.status !== 0) throw new Error(`git ${a.join(" ")} : ${r.stderr || r.error}`);
+    return r.stdout.trim();
+  };
+  poser(join(depot, "oracles", "decouvrir-oracles.mjs"), FAUSSE_DECOUVERTE);
+  poser(join(depot, "oracles", "oracle-h1.mjs"));
+  git("init", "-q");
+  git("config", "user.email", "recette@local");
+  git("config", "user.name", "recette");
+  git("add", "-A");
+  git("commit", "-q", "-m", "avant");
+  const avant = git("rev-parse", "--short", "HEAD");
+  poser(join(depot, "oracles", "oracle-h2.mjs"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "apres");
+  return { avant, apres: git("rev-parse", "--short", "HEAD") };
+}
+const v = (oracle, verdict = "PASS") => ({ type: "oracles_verdict", oracle, verdict, cible: "x" });
+const clore = { type: "run_close", resume: "fin" };
+const en1 = (r, forge) => r.findings.find((f) => f.regle === "EN1" && f.forge === forge);
+const cli = (args) => {
+  const r = spawnSync(process.execPath, [join(ICI, "oracle-enclenchement.mjs"), ...args], { encoding: "utf8" });
+  let j = null;
+  try { j = JSON.parse(r.stdout); } catch { /* illisible : les cas le disent */ }
+  return { code: r.status, j };
+};
+
+// Le parc de référence : deux forges jugeables, une sans entrée, une cassée, une sans oracle, le pilot.
+const P = parc({
+  "factory-forge-alpha": ["oracle-a1", "oracle-a2"],
+  "factory-forge-beta": ["oracle-b1"],
+  "factory-forge-gamma": "sans-entree",
+  "factory-forge-casse": "casse",
+  "factory-forge-vide": [],
+  "factory-forge-jumelle": ["oracle-a1"],
+  "factory-pilot": ["oracle-p1"],
+  // TF-1841 : une forge-boîte à outils, sur le modèle de forge-agents — un skill « journal » (l'outil
+  // qu'un run mobilise), un skill « controles » lourd, un skill sans oracle, un oracle hors skill.
+  "factory-forge-outils": { racine: ["oracle-o-cadre"], skills: { journal: ["oracle-journal"], controles: ["oracle-c1", "oracle-c2", "oracle-c3"], "sans-oracle": [] } },
+});
+const MOB = { forges_mobilisees: ["alpha", "beta (delta, --rendu)"] };
+
+try {
+  // ---- EN1, sens vert -----------------------------------------------------------------------------
+  check("VERT — chaque oracle découvert des forges mobilisées a son verdict : PASS, exit 0 (CLI, --racine)", () => {
+    const l = ledger(P, [ouvrir(MOB), v("oracle-a1"), v("oracle-a2", "FAIL"), v("oracle-b1"), clore]);
+    const r = cli([l, "--racine", P]);
+    if (r.code !== 0 || r.j?.verdict !== "PASS") throw new Error(`exit ${r.code}, verdict ${r.j?.verdict} — ${r.j?.motif || ""}`);
+    if (!["oracle", "verdict", "findings", "non_juge"].every((k) => k in r.j)) throw new Error("contrat de sortie incomplet");
+    if (r.j.oracle !== "oracle-enclenchement" || !r.j.non_juge.length) throw new Error("nom d'oracle ou non_juge absent");
+    for (const f of ["factory-forge-alpha", "factory-forge-beta"]) if (en1(r.j, f)?.statut !== "PASS") throw new Error(`EN1 ${f} ${en1(r.j, f)?.statut}`);
+  });
+
+  check("VERT — un verdict SKIP ou NA SERT la promesse : « a tourné sans pouvoir juger » n'est pas « n'a pas tourné »", () => {
+    const r = juger({ ledger: ledger(P, [ouvrir(MOB), v("oracle-a1", "SKIP"), v("oracle-a2", "NA"), v("oracle-b1", "PARTIEL"), clore]), racine: P });
+    if (r.verdict !== "PASS") throw new Error(`${r.verdict} — un non-jugement déclaré est accusé comme une absence`);
+  });
+
+  check("VERT — le nom se lit sans chemin, sans extension, sans casse, sans ses arguments", () => {
+    if (nomNormalise("oracles/oracle-a1.mjs --json") !== "oracle-a1") throw new Error(nomNormalise("oracles/oracle-a1.mjs --json"));
+    if (nomNormalise("C:\\x\\ORACLE-A2.MJS") !== "oracle-a2") throw new Error(nomNormalise("C:\\x\\ORACLE-A2.MJS"));
+    if (nomNormalise("oracle-conformite-projet (audit complet)") !== "oracle-conformite-projet") throw new Error("annotation non retirée");
+    const r = juger({ ledger: ledger(P, [ouvrir(MOB), v("oracles/oracle-a1.mjs --json"), v("ORACLE-A2.MJS"), v("oracle-b1 (relevé)"), clore]), racine: P });
+    if (r.verdict !== "PASS") throw new Error(r.verdict);
+  });
+
+  // ---- TF-1715 (15/10/2026) : une déclaration fausse de `forges_mobilisees` se rectifie PAR AJOUT ----
+  // Le fait : un run_open a déclaré à tort une forge mobilisée ; aucune entrée ne le rectifiait, et le
+  // run a dû passer `--forges` au juge. Rouge sur l'ancien code : la forge déclarée à tort reste exigée.
+  check("VERT TF-1715 — une `rectification_forges_mobilisees` postérieure remplace la liste du run_open, et le juge dit d'où il la tient", () => {
+    const r = juger({ ledger: ledger(P, [ouvrir({ forges_mobilisees: ["alpha", "beta"] }), v("oracle-a1"), v("oracle-a2"),
+      { type: "rectification_forges_mobilisees", forges_mobilisees: ["alpha"], cause: "beta déclarée à tort au run_open" }, clore]), racine: P });
+    if (r.verdict !== "PASS") throw new Error(`${r.verdict} — la forge retirée par rectification est encore exigée : ${JSON.stringify(en1(r, "factory-forge-beta"))}`);
+    if (en1(r, "factory-forge-beta")) throw new Error("la forge rectifiée est encore confrontée");
+    if (!/rectification_forges_mobilisees \(seq 4\)/.test(r.forges_mobilisees?.source || "")) throw new Error(`source non dite : ${r.forges_mobilisees?.source}`);
+  });
+  check("ROUGE TF-1715 — une rectification SANS cause ou à liste vide ne rectifie rien : la liste du run_open reste jugée, et c'est dit", () => {
+    for (const rect of [{ forges_mobilisees: ["alpha"] }, { forges_mobilisees: [], cause: "x" }]) {
+      const r = juger({ ledger: ledger(P, [ouvrir({ forges_mobilisees: ["alpha", "beta"] }), v("oracle-a1"), v("oracle-a2"),
+        { type: "rectification_forges_mobilisees", ...rect }, clore]), racine: P });
+      if (r.verdict !== "FAIL" || en1(r, "factory-forge-beta")?.statut !== "FAIL") throw new Error(`${r.verdict} — une rectification incomplète a éteint la promesse de beta`);
+      if (!r.non_juge.some((x) => /rectification_forges_mobilisees/.test(x) && /seq 4/.test(x))) throw new Error("la rectification ignorée n'est pas dite");
+    }
+  });
+  check("BORNE TF-1715 — `--forges` prime sur la rectification ; une rectification d'un AUTRE run ne compte pas", () => {
+    const l = ledger(P, [ouvrir({ forges_mobilisees: ["alpha"], run: "v1" }),
+      { type: "rectification_forges_mobilisees", forges_mobilisees: ["beta"], cause: "test" }, clore,
+      ouvrir({ forges_mobilisees: ["alpha"], run: "v2" }), v("oracle-a1"), v("oracle-a2"), clore]);
+    const r = juger({ ledger: l, racine: P });
+    if (r.verdict !== "PASS" || r.forges_mobilisees?.source !== "run_open.forges_mobilisees") throw new Error(`${r.verdict} ${r.forges_mobilisees?.source}`);
+    const o = juger({ ledger: l, racine: P, run: "v1", forges: "alpha" });
+    if (o.forges_mobilisees?.source !== "--forges") throw new Error(`--forges ne prime pas : ${o.forges_mobilisees?.source}`);
+  });
+
+  // ---- TF-1841 (17/10/2026) : une forge mobilisée comme OUTIL ne promet que la partie mobilisée ----
+  // Le fait : 7 refus sur 7 runs jugés, dont 5 sur une forge mobilisée sans aucun verdict ; forge-agents,
+  // mobilisée pour son seul journal, y promettait jusqu'à 48 oracles. Le run déclare ses parties.
+  const OUTIL = { forges_mobilisees: ["outils"] };
+  check("ROUGE TF-1841 — une forge-outil SANS partie déclarée promet TOUT : le run qui n'a servi que son outil est refusé", () => {
+    const r = juger({ ledger: ledger(P, [ouvrir(OUTIL), v("oracle-journal"), clore]), racine: P });
+    const f = en1(r, "factory-forge-outils");
+    if (r.verdict !== "FAIL" || JSON.stringify(f?.manquants) !== JSON.stringify(["oracle-c1", "oracle-c2", "oracle-c3", "oracle-o-cadre"])) throw new Error(`${r.verdict} ${JSON.stringify(f?.manquants)}`);
+    if (r.mesures.promesses["factory-forge-outils"] !== 5 || r.mesures.promesses_bornees) throw new Error(JSON.stringify(r.mesures));
+  });
+  check("VERT TF-1841 — `parties_mobilisees` borne la promesse au skill déclaré : PASS, exit 0 (CLI), et la borne est DITE", () => {
+    const l = ledger(P, [ouvrir({ ...OUTIL, parties_mobilisees: { outils: ["journal"] } }), v("oracle-journal"), clore]);
+    const r = cli([l, "--racine", P]);
+    if (r.code !== 0 || r.j?.verdict !== "PASS") throw new Error(`exit ${r.code} ${r.j?.verdict} ${JSON.stringify(en1(r.j || { findings: [] }, "factory-forge-outils"))}`);
+    if (r.j.mesures.promesses["factory-forge-outils"] !== 1) throw new Error(JSON.stringify(r.j.mesures));
+    const b = r.j.mesures.promesses_bornees?.["factory-forge-outils"];
+    if (b?.promis !== 1 || b?.decouverts !== 5 || b?.parties?.join() !== "journal") throw new Error(JSON.stringify(b));
+    if (!r.j.non_juge.some((x) => /promesse BORNÉE/.test(x) && /1 oracle\(s\) promis sur 5/.test(x))) throw new Error("la borne n'est pas dite");
+  });
+  check("ROUGE TF-1841 — la borne ne dispense pas la partie déclarée : son oracle non servi est réclamé", () => {
+    const r = juger({ ledger: ledger(P, [ouvrir({ ...OUTIL, parties_mobilisees: { "factory-forge-outils": ["journal", "controles"] } }), v("oracle-journal"), v("oracle-c1"), clore]), racine: P });
+    const f = en1(r, "factory-forge-outils");
+    if (r.verdict !== "FAIL" || JSON.stringify(f?.manquants) !== JSON.stringify(["oracle-c2", "oracle-c3"])) throw new Error(`${r.verdict} ${JSON.stringify(f?.manquants)}`);
+  });
+  check("COMPATIBILITÉ TF-1841 — une forge sans partie déclarée garde sa promesse entière, même si une autre forge en déclare", () => {
+    const r = juger({ ledger: ledger(P, [ouvrir({ forges_mobilisees: ["alpha", "outils"], parties_mobilisees: { outils: ["journal"] } }), v("oracle-a1"), v("oracle-journal"), clore]), racine: P });
+    if (r.verdict !== "FAIL" || JSON.stringify(en1(r, "factory-forge-alpha")?.manquants) !== JSON.stringify(["oracle-a2"])) throw new Error(`${r.verdict} ${JSON.stringify(en1(r, "factory-forge-alpha"))}`);
+    if (en1(r, "factory-forge-outils")?.statut !== "PASS") throw new Error("la forge bornée n'est pas jugée sur sa borne");
+    if (r.mesures.promesses_bornees?.["factory-forge-alpha"]) throw new Error("alpha bornée sans déclaration");
+  });
+  check("ROUGE TF-1841 — une partie INCONNUE (faute de frappe) ne borne RIEN : promesse entière, et c'est dit", () => {
+    const r = juger({ ledger: ledger(P, [ouvrir({ ...OUTIL, parties_mobilisees: { outils: ["jounral"] } }), v("oracle-journal"), clore]), racine: P });
+    if (r.verdict !== "FAIL" || en1(r, "factory-forge-outils")?.manquants?.length !== 4) throw new Error(`${r.verdict} — une faute de frappe a éteint la promesse`);
+    if (!r.non_juge.some((x) => /inconnue\(s\)/.test(x) && /jounral/.test(x) && /ENTIÈRE/.test(x))) throw new Error("la partie inconnue n'est pas dite");
+  });
+  check("SKIP TF-1841 — une partie réelle SANS oracle ne promet rien : SKIP motivé de la forge, jamais PASS", () => {
+    const r = juger({ ledger: ledger(P, [ouvrir({ ...OUTIL, parties_mobilisees: { outils: ["sans-oracle"] } }), v("oracle-journal"), clore]), racine: P });
+    const f = en1(r, "factory-forge-outils");
+    if (r.verdict !== "SKIP" || f?.statut !== "SKIP" || !/ne portent aucun oracle/.test(f.message)) throw new Error(`${r.verdict} ${f?.statut} ${f?.message}`);
+  });
+  check("VERT EN2 TF-1841 — un oracle servi HORS des parties déclarées est signalé (hors_parties), jamais accusé ni pris pour inconnu", () => {
+    const r = juger({ ledger: ledger(P, [ouvrir({ ...OUTIL, parties_mobilisees: { outils: ["journal"] } }), v("oracle-journal"), v("oracle-c2"), clore]), racine: P });
+    if (r.verdict !== "PASS") throw new Error(r.verdict);
+    const f = r.findings.find((x) => x.regle === "EN2" && x.hors_parties);
+    if (f?.statut !== "AVERTISSEMENT" || f.hors_parties.map((x) => x.nom).join() !== "oracle-c2") throw new Error(JSON.stringify(f));
+    if (r.findings.some((x) => (x.inconnus || []).some((i) => i.nom === "oracle-c2"))) throw new Error("rangé parmi les inconnus");
+  });
+  check("TF-1841 sources — une rectification porte ses parties ; `--parties` (CLI) prime ; une déclaration illisible est DITE et ne borne rien", () => {
+    const rect = juger({ ledger: ledger(P, [ouvrir({ ...OUTIL, parties_mobilisees: { outils: ["controles"] } }), v("oracle-journal"),
+      { type: "rectification_forges_mobilisees", forges_mobilisees: ["outils"], parties_mobilisees: { outils: ["journal"] }, cause: "le run n'a mobilisé que le journal" }, clore]), racine: P });
+    if (rect.verdict !== "PASS" || !/rectification_forges_mobilisees/.test(rect.forges_mobilisees.source_parties || "")) throw new Error(`${rect.verdict} ${rect.forges_mobilisees?.source_parties}`);
+    const l = ledger(P, [ouvrir(OUTIL), v("oracle-journal"), clore]);
+    const opt = cli([l, "--racine", P, "--parties", "outils:journal"]);
+    if (opt.code !== 0 || opt.j?.forges_mobilisees?.source_parties !== "--parties") throw new Error(`--parties : exit ${opt.code} ${opt.j?.forges_mobilisees?.source_parties}`);
+    const mal = juger({ ledger: ledger(P, [ouvrir({ ...OUTIL, parties_mobilisees: ["journal"] }), v("oracle-journal"), clore]), racine: P });
+    if (mal.verdict !== "FAIL" || !mal.non_juge.some((x) => /parties_mobilisees/.test(x) && /ENTIÈRE/.test(x))) throw new Error(`${mal.verdict} — déclaration illisible tue ou appliquée`);
+  });
+
+  // ---- EN1, sens rouge ----------------------------------------------------------------------------
+  check("ROUGE EN1 — une promesse non servie est un FAIL qui la NOMME, forge par forge, exit 1 (CLI)", () => {
+    const l = ledger(P, [ouvrir(MOB), v("oracle-a1"), v("oracle-b1"), clore]);
+    const r = cli([l, "--racine", P]);
+    if (r.code !== 1 || r.j?.verdict !== "FAIL") throw new Error(`exit ${r.code}, verdict ${r.j?.verdict}`);
+    const f = en1(r.j, "factory-forge-alpha");
+    if (f?.statut !== "FAIL" || JSON.stringify(f.manquants) !== JSON.stringify(["oracle-a2"])) throw new Error(JSON.stringify(f));
+    if (en1(r.j, "factory-forge-beta")?.statut !== "PASS") throw new Error("la forge servie est accusée avec l'autre");
+  });
+
+  check("ROUGE EN1 — un run qui n'a rien consigné n'a servi aucune promesse : toutes sont nommées", () => {
+    const r = juger({ ledger: ledger(P, [ouvrir({ forges_mobilisees: ["alpha"] }), clore]), racine: P });
+    if (r.verdict !== "FAIL" || JSON.stringify(en1(r, "factory-forge-alpha").manquants) !== JSON.stringify(["oracle-a1", "oracle-a2"])) throw new Error(`${r.verdict} ${JSON.stringify(en1(r, "factory-forge-alpha"))}`);
+  });
+
+  check("ROUGE EN1 — une entrée COMPOSITE ne sert que son premier nom, et le constat dit où l'autre est cité", () => {
+    const r = juger({ ledger: ledger(P, [ouvrir(MOB), v("oracle-a1 + oracle-a2 (lot)"), v("oracle-b1"), clore]), racine: P });
+    const f = en1(r, "factory-forge-alpha");
+    if (r.verdict !== "FAIL" || JSON.stringify(f.manquants) !== JSON.stringify(["oracle-a2"])) throw new Error(`${r.verdict} ${JSON.stringify(f?.manquants)}`);
+    if (!/seq 2/.test(f.message) || !f.cites_sans_etre_servis?.["oracle-a2"]) throw new Error("la citation n'est pas nommée : le lecteur ne voit pas la cause");
+  });
+
+  check("ROUGE EN1 — une entrée SANS verdict n'est pas créditée, et elle est dite (non canonique)", () => {
+    const r = juger({ ledger: ledger(P, [ouvrir(MOB), v("oracle-a1"), { type: "oracles_verdict", oracle: "oracle-a2" }, v("oracle-b1"), clore]), racine: P });
+    if (r.verdict !== "FAIL" || !/sans verdict/.test(en1(r, "factory-forge-alpha").message)) throw new Error(`${r.verdict} — ${en1(r, "factory-forge-alpha")?.message}`);
+    if (!r.non_juge.some((x) => /sans `oracle` ou sans `verdict`/.test(x) && /seq 3/.test(x))) throw new Error("l'entrée non canonique est tue");
+  });
+
+  check("ROUGE EN1 — le dernier run d'un ledger de version est jugé par défaut, `--run` en choisit un autre", () => {
+    const l = ledger(P, [ouvrir({ ...MOB, run: "v1" }), v("oracle-a1"), v("oracle-a2"), v("oracle-b1"), clore,
+      ouvrir({ ...MOB, run: "v2" }), v("oracle-a1"), v("oracle-b1"), clore]);
+    const dernier = juger({ ledger: l, racine: P });
+    if (dernier.verdict !== "FAIL" || dernier.run !== "v2") throw new Error(`${dernier.verdict} sur ${dernier.run}`);
+    if (!dernier.non_juge.some((x) => /v1/.test(x) && /--run/.test(x))) throw new Error("l'autre run du ledger n'est pas dit");
+    const premier = cli([l, "--racine", P, "--run", "v1"]);
+    if (premier.code !== 0 || premier.j?.run !== "v1") throw new Error(`--run v1 : exit ${premier.code}, run ${premier.j?.run}`);
+  });
+
+  // ---- la promesse se lit à la VERSION que le run a consignée (versions_forges, R-19) ------------
+  const H = forgeVersionnee(P);
+  const HIST = { forges_mobilisees: ["histoire"] };
+
+  check("VERT — un oracle NÉ APRÈS le run (absent de la version consignée) est SUSPENDU, jamais réclamé", () => {
+    const r = juger({ ledger: ledger(P, [ouvrir({ ...HIST, versions_forges: { "factory-forge-histoire": `v1.0.0-1-g${H.avant}` } }), v("oracle-h1"), clore]), racine: P });
+    const f = en1(r, "factory-forge-histoire");
+    if (r.verdict !== "PASS") throw new Error(`${r.verdict} — ${f?.message}`);
+    if (!/absent de factory-forge-histoire@/.test(f.suspendus?.["oracle-h2"] || "")) throw new Error(`suspension non dite : ${JSON.stringify(f.suspendus)}`);
+  });
+
+  check("ROUGE EN1 — le même oracle, PRÉSENT à la version consignée, est réclamé", () => {
+    const r = juger({ ledger: ledger(P, [ouvrir({ ...HIST, versions_forges: { "factory-forge-histoire": H.apres } }), v("oracle-h1"), clore]), racine: P });
+    if (r.verdict !== "FAIL" || JSON.stringify(en1(r, "factory-forge-histoire").manquants) !== JSON.stringify(["oracle-h2"])) throw new Error(`${r.verdict}`);
+  });
+
+  check("ROUGE EN1 — une version consignée INCONNUE du clone, ou aucune version : la promesse est celle d'aujourd'hui, et le risque est DIT", () => {
+    const inconnue = juger({ ledger: ledger(P, [ouvrir({ ...HIST, versions_forges: { "factory-forge-histoire": "0000000" } }), v("oracle-h1"), clore]), racine: P });
+    if (inconnue.verdict !== "FAIL" || !inconnue.non_juge.some((x) => /inconnue du clone/.test(x))) throw new Error(`${inconnue.verdict} — risque tu`);
+    const aucune = juger({ ledger: ledger(P, [ouvrir(HIST), v("oracle-h1"), clore]), racine: P });
+    if (aucune.verdict !== "FAIL" || !aucune.non_juge.some((x) => /aucune version consignée/.test(x))) throw new Error(`${aucune.verdict} — risque tu`);
+  });
+
+  // ---- EN2 : servi sans promesse, signalé jamais accusé -------------------------------------------
+  check("VERT EN2 — un verdict servi sans promesse ne fait JAMAIS échouer : hors mobilisation et inconnu sont SIGNALÉS", () => {
+    const r = juger({ ledger: ledger(P, [ouvrir({ forges_mobilisees: ["alpha"] }), v("oracle-a1"), v("oracle-a2"), v("oracle-b1"), v("oracle-p1"), v("pytest"), clore]), racine: P });
+    if (r.verdict !== "PASS") throw new Error(`${r.verdict} — l'asymétrie est rompue`);
+    const f = r.findings.find((x) => x.regle === "EN2" && x.statut === "AVERTISSEMENT");
+    if (f?.statut !== "AVERTISSEMENT") throw new Error(`EN2 ${f?.statut}`);
+    const hors = Object.fromEntries(f.hors_mobilisation.map((x) => [x.nom, x.depots.join("/")]));
+    if (hors["oracle-b1"] !== "factory-forge-beta") throw new Error(JSON.stringify(hors));
+    // TF-1444 (D-32 a, 28/09/2026) : l'oracle que SEUL le pilot découvre n'est plus « hors
+    // mobilisation » — il est le cadre du run, et les cas qui suivent le jouent dans ses deux sens.
+    if ("oracle-p1" in hors) throw new Error(`le cadre du pilot est encore signalé hors mobilisation : ${JSON.stringify(hors)}`);
+    if (JSON.stringify(f.inconnus.map((x) => x.nom)) !== JSON.stringify(["pytest"])) throw new Error(JSON.stringify(f.inconnus));
+    if (!r.non_juge.some((x) => /factory-forge-gamma/.test(x) && /inconnu/.test(x))) throw new Error("les dépôts sans découverte ne sont pas dits");
+  });
+
+  // ---- EN2 et le CADRE du pilot (TF-1444) : le pilot ne se déclare pas mobilisé ----------------------
+  // Le fait du 28/09 : chaque run de produit jouait la conformité, le contrôle du lot, l'étude
+  // d'opportunité et l'écriture, oracles du pilot, et EN2 les rangeait « hors mobilisation » à chaque run.
+  check("VERT TF-1444 — des oracles que SEUL le pilot découvre, pilot non déclaré : aucun avertissement, et le cadre est DIT", () => {
+    const r = juger({ ledger: ledger(P, [ouvrir({ forges_mobilisees: ["alpha"] }), v("oracle-a1"), v("oracle-a2"), v("oracle-p1"), clore]), racine: P });
+    if (r.verdict !== "PASS") throw new Error(r.verdict);
+    const avert = r.findings.filter((x) => x.regle === "EN2" && x.statut === "AVERTISSEMENT");
+    if (avert.length) throw new Error(`le cadre du pilot fait encore avertir : ${avert.map((x) => x.message).join(" | ")}`);
+    const cadre = r.findings.find((x) => x.regle === "EN2" && x.statut === "SANS_OBJET");
+    if (JSON.stringify(cadre?.cadre_pilot?.map((x) => x.nom)) !== JSON.stringify(["oracle-p1"]) || !/forges_mobilisees/.test(cadre.message)) {
+      throw new Error(`le cadre n'est pas dit : ${JSON.stringify(cadre)}`);
+    }
+  });
+
+  check("ROUGE TF-1444 — le même run qui sert aussi l'oracle d'une FORGE non mobilisée avertit toujours, pour elle seule", () => {
+    const r = juger({ ledger: ledger(P, [ouvrir({ forges_mobilisees: ["alpha"] }), v("oracle-a1"), v("oracle-a2"), v("oracle-p1"), v("oracle-b1"), clore]), racine: P });
+    const f = r.findings.find((x) => x.regle === "EN2" && x.statut === "AVERTISSEMENT");
+    if (!f || JSON.stringify(f.hors_mobilisation.map((x) => x.nom)) !== JSON.stringify(["oracle-b1"]) || !/^1 nom\(s\) servi\(s\)/.test(f.message)) {
+      throw new Error(`une forge non mobilisée n'est plus signalée, ou le pilot l'est encore : ${JSON.stringify(f)}`);
+    }
+  });
+
+  check("ROUGE TF-1444 — un nom que le pilot ET une forge non mobilisée découvrent reste hors mobilisation", () => {
+    const Q = parc({ "factory-forge-alpha": ["oracle-a1"], "factory-forge-beta": ["oracle-commun"], "factory-pilot": ["oracle-p1", "oracle-commun"] });
+    const r = juger({ ledger: ledger(Q, [ouvrir({ forges_mobilisees: ["alpha"] }), v("oracle-a1"), v("oracle-p1"), v("oracle-commun"), clore]), racine: Q });
+    const f = r.findings.find((x) => x.regle === "EN2" && x.statut === "AVERTISSEMENT");
+    const hors = Object.fromEntries((f?.hors_mobilisation || []).map((x) => [x.nom, x.depots.join("/")]));
+    // Ordre alphabétique des dépôts (tri de `decouvrir`) : factory-forge-beta précède factory-pilot.
+    if (hors["oracle-commun"] !== "factory-forge-beta/factory-pilot" || "oracle-p1" in hors) throw new Error(JSON.stringify(hors));
+  });
+
+  check("TF-1444 borne — un pilot DÉCLARÉ malgré la règle est confronté comme une forge (EN1), et rien n'est rangé au cadre", () => {
+    const r = juger({ ledger: ledger(P, [ouvrir({ forges_mobilisees: ["alpha", "factory-pilot"] }), v("oracle-a1"), v("oracle-a2"), clore]), racine: P });
+    const f = en1(r, "factory-pilot");
+    if (r.verdict !== "FAIL" || JSON.stringify(f?.manquants) !== JSON.stringify(["oracle-p1"])) throw new Error(`${r.verdict} ${JSON.stringify(f)}`);
+    if (r.findings.some((x) => x.regle === "EN2" && x.statut === "SANS_OBJET")) throw new Error("un pilot déclaré a encore un cadre");
+  });
+
+  check("VERT — un nom découvert par deux forges mobilisées sert les deux, et l'ambiguïté est DITE", () => {
+    const r = juger({ ledger: ledger(P, [ouvrir({ forges_mobilisees: ["alpha", "jumelle"] }), v("oracle-a1"), v("oracle-a2"), clore]), racine: P });
+    if (r.verdict !== "PASS") throw new Error(r.verdict);
+    if (!r.non_juge.some((x) => /oracle-a1/.test(x) && /jumelle/.test(x) && /plusieurs forges/.test(x))) throw new Error("ambiguïté tue");
+  });
+
+  // ---- ce qui ne se juge pas : SKIP motivé, jamais PASS ----------------------------------------------
+  check("SKIP — un run sans `schema_ledger` précède le schéma : rien n'est jugé, exit 2 (CLI)", () => {
+    const l = ledger(P, [{ type: "run_open", run: "ancien", ...MOB }, v("oracle-a1"), clore]);
+    const r = cli([l, "--racine", P]);
+    if (r.code !== 2 || r.j?.verdict !== "SKIP" || !/schema_ledger/.test(r.j.motif)) throw new Error(`exit ${r.code} ${r.j?.verdict} ${r.j?.motif}`);
+  });
+
+  check("SKIP — forges mobilisées inconnues : ce juge ne devine pas, et `--forges` lève le doute", () => {
+    const l = ledger(P, [ouvrir(), v("oracle-a1"), v("oracle-a2"), clore]);
+    const r = juger({ ledger: l, racine: P });
+    if (r.verdict !== "SKIP" || !/forges mobilisées inconnues/.test(r.motif)) throw new Error(`${r.verdict} ${r.motif}`);
+    const avec = cli([l, "--racine", P, "--forges", "factory-forge-alpha"]);
+    if (avec.code !== 0 || avec.j?.forges_mobilisees?.source !== "--forges") throw new Error(`--forges : exit ${avec.code}`);
+  });
+
+  check("SKIP — `--forges` l'emporte sur le run_open, et une annotation après le nom est ignorée", () => {
+    if (forgeCanonique("beta (delta, --rendu)") !== "factory-forge-beta" || forgeCanonique("forge-ops") !== "factory-forge-ops") throw new Error("nom canonique faux");
+    const r = juger({ ledger: ledger(P, [ouvrir({ forges_mobilisees: ["beta"] }), v("oracle-a1"), v("oracle-a2"), clore]), forges: "alpha", racine: P });
+    if (r.verdict !== "PASS" || r.forges_mobilisees.forges.join() !== "factory-forge-alpha") throw new Error(`${r.verdict} ${r.forges_mobilisees?.forges}`);
+  });
+
+  check("SKIP — une forge non clonée sort en SKIP motivé, les autres sont jugées ; toutes absentes = SKIP global", () => {
+    const r = juger({ ledger: ledger(P, [ouvrir({ forges_mobilisees: ["alpha", "absente"] }), v("oracle-a1"), v("oracle-a2"), clore]), racine: P });
+    if (r.verdict !== "PASS") throw new Error(r.verdict);
+    const f = en1(r, "factory-forge-absente");
+    if (f?.statut !== "SKIP" || !/pas clonée/.test(f.message)) throw new Error(JSON.stringify(f));
+    if (!r.non_juge.some((x) => /factory-forge-absente/.test(x))) throw new Error("la forge non jugée n'est pas au non_juge");
+    const seule = juger({ ledger: ledger(P, [ouvrir({ forges_mobilisees: ["absente"] }), v("oracle-a1"), clore]), racine: P });
+    if (seule.verdict !== "SKIP" || !/aucune forge mobilisée n'a pu être jugée/.test(seule.motif)) throw new Error(`${seule.verdict} ${seule.motif}`);
+  });
+
+  check("SKIP — forge sans entrée de découverte, découverte cassée, forge sans oracle : jamais un PASS", () => {
+    for (const [forge, attendu] of [["gamma", /n'expose pas d'entrée de découverte/], ["casse", /illisible/], ["vide", /AUCUN élément comparable/]]) {
+      const r = juger({ ledger: ledger(P, [ouvrir({ forges_mobilisees: [forge] }), v("oracle-a1"), clore]), racine: P });
+      const f = en1(r, `factory-forge-${forge}`);
+      if (r.verdict !== "SKIP" || f?.statut !== "SKIP" || !attendu.test(f.message)) throw new Error(`${forge} : ${r.verdict} ${f?.statut} ${f?.message}`);
+    }
+  });
+
+  check("SKIP — un service ILLISIBLE (aucune entrée canonique) n'est pas un service vide : pas d'accusation", () => {
+    const r = juger({ ledger: ledger(P, [ouvrir({ forges_mobilisees: ["alpha"] }), { type: "oracles_verdict", oracles: ["oracle-a1", "oracle-a2"] }, clore]), racine: P });
+    if (r.verdict !== "SKIP" || !/ILLISIBLE/.test(en1(r, "factory-forge-alpha")?.message || "")) throw new Error(`${r.verdict} ${en1(r, "factory-forge-alpha")?.message}`);
+  });
+
+  check("SKIP — sans le mécanisme de forge-tests, le juge ne confronte rien et le DIT, exit 2", () => {
+    const sans = parc({ "factory-forge-alpha": ["oracle-a1"] }, { avecMecanisme: false });
+    const r = cli([ledger(sans, [ouvrir({ forges_mobilisees: ["alpha"] }), v("oracle-a1"), clore]), "--racine", sans]);
+    if (r.code !== 2 || !/mécanisme de confrontation introuvable/.test(r.j?.motif || "")) throw new Error(`exit ${r.code} ${r.j?.motif}`);
+  });
+
+  check("SKIP — un ledger absent est un SKIP motivé, pas une exception", () => {
+    const r = juger({ ledger: join(T, "absent.jsonl"), racine: P });
+    if (r.verdict !== "SKIP" || !/introuvable/.test(r.motif)) throw new Error(`${r.verdict} ${r.motif}`);
+  });
+
+  check("le run non clos est DIT au non_juge ; le run clos ne l'est pas", () => {
+    const ouvert = juger({ ledger: ledger(P, [ouvrir(MOB), v("oracle-a1"), v("oracle-a2"), v("oracle-b1")]), racine: P });
+    if (!ouvert.non_juge.some((x) => /pas clos/.test(x))) throw new Error("run ouvert non signalé");
+    const clos = juger({ ledger: ledger(P, [ouvrir(MOB), v("oracle-a1"), v("oracle-a2"), v("oracle-b1"), clore]), racine: P });
+    if (clos.non_juge.some((x) => /pas clos/.test(x))) throw new Error("run clos signalé ouvert");
+  });
+
+  check("le verdict PUBLIE ce qu'il ne juge pas : qualité des verdicts, applicabilité fine, forme du ledger", () => {
+    if (!Array.isArray(NON_JUGE) || NON_JUGE.length < 3) throw new Error("non_juge squelettique");
+    if (!NON_JUGE.some((x) => /QUALITÉ/.test(x)) || !NON_JUGE.some((x) => /applicabilité FINE/.test(x))) throw new Error("une borne de l'étude n'est pas déclarée");
+  });
+} finally {
+  rmSync(T, { recursive: true, force: true });
+}
+
+console.log(`\noracle-enclenchement : ${pass} PASS, ${fail} FAIL`);
+process.exit(fail ? 1 : 0);

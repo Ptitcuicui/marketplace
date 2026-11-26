@@ -1,0 +1,827 @@
+#!/usr/bin/env node
+/**
+ * anonymiser-entrant.mjs — retire les noms de CLIENTS et de PRODUITS de tout ce qui entre au
+ * registre, avant l'écriture.
+ *
+ * ============================================================================================
+ * POURQUOI CE MODULE EXISTE, ET POURQUOI IL EST DANS LA CHAÎNE PLUTÔT QU'À CÔTÉ
+ * ============================================================================================
+ *
+ * LE 27/08, dix dépôts publics ont dû être réécrits parce qu'ils portaient le nom d'un client :
+ * 115 fichiers, 648 occurrences, quatre livrables clients entiers. Le 28/08 au matin, cinq lots
+ * de retours attendaient dans la boîte — huit fichiers sur dix portaient encore ce nom. Ils ont
+ * été pseudonymisés À LA MAIN avant ingestion. À 09:47 le même jour, UN NOUVEAU LOT est arrivé,
+ * porteur du même nom.
+ *
+ * C'est la démonstration en trois actes qu'un geste manuel ne tient pas : le flux des retours est
+ * continu, et chaque lot qui arrive porte le nom du produit qui l'envoie. Tant que la
+ * substitution vit dans les doigts de celui qui ingère, elle sera oubliée le jour où il pense à
+ * autre chose — et ce jour-là, le nom repart dans un dépôt public. La loi transverse n° 1 le dit
+ * autrement : toute affordance est câblée ou n'existe pas.
+ *
+ * ============================================================================================
+ * DEUX RÉFÉRENTIELS, ET AUCUN NE VIT DANS UN DÉPÔT
+ * ============================================================================================
+ *
+ * Un contrôle qui embarquerait la liste des noms interdits PUBLIERAIT EXACTEMENT CE QU'IL
+ * PROTÈGE (loi n° 4 : une donnée volatile est une donnée, pas du code) :
+ *
+ *   · `<racine>/_noms-interdits.json`      — les CLIENTS, table figée, alimentée à la main ;
+ *   · `<racine>/_produits-pseudonymes.json` — les PRODUITS, table qui S'ÉTEND TOUTE SEULE : un
+ *     produit inconnu reçoit le prochain pseudonyme libre et l'association est écrite. Sans quoi
+ *     il faudrait déclarer chaque produit avant son premier lot, et le premier lot passerait.
+ *
+ * L'absence d'un référentiel ne se contourne pas en silence : `anonymiser()` REFUSE, elle ne
+ * laisse pas passer. Un anonymiseur qui ne peut pas anonymiser doit arrêter le convoi.
+ *
+ * ============================================================================================
+ * CE QU'IL NE FAIT PAS, ET C'EST DÉCLARÉ
+ * ============================================================================================
+ *
+ *   · il ne relit pas ce qui est DÉJÀ au registre — il garde la porte, il ne rattrape pas ;
+ *   · il ne voit que le TEXTE des champs qu'on lui donne ;
+ *   · un client ou un produit dont le nom n'apparaît nulle part dans les deux tables passe :
+ *     la table des produits s'étend à la découverte, celle des clients non.
+ *
+ * Usage comme module : import { anonymiser, pseudoProduit } from "./anonymiser-entrant.mjs";
+ * Usage en ligne de commande : node anonymiser-entrant.mjs --self-test
+ */
+import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { tmpdir } from "node:os";
+import { cheminsTables, pseudoDe, formesDe } from "../scripts/lib-confidentiel.mjs";
+import { PRODUITS_DE_L_ECOSYSTEME } from "../scripts/lib-parc.mjs";
+
+const ICI = dirname(fileURLToPath(import.meta.url));
+const RACINE = process.env.FORGE_ROOT || join(ICI, "..", "..");
+
+const CHEMIN_CLIENTS = () => cheminsTables(RACINE).clients; // canal confidentiel (D-28 a), env, ou ancien fichier libre
+const CHEMIN_PRODUITS = () => cheminsTables(RACINE).produits;
+
+// Un sigle court se cherche en MOT ENTIER : mesuré le 27/08, le sigle d'un opérateur télécom
+// inscrit comme un nom ordinaire attrapait `candidatsFreres` et `resFront`, deux identifiants de
+// code bien réels. La frontière exclut lettres, chiffres et souligné — un tiret ou un point EST
+// une frontière, ce qui couvre une forme composée du genre `COMPTA-XYZ` sans toucher un
+// identifiant de code qui contiendrait les mêmes lettres au milieu d'un mot.
+// LES EXEMPLES DE CE FICHIER SONT INVENTÉS, et c'est une règle : le 27/08, un oracle écrit
+// pour traquer les noms de clients a été refusé par lui-même parce que son propre commentaire
+// en citait un en exemple.
+// LA CASSE, et elle a coûté une passe entière (01/09/2026). Ce motif était sensible à la casse
+// (`"g"` seul) là où la PORTE de publication, elle, compare sans y être sensible. Résultat
+// mesuré sur le parc : un anonymiseur passé sur 187 fichiers laissait `20260814-tests-Fournisseur-A` —
+// le sigle en minuscules — et la porte le refusait juste après. Deux contrôles du même sujet
+// qui ne s'accordent pas sur la casse donnent le pire des deux mondes : le nettoyage se croit
+// fini, et le refus tombe à la publication, quand il coûte le plus cher à comprendre.
+// TF-1456 (campagne du 12/10/2026) — LES ACCENTS NE SONT PAS UNE FRONTIÈRE ET NE DISTINGUENT PAS DEUX
+// GRAPHIES D'UN MÊME NOM. Mesuré le 01/10 : un nom de produit écrit avec ses accents traversait
+// l'accueil, l'ingestion et le hook de commit, alors que la même forme sans accent était substituée.
+// La tolérance est dans l'EXPRESSION, pas dans le texte : replier le texte changerait ses longueurs
+// et décalerait toute substitution. Chaque lettre qui porte une forme accentuée accepte la lettre
+// nue, ses formes précomposées et la forme décomposée (lettre + diacritique combinant).
+const ACCENTS = { a: "àáâãäå", c: "ç", e: "èéêë", i: "ìíîï", n: "ñ", o: "òóôõö", u: "ùúûü", y: "ýÿ" };
+const echapperRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+export const plier = (s) => String(s).normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+const tolerantAccents = (mot) => [...String(mot)].map((c) => {
+  const base = plier(c).toLowerCase();
+  const formes = base.length === 1 ? ACCENTS[base] : undefined;
+  return formes ? `[${base}${formes}][\\u0300-\\u036f]*` : echapperRe(c);
+}).join("");
+const bordé = (mot) => new RegExp(`(?<![A-Za-z0-9_])${tolerantAccents(mot)}(?![A-Za-z0-9_])`, "gi");
+
+function lireClients() {
+  const p = CHEMIN_CLIENTS();
+  if (!existsSync(p)) return null;
+  const d = JSON.parse(readFileSync(p, "utf8"));
+  const table = [];
+  for (const n of d.noms || []) {
+    const maj = n.toUpperCase(), bas = n.toLowerCase();
+    const cap = n[0].toUpperCase() + n.slice(1).toLowerCase();
+    const cible = d.pseudonymes && d.pseudonymes[n];
+    if (!cible) continue;                       // sans pseudonyme déclaré, on ne devine pas
+    table.push([maj, cible.toUpperCase()], [cap, cible], [bas, cible.toLowerCase()]);
+  }
+  for (const i of d.identifiants || []) {
+    const cible = (d.pseudonymes || {})[i];
+    if (cible) table.push([i, cible]);
+  }
+  const sigles = [];
+  for (const g of d.sigles || []) {
+    const cible = (d.pseudonymes || {})[g];
+    if (cible) sigles.push([g, cible]);
+  }
+  return { table, sigles };
+}
+
+/**
+ * Les VARIANTES de graphie d'un nom de produit, en une expression (TF-0742) : mots de la clé
+ * séparés par rien, une espace, un tiret ou un souligné, en toute casse, bornés par des
+ * non-alphanumériques. `null` quand la clé n'a qu'un mot (rien à dériver, et un mot seul en
+ * toute casse mordrait sur de la prose) ou porte un point (graphie de domaine, prise telle quelle).
+ */
+export function variantes(nom, { clients = null } = {}) {
+  if (typeof nom !== "string" || nom.includes(".")) return null;
+  // TF-1456 : le POINT MÉDIAN (·) est un séparateur de graphie comme l'espace ou le tiret — un nom
+  // d'affichage « produit · client » traversait toutes les gardes parce que la table ne le dérivait pas.
+  const mots = nom.replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
+    .split(/[\s\-_·]+/).filter(Boolean);
+  if (mots.length < 2 || mots.join("").length < 8) return null;
+  const SEP = "[\\s\\-_·]*";
+  // TF-1456 : un mot de la clé qui est un NOM DE CLIENT s'accepte aussi sous son pseudonyme. Le texte
+  // peut avoir déjà passé par la table des clients : « produit · Client-A » doit encore être reconnu
+  // comme la clé « produit · <client> ». `clients` : Map(nom replié en minuscules → pseudonyme).
+  const segment = (m) => {
+    const pseudo = clients && clients.get(plier(m).toLowerCase());
+    const brut = tolerantAccents(m);
+    if (!pseudo) return brut;
+    return `(?:${brut}|${String(pseudo).split(/[\s\-_]+/).filter(Boolean).map(tolerantAccents).join(SEP)})`;
+  };
+  const corps = mots.map(segment).join(SEP);
+  // Le SOULIGNÉ est une frontière d'identifiant, pas une frontière de mot (TF-0927, 08/09) :
+  // écrites `[A-Za-z0-9]`, ces bornes laissaient `calc_<nom>_total` matcher, et la substitution
+  // coupait l'identifiant que la garde du dessous venait de refuser de couper. Deux gardes du
+  // même sujet qui ne s'accordent pas sur l'alphabet donnent le pire des deux mondes — la même
+  // leçon que la casse, au même endroit. `bordé` excluait déjà `_` ; celle-ci ne le faisait pas.
+  return new RegExp(`(?<![A-Za-z0-9_])${corps}(?![A-Za-z0-9_])`, "gi");
+}
+
+/**
+ * TF-1839 (17/10/2026, décision D-16 (a)) — LA FORME COLLÉE d'un nom à séparateurs.
+ *
+ * Les variantes ci-dessus ne couvrent que les clés SANS point séparées par espace, tiret, souligné
+ * ou point médian. Une clé à point (graphie de domaine) ou séparée par une autre ponctuation
+ * (apostrophe, esperluette, barre oblique) voyait sa forme ÉCRITE COLLÉE traverser. Ici : accents
+ * repliés, tout non-alphanumérique retiré ; la forme n'existe que si la clé portait au moins un
+ * séparateur ET que la forme collée fait au moins SEUIL_COLLEE caractères (en dessous, une suite
+ * de lettres est un mot ordinaire). Insensible à la casse, bornée à gauche par un non-alphanumérique ;
+ * à droite des CHIFFRES peuvent suivre (suffixe de version d'un dossier, « <nom collé>2 » : les 30
+ * occurrences mesurées le 17/10 sont de cette forme) et sont AVALÉS avec le nom — « Produit-11 » + « 2 »
+ * se lirait « Produit-112 » ; une LETTRE après la forme collée l'écarte (mot voisin).
+ * Même règle que `formeColleeProduit()` de la porte `oracle-nom-client-publie` (forge-agents).
+ */
+export const SEUIL_COLLEE = 8;
+export function formeCollee(nom) {
+  if (typeof nom !== "string") return null;
+  const pliee = plier(nom);
+  const collee = pliee.replace(/[^A-Za-z0-9]+/g, "");
+  if (collee.length < SEUIL_COLLEE || collee.length === pliee.length) return null;
+  return new RegExp(`(?<![A-Za-z0-9_])${tolerantAccents(collee)}\\d*(?![A-Za-z0-9_])`, "gi");
+}
+
+function lireProduits() {
+  const p = CHEMIN_PRODUITS();
+  if (!existsSync(p)) return null;
+  return JSON.parse(readFileSync(p, "utf8"));
+}
+
+/** Un émetteur FORGE (ou le pilot, ou la file de tickets) : nom public, jamais pseudonymisé (TF-0807). */
+export const EST_EMETTEUR_FORGE = /^factory-(forge-[a-z0-9-]+|pilot|queue)$/i;
+
+/** Le processus courant est-il un banc de test ? Mesuré sur son point d'entrée, jamais deviné. */
+const EST_UN_BANC_ICI = () => /\.test\.mjs$/i.test(process.argv[1] || "") || process.argv.includes("--self-test");
+
+/**
+ * Le marqueur d'isolement, et POURQUOI c'est une variable d'environnement (TF-0957, 08/09/2026).
+ *
+ * La première garde ne regardait que le point d'entrée du processus COURANT. Elle attrapait donc
+ * un banc qui appelle `pseudoProduit` lui-même, et RATAIT le cas qui a causé l'incident : les cinq
+ * bancs fautifs lancent `ingerer-lot.mjs` en SOUS-PROCESSUS, où `process.argv[1]` n'est plus un
+ * fichier de banc. La garde rendait vert sur les cinq cas qu'elle devait attraper.
+ *
+ * On pouvait remonter l'arbre des processus pour demander « mon parent est-il un banc ? ». C'est
+ * fragile — l'arbre se lit mal, diffère selon les plateformes, et un lanceur intermédiaire le
+ * casse. Un marqueur d'environnement, lui, SE PROPAGE : Node transmet `process.env` à tout
+ * enfant, sans qu'aucun appelant ait à le savoir. Le banc le pose une fois, toute sa descendance
+ * l'hérite, et l'ingestion réelle — qui ne le pose jamais — n'est pas gênée.
+ *
+ * Il se pose donc TOUT SEUL dès qu'un banc démarre : c'est la loi n° 1, une affordance est câblée
+ * ou n'existe pas. Un banc qui devrait penser à poser sa propre garde ne la poserait pas, et c'est
+ * exactement ce que les cinq bancs fautifs prouvaient déjà pour leurs tables.
+ */
+export const MARQUEUR_BANC = "FORGE_CONTEXTE_BANC";
+if (EST_UN_BANC_ICI() && !process.env[MARQUEUR_BANC]) process.env[MARQUEUR_BANC] = "1";
+
+const estUnBanc = () => EST_UN_BANC_ICI() || process.env[MARQUEUR_BANC] === "1";
+
+/** Le chemin vise-t-il une table JETABLE, sous le répertoire temporaire du système ? */
+function sousRepertoireTemporaire(chemin) {
+  const norme = (x) => String(x).replaceAll("\\", "/").toLowerCase();
+  return norme(chemin).startsWith(norme(tmpdir()));
+}
+
+/**
+ * La garde, isolée pour être éprouvable SANS rien écrire nulle part : un banc de test qui vise une
+ * table hors du répertoire temporaire du système ne doit pas pouvoir l'étendre.
+ */
+export const extensionInterdite = (chemin) => estUnBanc() && !sousRepertoireTemporaire(chemin);
+
+/**
+ * TF-1431 (28/09/2026) — UN ESSAI SUR REGISTRE JETABLE N'ÉTEND PAS LA TABLE RÉELLE.
+ *
+ * Le fait : ce matin-là à 07:45:43Z, un essai d'ingestion joué avec `--registre` sur une COPIE du
+ * registre, sans `FORGE_PRODUITS_PSEUDO`, a inscrit un produit dans la table du canal. Le registre
+ * réel est resté intact, la table non. La garde de banc ci-dessus ne pouvait pas le voir : un essai
+ * lancé à la main n'a ni le point d'entrée d'un banc ni son marqueur.
+ *
+ * `ingerer-lot.mjs` pose donc ce marqueur dès que son registre n'est pas celui par défaut ; hérité
+ * comme celui des bancs, il vaut pour toute la descendance. Marqueur posé, l'écrivain n'étend que
+ * la table DÉSIGNÉE par `FORGE_PRODUITS_PSEUDO`. Il lit toujours la table du canal : un produit
+ * déjà connu passe, seule l'inscription d'un produit neuf est refusée, avant toute écriture.
+ */
+export const MARQUEUR_REGISTRE_JETABLE = "FORGE_REGISTRE_JETABLE";
+
+/**
+ * TF-1432 (28/09/2026) — le pseudonyme EXISTANT du dossier d'une racine déclarée, sinon `null`.
+ * Lecture seule : rien n'est inscrit. Deux passes, comme `scripts/lib-pseudonyme-produit.mjs` : une
+ * clé qui porte déjà le pseudonyme d'un client ne se rejoint qu'après la substitution du client. Le
+ * pseudonyme trouvé doit être une VALEUR de la table : un segment « Produit-NN » qu'elle ne connaît
+ * pas ne désigne aucun de ses produits.
+ */
+export function pseudonymeDeRacine(racine) {
+  if (typeof racine !== "string" || !racine.trim()) return null;
+  const dossier = racine.trim().replaceAll("\\", "/").replace(/\/+$/, "").split("/").pop();
+  const d = lireProduits();
+  if (!dossier || !d || !d.produits) return null;
+  let propre;
+  try { propre = anonymiser(anonymiser(dossier).texte).texte; } catch { return null; }
+  const m = String(propre).match(/Produit-\d{2,}/);
+  return m && Object.values(d.produits).map(pseudoDe).includes(m[0]) ? m[0] : null;
+}
+
+/**
+ * Pseudonyme STABLE d'un produit ; l'inscrit s'il est inconnu. `racine` : la racine que le lot
+ * déclare (`racine_produit`) — un nom neuf dont le dossier a déjà un pseudonyme le rejoint (TF-1432).
+ */
+export function pseudoProduit(nom, { racine = null } = {}) {
+  const p = CHEMIN_PRODUITS();
+  // UN BANC DE TEST N'ÉTEND JAMAIS LE RÉFÉRENTIEL RÉEL (08/09/2026), et c'est la TROISIÈME fois
+  // que la même classe se paie ici : la garde du dessus — « un nom de moins de 5 caractères ne
+  // s'inscrit pas » — est née le 02/09 d'une fixture non isolée qui avait inscrit son produit
+  // jouet. Elle traitait la LONGUEUR du nom, pas la CAUSE.
+  //
+  // Le fait, mesuré le 08/09 : les 46 bancs du dépôt ont été joués d'affilée avec les variables
+  // d'environnement pointant sur les tables RÉELLES du canal confidentiel. Cinq bancs ne posent
+  // pas leurs propres tables jetables ; leurs neuf produits jouets sont entrés dans la table de
+  // production, et la porte de publication a refusé le dépôt sur 81 constats — tous nés de noms
+  // inventés par des fixtures. Corriger les cinq bancs aurait été exact et insuffisant : le
+  // sixième banc écrit demain repartirait avec le même défaut (loi n° 1, toute affordance est
+  // câblée ou n'existe pas).
+  //
+  // La garde vit donc au point de PASSAGE, et elle ne devine rien : le point d'entrée du
+  // processus est-il un banc (`*.test.mjs`, ou `--self-test`), et la table visée est-elle hors du
+  // répertoire temporaire du système ? Les deux ensemble, et seulement les deux, valent refus —
+  // un banc correct pose ses tables sous `tmpdir()` et passe, l'ingestion réelle n'est pas un
+  // banc et passe aussi. Le refus est BRUYANT : un banc qui ne s'isole pas doit le savoir.
+  if (extensionInterdite(p)) {
+    throw new Error(
+      `un banc de test ne peut pas étendre le référentiel réel des produits (${p}) : poser des tables `
+      + "jetables sous le répertoire temporaire et les désigner par FORGE_NOMS_INTERDITS et "
+      + "FORGE_PRODUITS_PSEUDO, comme le font les autres bancs du dossier");
+  }
+  const d = lireProduits();
+  if (!d) return null;
+  d.produits = d.produits || {};
+  // UN NOM QUI EST DÉJÀ UN PSEUDONYME NE S'INSCRIT PAS (02/09/2026, payé en ingérant un lot
+  // anonymisé sur disque avant son ingestion) : « Produit-12 » lu dans le nom du lot était
+  // inconnu comme CLÉ, donc inscrit comme produit neuf → « Produit-13 », et l'anonymiseur a
+  // ensuite substitué Produit-12 par Produit-13 dans dix candidatures. Une table qui pseudonymise
+  // ses propres pseudonymes tourne en rond, et chaque tour décale tout le parc d'un cran.
+  if (Object.values(d.produits).map(pseudoDe).includes(nom) || /^Produit-\d{2,}$/.test(nom)) return nom;
+  // UNE FORGE N'EST PAS UN PRODUIT (TF-0807, 05/09/2026) : le gabarit des lots autorise une forge à
+  // remettre un lot au pilot, préfixé de son nom — et ce nom est PUBLIC (dépôt publié, cité par le
+  // noyau). Le 05/09, trois lots de forges ont inscrit « Produit-60 », « Produit-61 », « Produit-62 »
+  // à la table et rendu le registre illisible (« demandeur : Produit-60 » pour un constat de la forge
+  // de développement). Un émetteur forge garde son nom et n'entre jamais à la table.
+  if (EST_EMETTEUR_FORGE.test(nom)) return nom;
+  // UN PRODUIT PRIVÉ DE L'ÉCOSYSTÈME N'EST PAS UN NOM À CACHER (TF-1505, 01/10/2026). D-5 (a) du 17/09
+  // a déclaré `factory-marketing` nom public, et la seule liste qui le disait, `PRODUITS_DE_L_ECOSYSTEME`,
+  // n'était lue que par les balayages du parc : mesuré sur une copie jetable de la table, cet écrivain
+  // l'aurait réinscrit sous Produit-79, et la porte de publication aurait rendu bloquante chacune de ses
+  // occurrences suivies. Règle humaine du 01/10, mot pour mot : « Les dépôts privés peuvent conserver
+  // des données de type nom. » La liste se lit donc ICI, au point de passage, comme les forges.
+  if (PRODUITS_DE_L_ECOSYSTEME.has(nom)) return nom;
+  // UN NOM COURT NE SE REFUSE PLUS (TF-1457, 28/09/2026) : « PROD », nom de fixture d'une recette
+  // non isolée, inscrit comme produit, substitué par INCLUSION réécrivait « PRODUCTION » en
+  // « Produit-13UCTION » (02/09) — le refus traitait alors la LONGUEUR comme si elle était la
+  // CAUSE. La cause réelle est la VOIE DE SUBSTITUTION : en dessous de `SEUIL_MOT`, `anonymiser()`
+  // n'emploie plus que la voie BORNÉE (`bordé`), jamais la voie littérale qui mord sur un mot plus
+  // long. Un nom d'UN seul caractère reste refusé : même borné, il mordrait sur des initiales et
+  // des sigles ordinaires de la prose, ce qu'aucune frontière ne protège.
+  if (nom.length < 2) { console.error(`[ANONYMISÉ] « ${nom} » n'est pas inscrit : un nom de produit fait au moins 2 caractères`); return null; }
+  if (!d.produits[nom]) {
+    // TF-1431 : un registre jetable n'étend que la table qu'on lui désigne — refus avant l'écriture.
+    if (process.env[MARQUEUR_REGISTRE_JETABLE] && !process.env.FORGE_PRODUITS_PSEUDO) {
+      throw new Error(
+        `un essai sur registre jetable (${process.env[MARQUEUR_REGISTRE_JETABLE]}) ne peut pas étendre la table réelle `
+        + `des produits (${p}) : poser des tables jetables et les désigner par FORGE_NOMS_INTERDITS et `
+        + "FORGE_PRODUITS_PSEUDO, ou ingérer dans le registre par défaut (TF-1431)");
+    }
+    // TF-1328 (26/09/2026) : l'écrivain pose la date d'inscription au bloc `depuis` (D-31 (a) du
+    // 08/09). Sans elle, la porte de publication juge toute l'histoire du nom SANS borne — la
+    // rétroactivité que la date supprimait : Produit-66 et Produit-67 en ont été privés. Le jour est
+    // LOCAL, comme les dates d'enregistrement auxquelles la porte le compare.
+    const j = new Date();
+    const jour = `${j.getFullYear()}-${String(j.getMonth() + 1).padStart(2, "0")}-${String(j.getDate()).padStart(2, "0")}`;
+    // TF-1432 (28/09/2026) — UN PRODUIT CONNU PAR SA RACINE NE REÇOIT PAS UN SECOND PSEUDONYME. Le
+    // même produit était Produit-73 sous la forme de son nom de dossier (27/09), puis Produit-76 sous
+    // celle de son préfixe de lot (28/09) : les règles qui comparent les lots d'un produit n'en
+    // voyaient plus aucun. Le lot déclarait sa racine, dont le dossier avait déjà son pseudonyme : le
+    // nom neuf en est une autre graphie, et il le rejoint. Le rattachement se DÉCLARE au bloc
+    // `rattachements`, que la règle K5 du canal (« un pseudonyme, une clé ») doit lire pour tolérer
+    // l'alias. Une table qui ne porte pas ce bloc n'en reçoit pas en silence : le pseudonyme neuf est
+    // alloué comme avant, et l'ingestion DIT le dédoublement.
+    const duDossier = racine ? pseudonymeDeRacine(racine) : null;
+    const rattachements = d.rattachements && typeof d.rattachements === "object" && !Array.isArray(d.rattachements) ? d.rattachements : null;
+    if (duDossier && rattachements) {
+      d.produits[nom] = duDossier;
+      rattachements[nom] = { pseudonyme: duDossier, depuis: jour, motif: "racine déclarée par le lot (racine_produit) : dossier déjà inscrit sous ce pseudonyme (TF-1432)" };
+      d.depuis = d.depuis && typeof d.depuis === "object" ? d.depuis : {};
+      d.depuis[nom] = jour;
+      d.date_derniere_extension = jour;
+      writeFileSync(p, JSON.stringify(d, null, 1), "utf8");
+      console.error(`[RATTACHÉ] un nom de produit neuf rejoint ${duDossier}, le pseudonyme du dossier de sa racine déclarée : aucun pseudonyme neuf (TF-1432)`);
+      return duDossier;
+    }
+    // TF-1329 (26/09/2026) : l'indice suit le plus grand déjà attribué ou RÉSERVÉ, jamais le NOMBRE
+    // de clés. Compter les clés ré-attribue un indice retiré sans réservation dès que la table porte
+    // moins de clés que d'indices : 61 et 62, pris le 05/09 par deux forges puis retirés (TF-0807),
+    // désignent aujourd'hui aussi deux produits.
+    // Une entrée objet (TF-2130) compte aussi : lue par `String(v)`, elle rendait NaN et son indice
+    // aurait été ré-attribué au produit suivant.
+    const indices = Object.values(d.produits).map((v) => Number(String(pseudoDe(v)).replace(/^Produit-/, ""))).filter((x) => Number.isInteger(x) && x > 0);
+    const n = (indices.length ? Math.max(...indices) : 0) + 1;
+    d.produits[nom] = `Produit-${String(n).padStart(2, "0")}`;
+    d.depuis = d.depuis && typeof d.depuis === "object" ? d.depuis : {};
+    d.depuis[nom] = jour;
+    d.date_derniere_extension = jour;
+    writeFileSync(p, JSON.stringify(d, null, 1), "utf8");
+  }
+  return pseudoDe(d.produits[nom]);
+}
+
+// Les caractères dont est fait un identifiant de code, dans à peu près tous les langages.
+const IDENT = /[A-Za-z0-9_]/;
+
+// TF-1457 (28/09/2026, campagne D-32 (a)) — LE SEUIL EN DESSOUS DUQUEL UN NOM NE PASSE PLUS PAR
+// LA VOIE LITTÉRALE (substituerHorsIdentifiant) : une sous-chaîne de moins de 5 caractères mord
+// trop souvent sur un mot plus long qui la contient (« PROD » dans « PRODUCTION »), et la garde de
+// cette voie contre les identifiants ne s'arme qu'en code (`code: true`) — en prose, rien ne
+// l'arrête. En dessous du seuil, seule la voie BORNÉE (`bordé`, `variantes`) agit : un nom court
+// s'inscrit désormais comme un MOT ENTIER plutôt que de ne pas s'inscrire du tout.
+const SEUIL_MOT = 5;
+
+/**
+ * Substitution LITTÉRALE d'un nom, occurrence par occurrence, qui REFUSE de couper un
+ * identifiant de code — et le dit (TF-0927).
+ *
+ * ============================================================================================
+ * LE FAIT, ET IL A COÛTÉ DIX-HUIT JOURS DE TESTS MUETS
+ * ============================================================================================
+ *
+ * Le 20/08, une passe de pseudonymisation a remplacé un nom de produit AU MILIEU d'un
+ * identifiant de fonction Python. Le pseudonyme porte un tiret (`Produit-07`, `Client-A`) ;
+ * le tiret n'est pas un caractère d'identifiant. Le module est devenu non compilable, la
+ * collecte de la suite de tests s'est arrêtée sur l'erreur d'import, zéro test a été joué —
+ * et rien ne l'a signalé pendant DIX-HUIT JOURS. La forge des tests a livré le garde-fou du
+ * SYMPTÔME (un module non collectable est un échec nommé, pas un silence) ; la CAUSE est ici.
+ *
+ * ============================================================================================
+ * POURQUOI REFUSER PLUTÔT QUE SUBSTITUER AUTREMENT
+ * ============================================================================================
+ *
+ * On pouvait dériver un pseudonyme sans tiret pour les contextes de code. Ç'aurait été deux
+ * pseudonymes pour un produit, donc deux vérités dans le registre, et la règle K5 du canal
+ * confidentiel dit l'inverse : un pseudonyme par produit. Surtout, un identifiant de code qui
+ * porte un nom de client est un défaut de nommage du CODE : il se renomme, avec ses appelants,
+ * par un développeur qui sait ce qu'il casse. Une substitution de texte ne sait pas cela.
+ *
+ * Le refus n'est donc pas une abstention : c'est le seul verdict exact. Il laisse le nom en
+ * place, l'inscrit dans `refuses`, et la porte de publication continuera de refuser le dépôt —
+ * ce qui rend le défaut visible AVANT la publication au lieu de le rafistoler en silence.
+ *
+ * La borne, dans l'autre sens : un remplacement collé dont le pseudonyme n'introduit AUCUN
+ * caractère étranger à un identifiant reste fait. Refuser là serait perdre des nettoyages
+ * légitimes sans rien protéger.
+ *
+ * ============================================================================================
+ * ET LE CONTEXTE, PARCE QUE HORS DU CODE LA MÊME GARDE DÉTRUIT AUTRE CHOSE
+ * ============================================================================================
+ *
+ * La garde ne s'arme que sur un texte DÉCLARÉ code par son appelant (`anonymiser(t, { code:
+ * true })`). Mesuré en la posant d'abord partout : `scripts/lib-pseudonyme-produit.mjs` résout
+ * le pseudonyme d'un produit en anonymisant son nom DEUX FOIS, et la table porte donc des clés
+ * déjà à moitié pseudonymisées, nées d'une substitution COLLÉE. Armée sur ces noms, la garde
+ * rendait un produit connu introuvable — un banc vert depuis le 03/09 est passé au rouge.
+ *
+ * Un nom de produit n'est pas un identifiant de code : le couper n'y casse aucune compilation.
+ * C'est bien le CONTEXTE qui discrimine, comme le demandait l'item, et il se déclare — il ne se
+ * devine pas depuis le texte.
+ */
+function substituerHorsIdentifiant(texte, nom, pseudo, refuses, code) {
+  if (!texte.includes(nom)) return { texte, fait: false };
+  const pseudoCasseUnIdent = code && [...String(pseudo)].some((c) => !IDENT.test(c));
+  let out = "", i = 0, fait = false;
+  for (;;) {
+    const j = texte.indexOf(nom, i);
+    if (j < 0) { out += texte.slice(i); break; }
+    const avant = j > 0 ? texte[j - 1] : "";
+    const apres = j + nom.length < texte.length ? texte[j + nom.length] : "";
+    const collé = (avant && IDENT.test(avant)) || (apres && IDENT.test(apres));
+    if (collé && pseudoCasseUnIdent) {
+      refuses.push({
+        nom_masqué: `${nom.length} caractère(s)`, pseudo,
+        // TF-0993 : la LIGNE, pour que ce qui a résisté se retrouve. Stable d'une substitution à
+        // l'autre : un pseudonyme ne porte jamais de fin de ligne.
+        ligne: texte.slice(0, j).split("\n").length,
+        motif: "l'occurrence est collée à un caractère d'identifiant et le pseudonyme en introduirait un "
+          + "étranger — substituer casserait le code ; l'identifiant se renomme à la main",
+        autour: texte.slice(Math.max(0, j - 24), j).replace(/\s+/g, " ")
+          + "⟦…⟧" + texte.slice(j + nom.length, j + nom.length + 24).replace(/\s+/g, " "),
+      });
+      out += texte.slice(i, j + nom.length);
+    } else { out += texte.slice(i, j) + pseudo; fait = true; }
+    i = j + nom.length;
+  }
+  return { texte: out, fait };
+}
+
+/**
+ * Anonymise un texte. Rend `{ texte, remplaces, refuses }`, ou lève si un référentiel manque —
+ * un anonymiseur qui ne peut pas anonymiser arrête le convoi, il ne laisse pas passer.
+ * `refuses` n'est jamais vide pour rien : chaque entrée est une occurrence LAISSÉE EN PLACE.
+ */
+export function anonymiser(texte, { code = false } = {}) {
+  if (typeof texte !== "string" || !texte) return { texte, remplaces: [], refuses: [] };
+  const clients = lireClients();
+  const produits = lireProduits();
+  if (!clients) throw new Error(`référentiel des clients introuvable (${CHEMIN_CLIENTS()}) — ` +
+    "l'ingestion s'arrête : anonymiser à moitié serait pire que ne pas anonymiser");
+  if (!produits) throw new Error(`référentiel des produits introuvable (${CHEMIN_PRODUITS()}) — ` +
+    "l'ingestion s'arrête : anonymiser à moitié serait pire que ne pas anonymiser");
+  const remplaces = [];
+  const refuses = [];
+  let out = texte;
+  // Les PRODUITS d'abord : leurs noms sont souvent plus longs et contiennent parfois un nom de
+  // client (`Produit-04`). Substituer le client en premier casserait la clé du produit.
+  // TF-0913 (08/09/2026) — LA CLÉ LA PLUS LONGUE D'ABORD, ET C'EST TOUT L'ÉCART.
+  //
+  // LE FAIT, mesuré deux fois le 08/09 sur des lots réels : la table portait « X » et
+  // « X_Reporting », deux produits distincts. `Object.entries` rend les clés dans l'ordre
+  // d'insertion ; la courte est arrivée la première, `out.split(nom).join(pseudo)` a coupé au
+  // milieu de la longue, et quinze fichiers ont été nommés et réécrits sous le pseudonyme du
+  // MAUVAIS produit. Le registre, lui, portait le bon : `ingerer-lot` résout le nom complet.
+  // Personne n'a rien écrit à la main, et l'outil affichait « [ANONYMISÉ] » à chaque passe.
+  //
+  // Le remède ne coûte qu'un tri : une clé qui en contient une autre passe AVANT elle, donc la
+  // courte ne trouve plus rien à couper. Il vaut aussi pour les clients ci-dessous, où le même
+  // recouvrement existe (un sigle contenu dans un nom).
+  const parLongueur = (a, b) => String(b[0]).length - String(a[0]).length;
+  // TF-1456 : nom de client replié (minuscules, sans accent) → pseudonyme, pour les variantes de clé.
+  const parNom = new Map();
+  for (const [de, vers] of clients.table) { const k = plier(de).toLowerCase(); if (!parNom.has(k)) parNom.set(k, vers); }
+  for (const [nom, entree] of Object.entries(produits.produits || {}).sort(parLongueur)) {
+    const pseudo = pseudoDe(entree);
+    if (!pseudo) throw new Error(`entrée de produit sans pseudonyme lisible dans ${CHEMIN_PRODUITS()} — `
+      + "l'ingestion s'arrête : anonymiser à moitié serait pire que ne pas anonymiser");
+    // TF-2130 : les graphies déclarées REMPLACENT la clé nue, chacune à la casse exacte et en mot
+    // entier — la frontière de la porte (`litteralProduit`), sans variante ni repli de casse : le
+    // même terme en minuscules est un mot courant, pas une mention.
+    const formes = formesDe(entree);
+    if (formes) {
+      for (const f of formes) {
+        const re = new RegExp(`(?<![A-Za-z0-9])${echapperRe(f)}(?![A-Za-z0-9])`, "g");
+        if (re.test(out)) { re.lastIndex = 0; out = out.replace(re, pseudo); remplaces.push(nom); }
+      }
+      continue;
+    }
+    // TF-1457 : en dessous de SEUIL_MOT, la voie littérale est SAUTÉE — elle mordrait sur un mot
+    // plus long qui contient le nom court, et sa garde contre les identifiants ne s'arme qu'en
+    // code. Le nom court n'est substitué que par les voies déjà bornées, plus bas (`variantes`,
+    // `bordé`) — jamais au milieu d'un mot.
+    if (nom.length >= SEUIL_MOT) {
+      const litt = substituerHorsIdentifiant(out, nom, pseudo, refuses, code);
+      if (litt.fait) { out = litt.texte; remplaces.push(nom); } else out = litt.texte;
+    }
+    // TF-0742 (02/09/2026) : UNE table qui n'énumère qu'une graphie ne protège que cette graphie.
+    // Mesuré le 01/09 : la clé concaténée était substituée, la forme ESPACÉE du même nom — écrite
+    // en toutes lettres dans le titre et le contenu — traversait, et deux occurrences sont entrées
+    // au registre suivi pendant que l'outil affichait « [ANONYMISÉ] ». Les variantes se DÉRIVENT
+    // donc de la clé : ses mots (frontières de casse, tirets, soulignés) peuvent être séparés par
+    // rien, une espace, un tiret ou un souligné, en toute casse. Une clé qui porte un point est une
+    // graphie de domaine et se prend telle quelle : la dériver attraperait des liens légitimes.
+    const re = variantes(nom, { clients: parNom });
+    if (re && re.test(out)) { out = out.replace(re, pseudo); remplaces.push(nom); }
+    // TF-1839 : la forme COLLÉE d'un nom à séparateurs (voir `formeCollee`).
+    const collee = formeCollee(nom);
+    if (collee && collee.test(out)) { collee.lastIndex = 0; out = out.replace(collee, pseudo); remplaces.push(nom); }
+    // TF-0826 (08/09/2026) — LA CASSE, POUR LES PRODUITS AUSSI, ET ELLE A DORMI SEPT JOURS.
+    //
+    // La ligne du dessus compare avec `includes`, donc À LA CASSE PRÈS. La table portait un nom
+    // de produit en capitale initiale ; treize fichiers suivis du dépôt PUBLIC du pilot en
+    // portaient la graphie minuscule — un nom de domaine, forme naturelle dans de la prose. Le
+    // module passait dessus à chaque exécution en rendant « 0 à réécrire », et la porte de
+    // publication ne rattrapait rien : elle ne connaît que la table des CLIENTS.
+    //
+    // Le commentaire de `bordé`, écrit le 01/09, dit DÉJÀ la leçon — « deux contrôles du même
+    // sujet qui ne s'accordent pas sur la casse donnent le pire des deux mondes » — mais elle
+    // n'avait été appliquée qu'aux sigles des clients. Une leçon rangée dans un commentaire
+    // n'est pas un correctif : elle vaut pour chaque site qui compare des noms.
+    //
+    // Bornée, parce qu'insensible à la casse SANS frontière, une clé courte mordrait sur de la
+    // prose ordinaire. Additive, parce qu'elle vient APRÈS la voie littérale : une occurrence
+    // que celle-ci attrapait au milieu d'un mot reste attrapée, rien ne se perd. Mesuré sur les
+    // 1367 fichiers suivis du pilot : 13 fichiers gagnés, 0 perdu, 0 clé nouvellement mordante.
+    const bord = bordé(nom);
+    if (bord.test(out)) { out = out.replace(bordé(nom), pseudo); remplaces.push(nom); }
+  }
+  for (const [de, vers] of [...clients.table].sort(parLongueur)) {
+    // Même garde pour les clients : c'est un nom de CLIENT qui a cassé le module Python le 20/08.
+    const litt = substituerHorsIdentifiant(out, de, vers, refuses, code);
+    out = litt.texte;
+    if (litt.fait) remplaces.push(de);
+  }
+  for (const [de, vers] of clients.sigles) {
+    const re = bordé(de);
+    if (re.test(out)) { out = out.replace(bordé(de), vers); remplaces.push(de); }
+  }
+  return { texte: out, remplaces: [...new Set(remplaces)], refuses };
+}
+
+/** Anonymise les champs texte d'une candidature, en place sur une copie. */
+export function anonymiserCandidature(c) {
+  const copie = { ...c };
+  const touches = [];
+  for (const champ of ["titre", "contenu", "demandeur", "source", "preuve_du_cout"]) {
+    if (typeof copie[champ] === "string") {
+      const { texte, remplaces } = anonymiser(copie[champ]);
+      copie[champ] = texte;
+      touches.push(...remplaces);
+    }
+  }
+  return { candidature: copie, remplaces: [...new Set(touches)] };
+}
+
+// ---- self-test : les DEUX sens, sur des tables jetables ------------------------------------
+//
+// LA GARDE D'IMPORT (01/09/2026), et elle a été payée pour être vue. Ce bloc se déclenchait sur
+// `process.argv[2] === "--self-test"` SEUL, sans vérifier que ce fichier est le point d'entrée.
+// Conséquence : tout module qui l'IMPORTE et qu'on lance avec `--self-test` voyait le banc de
+// l'anonymiseur s'exécuter à sa place, puis `process.exit` emporter la session avant que son
+// propre banc n'ait joué une seule ligne — un banc qui rend 4/4 verts pour un module qui n'a
+// rien été testé. C'est le pire état d'un contrôle : il rassure au lieu de juger.
+//
+// Le défaut était DÉJÀ NOMMÉ dans ce dossier — `todo\journaliser.mjs` porte la même garde et
+// écrit pourquoi : « un module dont l'import déclenche la ligne de commande n'est pas
+// importable ». La leçon existait, l'idiome existait, et ce fichier ne l'avait pas repris.
+if (process.argv[1] && fileURLToPath(import.meta.url).toLowerCase().replaceAll("\\", "/")
+    === process.argv[1].toLowerCase().replaceAll("\\", "/") && process.argv[2] === "--self-test") {
+  const { mkdtempSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const dir = mkdtempSync(join(tmpdir(), "anon-entrant-"));
+  const casse = [];
+  writeFileSync(join(dir, "_noms-interdits.json"), JSON.stringify({
+    noms: ["Zorglub"], identifiants: ["wks-99999999999999"], sigles: ["ZRG"],
+    pseudonymes: { Zorglub: "Client-A", "wks-99999999999999": "wks-00000000000000", ZRG: "Sigle-A" },
+  }), "utf8");
+  writeFileSync(join(dir, "_produits-pseudonymes.json"), JSON.stringify({
+    produits: { "CalculatriceZorglubZAP": "Produit-01", "Gribouille-ai.fr": "Produit-02", "Atelier.Boréal": "Produit-02", "Lune.Net": "Produit-02" },
+  }), "utf8");
+  process.env.FORGE_NOMS_INTERDITS = join(dir, "_noms-interdits.json");
+  process.env.FORGE_PRODUITS_PSEUDO = join(dir, "_produits-pseudonymes.json");
+
+  // 1) un texte porteur est nettoyé — client, identifiant, sigle et produit
+  const r1 = anonymiser("Lot de CalculatriceZorglubZAP pour Zorglub, espace wks-99999999999999, facture ZRG.");
+  if (/Zorglub|wks-99999999999999|\bZRG\b/.test(r1.texte)) casse.push("un texte porteur n'est pas nettoyé : " + r1.texte);
+  if (!r1.texte.includes("Produit-01")) casse.push("le nom de produit n'est pas remplacé par son pseudonyme");
+
+  // 2) SECOND SENS — un mot qui CONTIENT le sigle sans en être un ne doit pas bouger
+  const r2 = anonymiser("Les identifiants candidatsFreres et resFront ne sont pas des sigles.");
+  if (r2.texte !== "Les identifiants candidatsFreres et resFront ne sont pas des sigles.")
+    casse.push("le sigle mord sur de la prose ordinaire : " + r2.texte);
+
+  // 3) un produit INCONNU reçoit un pseudonyme stable, et le même au second appel
+  const p1 = pseudoProduit("un-produit-neuf");
+  const p2 = pseudoProduit("un-produit-neuf");
+  if (!p1 || p1 !== p2) casse.push(`le pseudonyme d'un produit n'est pas stable : ${p1} puis ${p2}`);
+  if (p1 === "Produit-01") casse.push("un produit neuf réutilise le pseudonyme d'un autre");
+
+  // 2 bis) TF-0742 — les VARIANTES de graphie d'un produit sont substituées : forme espacée en
+  //        toute casse, tirets, soulignés ; et le second sens : un mot seul de la clé ne bouge pas
+  const r2b = anonymiser("Le site Calculatrice zorglub zap, dit calculatrice-Zorglub-ZAP ou calculatrice_zorglub_zap, est en ligne.");
+  if (/calculatrice[\s\-_]*zorglub[\s\-_]*zap/i.test(r2b.texte)) casse.push("une graphie espacée, tiretée ou soulignée du produit traverse : " + r2b.texte);
+  if ((r2b.texte.match(/Produit-01/g) || []).length !== 3) casse.push("les trois graphies ne sont pas toutes remplacées par le pseudonyme : " + r2b.texte);
+  const r2c = anonymiser("Une calculatrice ordinaire et le mot ZAP seul ne sont pas des produits.");
+  if (r2c.texte.includes("Produit-01")) casse.push("un mot isolé de la clé est pris pour le produit : " + r2c.texte);
+  // (nom de domaine INVENTÉ : une clé réelle écrite ici serait réécrite par la passe d'anonymisation
+  //  — c'est arrivé le 02/09, et le banc s'est mis à tester autre chose que ce qu'il croyait)
+  if (variantes("Zorglub-ai.fr") !== null) casse.push("une clé de domaine (avec un point) se voit dériver des variantes — elle doit être prise telle quelle");
+
+  // 2 ter) TF-1839 (17/10/2026, D-16 (a)) — LA FORME COLLÉE d'un nom à séparateurs, DANS LES TROIS SENS.
+  //        Clés INVENTÉES. Rouge avant le correctif : « atelierboreal » et « AtelierBoreal » traversaient
+  //        (la clé porte un point, donc aucune variante dérivée) ; vert : remplacées par « Produit-02 ».
+  //        Contre-épreuves : un mot voisin (« atelierborealite ») ne bouge pas ; une clé dont la forme
+  //        collée fait MOINS de SEUIL_COLLEE caractères (« Lune.Net » → « LuneNet », 7) n'a pas de forme collée.
+  const r2t1 = anonymiser("Voir atelierboreal et AtelierBoreal, ou ATELIERBOREAL, dossier c:/dev/AtelierBoreal2/src.");
+  if ((r2t1.texte.match(/Produit-02/g) || []).length !== 4 || /atelierboreal/i.test(r2t1.texte) || !r2t1.texte.includes("Produit-02/src"))
+    casse.push("TF-1839 : la forme collée d'une clé à séparateurs traverse : " + r2t1.texte);
+  const r2t2 = anonymiser("Un atelierborealite, un atelierboreal2b ne sont pas ce produit ; luneNet non plus.");
+  if (/atelierboreal$/.test(r2t2.texte) || !/atelierborealite/.test(r2t2.texte) || !/atelierboreal2b/.test(r2t2.texte) || !/luneNet/.test(r2t2.texte))
+    casse.push("TF-1839 : la forme collée mord sur un mot voisin ou sous le seuil : " + r2t2.texte);
+  if (formeCollee("Lune.Net") !== null || formeCollee("Atelier.Boréal") === null || formeCollee("Produit") !== null)
+    casse.push("TF-1839 : formeCollee ne respecte pas le seuil de " + SEUIL_COLLEE + " caractères ou l'exigence d'un séparateur");
+
+  // 3 quater) LA CASSE D'UNE CLÉ DE PRODUIT, DANS LES DEUX SENS (TF-0826, 08/09) — sens vert :
+  //           la clé porte une capitale initiale, le texte porte la graphie minuscule du même
+  //           nom, et elle est remplacée ; sens rouge : la même graphie COLLÉE dans un mot plus
+  //           long n'est pas touchée, sans quoi une clé courte insensible à la casse mordrait
+  //           sur de la prose ordinaire.
+  const r2d = anonymiser("redéployer gribouille-ai.fr ce soir, puis xgribouille-ai.frx à la marge");
+  if (r2d.texte.includes("gribouille-ai.fr ce soir"))
+    casse.push("la graphie minuscule d'une clé de produit capitalisée traverse : " + r2d.texte);
+  if (!r2d.texte.includes("xgribouille-ai.frx"))
+    casse.push("la clé insensible à la casse mord à l'intérieur d'un mot plus long : " + r2d.texte);
+
+  // 3 quinquies) UN REMPLACEMENT NE COUPE PAS UN IDENTIFIANT DE CODE, ET IL LE DIT (TF-0927,
+  //              08/09) — le défaut d'origine : un nom substitué au milieu d'un identifiant de
+  //              fonction Python y a introduit le tiret du pseudonyme, le module est devenu non
+  //              compilable, et la suite de tests n'a plus rien collecté pendant dix-huit jours.
+  //              Sens vert : l'occurrence en PROSE est remplacée. Sens rouge : l'occurrence
+  //              COLLÉE dans un identifiant reste en place ET remonte dans `refuses`.
+  const r2e = anonymiser("def calc_CalculatriceZorglubZAP_total(): pass  # module de CalculatriceZorglubZAP", { code: true });
+  if (!r2e.texte.includes("calc_CalculatriceZorglubZAP_total"))
+    casse.push("l'identifiant de code a été coupé par la substitution : " + r2e.texte);
+  if (!r2e.texte.includes("de Produit-01"))
+    casse.push("l'occurrence en prose n'est pas remplacée : " + r2e.texte);
+  if (r2e.refuses.length !== 2)
+    casse.push(`les refus ne sont pas remontés (produit ET client attendus) : ${JSON.stringify(r2e.refuses)}`);
+  if (!r2e.refuses.every((x) => /identifiant/.test(x.motif) && !/Zorglub|Calculatrice/.test(JSON.stringify(x.nom_masqué))))
+    casse.push("un refus ne nomme pas son motif, ou recopie le nom qu'il protège : " + JSON.stringify(r2e.refuses));
+
+  //           Et le SECOND SENS DU CONTEXTE : hors code, la garde ne s'arme pas — un nom de
+  //           produit à moitié pseudonymisé naît d'une substitution collée, et l'interdire
+  //           rendrait introuvable un produit connu de la table (banc de lib-pseudonyme-produit).
+  const r2f = anonymiser("def calc_CalculatriceZorglubZAP_total()");
+  if (r2f.texte.includes("CalculatriceZorglubZAP"))
+    casse.push("hors contexte de code, la garde s'arme quand même : " + r2f.texte);
+  if (r2f.refuses.length)
+    casse.push("hors contexte de code, un refus est remonté : " + JSON.stringify(r2f.refuses));
+
+  // 3 octies) TF-1328 et TF-1329 (26/09) — l'inscription porte sa DATE, et l'indice ne réutilise
+  //           jamais un indice retiré. Sens vert de la date : « un-produit-neuf », inscrit au cas 3,
+  //           est daté au bloc depuis. Sens rouge de l'indice, rejoué : la clé de Produit-02 est
+  //           retirée SANS réservation (table à 2 clés, plus grand indice 3) ; un produit neuf doit
+  //           recevoir Produit-04 — compter les clés lui aurait redonné Produit-03, déjà pris.
+  {
+    const t = JSON.parse(readFileSync(process.env.FORGE_PRODUITS_PSEUDO, "utf8"));
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String((t.depuis || {})["un-produit-neuf"] || "")))
+      casse.push("TF-1328 : un produit inscrit par l'écrivain n'a pas de date au bloc depuis — la porte jugerait son histoire sans borne");
+    delete t.produits["Gribouille-ai.fr"];
+    writeFileSync(process.env.FORGE_PRODUITS_PSEUDO, JSON.stringify(t), "utf8");
+    const p4 = pseudoProduit("encore-un-produit");
+    if (p4 !== "Produit-04") casse.push(`TF-1329 : après un retrait sans réservation, un produit neuf reçoit ${p4} au lieu de Produit-04 — un indice déjà pris est ré-attribué`);
+    const t2 = JSON.parse(readFileSync(process.env.FORGE_PRODUITS_PSEUDO, "utf8"));
+    t2.produits["Gribouille-ai.fr"] = "Produit-02";
+    writeFileSync(process.env.FORGE_PRODUITS_PSEUDO, JSON.stringify(t2), "utf8");
+  }
+
+  // 3 nonies) TF-1505 (01/10/2026) — UN PRODUIT PRIVÉ DE L'ÉCOSYSTÈME GARDE SON NOM. Sens vert : un
+  //           nom de `PRODUITS_DE_L_ECOSYSTEME` revient tel quel, et la table n'en reçoit aucune clé.
+  //           Sens rouge : un nom de même forme que la liste ne déclare PAS reçoit toujours son
+  //           pseudonyme, sans quoi la liste ouvrirait la table à tout préfixe `factory-`. Le défaut
+  //           d'origine : D-5 (a) du 17/09 déclarait `factory-marketing` nom public, et cet écrivain,
+  //           qui ne lisait pas la liste, l'aurait réinscrit sous Produit-79 le 01/10.
+  {
+    const [declare] = [...PRODUITS_DE_L_ECOSYSTEME];
+    const avant = readFileSync(process.env.FORGE_PRODUITS_PSEUDO, "utf8");
+    const p5 = pseudoProduit(declare);
+    if (p5 !== declare) casse.push(`TF-1505 : le produit déclaré de l'écosystème « ${declare} » reçoit ${p5} — un nom public décidé par l'humain serait réinscrit`);
+    if (readFileSync(process.env.FORGE_PRODUITS_PSEUDO, "utf8") !== avant) casse.push("TF-1505 : la table s'est étendue pour un produit déclaré de l'écosystème");
+    const p6 = pseudoProduit("factory-produit-non-declare");
+    if (!/^Produit-\d{2,}$/.test(String(p6))) casse.push(`TF-1505 : un nom en factory- que la liste ne déclare pas n'est plus pseudonymisé (${p6}) — la liste ouvrirait la table à tout préfixe`);
+  }
+
+  // 3 bis) un nom qui EST déjà un pseudonyme n'est jamais réinscrit ni décalé (02/09)
+  const p3 = pseudoProduit("Produit-01");
+  if (p3 !== "Produit-01") casse.push(`un pseudonyme réinscrit comme produit neuf : Produit-01 → ${p3}`);
+  if (Object.keys(JSON.parse(readFileSync(process.env.FORGE_PRODUITS_PSEUDO, "utf8")).produits).includes("Produit-01"))
+    casse.push("la table porte un pseudonyme comme CLÉ — elle pseudonymise ses propres pseudonymes");
+  if (anonymiser("lot de Produit-01").texte !== "lot de Produit-01") casse.push("un texte déjà anonymisé est réécrit");
+
+  // 3 sexies) UN BANC N'ÉTEND PAS LE RÉFÉRENTIEL RÉEL (08/09) — la garde est éprouvée SANS rien
+  //           écrire : elle est une fonction pure du chemin visé. Sens rouge : un chemin hors du
+  //           répertoire temporaire, depuis un banc, est interdit. Sens vert : la table jetable de
+  //           ce banc-ci, sous ce même répertoire, est autorisée — sans quoi la garde bloquerait
+  //           les bancs corrects, et le cas 3 ci-dessus ne passerait pas. Le défaut d'origine :
+  //           46 bancs joués avec les variables pointant sur les tables réelles ont fait entrer
+  //           neuf produits jouets dans la table de production, et la porte de publication a
+  //           refusé le dépôt sur 81 constats, tous nés de noms inventés par des fixtures.
+  if (!extensionInterdite("C:/un/chemin/hors/du/repertoire/temporaire.json"))
+    casse.push("un banc peut étendre un référentiel hors du répertoire temporaire — c'est ainsi que neuf produits jouets sont entrés dans la table de production le 08/09");
+  if (extensionInterdite(join(dir, "_produits-pseudonymes.json")))
+    casse.push("la garde bloque la table JETABLE d'un banc correct — elle empêcherait tous les bancs de s'exécuter");
+  let refusDit = "";
+  try { pseudoProduit("un-produit-de-fixture"); } catch (e) { refusDit = e.message; }
+  if (refusDit && !/FORGE_PRODUITS_PSEUDO/.test(refusDit))
+    casse.push("le refus ne nomme pas la variable à poser : " + refusDit);
+
+  // 3 septies) LE SOUS-PROCESSUS, qui est le cas qui a causé l'incident (TF-0957, 08/09) — les
+  //            cinq bancs fautifs ne touchaient pas la chaîne eux-mêmes : ils lançaient l'ingestion
+  //            en sous-processus, où le point d'entrée n'est plus un fichier de banc, et la
+  //            première garde y rendait vert. Le marqueur d'environnement est posé par le banc et
+  //            hérité par tout enfant. Sens rouge : un enfant lancé d'ici refuse d'étendre une
+  //            table hors du répertoire temporaire. Sens vert : le MÊME enfant, marqueur retiré —
+  //            c'est-à-dire une ingestion réelle —, l'étend sans entrave.
+  {
+    const { spawnSync } = await import("node:child_process");
+    const moi = import.meta.url;   // URL file://, seule forme importable depuis `node -e` sur Windows
+    // Le CHEMIN sert de sonde et rien n'est ecrit ; il doit etre HORS du repertoire temporaire,
+    // sans quoi la garde ne s'arme pas et le cas rouge se croit vert (piege paye deux fois le 08/09).
+    const hors = "C:/un/chemin/hors/du/repertoire/temporaire.json";
+    const code = "import{extensionInterdite}from" + JSON.stringify(moi)
+      + ";process.stdout.write(String(extensionInterdite(process.argv[1])))";
+    const enfant = (env) => spawnSync(process.execPath, ["--input-type=module", "-e", code, hors],
+      { encoding: "utf8", env }).stdout;
+
+    if (enfant({ ...process.env }) !== "true")
+      casse.push("un SOUS-PROCESSUS lancé par un banc peut étendre le référentiel réel — c'est le cas exact qui a fait entrer neuf produits jouets dans la table de production le 08/09");
+    const sansMarqueur = { ...process.env };
+    delete sansMarqueur[MARQUEUR_BANC];
+    if (enfant(sansMarqueur) !== "false")
+      casse.push("une ingestion RÉELLE, hors banc, se voit refuser l'extension de la table — la garde mordrait sur le seul usage légitime");
+  }
+
+  // 3 decies) TF-1457 (28/09/2026, campagne D-32 (a)) — UN NOM COURT S'INSCRIT COMME UN MOT
+  //           ENTIER. Sens vert : un nom de 3 caractères (« PRD », le préfixe de lot réel du
+  //           constat) s'inscrit désormais — il recevait `null` avant le correctif — et son
+  //           occurrence ISOLÉE est substituée. Sens rouge, le défaut d'origine du 02/09 : la MÊME
+  //           clé, COLLÉE des deux côtés à un mot plus long qui la contient, reste INTACTE — en
+  //           dessous de SEUIL_MOT, la voie littérale est sautée, seule la voie BORNÉE agit.
+  {
+    const pCourt = pseudoProduit("PRD");
+    if (!pCourt || !/^Produit-\d{2,}$/.test(pCourt))
+      casse.push(`TF-1457 : un nom court de 3 caractères (« PRD ») n'est plus inscrit — ${pCourt}`);
+    const rCourt = anonymiser("Le produit PRD est livré ce soir, jamais au milieu de xPRDx, de PRDx, ni de xPRD.");
+    if (!rCourt.texte.includes(`Le produit ${pCourt} est livré`))
+      casse.push("TF-1457 : l'occurrence ISOLÉE du nom court n'est pas substituée : " + rCourt.texte);
+    if (!rCourt.texte.includes("xPRDx") || !rCourt.texte.includes("PRDx") || !rCourt.texte.includes("xPRD."))
+      casse.push("TF-1457 : un nom court mord sur un mot plus long qui le contient (la voie littérale "
+        + "a quand même agi) : " + rCourt.texte);
+  }
+
+  // 3 undecies) TF-1456 (campagne du 12/10/2026) — UNE CLÉ DE PRODUIT SE RECONNAÎT SOUS TOUTES SES
+  //            GRAPHIES : avec ou sans accents (précomposés ou décomposés), séparée par un point médian,
+  //            et avec sa partie client déjà pseudonymisée. Le défaut d'origine : un nom d'affichage
+  //            « produit · client » de 45 caractères et un nom accentué ont traversé l'accueil,
+  //            l'ingestion, le hook de commit et la porte, et sont entrés dans l'histoire publiée.
+  //            Sens verts : les six graphies ci-dessous reviennent sous le pseudonyme. Sens rouges :
+  //            un mot isolé de la clé, et la clé COLLÉE à des lettres, ne bougent pas.
+  {
+    const pK = pseudoProduit("Ventilation Éléphant Zorglub");
+    const graphies = [
+      "Ventilation Éléphant Zorglub", "ventilation elephant zorglub", "Ventilation · Éléphant · Zorglub",
+      "Ventilation · Éléphant · Client-A", "Ventilation Elephant Client-A",
+      "Ventilation Éléphant Zorglub".normalize("NFD"),
+    ];
+    for (const g of graphies) {
+      const r = anonymiser(`Le produit ${g} est livré.`);
+      if (r.texte !== `Le produit ${pK} est livré.`) casse.push(`TF-1456 : la graphie « ${g.normalize("NFC").replace(/Zorglub/gi, "<client>")} » traverse : ${r.texte}`);
+    }
+    const rIso = anonymiser("Un éléphant seul, une ventilation seule, et xventilation elephant zorglubx collés.");
+    if (rIso.texte.includes(pK)) casse.push("TF-1456 : un mot isolé ou une clé collée à des lettres est pris pour le produit : " + rIso.texte);
+    const pM = pseudoProduit("Éléphantine");
+    const rM = anonymiser("L'elephantine et l'ÉLÉPHANTINE, jamais dans xelephantinex.");
+    if ((rM.texte.match(new RegExp(pM, "g")) || []).length !== 2 || !rM.texte.includes("xelephantinex"))
+      casse.push("TF-1456 : une clé à un mot, sans accent dans le texte, n'est pas substituée aux deux graphies — ou mord dans un mot : " + rM.texte);
+  }
+
+  // 3 duodecies) TF-2130 (05/11/2026) — UNE ENTRÉE OBJET `{ pseudo, formes }`, sur sa propre table
+  //            jetable (les indices des cas du dessus restent ce qu'ils étaient). Rouge avant le
+  //            correctif : le pseudonyme rendu était l'objet, et l'accueil nommait le lot
+  //            « [object Object] - RETOURS - … ». Vert : la graphie déclarée devient le pseudonyme ;
+  //            contre-épreuves : le même terme en minuscules et collé à des lettres ne bouge pas, et
+  //            l'indice de l'objet compte pour le produit neuf suivant.
+  {
+    const tObj = join(dir, "_produits-objet.json");
+    writeFileSync(tObj, JSON.stringify({ produits: { "PlumeTests":{ pseudo: "Produit-07", formes: ["PlumeTests"] } } }), "utf8");
+    const avant = process.env.FORGE_PRODUITS_PSEUDO;
+    process.env.FORGE_PRODUITS_PSEUDO = tObj;
+    const pO = pseudoProduit("PlumeTests");
+    if (pO !== "Produit-07") casse.push(`TF-2130 : une entrée objet rend ${pO} au lieu de son champ pseudo`);
+    const rO = anonymiser("Lot PlumeTests, des plumetests au sens courant, xPlumeTestsx collé.");
+    if (rO.texte !== "Lot Produit-07, des plumetests au sens courant, xPlumeTestsx collé.") casse.push("TF-2130 : la graphie déclarée n'est pas seule substituée, à la casse exacte et en mot entier : " + rO.texte);
+    const pN = pseudoProduit("un-neuf-apres-objet");
+    if (pN !== "Produit-08") casse.push(`TF-2130 : le produit neuf après une entrée objet reçoit ${pN} au lieu de Produit-08 — l'indice de l'objet n'est pas compté`);
+    process.env.FORGE_PRODUITS_PSEUDO = avant;
+  }
+
+  // 4) référentiel ABSENT → refus, jamais un passage silencieux
+  process.env.FORGE_NOMS_INTERDITS = join(dir, "absent.json");
+  let refuse = false;
+  try { anonymiser("Zorglub"); } catch { refuse = true; }
+  if (!refuse) casse.push("référentiel absent et le texte passe quand même — le convoi n'est pas arrêté");
+
+  for (const m of casse) console.log("  [FAIL] " + m);
+  console.log(`\nSelf-test anonymiseur d'entrants : ${13 - casse.length}/13 cas, ${casse.length} FAIL`
+    + (casse.length ? "" : " — cas rouges : référentiel absent REFUSÉ sans laisser passer le texte, extension de la table hors banc REFUSÉE avec la variable à poser nommée"));
+  process.exit(casse.length ? 1 : 0);
+}

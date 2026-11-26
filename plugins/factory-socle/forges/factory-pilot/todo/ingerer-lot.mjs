@@ -1,0 +1,854 @@
+#!/usr/bin/env node
+/**
+ * ingerer-lot.mjs — ingère un sidecar de candidatures (*.tf.jsonl) dans le registre TODO-FORGE.
+ *
+ * Contrat (campagne du 08/08) :
+ *  - les candidatures arrivent SANS id : les ids TF sont frappés ICI (écrivain unique) ;
+ *  - validation de TOUTES les lignes AVANT toute écriture — une ligne invalide = rejet
+ *    ATOMIQUE et motivé du fichier entier, registre intact ;
+ *  - IDEMPOTENT : l'empreinte sha256 du sidecar est consignée en événement `ingestion` —
+ *    ré-ingérer le même lot ne crée rien ;
+ *  - tout entre en statut CANDIDAT : l'automatique s'arrête là, la décision reste humaine ;
+ *  - après écriture : oracle-todo rejoué + vue régénérée (registre par défaut uniquement).
+ *
+ * Usage : node ingerer-lot.mjs <sidecar.tf.jsonl> [--registre <TODO.jsonl>]
+ * Exit : 0 = ingéré (ou déjà ingéré, 0 création) · 1 = sidecar rejeté · 2 = erreur.
+ */
+import { readFileSync, appendFileSync, existsSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { execFileSync, spawnSync } from "node:child_process";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+// TF-0597 (24/08) — LES RÈGLES DE FORME NE VIVENT PLUS ICI. Elles vivent dans
+// `gabarits\oracle-lot-retours.mjs`, que ce fichier IMPORTE et que l'héritage fait voyager
+// jusqu'au produit (`forge\retours\oracle-lot.mjs`, mode copie_conforme). Un seul jeu de
+// règles, deux endroits où le jouer : le produit AVANT de remettre, le pilot À LA PORTE.
+// Deux implémentations de la même forme auraient donné deux vérités — c'est le défaut que
+// TF-0474 a nommé sur les empreintes, où cinq mécanismes de scellement coexistaient sans
+// format commun et où la même classe de défaut a été redécouverte forge par forge.
+import { verifier as verifierFormeLot } from "../gabarits/oracle-lot-retours.mjs";
+import { localiserProduit, causeDuRefus } from "./localiser-produit.mjs";
+import { anonymiserCandidature, pseudoProduit, pseudonymeDeRacine, anonymiser, EST_EMETTEUR_FORGE, MARQUEUR_REGISTRE_JETABLE } from "./anonymiser-entrant.mjs";
+import { PRODUITS_DE_L_ECOSYSTEME } from "../scripts/lib-parc.mjs";
+import { aQualifier } from "./identifiants-techniques.mjs";
+import { aQualifier as adressesIpAQualifier, messageAQualifier as messageAdressesIp } from "./adresses-ip.mjs";
+import { aQualifier as personnesAQualifier, messageAQualifier as messagePersonnes } from "./noms-de-personnes.mjs";
+import { aQualifier as designationsAQualifier, messageAQualifier as messageDesignations } from "./designation-projet.mjs";
+
+const ICI = dirname(fileURLToPath(import.meta.url));
+const sidecarPath = process.argv[2];
+const iReg = process.argv.indexOf("--registre");
+const registre = resolve(iReg > 0 ? process.argv[iReg + 1] : join(ICI, "TODO.jsonl"));
+// TF-1431 (28/09/2026) : un registre autre que celui par défaut est un ESSAI, et un essai n'étend pas
+// la table réelle des pseudonymes — l'écrivain (`pseudoProduit`) lit ce marqueur. Comparaison sans
+// casse sous Windows : le registre par défaut nommé explicitement reste le registre par défaut.
+const REGISTRE_PAR_DEFAUT = resolve(join(ICI, "TODO.jsonl"));
+const casse = (c) => (process.platform === "win32" ? c.toLowerCase() : c);
+if (casse(registre) !== casse(REGISTRE_PAR_DEFAUT)) process.env[MARQUEUR_REGISTRE_JETABLE] = registre;
+const archive = join(dirname(registre), "TODO-ARCHIVE.jsonl");
+// LA CLASSE D'UN RETOUR (mandat du 03/09/2026, pas 1 — mesure au pas 0 : 50 items du registre
+// déclaraient une récidive en toutes lettres et AUCUN champ ne permettait de les compter ; un
+// classement automatique par famille de mots-clés rendait 94 % de faux positifs). Le producteur
+// DÉCLARE la classe ; le référentiel est une donnée datée (loi n° 4), surchargeable pour la recette.
+const iCl = process.argv.indexOf("--classes");
+const CLASSES_PATH = resolve(iCl > 0 ? process.argv[iCl + 1] : join(ICI, "CLASSES.json"));
+// LE DOSSIER DU REGISTRE, EN PORTÉE MODULE — et ce n'est pas un déplacement de confort (TF-0634,
+// mesuré le 25/08). Il était déclaré `const` DANS le bloc du préflight anti-collision, donc
+// invisible au POST-contrôle qui vit deux cents lignes plus bas et s'en sert aussi. Le
+// post-contrôle levait donc `todoDir is not defined` à chaque ingestion de plus d'une
+// candidature, son `catch` avalait l'erreur, et la seule chose qu'il rendait était qu'il n'avait
+// pas pu vérifier. Autrement dit : LE GARDE-FOU CONTRE LES COLLISIONS INTER-SESSIONS N'A JAMAIS
+// TOURNÉ — pendant que deux sessions parallèles écrivaient dans ce registre.
+// On ne l'a su que parce que le correctif de la veille (TF-0623) a fait dire à ce `catch` la
+// CAUSE RÉELLE au lieu de deux hypothèses fausses. Un contrôle qui échoue en silence et un
+// contrôle qui passe sont indiscernables ; c'est le message d'erreur honnête qui les sépare.
+const todoDir = dirname(registre);
+if (!sidecarPath || !existsSync(sidecarPath)) { console.error("usage : ingerer-lot.mjs <sidecar.tf.jsonl> [--registre <TODO.jsonl>] [--sans-fetch] [--derogation \"<motif>\" | --derogation-fichier <motif.txt>]"); process.exit(2); }
+
+// ---- dérogation TRACÉE aux règles de FORME du lot (décision humaine du 22/08, option b3) ---
+// Deux lots Produit-05 rédigés AVANT la publication de R-45 restaient hors du registre : la règle
+// se juge sur la date du NOM du lot, jamais sur ce que le produit pouvait savoir. L'arbitrage
+// humain a refusé d'amender R-45 — elle reste intacte, et elle a raison sur le fond — et a
+// retenu une dérogation tracée, cas par cas.
+//
+// Ce que la dérogation couvre : R-45 et R-46 SEULEMENT, les règles de FORME du lot remis.
+// Ce qu'elle ne couvre JAMAIS : la validation des candidatures (rejet atomique), l'unicité des
+// ids, l'idempotence, le préflight anti-collision. Une dérogation qui ouvrirait tout ne serait
+// pas une dérogation, ce serait un interrupteur.
+//
+// Ce qu'elle exige : un motif ÉCRIT et substantiel, consigné dans l'événement `ingestion` du
+// registre. Une dérogation sans motif est un contournement silencieux ; le seuil de longueur
+// ne mesure aucune qualité, il rend seulement le geste coûteux à poser sans réfléchir.
+//
+// LE MOTIF SE LIT DEPUIS UN FICHIER, ET C'EST LA VOIE SÛRE (TF-0646, 26/08/2026). Un motif passé
+// en ARGUMENT traverse un shell, et un shell N'EST PAS UN TUYAU NEUTRE. Mesuré ce jour, sur ce
+// script même : un motif qui citait `forge/retours/RETOURS-FORGES.md` et `forge/retours/oracle-lot.mjs`
+// entre accents graves a vu bash exécuter les deux comme des substitutions de commande. Elles ont
+// échoué, leur sortie vide a REMPLACÉ les noms, et le registre a reçu « dont  (le gabarit …) et
+// (son juge) » — quatre lots, quatre motifs mutilés, et RIEN ne l'a signalé : le texte restait
+// au-dessus du seuil de longueur, donc plausible.
+//
+// C'EST LA MÊME LEÇON QUE LES MESSAGES DE COMMIT, apprise deux fois : on les écrit dans un fichier
+// et on passe `-F`, précisément pour que le shell ne les relise pas. Le registre mérite au moins
+// autant : ce qu'il consigne est la SEULE trace qui restera d'une dérogation.
+//
+// `--derogation` reste accepté — un motif court et sans caractère spécial n'a pas à changer de
+// forme. Mais dès qu'un motif cite un chemin, une commande ou une variable, `--derogation-fichier`
+// est la voie qui ne peut pas le trahir.
+const iDeroFichier = process.argv.indexOf("--derogation-fichier");
+const iDero = process.argv.indexOf("--derogation");
+const MOTIF_MIN = 30;
+let derogationMotif = null;
+if (iDeroFichier > 0) {
+  const chemin = process.argv[iDeroFichier + 1] || "";
+  if (!chemin || chemin.startsWith("--") || !existsSync(chemin)) {
+    console.error(`[REFUS] --derogation-fichier exige un fichier lisible : « ${chemin || "(rien)"} » introuvable.\n` +
+      "  Écrire le motif dans un fichier, puis passer son chemin — le shell ne le relit jamais.");
+    process.exit(2);
+  }
+  derogationMotif = readFileSync(chemin, "utf8").trim();
+  if (derogationMotif.length < MOTIF_MIN) {
+    console.error(`[REFUS] motif de dérogation trop court (${derogationMotif.length} caractères, minimum ${MOTIF_MIN}).`);
+    process.exit(2);
+  }
+} else if (iDero > 0) {
+  derogationMotif = (process.argv[iDero + 1] || "").trim();
+  if (!derogationMotif || derogationMotif.startsWith("--")) {
+    console.error("[REFUS] --derogation exige un motif écrit : ce qui est dérogé, pourquoi, et sur quelle décision.\n" +
+      "  Une dérogation sans motif ne se distingue pas d'un contournement.");
+    process.exit(2);
+  }
+  if (derogationMotif.length < MOTIF_MIN) {
+    console.error(`[REFUS] motif de dérogation trop court (${derogationMotif.length} caractères, minimum ${MOTIF_MIN}).\n` +
+      "  Le motif est la SEULE trace qui restera : il nomme la règle dérogée et la décision qui l'autorise.");
+    process.exit(2);
+  }
+}
+const reglesDerogees = [];
+// Rend true si la règle est dérogée — et le DIT, fort : un refus qui devient un passage se voit.
+const derogee = (regle, quoi) => {
+  if (!derogationMotif) return false;
+  reglesDerogees.push(regle);
+  console.error(`[DÉROGATION ${regle}] ${quoi}\n  motif : ${derogationMotif}\n` +
+    "  La règle reste INTACTE : ce lot passe, le suivant sera refusé de la même façon.");
+  return true;
+};
+
+// ---- préflight anti-collision inter-sessions (TF-0394, revue du 19/08) --------------------
+// Deux sessions pilot parallèles ont frappé les mêmes ids TF depuis la même base (19/08 :
+// TF-0383/0384/0385 doublement frappés) : l'écrivain unique ne l'est que PAR SESSION, et la
+// collision ne s'est vue qu'au push — payée en renumérotation manuelle du registre. Avant
+// toute frappe d'ids, le registre distant est confronté au local : s'il porte des commits
+// sur TODO.jsonl / TODO-ARCHIVE.jsonl absents du local, le max local est faux et les ids
+// séquentiels re-frapperaient des numéros déjà pris ailleurs — REFUS, pull d'abord.
+// Hors git ou hors ligne : constat déclaré, jamais silencieux. `--sans-fetch` assume.
+if (!process.argv.includes("--sans-fetch")) {
+  // `todoDir` vient de la portée module (TF-0634) : le redéclarer ici l'y enfermerait à nouveau.
+  const git = (args) => execFileSync("git", ["-C", todoDir, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  let dansGit = false;
+  try { dansGit = git(["rev-parse", "--is-inside-work-tree"]) === "true"; } catch { /* registre nu : rien à confronter */ }
+  if (dansGit) {
+    try {
+      execFileSync("git", ["-C", todoDir, "fetch", "--quiet", "origin"], { stdio: "ignore", timeout: 20000 });
+      const enRetard = Number(git(["rev-list", "--count", "HEAD..origin/main", "--", "TODO.jsonl", "TODO-ARCHIVE.jsonl"]));
+      if (enRetard > 0) {
+        // TF-1003 (09/09/2026) — LE PRÉFLIGHT JUGE CE QU'IL PROTÈGE, PAS UN COMPTE DE COMMITS.
+        // Mesuré ce jour-là : 526 commits distants absents du local ET 527 locaux absents du
+        // distant — deux histoires DIVERGENTES (réécriture d'histoire, TF-0752), portant le même
+        // registre. Le refus était définitif tant que la republication (geste humain) n'était pas
+        // faite, son remède `git pull --rebase` est celui que le mode opératoire de réécriture
+        // interdit, et la seule issue faisait déclarer un hors-ligne faux. L'invariant réel : aucune
+        // CRÉATION du distant ne manque ici, ni ne porte ici un autre horodatage de frappe (même id,
+        // autre item — la collision de TF-0394). Le `ts` d'une création est stampé à l'ingestion :
+        // une réécriture de textes ne le touche pas, un item frappé ailleurs en porte un autre.
+        const creationsDe = (texte) => new Map(String(texte || "").split("\n").filter((l) => l.trim())
+          .map((l) => { try { return JSON.parse(l); } catch { return null; } })
+          .filter((ev) => ev && ev.ev === "creation" && ev.id).map((ev) => [ev.id, String(ev.ts || "")]));
+        const auDistant = (f) => { try { return git(["show", `origin/main:./${f}`]); } catch { return ""; } };
+        const ici = (f) => (existsSync(join(todoDir, f)) ? readFileSync(join(todoDir, f), "utf8") : "");
+        const distant = new Map([...creationsDe(auDistant("TODO.jsonl")), ...creationsDe(auDistant("TODO-ARCHIVE.jsonl"))]);
+        const local = new Map([...creationsDe(ici(basename(registre))), ...creationsDe(ici("TODO-ARCHIVE.jsonl"))]);
+        const inconnus = [...distant].filter(([id, ts]) => !local.has(id) || local.get(id) !== ts).map(([id]) => id);
+        const diverge = Number(git(["rev-list", "--count", "origin/main..HEAD"])) > 0;
+        const lectureDivergence = "histoires DIVERGENTES (chacune porte des commits que l'autre n'a pas — signature d'une réécriture d'histoire) : "
+          + "ne JAMAIS `git pull --rebase` ici, le mode opératoire de réécriture le proscrit (references/TODO-FORGE.md, TF-0752 : « à recloner, pas à fusionner ») ; "
+          + "la republication est un geste humain (R-38)";
+        if (inconnus.length) {
+          console.error(`[REFUS PRÉFLIGHT TF-0394] le registre distant porte ${inconnus.length} création(s) absente(s) d'ici ou frappée(s) ailleurs sous le même id (${inconnus.slice(0, 5).join(", ")}${inconnus.length > 5 ? ", …" : ""}) — les ids séquentiels repartiraient du mauvais max. `
+            + (diverge ? `${lectureDivergence} ; rapatrier ces créations avant d'ingérer.` : "git pull --rebase, puis ré-ingérer.")
+            + " (--sans-fetch pour assumer explicitement le hors-ligne)");
+          process.exit(1);
+        }
+        console.error(`[préflight TF-0394/TF-1003] ${enRetard} commit(s) distant(s) touchent le registre, mais leurs ${distant.size} création(s) sont toutes ici, frappées à l'identique — aucun id ne peut entrer en collision, ingestion poursuivie`
+          + (diverge ? `. ${lectureDivergence}` : ""));
+      }
+    } catch {
+      console.error("[préflight TF-0394] fetch/comparaison origin impossible (hors ligne ? remote absent ?) — unicité inter-sessions NON vérifiée, ingestion locale assumée");
+    }
+  }
+}
+
+const contenu = readFileSync(sidecarPath, "utf8");
+// Empreinte NORMALISEE en LF (idiome TF-0253, etendu par TF-0359) : avec core.autocrlf=true,
+// git repose un sidecar en CRLF au checkout sans qu'un octet de contenu ait bouge. Une
+// empreinte prise sur les octets bruts ne reconnait alors plus le lot deja ingere, et
+// l'idempotence tombe : le meme lot recree ses candidatures en doublon — l'incident du
+// 13/08 (32 doublons) par un autre chemin. La forme brute reste acceptee en lecture pour
+// les ingestions ANTERIEURES a cette normalisation, jamais ecrite pour les nouvelles.
+const lotSha = createHash("sha256").update(contenu.split("\r\n").join("\n")).digest("hex");
+const lotShaBrut = createHash("sha256").update(contenu).digest("hex");
+const lignes = contenu.split("\n").filter((l) => l.trim());
+
+// ---- R-45 et R-46 : la FORME du lot remis, jugée par le module partagé ---------------------
+// R-45 (21/08) exige que le lot DISE ce qu'il n'a pas remonté ; R-46 (22/08) ce que ses documents
+// ont coûté au gabarit. Les deux valent au moment où le lot ENTRE, pas seulement quand il attend
+// dans la boîte : une fois ingéré, il part en `old\` et `oracle-boite-entree` (B6, B7) ne le voit
+// plus. Le constat et le refus se cumulent — l'un détecte ce qui traîne, l'autre empêche d'entrer.
+//
+// Le JUGEMENT est délégué au module partagé ; ce qui reste ici est ce qui n'appartient qu'à la
+// porte : le rejet ATOMIQUE et la dérogation tracée. Portée inchangée — seuls les sidecars
+// flanqués d'un `.md` homonyme sont concernés (une candidature hors lot n'a pas de lot).
+{
+  const lotMd = sidecarPath.replace(/\.normalise\.tf\.jsonl$/i, ".md").replace(/\.tf\.jsonl$/i, ".md");
+  if (existsSync(lotMd)) {
+    const forme = verifierFormeLot(lotMd);
+    for (const c of forme.constats) {
+      if (c.statut !== "FAIL") continue;
+      // TF-2761 (22/11/2026) : LOT-SIDECAR est un ÉCHEC chez le produit ; ici la porte juge ce même sidecar plus bas, avec ses
+      // propres messages (clé de famille donnée comme classe, familles listées : TF-2764). Le refus générique ne les masque pas.
+      if (c.regle === "LOT-SIDECAR") continue;
+      if (derogee(c.regle, c.message)) continue;
+      console.error(
+        `[REJET ATOMIQUE] ${sidecarPath} — registre intact.\n` +
+        `  - ${lotMd} : ${c.message} (${c.regle}).\n` +
+        (c.remede ? `    REMÈDE : ${c.remede}\n` : "") +
+        "    CE REFUS ÉTAIT ÉVITABLE, et c'est tout le point (TF-0597) : le produit peut jouer ce\n" +
+        "    MÊME contrôle chez lui, AVANT de remettre son lot —\n" +
+        `      node forge\\retours\\oracle-lot.mjs \"<son lot>.md\"\n` +
+        "    LA CAUSE EST MESUREE, PAS DEVINEE (TF-0623) — un controle qui enonce des hypotheses\n" +
+        "    sur sa propre cause prend la place de celle qu'il pouvait mesurer :\n" +
+        `    ${causeDuRefus(
+          (String(lotMd).split(/[\\\\/]/).pop() || "").split(" - RETOURS - ")[0],
+          process.env.FORGE_ROOT || join(ICI, "..", ".."),
+          (() => { try { return JSON.parse(readFileSync(join(ICI, "..", "gabarits", "HERITAGE.json"), "utf8")); } catch { return null; } })(),
+        ).texte}`);
+      process.exit(1);
+    }
+  }
+}
+
+// LES FORGES QUE LE PARC CONNAÎT, pour déduire une cible qu'un sidecar a oubliée (R-48). La table
+// est ÉCRITE et non devinée : chaque motif dit ce qu'il reconnaît, et un nom hors table n'est pas
+// deviné — le lot est alors refusé, ce qui est le comportement sûr.
+const FORGES_CONNUES = [
+  { depot: "factory-pilot", motif: /\b(factory|pilot|noyau|restitution|registre todo|todo-forge)\b/ },
+  { depot: "factory-forge-agents", motif: /\b(forge-agents|socle de rendu|page-html|check_html|render_page|skill)\b/ },
+  { depot: "factory-forge-tests", motif: /\b(forge-tests|plancher de rendu|pan |adaptateur)\b/ },
+  { depot: "factory-forge-conception", motif: /\b(forge-conception|conception|exigence)\b/ },
+  { depot: "factory-forge-development", motif: /\b(forge-development|development)\b/ },
+  { depot: "factory-forge-design", motif: /\b(forge-design|design|syst[èe]me de marque)\b/ },
+  { depot: "factory-forge-ops", motif: /\b(forge-ops|mep|d[ée]ploiement)\b/ },
+  { depot: "factory-forge-data", motif: /\b(forge-data|lineage|qualit[ée] de la donn[ée]e)\b/ },
+  { depot: "factory-forge-audit", motif: /\b(forge-audit|auditcore)\b/ },
+  { depot: "factory-forge-seo-geo", motif: /\b(forge-seo|seo|geo)\b/ },
+];
+const deductions = [];
+
+// ---- validation intégrale AVANT toute écriture (rejet atomique) ----------------------------
+// TF-0703 — LE CANAL DE RECTIFICATION. Un lot remis ne se modifie JAMAIS, et c'est cette
+// immuabilité qui a forcé la déclaration de l'erreur du 28/08 : un lot affirmait qu'une fiche
+// était « maintenue à la main », le générateur versionné existait, et AUCUN champ du sidecar ne
+// permettait de le dédire. Un registre incapable de se corriger n'accumule pas de la
+// connaissance : il accumule aussi ses erreurs, avec le même poids. Deux champs OPTIONNELS :
+// `rectifie` (l'id TF visé) et `nature_de_la_rectification` (fait_errone | cause_erronee |
+// annule). Une ligne qui les porte MARQUE l'item visé (événement `maj` avec bloc
+// `rectification`) au lieu d'en créer un second sans lien. La règle d'immuabilité du lot
+// N'EST PAS assouplie — le geste complémentaire arrive par un NOUVEAU lot.
+const NATURES_RECTIFICATION = new Set(["fait_errone", "cause_erronee", "annule"]);
+const motifs = [];
+
+// ---- classe déclarée, récidive comptée (03/09/2026) --------------------------------------
+// Un lot daté du 03/09/2026 ou après porte une `classe` par retour, prise dans todo/CLASSES.json.
+// Clé absente ou inconnue = rejet atomique, avec les clés proches : on ne devine pas une classe,
+// on ne la crée pas dans un sidecar. Une candidature HORS lot (sans « - RETOURS - » ni date dans
+// le nom) peut en porter une ; elle n'y est pas tenue — elle n'a pas de lot.
+// La récidive, elle, ne refuse JAMAIS : elle se compte. Un retour dont la classe est déjà close
+// en `corrige` entre marqué `recidive_de` — c'est le signal que la descente n'a pas tenu, et
+// cacher ce signal en refusant le lot serait exactement le défaut que le mandat corrige.
+const NOM_SIDECAR = String(sidecarPath).split(/[\\/]/).pop() || "";
+const M_DATE = NOM_SIDECAR.match(/(\d{4})(\d{2})(\d{2})[a-z]?(?:\.normalise)?\.tf\.jsonl$/i);
+const DATE_LOT = M_DATE ? `${M_DATE[1]}-${M_DATE[2]}-${M_DATE[3]}` : null;
+const EST_UN_LOT = NOM_SIDECAR.includes(" - RETOURS - ");
+const SEUIL_CLASSE = "2026-09-03";
+let REF_CLASSES = null;
+try { REF_CLASSES = JSON.parse(readFileSync(CLASSES_PATH, "utf8")); } catch { REF_CLASSES = null; }
+const CLASSES = new Map((REF_CLASSES?.classes || []).map((k) => [k.cle, k]));
+const FAMILLES = [...new Set([...CLASSES.values()].map((k) => k.famille))];
+const proches = (cle) => {
+  const jetons = new Set(String(cle).toLowerCase().split(/[^a-z0-9]+/).filter((j) => j.length > 2));
+  return [...CLASSES.keys()]
+    .map((k) => ({ k, n: k.split(/[^a-z0-9]+/).filter((j) => jetons.has(j)).length + (k.includes(String(cle).toLowerCase()) ? 2 : 0) }))
+    .filter((x) => x.n > 0).sort((a, b) => b.n - a.n || a.k.localeCompare(b.k)).slice(0, 5).map((x) => x.k);
+};
+// TF-1128 (15/09/2026) — UN DÉFAUT VRAIMENT NEUF A UNE SORTIE CONFORME. Le gabarit de lot disait,
+// à quinze lignes d'écart, « classe inconnue : refusé » et « aucune clé ne convient ? le dire dans
+// le .md et laisser le pilot créer la classe » : le producteur n'avait AUCUNE voie qui passe — soit
+// son lot entier était refusé, soit il rangeait le retour sous une clé approchée et faussait le
+// compte des récidives, soit il ne remontait rien. La clé RÉSERVÉE `classe-a-creer` est la
+// sortie : admise à la condition que la ligne porte `classe_proposee` {cle, famille, libelle},
+// que la clé proposée n'existe pas déjà, que sa famille soit connue, et que le .md du lot la
+// nomme. Le retour entre avec `classe: null` et `classe_a_creer` ; le pilot crée la vraie classe
+// dans le référentiel et rattache le retour. La classe ne se crée toujours pas dans un sidecar.
+const CLE_A_CREER = "classe-a-creer";
+const TEXTE_LOT_MD = (() => {
+  const md = String(sidecarPath).replace(/\.normalise\.tf\.jsonl$/i, ".md").replace(/\.tf\.jsonl$/i, ".md");
+  try { return existsSync(md) ? readFileSync(md, "utf8") : ""; } catch { return ""; }
+})();
+const verifierClasseACreer = (c, i) => {
+  const p = c.classe_proposee && typeof c.classe_proposee === "object" ? c.classe_proposee : {};
+  const manque = ["cle", "famille", "libelle"].filter((k) => !p[k] || !String(p[k]).trim());
+  const familles = new Set([...FAMILLES, ...((REF_CLASSES?.familles || []).map((f) => f.cle))]);
+  if (manque.length) motifs.push(`ligne ${i + 1} : classe « ${CLE_A_CREER} » sans classe_proposee complète — manque ${manque.join(", ")} ; la ligne porte "classe_proposee": {"cle", "famille", "libelle"} et le .md les nomme (section « La règle qui aurait évité le retour »)`);
+  else if (CLASSES.has(String(p.cle))) motifs.push(`ligne ${i + 1} : classe proposée « ${p.cle} » EXISTE déjà au référentiel — la porter directement dans "classe", sans passer par « ${CLE_A_CREER} »`);
+  else if (!familles.has(String(p.famille))) motifs.push(`ligne ${i + 1} : famille « ${p.famille} » de la classe proposée inconnue — familles du référentiel : ${[...familles].join(", ")}`);
+  else if (!TEXTE_LOT_MD.includes(String(p.cle))) motifs.push(`ligne ${i + 1} : la classe proposée « ${p.cle} » n'est pas nommée dans le .md du lot — le lecteur humain doit y trouver la clé, sa famille et son libellé (section « La règle qui aurait évité le retour »)`);
+};
+const verifierClasse = (c, i) => {
+  if (c.rectifie !== undefined) return;
+  if (String(c.classe) === CLE_A_CREER && REF_CLASSES) { verifierClasseACreer(c, i); return; }
+  const exigee = EST_UN_LOT && DATE_LOT && DATE_LOT >= SEUIL_CLASSE;
+  if (c.classe === undefined || c.classe === null || c.classe === "") {
+    if (exigee) {
+      if (!REF_CLASSES) motifs.push(`ligne ${i + 1} : classe manquante, et le référentiel ${CLASSES_PATH} est illisible — un lot daté du ${SEUIL_CLASSE} ou après ne s'ingère pas sans référentiel de classes`);
+      else motifs.push(`ligne ${i + 1} : classe manquante — tout retour d'un lot daté du ${SEUIL_CLASSE} ou après désigne UNE classe de todo/CLASSES.json (${CLASSES.size} clés, champ "cle" du tableau "classes" ; elles se rangent en familles, qui ne sont PAS des clés : ${FAMILLES.join(", ")}). Une classe nouvelle se crée dans le référentiel, datée et sourcée, jamais dans le sidecar`);
+    }
+    return;
+  }
+  if (!REF_CLASSES) { motifs.push(`ligne ${i + 1} : classe « ${c.classe} » déclarée mais référentiel ${CLASSES_PATH} illisible — on ne juge pas une clé sans référentiel`); return; }
+  // TF-2764 (21/11/2026) : 17 lignes de 11 lots portaient une clé de FAMILLE comme classe, et le
+  // refus ne le disait pas ; il nomme désormais l'erreur et les classes de cette famille.
+  const familleDe = new Set([...FAMILLES, ...((REF_CLASSES?.familles || []).map((f) => f.cle))]);
+  if (!CLASSES.has(String(c.classe)) && familleDe.has(String(c.classe))) {
+    const membres = [...CLASSES.entries()].filter(([, k]) => k.famille === String(c.classe)).map(([cle]) => cle);
+    motifs.push(`ligne ${i + 1} : « ${c.classe} » est une FAMILLE du référentiel, pas une clé de classe — choisir l'une des ${membres.length} classe(s) de cette famille : ${membres.join(", ") || "(aucune)"} ; si aucune ne convient, porter "classe": "${CLE_A_CREER}" avec "classe_proposee": {"cle", "famille": "${c.classe}", "libelle"} et nommer la clé proposée dans le .md`);
+    return;
+  }
+  if (!CLASSES.has(String(c.classe))) {
+    const p = proches(c.classe);
+    motifs.push(`ligne ${i + 1} : classe « ${c.classe} » inconnue du référentiel — clés proches : ${p.length ? p.join(", ") : "(aucune)"} ; si aucune ne convient, porter "classe": "${CLE_A_CREER}" avec "classe_proposee": {"cle", "famille", "libelle"} et nommer la clé proposée dans le .md — le pilot crée la classe dans son référentiel (TF-1128)`);
+  }
+};
+let candidatures = lignes.map((l, i) => {
+  let c;
+  try { c = JSON.parse(l); } catch { motifs.push(`ligne ${i + 1} : JSON invalide`); return null; }
+  if (c.schema !== 1) motifs.push(`ligne ${i + 1} : schema attendu 1, reçu ${c.schema}`);
+  // TF-1067 (14/09/2026) — UN CARACTÈRE DE CONTRÔLE N'ENTRE PAS AU REGISTRE. Quatre octets nuls y
+  // sont entrés par des lots dont un chemin « input\\00-retours » avait été écrit dans une chaîne
+  // Python non brute : « \\00 » y est un octet nul, que le sidecar a porté en échappement JSON. Le
+  // registre étant append-only, la seule place où l'arrêter est ici, avant l'écriture.
+  for (const [champ, v] of Object.entries(c)) {
+    if (typeof v !== "string") continue;
+    const k = [...v].findIndex((ch) => { const n = ch.charCodeAt(0); return (n < 32 && n !== 9 && n !== 10 && n !== 13) || n === 127; });
+    if (k >= 0) motifs.push(`ligne ${i + 1} : le champ « ${champ} » porte un caractère de contrôle U+${[...v][k].charCodeAt(0).toString(16).padStart(4, "0").toUpperCase()} (après « ${[...v].slice(Math.max(0, k - 20), k).join("")} ») — un chemin Windows écrit dans une chaîne Python non brute (« \\00 ») en produit un : écrire la chaîne brute (r"…") ou doubler l'antislash, puis remettre le lot sous l'indice suivant (TF-1067)`);
+  }
+  if (c.id) motifs.push(`ligne ${i + 1} : une candidature ne porte JAMAIS d'id (frappé à l'ingestion)`);
+  for (const champ of ["titre", "contenu", "demandeur", "source", "date_demande"])
+    if (!c[champ]) motifs.push(`ligne ${i + 1} : champ ${champ} manquant`);
+  if (c.rectifie !== undefined) {
+    // Une rectification vise un item : elle n'a pas de cible de forge à elle, et sa nature est
+    // FERMÉE — une nature libre redeviendrait de la prose que rien ne sait interroger.
+    if (!/^TF-\d{4}$/.test(String(c.rectifie)))
+      motifs.push(`ligne ${i + 1} : rectifie doit désigner un id « TF-xxxx », reçu « ${c.rectifie} »`);
+    if (!NATURES_RECTIFICATION.has(c.nature_de_la_rectification))
+      motifs.push(`ligne ${i + 1} : nature_de_la_rectification doit être fait_errone, cause_erronee ou annule — reçu « ${c.nature_de_la_rectification ?? "(rien)"} »`);
+    return c;
+  }
+  if (!Array.isArray(c.forges_cibles_initiales) || !c.forges_cibles_initiales.length) {
+    // R-48 APPLIQUÉE À NOTRE PROPRE OUTIL (24/08) : « si deux personnes compétentes trancheraient
+    // identiquement sans information supplémentaire, ce n'est pas une décision, c'est un défaut
+    // d'automatisation ». Un lot dont chaque entrée NOMME sa cible dans son titre était refusé en
+    // bloc, et le produit devait le remettre pour un champ que le texte disait déjà. Mesuré le
+    // 24/08 : trois entrées d'un lot, les trois nommant la factory, rejet atomique.
+    //
+    // On DÉDUIT donc, et on le DIT — la déduction s'inscrit dans la source de la candidature, pour
+    // qu'un lecteur sache que ce champ n'a pas été rempli par l'émetteur. Ce qui n'est PAS déductible
+    // reste refusé : on ne devine jamais une cible qu'aucun mot ne nomme.
+    // UN ALIAS DE CHAMP VAUT MIEUX QU'UN REJET, et c'est le cas réel qui l'a montré : le lot écrivait
+    // `forge_cible: "pilot"` — au singulier, sans le suffixe `_initiales`. Le champ EXISTAIT, sous un
+    // autre nom, et le lot était refusé en bloc pour une information qu'il portait. Deux lecteurs
+    // compétents traduisent identiquement « pilot » en « factory-pilot » : c'est donc un défaut
+    // d'automatisation, pas une décision (R-48). L'alias est lu d'abord, le texte en dernier recours.
+    const alias = [c.forge_cible, c.forges_cibles, c.cible].filter(Boolean).flat()
+      .map((x) => String(x).trim().toLowerCase())
+      .map((x) => (/^(pilot|factory|noyau)$/.test(x) ? "factory-pilot"
+        : /^forge-/.test(x) ? `factory-${x}`
+        : /^factory/.test(x) ? x : null))
+      .filter(Boolean);
+    const texte = `${c.titre || ""} ${c.contenu || ""}`.toLowerCase();
+    const deduites = alias.length ? alias
+      : FORGES_CONNUES.filter(({ motif }) => motif.test(texte)).map(({ depot }) => depot);
+    if (deduites.length) {
+      c.forges_cibles_initiales = [...new Set(deduites)];
+      c.source = `${c.source} · [déduit à l'ingestion] forges_cibles_initiales absent du sidecar, ` +
+        `dérivé du texte de l'entrée : ${c.forges_cibles_initiales.join(", ")} (R-48 — la réponse se ` +
+        `déduisait du contexte, la refuser aurait coûté un aller-retour pour un champ que le titre disait)`;
+      deductions.push(`ligne ${i + 1} → ${c.forges_cibles_initiales.join(", ")}`);
+    } else {
+      motifs.push(`ligne ${i + 1} : forges_cibles_initiales manquant, et AUCUN mot de l'entrée ne nomme une forge — on ne devine pas une cible que rien ne nomme`);
+    }
+  }
+  verifierClasse(c, i);
+  return c;
+});
+if (motifs.length) {
+  console.error(`[REJET ATOMIQUE] ${sidecarPath} — registre intact. Motifs :\n  - ${motifs.join("\n  - ")}`);
+  process.exit(1);
+}
+
+// ---- idempotence : lot déjà ingéré ? ------------------------------------------------------
+const lireEv = (f) => (existsSync(f) ? readFileSync(f, "utf8").split("\n").filter((l) => l.trim()).map((l) => JSON.parse(l)) : []);
+const evenements = lireEv(registre);
+if (evenements.some((e) => e.ev === "ingestion" && (e.lot_sha === lotSha || e.lot_sha === lotShaBrut))) {
+  console.log(`[DÉJÀ INGÉRÉ] empreinte ${lotSha.slice(0, 12)} — 0 création (idempotence)`);
+  process.exit(0);
+}
+
+// ---- TF-0703 : une rectification qui porterait À CÔTÉ est refusée AVANT toute écriture ------
+// Un id inconnu marquerait le vide ; un id ARCHIVÉ vit dans un fichier dont chaque ligne doit
+// appartenir à un item d'état final `archive` (R8) — y ajouter une marque se décide, elle ne
+// s'automatise pas. Les deux cas sont des rejets atomiques, chacun avec son remède.
+const rectifications = candidatures.filter((c) => c.rectifie !== undefined);
+if (rectifications.length) {
+  const actifsIds = new Set(evenements.filter((e) => e.id).map((e) => e.id));
+  const archivesIds = new Set(lireEv(archive).filter((e) => e.id).map((e) => e.id));
+  const motifsRect = [];
+  for (const c of rectifications) {
+    if (actifsIds.has(c.rectifie)) continue;
+    motifsRect.push(archivesIds.has(c.rectifie)
+      ? `rectification de ${c.rectifie} : l'item est ARCHIVÉ — marquer l'archive est une décision ` +
+        "humaine, pas un geste d'ingestion. Remettre la rectification au pilot avec l'id en clair : " +
+        "c'est lui qui arbitrera entre rouvrir l'item et consigner la rectification à l'archive"
+      : `rectification de ${c.rectifie} : id INCONNU du registre (actifs et archive) — une ` +
+        "rectification qui vise un id absent porterait à côté, et le premier lecteur croirait " +
+        "l'erreur d'origine corrigée quelque part");
+  }
+  if (motifsRect.length) {
+    console.error(`[REJET ATOMIQUE] ${sidecarPath} — registre intact. Motifs :\n  - ${motifsRect.join("\n  - ")}`);
+    process.exit(1);
+  }
+}
+
+// ---- DOUBLON STRICT : REFUSÉ, jamais ingéré une seconde fois (TF-0956, 14/09/2026) ----------
+// Le 08/09, deux lots renommés par la pseudonymisation sont redevenus « jamais ingérés » pour la
+// boîte d'entrée, et ont été ingérés une seconde fois : six candidatures identiques mot pour mot
+// à six autres, entrées sans que rien ne bronche. Le rapprochement ci-dessous SIGNALE sans juger,
+// et c'est juste pour un recouvrement de mots ; un titre ET un contenu identiques (à la casse et
+// aux espaces près) ne sont pas une ressemblance, ce sont le même item.
+{
+  const norm = (s) => String(s || "").toLowerCase().replace(/\s+/g, " ").trim();
+  const connus = new Map();
+  for (const e of [...evenements, ...lireEv(archive)])
+    if (e.ev === "creation" && e.id) connus.set(`${norm(e.titre)} | ${norm(e.contenu)}`, e.id);
+  const motifsDoublon = [];
+  for (const [i, c] of candidatures.entries()) {
+    if (c.rectifie) continue;
+    const cle = `${norm(c.titre)} | ${norm(c.contenu)}`;
+    if (connus.has(cle)) motifsDoublon.push(`ligne ${i + 1} : titre ET contenu identiques à ${connus.get(cle)} — doublon strict`);
+    else connus.set(cle, `la ligne ${i + 1} du même lot`);
+  }
+  if (motifsDoublon.length) {
+    console.error(`[REJET ATOMIQUE] ${sidecarPath} — registre intact. Motifs :\n  - ${motifsDoublon.join("\n  - ")}\n`
+      + "  REMÈDE : un lot déjà ingéré sous un autre nom se RATTACHE (`node todo\\reempreinter-lot.mjs <sidecar> --par-rapprochement`),\n"
+      + "  il ne se réingère pas ; un item réellement nouveau se reformule (TF-0956).");
+    process.exit(1);
+  }
+}
+
+// ---- rapprochement contre le registre : SIGNALE, ne bloque JAMAIS (TF-0618) ---------------
+// Un produit remonte ce qu'il OBSERVE, et il n'a aucun moyen de savoir ce que le registre du pilot
+// contient : `TODO-PRODUIT.md` porte les items qui LE concernent, pas ceux que le pilot a corriges
+// chez lui. Le 25/08, un signalement juste a donc produit un doublon strict d'un item corrige la
+// veille, et coute une decision humaine pour un travail deja livre. Le rapprochement rend cette
+// piste AVANT la decision au lieu de la laisser decouvrir apres.
+//
+// IL N'AFFIRME PAS UN DOUBLON, il dit « ressemble a » : mesure sur les 154 items du registre, 3 des
+// 5 paires signalees ne sont pas des doublons mais deux faces d'un meme episode. Affirmer serait
+// donc faux 3 fois sur 5, et un controle qui affirme faux se fait desactiver (motif que R-33 bis donne pour le verdict websec).
+try {
+  const { rapprochements, itemsDuRegistre, frequences } = await import("./rapprocher.mjs");
+  const itemsClos = itemsDuRegistre(evenements);
+  const df = frequences(itemsClos);
+  const lignesRappro = [];
+  for (const [i, c] of candidatures.entries()) {
+    const r = rapprochements(`${c.titre || ""} ${c.contenu || ""}`, itemsClos, { df }).slice(0, 3);
+    for (const x of r) {
+      lignesRappro.push(`  item entrant n° ${i + 1} « ${String(c.titre).slice(0, 60)} »` +
+        `\n    ressemble a ${x.id} (${x.statut}${x.date ? ", " + x.date : ""}, recouvrement ${x.score}) : ${x.titre}` +
+        `\n    termes communs : ${x.communs.join(", ")}`);
+    }
+  }
+  if (lignesRappro.length) {
+    console.log(`[RAPPROCHEMENT] ${lignesRappro.length} piste(s) de lecture — AUCUN BLOCAGE, le juge reste humain.` +
+      "\n  Un item entrant peut decrire un defaut deja corrige a la source : le produit ne peut pas le savoir.\n" +
+      lignesRappro.join("\n") +
+      "\n  Ce n'est pas un verdict de doublon : sur le corpus reel, 3 paires sur 5 sont deux faces d'un" +
+      "\n  meme episode et non des doublons. A lire avant de decider.");
+  }
+} catch (e) {
+  // Un rapprochement indisponible ne doit JAMAIS empecher une ingestion : il aide, il ne garde pas.
+  console.error(`[RAPPROCHEMENT] indisponible (${e.message}) — ingestion poursuivie, la piste est perdue mais rien n'est bloque`);
+}
+
+// ---- frappage des ids à la suite (actifs + archive, jamais réutilisés) ---------------------
+const ids = [...evenements, ...lireEv(archive)].filter((e) => e.id).map((e) => parseInt(e.id.slice(3), 10));
+let prochain = (ids.length ? Math.max(...ids) : 0) + 1;
+// ---- ANONYMISATION À LA SOURCE (décision humaine du 28/08/2026) ---------------------------
+// « anonymiser la source dans les traitements, permettant de ne pas garder de trace des clients
+// et produits ». Le registre est PUBLIÉ : tout ce qui y entre est publié avec lui.
+//
+// TROIS ACTES EN DEUX JOURS ont montré qu'un geste manuel ne tient pas. Le 27/08, dix dépôts
+// réécrits pour un nom de client. Le 28/08 au matin, cinq lots pseudonymisés À LA MAIN avant
+// ingestion. À 09:47 le même jour, un nouveau lot est arrivé, porteur du même nom. Le flux des
+// retours est CONTINU et chaque lot porte le nom du produit qui l'envoie : tant que la
+// substitution vit dans les doigts de celui qui ingère, elle sera oubliée le jour où il pense à
+// autre chose — et ce jour-là le nom repart dans un dépôt public.
+//
+// La substitution est donc faite ICI, avant l'écriture, sur les champs texte de chaque
+// candidature. Elle s'arrête net si un référentiel manque : anonymiser à moitié serait pire que
+// ne pas anonymiser, parce que le registre passerait pour propre.
+const ts = new Date().toISOString();
+// LE PRODUIT S'INSCRIT AVANT D'ÊTRE SUBSTITUÉ, et cet ordre n'est pas un détail : la table des
+// produits s'étend À LA DÉCOUVERTE. Sans cette ligne, le premier lot d'un produit passerait avec
+// son nom en clair — et « le premier lot passe » est exactement la faille qu'on vient de payer
+// trois fois. Le nom se lit dans le NOM DU LOT, seule source qui le porte à coup sûr.
+// LES DEUX SÉPARATEURS, et c'est une mesure (02/09/2026) : ce découpage ne connaissait que `/`.
+// Sur un chemin Windows, « le nom du lot » était donc le chemin ENTIER, et la table des
+// pseudonymes s'est étendue à la découverte avec 24 entrées de la forme
+// `C:\…\Temp\<recette>\PROD` → Produit-13 à Produit-36 — des répertoires jetables de recettes,
+// inscrits comme produits. La table est hors dépôt, rien ne l'a relue ; la recette
+// `ingerer-anonymise-fichier.test.mjs` l'a attrapé en trouvant un pseudonyme dans le chemin et
+// aucun dans le nom du projet.
+const nomDuLot = String(sidecarPath).split(/[\\/]/).pop() || "";
+if (nomDuLot.includes(" - RETOURS - ")) {
+  const nomProduit = nomDuLot.split(" - RETOURS - ")[0];
+  // TF-1432 : la racine que le lot DÉCLARE (TF-0555) rattache un nom neuf au pseudonyme de son dossier.
+  const racineDeclaree = candidatures.map((c) => c && c.racine_produit).find(Boolean);
+  const pseudo = pseudoProduit(nomProduit, { racine: racineDeclaree ? String(racineDeclaree) : null });
+  // La sortie ne répète pas le nom réel : elle finit dans des journaux que rien ne relit.
+  // TF-0807 : un émetteur forge est public, son nom se dit et ne s'inscrit pas.
+  if (EST_EMETTEUR_FORGE.test(nomProduit)) console.log(`[ÉMETTEUR FORGE] lot remis par « ${nomProduit} » — nom public, conservé tel quel, jamais inscrit à la table des pseudonymes (TF-0807)`);
+  // TF-1505 : un produit privé déclaré de l'écosystème garde son nom ; le dire « anonymisé » serait faux.
+  else if (PRODUITS_DE_L_ECOSYSTEME.has(nomProduit)) console.log(`[ÉCOSYSTÈME] lot remis par « ${nomProduit} » — produit privé déclaré de l'écosystème, nom conservé tel quel, jamais inscrit à la table des pseudonymes (TF-1505)`);
+  else if (pseudo) console.log(`[ANONYMISÉ] produit du lot → ${pseudo} (table hors dépôt)`);
+  // TF-1432 : un produit qui porte DEUX pseudonymes se dit à chaque lot, tant que la table n'a pas
+  // tranché — le lot sous l'un, son dossier sous l'autre. Avertissement : rattacher se décide à la table.
+  const duDossier = pseudo && racineDeclaree ? pseudonymeDeRacine(String(racineDeclaree)) : null;
+  if (duDossier && duDossier !== pseudo) {
+    console.error(`[DEUX PSEUDONYMES] le lot est ${pseudo} et sa racine déclarée est ${duDossier} : un même produit, deux pseudonymes, `
+      + "et les règles qui comparent ses lots n'en voient qu'une part (TF-1432). Rattacher se décide à la table : "
+      + "bloc « rattachements », que la règle K5 du canal doit lire.");
+  }
+}
+let remplacesTotal = [];
+candidatures = candidatures.map((c) => {
+  const { candidature, remplaces } = anonymiserCandidature(c);
+  remplacesTotal.push(...remplaces);
+  return candidature;
+});
+remplacesTotal = [...new Set(remplacesTotal)];
+if (remplacesTotal.length) {
+  console.log(`[ANONYMISÉ] ${remplacesTotal.length} nom(s) substitué(s) avant écriture au registre : ` +
+    remplacesTotal.join(", "));
+  console.log("  Les tables de correspondance vivent HORS des dépôts.");
+}
+// TF-0966 (15/09/2026) — UN IDENTIFIANT TECHNIQUE INCONNU DES TABLES SE FAIT QUALIFIER. Le 08/09,
+// cinq identifiants d'un système client (MAJUSCULES_SOULIGNÉES, schema.table) sont entrés au
+// registre publié, absents des deux tables : ni l'anonymisation ni la porte ne pouvaient les voir.
+// Relevé APRÈS la substitution (un nom connu est déjà remplacé), moins le vocabulaire public du
+// pilot. AVERTISSEMENT, pas refus : mesuré le 15/09, 42 créations sur 350 en portent au moins un —
+// un refus arrêterait un lot sur huit pour une question qu'un humain seul peut trancher. Le nombre
+// entre à l'événement d'ingestion ; les NOMS, jamais — ils sont peut-être confidentiels.
+const identifiantsAQualifier = aQualifier(candidatures.map((c) => `${c.titre || ""} ${c.contenu || ""}`));
+if (identifiantsAQualifier.length) {
+  console.error(`[IDENTIFIANTS À QUALIFIER] ${identifiantsAQualifier.length} identifiant(s) technique(s) absent(s) des tables et du vocabulaire public du pilot : ` +
+    `${identifiantsAQualifier.join(", ")}\n  Confidentiel ? l'inscrire à la table des noms interdits du canal (identifiants + pseudonymes) et rectifier les items ; ` +
+    "sinon, rien à faire. Le registre est publié : la question se pose MAINTENANT, pas après le push (TF-0966).");
+}
+// TF-1134 (a) (15/09/2026) — UNE ADRESSE IP N'EST DANS AUCUNE TABLE. L'adresse IPv4 d'un poste en
+// service est entrée au registre le 15/09. Même modèle que TF-0966 : NOMMÉE à l'écran, COMPTÉE à
+// l'événement d'ingestion, jamais écrite dans ce dernier ; avertissement, pas refus.
+const adressesIp = adressesIpAQualifier(candidatures.map((c) => `${c.titre || ""} ${c.contenu || ""}`));
+if (adressesIp.length) console.error(messageAdressesIp(adressesIp, "le lot"));
+// TF-1357 (26/09/2026) — UN NOM DE PERSONNE N'EST DANS AUCUNE TABLE non plus : même modèle, nommé à
+// l'écran, compté à l'événement d'ingestion, jamais écrit dans ce dernier.
+const personnes = personnesAQualifier(candidatures.map((c) => `${c.titre || ""} ${c.contenu || ""} ${c.source || ""}`));
+if (personnes.length) console.error(messagePersonnes(personnes, "le lot"));
+// TF-1540 (12/10/2026) — LA FORME PAR LAQUELLE UN LOT DÉSIGNE SON PROJET N'EST DANS AUCUNE TABLE non plus :
+// même modèle, nommée à l'écran, comptée à l'événement d'ingestion, jamais écrite dans ce dernier.
+const designations = designationsAQualifier(candidatures.map((c) => `${c.titre || ""} ${c.contenu || ""} ${c.source || ""}`));
+if (designations.length) console.error(messageDesignations(designations, "le lot"));
+// ---- récidive : la classe est-elle déjà close en corrige ? --------------------------------
+// Deux sources, réunies : les items que la classe déclare l'avoir FONDÉE (todo/CLASSES.json,
+// `fondee_par`) et tout item du registre portant déjà cette `classe`. La date de correction se
+// LIT au registre — actifs ET archive —, jamais dans le référentiel (N-6 : une valeur mobile ne se
+// recopie pas). Une classe SUSPECTE est une clé créée SANS clôture fondatrice, moins de 30 jours
+// après un retour d'une classe voisine : la façon la moins chère de faire baisser un compteur de
+// récidives est d'inventer une clé neuve, et c'est ce que ce signal rend visible.
+const etatsTous = new Map();
+for (const e of [...lireEv(archive), ...evenements]) {
+  if (!e.id) continue;
+  if (e.ev === "creation") etatsTous.set(e.id, { ...e, _corrige: null });
+  else if (e.ev === "maj" && etatsTous.has(e.id)) {
+    const s = etatsTous.get(e.id); Object.assign(s, e);
+    if (e.statut === "corrige") s._corrige = e.date_correction || String(e.ts || "").slice(0, 10);
+  }
+}
+const recidiveDe = (cle, dateRetour) => {
+  const ids = new Set();
+  for (const id of (CLASSES.get(cle)?.fondee_par || [])) {
+    const s = etatsTous.get(id);
+    if (s && s._corrige && (!dateRetour || s._corrige < dateRetour)) ids.add(id);
+  }
+  for (const s of etatsTous.values()) if (s.classe === cle && s._corrige && (!dateRetour || s._corrige < dateRetour)) ids.add(s.id);
+  return [...ids].sort();
+};
+const classeSuspecte = (cle) => {
+  const ref = CLASSES.get(cle);
+  if (!ref || (ref.fondee_par || []).length || !ref.creee_le || !(ref.voisines || []).length) return null;
+  const voisinesRecentes = [];
+  for (const v of ref.voisines) {
+    const dates = [...etatsTous.values()].filter((s) => s.classe === v).map((s) => s.date_demande || String(s.ts || "").slice(0, 10))
+      .concat((CLASSES.get(v)?.fondee_par || []).map((id) => etatsTous.get(id)?.date_demande).filter(Boolean));
+    const derniere = dates.sort().pop();
+    if (!derniere) continue;
+    const jours = (Date.parse(ref.creee_le) - Date.parse(derniere)) / 86400000;
+    if (jours >= 0 && jours < 30) voisinesRecentes.push(`${v} (retour du ${derniere})`);
+  }
+  return voisinesRecentes.length ? voisinesRecentes : null;
+};
+let nbRecidives = 0;
+const produitDuLot = EST_UN_LOT ? (pseudoProduit(NOM_SIDECAR.split(" - RETOURS - ")[0]) || NOM_SIDECAR.split(" - RETOURS - ")[0]) : "(candidature hors lot)";
+const nouvelles = candidatures.map((c) => {
+  // TF-0703 : une rectification MARQUE l'item visé — événement `maj`, aucun id neuf frappé.
+  // L'item d'origine et sa correction restent reliés par le même identifiant, au lieu de deux
+  // créations concurrentes que rien ne rattache.
+  if (c.rectifie !== undefined) {
+    return JSON.stringify({
+      ev: "maj", ts, id: c.rectifie,
+      rectification: {
+        nature: c.nature_de_la_rectification,
+        titre: c.titre, contenu: c.contenu, demandeur: c.demandeur,
+        source: c.source, date_demande: c.date_demande,
+      },
+    });
+  }
+  const score = c.score && [c.score.gain, c.score.preuve, c.score.effort].every((v) => typeof v === "number")
+    ? { ...c.score, valeur: Math.round((c.score.gain * c.score.preuve / c.score.effort) * 10) / 10 }
+    : { gain: 3, preuve: 1, effort: 3, valeur: 1, par_defaut: true };
+  // TF-1128 : la clé réservée n'entre jamais comme classe — elle se compterait hors référentiel
+  // (R13). Le retour entre sans classe, avec la proposition, que le pilot instruit.
+  const aCreer = String(c.classe) === CLE_A_CREER ? c.classe_proposee : null;
+  if (aCreer) console.error(`[CLASSE À CRÉER] « ${aCreer.cle} » (famille ${aCreer.famille}) proposée par ${produitDuLot} — le retour ENTRE sans classe ; créer la clé dans todo/CLASSES.json (datée, sourcée), puis rattacher le retour par rectification`);
+  const classe = c.classe && !aCreer ? String(c.classe) : null;
+  const rec = classe ? recidiveDe(classe, c.date_demande) : [];
+  const susp = classe ? classeSuspecte(classe) : null;
+  if (rec.length) {
+    nbRecidives++;
+    console.error(`[RÉCIDIVE] classe « ${classe} » déjà close en corrige par ${rec.join(", ")} — le retour ENTRE, marqué recidive_de. ` +
+      `La descente n'a pas tenu chez ${produitDuLot} ; contrôle censé la jouer : ${CLASSES.get(classe)?.oracle || "(aucun déclaré)"} ; règle : ${CLASSES.get(classe)?.regle || "?"}`);
+  }
+  if (susp) console.error(`[CLASSE SUSPECTE] « ${classe} » créée le ${CLASSES.get(classe)?.creee_le} sans clôture fondatrice, moins de 30 jours après un retour d'une classe voisine : ${susp.join(" ; ")} — la contre-métrique du tableau de bord la compte`);
+  return JSON.stringify({
+    ev: "creation", ts, id: `TF-${String(prochain++).padStart(4, "0")}`,
+    titre: c.titre, contenu: c.contenu, demandeur: c.demandeur, source: c.source,
+    date_demande: c.date_demande, statut: "candidat",
+    forges_cibles_initiales: c.forges_cibles_initiales, forges_cibles_reelles: null,
+    classe, recidive_de: rec.length ? rec : null, ...(susp ? { classe_suspecte: susp } : {}),
+    ...(aCreer ? { classe_a_creer: { cle: aCreer.cle, famille: aCreer.famille, libelle: aCreer.libelle } } : {}),
+    score, preuve_du_cout: c.preuve_du_cout ?? null,
+    decideur: null, date_decision: null, date_correction: null, corrections_realisees: null,
+    gains_constates: null, version_forge_corrigee: null, produits_beneficiaires: null,
+  });
+});
+// La dérogation se CONSIGNE au registre, jamais seulement à l'écran : un lot entré par
+// dérogation doit rester reconnaissable des années plus tard, avec la règle contournée et le
+// motif. C'est le prix de b3 — la règle reste dure, le passage reste tracé.
+if (derogationMotif && !reglesDerogees.length) {
+  console.error("[AVERTISSEMENT] --derogation posé mais aucune règle de forme ne refusait ce lot —\n" +
+    "  dérogation inutile, non consignée. Une trace décorative brouille les vraies.");
+}
+// TF-0703 : `creations` ne compte que les créations — compter les rectifications ferait croire
+// à des ids frappés qui n'existent pas, et fausserait tout rapprochement registre↔lot futur.
+const nbRectifications = candidatures.filter((c) => c.rectifie !== undefined).length;
+// LE CHEMIN DU LOT PASSE PAR LA MÊME SUBSTITUTION QUE LA CANDIDATURE (RT du 31/08, lot c du
+// Produit-12 : « l'anonymisation couvre la candidature mais pas l'événement d'ingestion »). Le nom
+// du fichier reçu porte le nom du produit, et le registre est suivi par git : deux occurrences
+// d'un nom de client sont ainsi entrées dans un commit pendant que la sortie affichait
+// « [ANONYMISÉ] ». Un contrôle qui annonce propre et laisse fuir retire au relecteur la raison de
+// regarder. L'idempotence n'a besoin que du lot_sha ; le nom consigné est le nom pseudonymisé.
+const evIngestion = { ev: "ingestion", ts, lot_sha: lotSha, fichier: anonymiser(String(sidecarPath)).texte, creations: nouvelles.length - nbRectifications };
+if (nbRectifications) evIngestion.rectifications = nbRectifications;
+if (nbRecidives) evIngestion.recidives = nbRecidives;
+if (identifiantsAQualifier.length) evIngestion.identifiants_a_qualifier = identifiantsAQualifier.length;
+if (adressesIp.length) evIngestion.adresses_ip_a_qualifier = adressesIp.length;
+if (personnes.length) evIngestion.noms_de_personnes_a_qualifier = personnes.length;
+if (designations.length) evIngestion.designations_de_projet_a_qualifier = designations.length;
+if (reglesDerogees.length) {
+  evIngestion.derogation = { regles: [...new Set(reglesDerogees)], motif: derogationMotif, decision: "humaine" };
+}
+nouvelles.push(JSON.stringify(evIngestion));
+appendFileSync(registre, nouvelles.join("\n") + "\n");
+
+// ---- POST-CONTRÔLE anti-collision (TF-0481, 22/08/2026) -----------------------------------
+// Le préflight de TF-0394 regarde AVANT d'écrire : il refuse quand le distant a déjà avancé. Il ne
+// peut rien contre la fenêtre qui s'ouvre PENDANT l'ingestion — deux sessions qui frappent les
+// mêmes numéros avant que l'une ait poussé. Cette fenêtre a été payée TROIS FOIS, dont deux le
+// 22/08 : cinq candidatures renumérotées le matin, un `TF-0514` frappé ici pendant qu'une autre
+// session publiait le sien le soir.
+//
+// Ce post-contrôle ne la ferme pas — il la RACCOURCIT, en la faisant voir tout de suite au lieu de
+// la découvrir à la main plus tard. Il ne peut pas échouer : l'écriture est faite, et annuler
+// ferait perdre le travail d'ingestion. Il AVERTIT, nomme les ids en cause, et donne la commande
+// qui répare. C'est la différence entre un défaut qu'on subit et un défaut qu'on voit.
+if (!process.argv.includes("--sans-fetch") && nouvelles.length > 1) {
+  // TF-0703 : seuls les ids FRAPPÉS ICI se confrontent à origin — l'id d'une rectification
+  // désigne un item existant, donc présent sur le distant par construction : le compter ferait
+  // crier collision sur chaque rectification d'un item déjà publié.
+  const frappes = nouvelles.slice(0, -1)
+    .map((l) => { try { return JSON.parse(l); } catch { return null; } })
+    .filter((o) => o && o.ev === "creation").map((o) => o.id);
+  try {
+    execFileSync("git", ["-C", todoDir, "fetch", "--quiet", "origin"], { stdio: "ignore", timeout: 20000 });
+    const distant = execFileSync("git", ["-C", todoDir, "show", "origin/main:todo/TODO.jsonl"], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+    const pris = frappes.filter((id) => distant.includes('"id":"' + id + '"'));
+    if (pris.length) {
+      console.error(`[COLLISION TF-0481] ${pris.length} id(s) frappé(s) ici sont DÉJÀ PRIS sur origin : ${pris.join(", ")}.\n` +
+        "  Une autre session les a publiés pendant cette ingestion — le préflight ne pouvait pas le voir, il regarde AVANT.\n" +
+        "  L'ingestion locale est écrite et n'est PAS annulée. Réparer avec, pour chaque id :\n" +
+        pris.map((id) => `    node todo\\renumeroter.mjs ${id} TF-XXXX --motif "collision avec une session parallèle le <date>"`).join("\n") +
+        "\n  Choisir XXXX au-delà du max des DEUX registres (local et origin), puis régénérer les vues.");
+    }
+  } catch (e) {
+    // TF-0623 : ce `catch` ne liait pas son exception. Il rendait « hors ligne ? remote absent ? » —
+    // deux hypotheses testees le 25/08 et FAUSSES toutes les deux, le fetch rendant 0 et le show
+    // rendant les 898 432 octets du registre distant. La cause reelle etait donc detruite au moment
+    // ou elle se produisait, et le controle rendait la seule information qui n'aidait pas.
+    console.error("[post-contrôle TF-0481] comparaison origin impossible — collision inter-sessions NON " +
+      `vérifiée après écriture. CAUSE RÉELLE : ${String(e && e.message || e).split("\n")[0].slice(0, 240)}`);
+  }
+}
+
+// ---- contrôles post-écriture ---------------------------------------------------------------
+execFileSync("node", [join(ICI, "oracle-todo.mjs"), registre, archive, "--classes", CLASSES_PATH], { encoding: "utf8" });
+if (registre === resolve(join(ICI, "TODO.jsonl")))
+  execFileSync("node", [join(ICI, "generer-vue.mjs")], { encoding: "utf8" });
+// ---- R-47 à l'arrivée d'un lot : refermer le cercle (23/08/2026) ---------------------------
+// Le diagnostic du 23/08, et c'est lui qui compte plus que la règle elle-même. Le défaut
+// d'héritage d'Produit-02 était DÉJÀ VU par `oracle-conformite-projet` — R-43 rendait
+// FAIL, mot pour mot : « précédence de la factory non câblée ». L'oracle existait, il voyait,
+// et personne ne l'a joué. Il n'est déclenché qu'à l'OUVERTURE d'un run et à sa CLÔTURE ; entre
+// les deux, le seul mécanisme qui pourrait le rejouer est le hook de la factory installé chez
+// le produit — or ce hook fait partie des artefacts manquants. Le contrôle dépendait donc d'un
+// artefact dont il était lui-même le seul juge : un cercle, et rien ne le rompait.
+//
+// Ce qui suit rompt le cercle en câblant le contrôle à un moment que le PILOT maîtrise, sans
+// rien attendre de ce qui est installé ailleurs : un produit qui remet un lot se nomme. On joue
+// alors la conformité de son héritage et on la DIT.
+//
+// AVERTISSEMENT, jamais blocage, et le motif tient en une phrase : refuser l'ingestion parce
+// que le produit n'a pas ses gabarits punirait deux fois le même défaut — une fois à la porte,
+// une fois sur le travail déjà fait. C'est exactement ce que les quinze candidatures refusées
+// en trois jours ont coûté.
+// Borne : R-47 ne parle que des LOTS DE RETOURS, dont le nom porte le produit. Une candidature
+// hors lot n'a pas de produit a juger, et crier dessus apprendrait a ignorer le message.
+const nomFichier = String(sidecarPath).split(/[\\\/]/).pop() || "";
+// TF-0807 (05/09) : R-47 juge l'héritage d'un PRODUIT. Un lot remis par une forge n'a pas de
+// produit à localiser — le chercher rendait « dossier introuvable » sur un émetteur qui n'est pas
+// une cible, et consignait un silence qui n'en était pas un. Sans objet, déclaré, jamais cherché.
+if (nouvelles.length > 1 && nomFichier.includes(" - RETOURS - ") && EST_EMETTEUR_FORGE.test(nomFichier.split(" - RETOURS - ")[0])) {
+  console.error(`[R-47] lot remis par la forge « ${nomFichier.split(" - RETOURS - ")[0]} » — l'héritage du pilot se juge chez un produit, pas chez une forge : SANS OBJET (TF-0807)`);
+} else if (nouvelles.length > 1 && nomFichier.includes(" - RETOURS - ")) {
+  const projet = nomFichier.split(" - RETOURS - ")[0];
+  const racine = process.env.FORGE_ROOT || join(ICI, "..", "..");
+  let dossier = null;
+  let parCritere = null;
+  // LE SIDECAR PEUT DIRE OU IL HABITE, ET C'EST LA SEULE SOURCE SURE (TF-0555, 24/08). La
+  // recherche ci-dessous DEVINE ; le produit, lui, SAIT. Un sidecar qui porte `racine_produit`
+  // court-circuite donc toute heuristique — c'est la voie recommandee par le lot qui a signale le
+  // defaut, et elle ne coute qu'un champ.
+  // TF-0731 (corrigé le 01/09) : cette ligne lisait `nouvelles` — un tableau de CHAÎNES JSON —
+  // et `.racine_produit` sur une chaîne rend toujours undefined. La « seule source sûre »
+  // (TF-0555) était donc celle que le code ne lisait pas, et toute localisation retombait sur
+  // l'heuristique, qui masquait la voie morte tant qu'elle trouvait. On lit les OBJETS.
+  const declaree = candidatures.map((c) => c && c.racine_produit).find(Boolean);
+  if (declaree) {
+    const abs = isAbsolute(String(declaree)) ? String(declaree) : join(racine, String(declaree));
+    if (existsSync(join(abs, "forge"))) dossier = abs;
+    else console.error(`[R-47] le sidecar declare racine_produit = « ${declaree} », introuvable ou sans forge\ — on ne la suit pas les yeux fermes`);
+  }
+  // TF-0623 : la recherche vit dans `todo/localiser-produit.mjs`, qui la rend TESTABLE et la
+  // partage avec le message de rejet — c'est le meme besoin aux deux endroits, et deux copies
+  // divergeraient. Le module dit AUSSI par quel critere il a trouve, ce que le message reprend.
+  if (!dossier) {
+    const trouve = localiserProduit(projet, racine);
+    dossier = trouve.dossier;
+    if (dossier) parCritere = trouve.par;
+  }
+  if (!projet || !dossier) {
+    // Silence assumé et DIT : un produit qu'on ne localise pas sur ce poste n'est pas un produit
+    // en défaut. Le contraire ferait crier l'ingestion sur toutes les remises venues d'ailleurs.
+    console.error(`[R-47] conformité de l'héritage NON vérifiée pour « ${projet || "?"} » — dossier introuvable sous ${racine}. Ce n'est pas un constat sur le produit, c'est l'absence d'une cible à juger.`);
+    // UNE VÉRIFICATION NON FAITE QUI NE LAISSE PAS DE TRACE EST UNE VÉRIFICATION QU'ON CROIT FAITE
+    // (TF-0555, 24/08). Le message ci-dessus partait au seul flux d'erreur : il disparaissait avec
+    // la session. Le registre en garde donc une ligne, avec le nom cherché et la racine balayée —
+    // de quoi savoir, six mois plus tard, que ce lot est entré sans que l'héritage soit jugé.
+    // Même type d'événement que l'ingestion (le registre n'en accepte pas d'autre sans identifiant)
+    // et SANS `creations` : cette ligne ne couvre aucune candidature, elle consigne un silence.
+    appendFileSync(registre, JSON.stringify({
+      // Même substitution que l'événement d'ingestion : le chemin ET le nom du projet (lu dans le
+      // nom du lot, donc le nom du produit) entrent dans un fichier suivi par git.
+      ev: "ingestion", ts: new Date().toISOString(), lot_sha: lotSha, fichier: anonymiser(String(sidecarPath)).texte,
+      heritage_non_verifie: { projet: projet ? anonymiser(projet).texte : null, racine: anonymiser(String(racine)).texte,
+        motif: "produit introuvable sur ce poste — cible absente, aucun constat sur le produit" },
+    }) + "\n");
+  } else {
+    // Le CRITERE de localisation est dit : « trouve par ses lots » n'a pas la meme force que
+    // « trouve par son nom », et le lecteur doit pouvoir peser le constat qui suit (TF-0623).
+    console.error(`[R-47] produit « ${projet} » localise en ${dossier}` +
+      `${parCritere ? ` (par ses ${parCritere})` : " (racine declaree par le sidecar)"} — heritage juge sur cette cible.`);
+    const r = spawnSync(process.execPath, [join(ICI, "..", "oracles", "oracle-conformite-projet.mjs"), dossier],
+      { encoding: "utf8", timeout: 120000 });
+    let f = null;
+    try { const j = JSON.parse((r.stdout || "").slice((r.stdout || "").indexOf("{"))); f = (j.findings || []).find((x) => x.regle === "R-47"); } catch { /* verdict illisible */ }
+    if (!f) console.error(`[R-47] verdict d'héritage illisible pour ${dossier} — non vérifié, jamais supposé bon`);
+    else if (f.statut === "FAIL") console.error(`[R-47 — AVERTISSEMENT] ${projet} : ${f.message}\n  Le lot est INGÉRÉ quand même : refuser ici punirait deux fois le même défaut.`);
+    else console.error(`[R-47] ${projet} : ${f.statut === "PASS" ? f.message : f.message}`);
+
+    // TF-0689 — LA PROPAGATION SE CONFRONTE AU MÊME MOMENT QUE L'HÉRITAGE : un produit qui
+    // remet un lot se nomme, c'est l'instant que le pilot maîtrise. AVERTISSEMENT, jamais
+    // blocage — même raison que R-47 : refuser punirait deux fois, une fois à la porte, une
+    // fois sur le travail déjà fait.
+    const rp = spawnSync(process.execPath, [join(ICI, "..", "oracles", "oracle-propagation.mjs"), dossier, "--json"],
+      { encoding: "utf8", timeout: 120000 });
+    let vp = null;
+    try { vp = JSON.parse((rp.stdout || "").slice((rp.stdout || "").indexOf("{"))); } catch { /* dit juste après */ }
+    if (!vp) console.error(`[propagation TF-0689] verdict illisible pour ${dossier} — non confronté, jamais supposé à jour`);
+    else if (vp.verdict === "FAIL") {
+      const durs = (vp.findings || []).filter((x) => x.statut === "FAIL");
+      console.error(`[propagation TF-0689 — AVERTISSEMENT] ${projet} : ${durs.length} obligation(s) en retard —\n`
+        + durs.slice(0, 4).map((x) => `  - ${x.ou} : ${String(x.message).slice(0, 200)}`).join("\n"));
+    } else {
+      console.error(`[propagation TF-0689] ${projet} : ${vp.verdict} — ${(vp.findings || [])[0]?.message?.slice(0, 140) || ""}`);
+    }
+  }
+}
+
+if (deductions.length) {
+  // Loi n° 3 : une décision prise d'office se DIT. Sans cette ligne, un champ rempli par
+  // déduction serait indiscernable d'un champ rempli par l'émetteur.
+  console.error(`[R-48 · décidé d'office] forges_cibles_initiales DÉDUIT pour ${deductions.length} ` +
+    `candidature(s), la déduction est écrite dans leur champ « source » : ${deductions.join(" · ")}`);
+}
+console.log(`[OK] ${nouvelles.length - 1 - nbRectifications} candidature(s) ingérée(s) en CANDIDAT` +
+  (nbRectifications ? ` et ${nbRectifications} rectification(s) MARQUÉE(S) sur leur item (TF-0703)` : "") +
+  ` (lot ${lotSha.slice(0, 12)}) — la décision reste humaine`);

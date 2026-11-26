@@ -1,0 +1,849 @@
+#!/usr/bin/env node
+// bootstrap.mjs — amorce ou met à jour un poste pour l'écosystème forge Factory.
+//
+// v2 (20/08/2026, revue « dernières versions ») — « Poste prêt » veut désormais dire, et
+// prouve par exécution : le pilot ET les quatorze dépôts suivis sont présents, chacun À JOUR de son
+// origin (mesuré : retard/avance en commits, version affichée), et les skills installés sont
+// ceux que les forges versionnent. Avant : « mis à jour » signifiait « pull sans erreur »,
+// « déjà présent » valait « prêt » à 50 commits de retard, le pilot n'était pas mis à jour,
+// les skills jamais installés ni propagés (K1 rouge sur poste vierge, K2 rouge après chaque
+// pull), un dépôt renommé se dupliquait, et gh bloquait des forges devenues publiques.
+//
+// Usage :  node bootstrap.mjs [--racine <dossier>] [--pull] [--sans-skills] [--sans-pilot]
+//   --racine      racine d'installation (défaut : $FORGE_ROOT, sinon le parent de ce dépôt)
+//   --pull        met à jour (git pull --ff-only) le pilot puis les forges présentes, et
+//                 propage les skills versionnés vers la copie installée (oracle-skills
+//                 --appliquer) d'un état PROPRE et PUBLIÉ de chaque forge : un dépôt source qui a
+//                 des changements non publiés sous ses skills ou ses hooks (arbre modifié, commits
+//                 non poussés) n'est pas recopié, et c'est dit en [avert] (TF-1099). Lancer --pull
+//                 décide de propager ce qui est publié — jamais un état intermédiaire que personne
+//                 n'a vu (R-29)
+//   --sans-skills ne juge ni ne propage les skills (recette sur dépôts factices)
+//   --sans-pilot  ne touche pas au dépôt pilot courant (recette)
+//   --pour-produit verdict du poste POUR UN PRODUIT : un défaut du parc (canal confidentiel) y est un
+//                 avertissement nommé, sans exit 1 — passé par le hook d'ouverture d'un produit (TF-1657)
+//   --rebatir <dépôt> [--essai]  rebâtit un clone DIVERGÉ sur son histoire publiée réécrite, sans
+//                 perdre le travail propre au poste (scripts/rebatir-clone.mjs, D-12 a du 07/09) ;
+//                 jamais de push — la publication reste un GO humain
+// Env :  BOOTSTRAP_SOURCE        base des dépôts (défaut https://github.com/Ptitcuicui)
+//        FORGE_SKILLS_INSTALLES  dossier des skills installés (prioritaire — voie des recettes)
+//        CLAUDE_CONFIG_DIR      racine de configuration que le HARNAIS charge (défaut ~/.claude)
+//                               résolution unique : scripts/lib-config-installee.mjs (TF-0995)
+//
+// Sans --pull, le poste est seulement MESURÉ : un dépôt en retard est un DÉFAUT dont le
+// remède est nommé (--pull). Un skill installé en écart est un DÉFAUT dont le remède est
+// nommé (--pull). Rien n'est « prêt » par omission.
+// Prérequis bloquants : git, node >= 18. gh n'est plus requis (forges publiques depuis le
+// 10/08 ; gh reste utile aux dépôts d'engagement privés, hors bootstrap).
+// Contrat de sortie : rapport sur stdout, exit 0 = poste prêt, 1 = au moins un défaut.
+
+import { spawnSync } from "node:child_process";
+import { existsSync, readFileSync, writeFileSync, renameSync, readdirSync, statSync, readlinkSync, unlinkSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { skillsInstalles } from "./scripts/lib-config-installee.mjs";
+import { SOUS_ARBRE_LIE, jugerForgeRoot, racineConseillee } from "./oracles/lib-racine-parc.mjs";
+import { releverNonEnregistres, dire } from "./scripts/lib-non-enregistre.mjs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const ICI = dirname(fileURLToPath(import.meta.url));
+const MOI = fileURLToPath(import.meta.url);
+const SOURCE = (process.env.BOOTSTRAP_SOURCE || "https://github.com/Ptitcuicui").replace(/\/+$/, "");
+// Pilot embarqué (26/11/2026) : la copie de la partie outil du pilot que livre la mallette
+// factory-socle porte EMBARQUE.json. Ce n'est pas un clone : rien ne s'y clone ni ne s'y tire, la
+// marketplace la met à jour, et le parc du poste se réduit aux forges que livrent les mallettes.
+if (existsSync(join(ICI, "EMBARQUE.json"))) {
+  console.log("[info] pilot embarqué par la mallette factory-socle : la marketplace le met à jour, rien à cloner ni à tirer. Pour un parc complet : installer.ps1 ou installer.sh.");
+  process.exit(0);
+}
+// Les dépôts déclarés du parc vivent dans scripts/lib-parc.mjs depuis le 27/09/2026 (TF-1327) : les
+// balayages du parc les lisent là, au lieu de juger un dossier à la forme de son nom.
+import { FORGES, PRODUITS_DE_L_ECOSYSTEME, PILOT, ALIAS_PILOT, CANAL, ACCES_REFUSE, depotDe } from "./scripts/lib-parc.mjs";
+
+const args = process.argv.slice(2);
+// --rebatir <dépôt> (D-12 a, 07/09/2026, TF-0877) : quand un dépôt rend « DIVERGÉ » parce que son
+// histoire publiée a été réécrite, --pull ne peut rien (avance rapide refusée) et le mode opératoire
+// dit « à recloner, pas à fusionner ». Ce mode délègue à scripts/rebatir-clone.mjs : sauvegarde en
+// paquet vérifié, delta propre au poste exporté en patches, réalignement sur origin/main, rejeu,
+// arborescences liées retirées, porte de publication jouée — jamais de push. Sortie JSON du script.
+const iRebatir = args.indexOf("--rebatir");
+if (iRebatir >= 0) {
+  const nomDepot = args[iRebatir + 1];
+  if (!nomDepot || nomDepot.startsWith("--")) { console.error("usage : node bootstrap.mjs --rebatir <nom-du-dépôt> [--essai]"); process.exit(2); }
+  const iR = args.indexOf("--racine");
+  const racineR = resolve(iR >= 0 ? args[iR + 1] : (process.env.FORGE_ROOT && !SOUS_ARBRE_LIE.test(resolve(process.env.FORGE_ROOT)) ? process.env.FORGE_ROOT : null) || racineConseillee(ICI));
+  const cible = existsSync(join(racineR, nomDepot)) ? join(racineR, nomDepot) : resolve(nomDepot);
+  const r = spawnSync(process.execPath, [join(ICI, "scripts", "rebatir-clone.mjs"), cible, ...(args.includes("--essai") ? ["--essai"] : [])], { stdio: "inherit", env: { ...process.env, FORGE_ROOT: racineR } });
+  process.exit(r.status ?? 1);
+}
+const pull = args.includes("--pull");
+const sansSkills = args.includes("--sans-skills");
+// 14/10/2026 : joué par `scripts/installer-projet.mjs`, le bootstrap tait sa bannière — l'installateur
+// rend la sienne, la seule que l'humain doit lire (deux bannières successives se lisaient comme deux verdicts).
+const sousInstallateur = args.includes("--sous-installateur");
+const sansPilot = args.includes("--sans-pilot");
+const iRacine = args.indexOf("--racine");
+// TF-2720 (22/11/2026) — LA RACINE PAR DÉFAUT N'EST PAS LE PARENT D'UN ARBRE LIÉ. `dirname(ICI)` rendait `…\.claude\worktrees` quand le
+// bootstrap se jouait depuis un arbre d'agent, et la bannière conseillait d'exporter cette valeur (relevé d'ouverture du 14/11/2026) : le
+// pilot devenait introuvable, des recettes rougissaient (6 cas sur 95) et TF-2520 avait déjà vu le bootstrap recloner les forges sous
+// cet arbre. Le défaut vient donc de `racineConseillee` (le parent du dépôt PRINCIPAL), et un `FORGE_ROOT` hérité sous `.claude\worktrees`
+// n'est jamais un parc : il est écarté, dit à l'écran (voir plus bas), au profit de ce défaut.
+const racineHeritee = process.env.FORGE_ROOT;
+const racineHeriteeRefusee = iRacine < 0 && Boolean(racineHeritee) && SOUS_ARBRE_LIE.test(resolve(racineHeritee));
+const racine = resolve(iRacine >= 0 ? args[iRacine + 1] : (racineHeriteeRefusee ? null : racineHeritee) || racineConseillee(ICI));
+// La copie installée se résout par lib-config-installee (TF-0995) : `CLAUDE_CONFIG_DIR` est la
+// variable que le HARNAIS lit — l'ignorer faisait juger un parc que la session ne charge pas.
+// `SKILLS_DECIDE_PAR` accompagne le chemin partout où il s'imprime : un verdict qui ne dit pas
+// où il a regardé ne se conteste pas.
+const { chemin: SKILLS_INSTALLES, decide_par: SKILLS_DECIDE_PAR } = skillsInstalles();
+
+const run = (cmd, argv, cwd) => {
+  const r = spawnSync(cmd, argv, { cwd, encoding: "utf-8", windowsHide: true });
+  if (r.error) return { status: 127, stdout: "", stderr: String(r.error.message || r.error) };
+  return { status: r.status ?? 1, stdout: r.stdout || "", stderr: r.stderr || "" };
+};
+const git = (cwd, ...argv) => run("git", argv, cwd);
+const sortie = (r) => (r.stdout || "").trim();
+
+const defauts = [];
+const averts = [];
+const versions = [];
+// LE COMPTE DES AVERTISSEMENTS EST CELUI DES LIGNES AFFICHÉES (14/10/2026). Le bilan comptait les
+// seules entrées poussées dans `averts`, et plusieurs lignes [avert] n'en poussaient aucune : le
+// 14/10, quatre lignes affichées, « 2 avertissement(s) » au bilan. Un compte qui contredit l'écran
+// qu'on vient de lire apprend à ne plus lire ni l'un ni l'autre.
+let avertsAffiches = 0;
+const ligne = (statut, msg) => { if (statut === "avert") avertsAffiches++; console.log(`[${statut}] ${msg}`); };
+if (racineHeriteeRefusee) {
+  ligne("avert", `FORGE_ROOT=${racineHeritee} est sous .claude\\worktrees : le parent d'un arbre lié d'agent n'est pas un parc, la valeur est ÉCARTÉE (TF-2720) ; racine employée : ${racine}. Corriger la variable : FORGE_ROOT=${racine}`);
+  averts.push("FORGE_ROOT hérité sous .claude\\worktrees");
+}
+const jugeRacineHeritee = racineHeriteeRefusee || iRacine >= 0 ? null : jugerForgeRoot(process.env);
+if (jugeRacineHeritee && jugeRacineHeritee.etat === "sans-pilot") {
+  ligne("avert", `${jugeRacineHeritee.motif} (TF-2720) : une recette ou un hook qui cherche le pilot sous cette racine ne le trouvera pas. Remède : FORGE_ROOT=${racineConseillee(ICI)}, ou retirer la variable`);
+  averts.push("FORGE_ROOT sans pilot");
+}
+// TF-1657 (14/10/2026) — DEUX VERDICTS : LE POSTE POUR UN PRODUIT, ET LE PARC. Mesuré le 13/10 : le
+// pilot et quatorze forges à jour, et pourtant « Poste NON prêt » à l'ouverture d'un produit, pour un
+// seul défaut du canal confidentiel que ce produit ne touche pas — et la consigne d'accueil disait
+// d'appliquer le remède, hors du périmètre de la session. Sous `--pour-produit` (passé par le hook
+// d'ouverture d'un produit), un défaut du PARC (canal confidentiel) devient un avertissement nommé, à
+// relever au lot de retours et jamais à corriger depuis le produit ; sans l'option (session du pilot,
+// qui tient le parc), il reste un défaut. Le verdict du parc se dit à part, sur sa propre ligne.
+const pourProduit = args.includes("--pour-produit");
+const defautsParc = [];
+let zoneParc = false;
+let prePushReporte = ""; // H3/H4 du pilot, jugés après le clone des forges (étape 4 bis)
+const defaut = (msg, remede) => {
+  if (zoneParc && pourProduit) {
+    ligne("avert", `PARC (hors du périmètre d'un produit) — ${msg} — remède, à la session du pilot : ${remede}. Depuis un produit : le relever au lot de retours, ne pas le corriger (TF-1657)`);
+    defautsParc.push(msg); averts.push(msg);
+    return;
+  }
+  ligne("DEFAUT", `${msg} — remède : ${remede}`); defauts.push(msg);
+  if (zoneParc) defautsParc.push(msg);
+};
+// 13/10/2026 — UN DÉPÔT PRIVÉ HORS D'ACCÈS N'EST PAS UN DÉFAUT DU POSTE. Un autre développeur a joué
+// `--pull` sur son poste : les quatorze forges publiques à jour, et pourtant « Poste NON prêt — 3
+// défaut(s) », tous dus aux deux dépôts privés du propriétaire (factory-queue, factory-confidentiel)
+// que son compte ne peut pas lire. Décision humaine du même jour : un dépôt privé hors d'accès est
+// FACULTATIF et SILENCIEUX — ni défaut, ni avertissement, ni preuve jugée. Une autre cause d'échec
+// (réseau, disque) reste un défaut. Présent (poste du propriétaire), il est jugé comme une forge.
+const privesHorsAcces = new Set();
+const cloneRefuse = (depot, stderr) => {
+  if (!depot.prive || !ACCES_REFUSE.test(stderr || "")) return false;
+  privesHorsAcces.add(depot.nom);
+  return true;
+};
+
+console.log(`Amorçage forge — racine : ${racine}\n`);
+
+// 1. Prérequis ------------------------------------------------------------------------------
+{
+  const majeur = Number(process.versions.node.split(".")[0]);
+  if (majeur >= 18) ligne("ok", `node ${process.versions.node}`);
+  else defaut(`node ${process.versions.node} trop ancien`, "installer node >= 18");
+  const g = run("git", ["--version"]);
+  if (g.status === 0) ligne("ok", sortie(g));
+  else defaut("git indisponible", "installer git et le mettre dans le PATH");
+  for (const [cmd, argv, note] of [
+    ["gh", ["auth", "status"], "requis seulement pour les dépôts d'engagement privés"],
+    ["uv", ["--version"], "requis plus tard pour l'étape tests"],
+    ["python", ["--version"], "requis plus tard pour l'étape tests"],
+  ]) {
+    const r = run(cmd, argv);
+    if (r.status === 0) ligne("ok", `${cmd} disponible`);
+    else { ligne("avert", `${cmd} indisponible (${note})`); averts.push(cmd); }
+  }
+  if (defauts.length) { console.log(`\nPoste NON prêt — ${defauts.length} défaut(s).`); process.exit(1); }
+}
+
+// 2. État d'un dépôt : version, retard/avance sur origin, propreté ---------------------------
+function etatDepot(dest) {
+  const e = { fetch: false, branche: "", version: "", sha: "", date: "", retard: null, avance: null, propre: true };
+  e.branche = sortie(git(dest, "rev-parse", "--abbrev-ref", "HEAD")) || "HEAD";
+  e.sha = sortie(git(dest, "rev-parse", "--short", "HEAD"));
+  e.version = sortie(git(dest, "describe", "--tags", "--always")) || e.sha;
+  e.date = sortie(git(dest, "log", "-1", "--format=%cs"));
+  e.propre = sortie(git(dest, "status", "--porcelain")) === "";
+  const f = git(dest, "fetch", "--quiet", "origin");
+  e.fetch = f.status === 0;
+  if (e.fetch && git(dest, "rev-parse", "--verify", "--quiet", `origin/${e.branche}`).status === 0) {
+    e.retard = Number(sortie(git(dest, "rev-list", "--count", `HEAD..origin/${e.branche}`)));
+    e.avance = Number(sortie(git(dest, "rev-list", "--count", `origin/${e.branche}..HEAD`)));
+  }
+  return e;
+}
+const decrire = (e) => {
+  if (!e.fetch) return "origin injoignable (hors ligne ?) — fraîcheur NON vérifiée";
+  if (e.retard === null) return `branche ${e.branche} sans amont origin — fraîcheur non mesurable`;
+  if (e.retard === 0 && e.avance === 0) return "à jour";
+  if (e.retard > 0 && e.avance > 0) return `DIVERGÉ (${e.avance} devant, ${e.retard} derrière)`;
+  if (e.retard > 0) return `en retard de ${e.retard} commit(s)`;
+  return `en avance de ${e.avance} commit(s) (travail local non poussé)`;
+};
+
+// TF-1612 (12/10/2026) — UN JOURNAL ÉCRIT PAR UN ORACLE ET VERSIONNÉ NE BLOQUE PLUS LA MISE À JOUR.
+// Le 07/10, le pilot restait « en retard de 83 commits » : `todo/HERITAGE-RELEVES.jsonl` (journal
+// append-only du relevé d'héritage) portait une ligne locale, `git pull --ff-only` refusait, et le
+// message ne nommait pas le fichier. Deux remèdes : le message nomme les fichiers qui bloquent
+// (`fichiersBloquants`), et un journal append-only SEUL en cause est réconcilié sans perte — ses
+// lignes locales sont gardées, le fichier est remis à l'état publié, le pull se joue, puis les lignes
+// locales absentes du publié sont ré-ajoutées. Tout autre fichier bloquant reste un geste humain.
+const JOURNAUX_APPEND_ONLY = ["todo/HERITAGE-RELEVES.jsonl"];
+const fichiersBloquants = (stderr) => {
+  const lignes = String(stderr || "").split(/\r?\n/);
+  const out = [];
+  let dans = false;
+  for (const l of lignes) {
+    if (/would be overwritten|seraient écrasé|seraient remplacé/i.test(l)) { dans = true; continue; }
+    if (dans && /^\s+\S/.test(l)) out.push(l.trim());
+    else if (dans && !/^\s/.test(l)) dans = false;
+  }
+  return out;
+};
+function pullAvecJournaux(dest) {
+  let p = git(dest, "pull", "--ff-only", "--quiet");
+  if (p.status === 0) return { p, bloquants: [], reconcilies: [] };
+  const bloquants = fichiersBloquants(p.stderr);
+  if (!bloquants.length || !bloquants.every((f) => JOURNAUX_APPEND_ONLY.includes(f))) return { p, bloquants, reconcilies: [] };
+  const locaux = new Map(bloquants.map((f) => [f, readFileSync(join(dest, f), "utf8")]));
+  const restaurer = () => { for (const [f, t] of locaux) writeFileSync(join(dest, f), t, "utf8"); };
+  for (const f of bloquants) {
+    if (git(dest, "checkout", "--", f).status !== 0) { restaurer(); return { p, bloquants, reconcilies: [] }; }
+  }
+  p = git(dest, "pull", "--ff-only", "--quiet");
+  if (p.status !== 0) { restaurer(); return { p, bloquants, reconcilies: [] }; }
+  for (const [f, local] of locaux) {
+    const publie = readFileSync(join(dest, f), "utf8");
+    const connues = new Set(publie.split(/\r?\n/).filter(Boolean));
+    const manquantes = local.split(/\r?\n/).filter((l) => l && !connues.has(l));
+    if (manquantes.length) writeFileSync(join(dest, f), publie.replace(/\r?\n?$/, "\n") + manquantes.join("\n") + "\n", "utf8");
+  }
+  return { p, bloquants, reconcilies: bloquants };
+}
+
+// Juge un dépôt présent : le met à jour si --pull, sinon le mesure. Enregistre sa version.
+function traiterPresent(nom, dest) {
+  const estPilot = resolve(dest) === resolve(ICI);
+  let e = etatDepot(dest);
+  if (pull && e.fetch && e.retard > 0 && e.avance === 0) {
+    const { p, bloquants, reconcilies } = pullAvecJournaux(dest);
+    if (p.status === 0) {
+      e = etatDepot(dest);
+      ligne("ok", `${nom} — mis à jour (${e.version}, ${decrire(e)})`);
+      if (reconcilies.length) ligne("ok", `${nom} — journal(aux) append-only rejoué(s) après le pull : ${reconcilies.join(", ")} (TF-1612)`);
+    }
+    // TF-1612 : le message NOMME le fichier qui bloque, pas seulement la première ligne de git.
+    else defaut(`${nom} — pull impossible : ${(p.stderr || "").trim().split("\n")[0].slice(0, 120)}` +
+      (bloquants.length ? ` — fichier(s) qui bloque(nt) : ${bloquants.join(", ")}` : ""),
+      "git status dans le dépôt, résoudre (stash/commit), relancer --pull");
+  } else if (e.fetch && e.retard > 0 && e.avance > 0) {
+    defaut(`${nom} — ${decrire(e)}`, "rebase ou merge à la main dans le dépôt (ff-only refusé par construction)");
+  } else if (e.fetch && e.retard > 0) {
+    defaut(`${nom} — ${decrire(e)} (${e.version})`, "node bootstrap.mjs --pull");
+  } else {
+    const s = e.fetch ? "ok" : "avert";
+    ligne(s, `${nom} — présent, ${decrire(e)} (${e.version})`);
+    if (!e.fetch) averts.push(`${nom} hors ligne`);
+  }
+  if (!e.propre) {
+    // TF-1200 : le relevé DATE ce qui n'est pas enregistré. Un avertissement sans âge se lisait comme
+    // une session en cours ; 78 chemins finis sont restés 3 à 6 jours hors de l'histoire du pilot.
+    const m = releverNonEnregistres(dest);
+    const phrase = dire(nom, m);
+    if (m.perime && estPilot) {
+      defaut(`${phrase} — au-delà du seuil de ${m.seuil} h`,
+        "enregistrer ce qui est fini (git commit --only -- <chemins>) ou le mettre de côté ; seuil : BOOTSTRAP_SEUIL_NON_ENREGISTRE_HEURES");
+    } else if (phrase) {
+      ligne("avert", `${phrase} (le pull --ff-only les tolère tant qu'elles ne touchent pas les fichiers mis à jour)`);
+    } else {
+      ligne("avert", `${nom} — modifications locales non committées, toutes générées ou sceaux (le pull --ff-only les tolère tant qu'elles ne touchent pas les fichiers mis à jour)`);
+    }
+  }
+  versions.push({ nom, version: e.version, sha: e.sha, date: e.date, etat: decrire(e) });
+  return e;
+}
+
+// 3. Le pilot lui-même : mis à jour AVANT les forges (sa liste de forges peut avoir changé) --
+console.log("");
+if (!sansPilot) {
+  const empreinteAvant = createHash("sha256").update(readFileSync(MOI)).digest("hex");
+  if (existsSync(join(ICI, ".git"))) traiterPresent("factory-pilot (pilot)", ICI);
+  else ligne("avert", "factory-pilot (pilot) — pas un dépôt git : fraîcheur du pilot non vérifiable");
+  // TF-1041 (15/09/2026) — les gardes de pré-commit du pilot sont APPELÉES, pas seulement déclarées.
+  // `.git/hooks/` ne voyage pas : un clone frais ou rebâti n'avait aucun hook, et la garde des
+  // quantificateurs (TF-1010) n'était jamais jouée. Sans --pull, on mesure ; avec, on pose la copie
+  // versionnée si le hook MANQUE — jamais par-dessus un hook existant.
+  if (existsSync(join(ICI, ".git"))) {
+    const h = spawnSync(process.execPath, [join(ICI, "scripts", "verifier-hooks-git.mjs"), "--depot", ICI, ...(pull ? ["--installer"] : [])], { encoding: "utf8" });
+    const lignes = (h.stdout || "").trim().split(/\r?\n/);
+    for (const l of lignes.filter((x) => /^\[INSTALLÉ\]/.test(x))) ligne("ok", `factory-pilot (pilot) — ${l.replace(/^\[INSTALLÉ\]\s*/, "")}`);
+    if (h.status === 0) ligne("ok", "factory-pilot (pilot) — gardes de pré-commit appelées par le hook installé");
+    // 14/10/2026 — LE PRE-PUSH SE POSE SEUL, IL NE S'ANNONCE PLUS « introuvable ». Mesuré sur un poste
+    // neuf : « Poste NON prêt » pour le seul H3, et la session concluait que l'installeur du hook
+    // manquait, parce qu'à cette étape la forge des outils qui le porte n'est pas encore clonée. Sous
+    // --pull, H3/H4 se reportent après les forges (étape 4 bis), où l'installeur est posé et joué.
+    else if (h.status === 1 && pull && lignes.some((x) => /^\[FAIL\] H[34]\b/.test(x)) && !lignes.some((x) => /^\[FAIL\] (?!H[34]\b)/.test(x)))
+      prePushReporte = lignes.filter((x) => x.startsWith("[FAIL]")).join(" · ").slice(0, 300);
+    else if (h.status === 1) defaut(`factory-pilot (pilot) — ${lignes.filter((x) => x.startsWith("[FAIL]")).join(" · ").slice(0, 300)}`,
+      lignes.some((x) => x.startsWith("[FAIL] H3")) ? "rétablir le pre-push R-38 (H3, TF-1275) : installeur de la forge des outils, puis la section d'avance avant la porte des noms"
+        : lignes.some((x) => x.startsWith("[FAIL] H4")) ? "poser la section TF-1400 du pre-push : installeur de la forge des outils --seul=pre-push, puis node scripts/verifier-hooks-git.mjs --installer"
+        : pull ? "fusionner à la main depuis scripts/hooks-git/pre-commit" : "node bootstrap.mjs --pull (pose le hook s'il manque)");
+  }
+  const empreinteApres = createHash("sha256").update(readFileSync(MOI)).digest("hex");
+  if (empreinteAvant !== empreinteApres && !process.env.BOOTSTRAP_RELANCE) {
+    // Ce script vient d'être mis à jour par son propre pull : le reste doit s'exécuter avec la
+    // version neuve (liste de forges, règles), pas avec celle chargée en mémoire.
+    console.log("\n[relance] bootstrap.mjs a changé pendant la mise à jour du pilot — relance avec la version neuve.\n");
+    const r = spawnSync(process.execPath, [MOI, ...args], { stdio: "inherit", env: { ...process.env, BOOTSTRAP_RELANCE: "1" } });
+    process.exit(r.status ?? 1);
+  }
+}
+
+// 4. Les forges : renommage hérité, clone, mesure ou mise à jour ----------------------------
+console.log("");
+for (const f of FORGES) {
+  const dest = join(racine, f.nom);
+  // Renommage hérité (ex : factory-forge-seo → -seo-geo) : un dossier à l'ancien nom dont
+  // l'origin est bien CE dépôt est renommé sur place et pointé sur le nouveau nom — jamais
+  // dupliqué, jamais laissé orphelin.
+  if (!existsSync(join(dest, ".git"))) {
+    for (const ancien of f.alias || []) {
+      const vieux = join(racine, ancien);
+      if (!existsSync(join(vieux, ".git"))) continue;
+      const url = sortie(git(vieux, "remote", "get-url", "origin"));
+      // Séparateur `/` OU `\` : une origin locale sous Windows s'écrit avec des antislashs.
+      if (!new RegExp(`[\\\\/](${ancien}|${f.nom}|${depotDe(f)})(\\.git)?$`).test(url)) continue;
+      try {
+        renameSync(vieux, dest);
+        git(dest, "remote", "set-url", "origin", `${SOURCE}/${depotDe(f)}.git`);
+        ligne("ok", `${f.nom} — dossier hérité « ${ancien} » renommé et pointé sur ${f.nom} (aucun doublon)`);
+      } catch (e) {
+        defaut(`${f.nom} — dossier hérité « ${ancien} » non renommable : ${e.code || e.message}`,
+          `fermer ce qui tient le dossier, puis : ren ${ancien} ${f.nom} · git remote set-url origin ${SOURCE}/${depotDe(f)}.git`);
+      }
+      break;
+    }
+  }
+  if (existsSync(join(dest, ".git"))) {
+    traiterPresent(f.nom, dest);
+  } else if (existsSync(dest)) {
+    defaut(`${f.nom} — le dossier existe SANS dépôt git`, "le déplacer ou le supprimer, puis relancer");
+  } else {
+    // core.longpaths : les forges portent des noms de fichiers longs (convention
+    // "Factory - ... - AAAAMMJJx.md") qui dépassent MAX_PATH sous Windows (TF-1015).
+    const r = git(racine, "clone", "--quiet", "-c", "core.longpaths=true", `${SOURCE}/${depotDe(f)}.git`, dest);
+    if (r.status === 0) {
+      const e = etatDepot(dest);
+      ligne("ok", `${f.nom} — cloné (${e.version})`);
+      versions.push({ nom: f.nom, version: e.version, sha: e.sha, date: e.date, etat: "cloné" });
+    } else if (!cloneRefuse(f, r.stderr)) defaut(`${f.nom} — clone en échec : ${(r.stderr || "").trim().split("\n")[0].slice(0, 120)}`,
+      `vérifier l'accès à ${SOURCE}/${depotDe(f)}.git`);
+  }
+}
+
+// 4 ter. LE CANAL CONFIDENTIEL : présent, à jour, privé, sans secret ------------------------
+{
+  zoneParc = true;   // TF-1657 : le canal confidentiel est du PARC, pas du poste d'un produit
+  const dest = process.env.FORGE_CONFIDENTIEL || join(racine, CANAL.dossier);
+  if (existsSync(join(dest, ".git"))) {
+    traiterPresent(`${CANAL.nom} (canal confidentiel)`, dest);
+    if (!existsSync(join(dest, CANAL.preuve))) defaut(`${CANAL.nom} — la table des produits manque (${CANAL.preuve})`, "jouer scripts/fusionner-tables-confidentielles.mjs depuis le pilot");
+    const o = spawnSync(process.execPath, [join(dest, "oracle-confidentiel.mjs"), dest], { encoding: "utf8" });
+    if (o.status === 0) ligne("ok", `${CANAL.nom} — oracle-confidentiel PASS (privé, tables valides, aucun secret)`);
+    else {
+      let detail = "";
+      try { detail = (JSON.parse(o.stdout).constats || []).filter((c) => c.statut === "FAIL").map((c) => `${c.regle} : ${c.message}`).join(" · ").slice(0, 200); } catch { detail = (o.stderr || o.stdout || "").trim().slice(0, 200); }
+      defaut(`${CANAL.nom} — oracle-confidentiel FAIL : ${detail}`, `node "${join(dest, "oracle-confidentiel.mjs")}" "${dest}" et corriger`);
+    }
+  } else {
+    // Absent : cloné comme une forge (le poste vierge doit le recevoir). Une SOURCE surchargée
+    // (recette du bootstrap, miroir local) peut ne pas porter ce dépôt privé : alors on le DIT en
+    // avertissement, jamais en défaut — un miroir sans canal n'est pas un poste sans tables, c'est
+    // un poste dont les tables restent à l'ancien emplacement, ce que lib-confidentiel déclare.
+    // core.longpaths : même motif que pour les forges — sous MAX_PATH = 260, un chemin long
+    // refusé au checkout laisse un clone SANS arbre de travail (TF-1015, 10/09/2026).
+    const r = git(racine, "clone", "--quiet", "-c", "core.longpaths=true", `${SOURCE}/${depotDe(CANAL)}.git`, dest);
+    if (r.status === 0) ligne("ok", `${CANAL.nom} — canal confidentiel cloné en ${dest} ; si ce poste portait encore des tables libres, jouer scripts/fusionner-tables-confidentielles.mjs`);
+    else if (cloneRefuse(CANAL, r.stderr)) { /* facultatif et silencieux : tables lues à l'ancien emplacement s'il existe */ }
+    else if (process.env.BOOTSTRAP_SOURCE) { ligne("avert", `${CANAL.nom} — canal confidentiel absent à la source surchargée ${SOURCE} : tables lues à l'ancien emplacement s'il existe`); averts.push(`${CANAL.nom} absent à la source surchargée`); }
+    else defaut(`${CANAL.nom} — canal confidentiel ABSENT et clone en échec : ${(r.stderr || "").trim().split("\n")[0].slice(0, 120)}`, `vérifier l'accès au dépôt PRIVÉ ${SOURCE}/${depotDe(CANAL)}.git (gh auth status), puis scripts/fusionner-tables-confidentielles.mjs si des tables libres existent`);
+  }
+  zoneParc = false;
+}
+
+// 4 bis. LES DÉPÔTS QUE LA LISTE NE CONNAÎT PAS (TF-0525) ------------------------------------
+//
+// LE FAIT, mesuré le 23/08. Le balayage des dépôts de la racine a rendu QUINZE entrées là où
+// l'écosystème en compte quatorze. La quinzième est un SECOND CLONE DU PILOT, sous un ancien nom :
+// même `origin`, même dépôt, deux répertoires. Il est absent de la liste `FORGES`, donc `--pull` ne
+// le voit pas et ne le mettra JAMAIS à jour — il portait 110 commits de retard au moment de la
+// mesure, et son dernier commit local datait de quatre jours plus tôt.
+//
+// CE QU'UN CLONE MORT PIÈGE, et ce n'est pas théorique : quelqu'un y avait ingéré une candidature,
+// en croyant écrire dans le registre vivant. Le sujet a été redécouvert QUATRE JOURS PLUS TARD par
+// un lot de retours, et instruit une seconde fois. Rien n'était perdu — c'est le travail refait qui
+// a coûté.
+//
+// Le marqueur `PERIME.md` posé dans ce clone était NON VERSIONNÉ : un nouveau clone ne l'aurait pas.
+// Un avertissement qui ne survit pas au clonage n'avertit personne.
+//
+// CE QUI EST JUGÉ ICI, et pas plus : la racine porte-t-elle un répertoire git dont l'`origin` est
+// celui d'un dépôt DÉJÀ connu, ou un répertoire qui ressemble à une mise de côté (`_old`, `_vide`,
+// `_ancien`, `PERIME.md`) ? On le DIT, on ne le supprime pas : effacer un dépôt sur une heuristique
+// serait échanger un piège contre une perte.
+console.log("");
+{
+  // HORS PÉRIMÈTRE DÉCLARÉ, avec la cause de chacun (règle N-13). Un dépôt de l'écosystème que
+  // bootstrap ne suit PAS exprès se nomme ici, une fois — sinon le contrôle qui suit le signale à
+  // chaque ouverture, et un avertissement qui revient sans jamais rien vouloir dire s'apprend à
+  // être ignoré. C'est la mesure du 23/08 qui l'impose : la règle neuve rendait TROIS dépôts, dont
+  // deux volontaires et déjà documentés ailleurs. Une précision d'un sur trois n'est pas un contrôle.
+  // PLUS AUCUN NOM DE CLIENT ICI (27/08). La table nommait un dépôt d'engagement, et ce nom
+  // fuitait dans un dépôt public. Elle est remplacée par la CONVENTION qu'elle encodait : un
+  // dépôt `factory…` portant un SUFFIXE `_<engagement>` est un espace d'engagement CLIENT,
+  // privé et hors bootstrap — il porte des livrables remis, pas de l'outillage. Aucune forge du
+  // parc ne porte d'underscore, le motif est donc exact, et tout engagement futur est couvert
+  // sans qu'on ait à l'inscrire à la main.
+  const horsPerimetre = (nom) => /^factory[a-z0-9-]*_/i.test(nom);
+  const connus = new Map();          // origin normalisé -> nom du dépôt attendu
+  const attendus = new Set(FORGES.map((f) => f.nom));
+  attendus.add(PILOT);
+  attendus.add(CANAL.dossier); // le canal confidentiel est un dépôt connu, sous son nom de dossier
+  // LE SEPARATEUR FAIT PARTIE DE LA NORMALISATION, et son absence rendait la comparaison
+  // fausse en silence : une origin ecrite « C:\\dev\\bare/depot.git » et une autre
+  // « C:\\dev\\bare\\depot.git » designent le MEME depot et ne se ressemblaient pas. Deux clones du
+  // meme depot, l un cite avec des barres obliques et l autre avec des antislashs, echappaient donc
+  // au controle du second clone. Trouve en jouant le cas du renommage (TF-0533).
+  const normaliser = (u) => (u || "").trim().replaceAll("\\", "/")
+    .replace(/\.git$/, "").replace(/\/+$/, "").toLowerCase();
+  const originDe = (d) => {
+    const r = git(d, "remote", "get-url", "origin");
+    return r.status === 0 ? normaliser(r.stdout) : null;
+  };
+  // LES ALIAS COMPTENT ICI, ET LEUR ABSENCE A COUTE UN DEPOT FANTOME (TF-0533, 23/08/2026).
+  // Ce balayage reconnaissait un second clone en comparant des CHAINES d'origin. Or l'origin d'un
+  // clone antérieur à un renommage porte l'ANCIEN nom : « …/factory-forge-seo.git » face à
+  // « …/factory-forge-seo-geo.git ». Deux chaînes différentes, donc aucun rapprochement — et le
+  // dossier tombait entre les trois branches de ce contrôle, déclaré comme RIEN. Mesuré : trois
+  // commits de retard, compté comme un dépôt vivant par tout oracle de parc, qui annonçait
+  // « 16 dépôts » pour 15 et lisait 26 fichiers de trop. Un oracle avait même été patché pour
+  // l'exclure LUI, nommément, plutôt que la cause soit traitée ici.
+  // La table d'alias existait déjà, à deux fonctions d'ici : elle sert maintenant AUSSI à
+  // reconnaître les origins. Un renommage futur est donc couvert sans un geste.
+  for (const nom of attendus) {
+    const d = join(racine, nom);
+    if (!existsSync(join(d, ".git"))) continue;
+    const o = originDe(d);
+    if (!o) continue;
+    connus.set(o, nom);
+    // LE PILOT ÉTAIT LE SEUL DÉPÔT SANS ALIAS, et c'est le seul qui a été renommé DEUX fois
+    // (steering → pilot → factory). Mesuré le 25/08 : la table d'alias, écrite le 23/08
+    // exactement pour ce cas (TF-0533), ne se remplit que depuis `FORGES` — or le pilot n'y
+    // figure pas, il entre par `attendus.add(…)` à quelques lignes d'ici. Donc `f` valait
+    // `undefined`, aucun alias n'était enregistré, et le clone du pilot dont l'origin porte
+    // encore « …/factory-forge-pilot.git » ne se rapprochait PAS du pilot dont l'origin dit
+    // « …/factory-pilot.git ». Deux chaînes, aucun rapprochement.
+    // CE QUE ÇA COÛTAIT : le clone tombait dans la branche faible et sortait « mise de côté —
+    // ne rien y exécuter », sans son retard ni le motif qui compte (« y travailler écrit dans un
+    // registre mort »). Il n'y échappait même pas : c'est le HASARD de son suffixe `_old` qui le
+    // déclarait. Renommé sans ce suffixe, il serait passé pour un dépôt hors liste avec SON PROPRE
+    // origin — un diagnostic faux, qui invite à l'inscrire dans la liste des forges au lieu de le
+    // retirer. La règle protégeait tout le parc SAUF le seul dépôt dont elle était née.
+    const alias = nom === PILOT ? ALIAS_PILOT : (FORGES.find((x) => x.nom === nom) || {}).alias || [];
+    for (const ancien of alias) {
+      connus.set(o.replace(/[^/]+$/, ancien.toLowerCase()), nom);
+    }
+  }
+  let entrees = [];
+  try { entrees = readdirSync(racine, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name); }
+  catch { entrees = []; }
+  const suspects = [];
+  for (const nom of entrees) {
+    if (attendus.has(nom)) continue;
+    const d = join(racine, nom);
+    const estGit = existsSync(join(d, ".git"));
+    const perime = existsSync(join(d, "PERIME.md"));
+    // `_archive-` est la convention du parc depuis le 23/08 (references/CONVENTION-DEPOTS-MIS-DE-COTE.md) :
+    // un dépôt mis de côté se RENOMME une fois, au lieu d'être exclu nommément dans chaque contrôle.
+    const nommeMisDeCote = /(_old|_vide|_ancien|_backup|\.bak)$/i.test(nom) || /^_archive-/i.test(nom);
+    if (!estGit) {
+      // UN MARQUEUR POSÉ EXPRÈS SE LIT AVANT DE CRIER À L'ACCIDENT (23/08/2026). Cette branche
+      // passait avant toute lecture de `PERIME.md` : un répertoire tombé là par mégarde et une
+      // PIERRE TOMBALE posée délibérément recevaient le même verdict, « rien de ce qu'on y écrit
+      // n'est suivi ». Or l'un est un accident à corriger et l'autre un choix à respecter — les
+      // confondre apprend à ignorer les deux.
+      // 14/10/2026 : une pierre tombale DÉCLARÉE n'est plus un avertissement. Elle n'est ni un
+      // dépôt, ni un accident, et son PERIME.md dit déjà ce qu'un avertissement répétait à chaque
+      // ouverture ; répété, il habituait à lire « avert » comme du bruit. Elle se nomme en [ok].
+      if (perime) ligne("ok", `${nom} — mise de côté déclarée (PERIME.md, non versionné) : ignorée par le parc`);
+      // Un répertoire NON git qui porte le nom d'un dépôt de l'écosystème est un piège aussi : on
+      // s'y installe en croyant être dans un dépôt, et rien n'y est versionné.
+      else if (/^factory/i.test(nom)) suspects.push({ nom, motif: "répertoire NON versionné portant un nom de l'écosystème — rien de ce qu'on y écrit n'est suivi" });
+      continue;
+    }
+    const o = originDe(d);
+    if (o && connus.has(o)) {
+      const retard = git(d, "rev-list", "--count", "HEAD..origin/main");
+      const n = retard.status === 0 ? (retard.stdout || "").trim() : "?";
+      suspects.push({
+        nom,
+        motif: `SECOND CLONE de ${connus.get(o)} (même origin) — ${n} commit(s) de retard, hors de la liste ` +
+          "des dépôts donc jamais mis à jour par --pull. Y travailler écrit dans un registre mort",
+      });
+      continue;
+    }
+    if (perime || nommeMisDeCote) {
+      suspects.push({ nom, motif: `mise de côté (${perime ? "PERIME.md présent" : "nom archivé ou en _old/_vide"}) — ne rien y exécuter` });
+      continue;
+    }
+    // LE TROISIÈME TROU DE CE MÊME BALAYAGE, trouvé le 23/08 en regardant la racine à l'œil : un
+    // dépôt qui porte un nom de l'écosystème, versionné, avec SON PROPRE origin — donc ni une forge
+    // de la liste, ni un second clone, ni une mise de côté. Il tombait entre toutes les branches et
+    // n'était déclaré NULLE PART. Mesuré : `factory-queue` vit dans le parc depuis un moment, hors
+    // de toute vérification de fraîcheur, et rien ne l'avait jamais dit. Le contrôle ne tranche pas
+    // — il POSE la question, parce que la réponse (entrer dans la liste, ou être hors périmètre
+    // assumé) est une décision humaine.
+    if (/^factory/i.test(nom) && !horsPerimetre(nom) && !PRODUITS_DE_L_ECOSYSTEME.has(nom)) {
+      suspects.push({ nom, motif: `dépôt de l'écosystème HORS LISTE avec son propre origin (${o || "origin illisible"}) — ni forge suivie, ni second clone, ni mise de côté : jamais vérifié par --pull. À inscrire dans la liste des forges, ou à déclarer hors périmètre` });
+    }
+  }
+  // ---- LE VERSANT FICHIERS DU MÊME BALAYAGE (TF-0598, 24/08/2026) ---------------------------
+  // Ce balayage ne lisait que les RÉPERTOIRES — `filter((e) => e.isDirectory())` — et c'est
+  // exactement pour cette raison qu'un fichier a pu vivre trois jours à la racine du parc sans
+  // qu'aucun contrôle joué chaque matin ne le nomme.
+  //
+  // LE FAIT : `c:\dev\null`, 1892 octets, daté du 21/08, contenant une page HTML d'erreur 403
+  // d'un hébergeur. LA CAUSE tient en une phrase, et elle est structurelle sur ce poste : une
+  // redirection `> /dev/null` ou `2>/dev/null` n'est un puits QUE pour un shell POSIX. Jouée par
+  // PowerShell ou `cmd` avec la racine du parc pour répertoire courant, la même redirection CRÉE
+  // un fichier de ce nom et Y ÉCRIT ce qu'on croyait jeter. Les deux shells cohabitent ici par
+  // consigne, donc la confusion n'est pas un accident isolé : elle reviendra.
+  //
+  // CE QUE ÇA COÛTE, et ce n'est pas le fichier : le corps d'une réponse qu'on a EXPLICITEMENT
+  // demandé de jeter atterrit sur disque, à la racine du parc — hors de tout dépôt, donc hors de
+  // tout `.gitignore`, hors de toute recherche de secret jouée sur un dépôt, et hors du champ de
+  // tout oracle. Ici c'était une page d'erreur publique ; la même redirection sur un appel
+  // authentifié y conserverait un jeton.
+  //
+  // La CAUSE est écrite dans le message, et pas seulement le constat : sans elle, un lecteur qui
+  // trouve ce fichier le supprime et la cause revient au prochain mélange de shells.
+  const PUITS_RATES = new Map([
+    ["null", "redirection `> /dev/null` jouée par un shell Windows"],
+    ["nul", "redirection `> nul` sortie de son shell d'origine"],
+    ["1", "redirection `>1` ou `2>1` au lieu de `2>&1`"],
+    ["2", "redirection `>2` — le descripteur pris pour un nom de fichier"],
+    ["&1", "redirection `2>&1` mal citée par le shell"],
+    ["&2", "redirection `1>&2` mal citée par le shell"],
+  ]);
+  let fichiersSuspects = [];
+  try {
+    fichiersSuspects = readdirSync(racine, { withFileTypes: true })
+      .filter((e) => e.isFile() && PUITS_RATES.has(e.name.toLowerCase()))
+      .map((e) => e.name);
+  } catch { fichiersSuspects = []; }
+  for (const nom of fichiersSuspects) {
+    // UN PUITS VIDE S'EFFACE SEUL (14/10/2026, mandat humain « ça s'installe et c'est opérationnel »).
+    // Zéro octet : il n'y a rien à vérifier avant d'effacer, donc rien qui relève d'un geste humain ;
+    // l'avertissement revenait à chaque ouverture sans rien protéger. Un puits NON vide reste déclaré.
+    try {
+      if (statSync(join(racine, nom)).size === 0) {
+        unlinkSync(join(racine, nom));
+        ligne("ok", `${nom} — puits de redirection raté VIDE (0 octet) effacé à la racine du parc : rien à perdre (${PUITS_RATES.get(nom.toLowerCase())})`);
+        continue;
+      }
+    } catch { /* illisible ou verrouillé : déclaré ci-dessous comme un puits non vide */ }
+    let taille = "?";
+    let modifie = "?";
+    try { const st = statSync(join(racine, nom)); taille = String(st.size); modifie = st.mtime.toISOString().slice(0, 16).replace("T", " "); } catch { /* taille indisponible */ }
+    // TF-1584 : la taille ET la date de dernière écriture se disent, pour que deux ouvertures
+    // successives se comparent — un fichier réécrit entre elles change de taille ou de date.
+    ligne("avert",
+      `${nom} — FICHIER de ${taille} octets (dernière écriture ${modifie} UTC) à la racine du parc :${PUITS_RATES.get(nom.toLowerCase())}. ` +
+      "Ce qu'une commande croyait JETER a été ÉCRIT sur disque, hors de tout dépôt — donc hors de " +
+      "tout .gitignore et de toute recherche de secret. Vérifier son contenu AVANT de l'effacer : " +
+      "une réponse authentifiée y conserverait un jeton. Supprimer un fichier est un geste HUMAIN " +
+      "(R-29) — ce contrôle le déclare, il ne l'efface pas");
+    averts.push(nom);
+  }
+
+  // ---- LE TROISIÈME VERSANT : LES LIENS (TF-0631, 25/08/2026) --------------------------------
+  //
+  // LE FAIT. `factory-forge-pilot_old` vit à la racine du parc depuis le 9 août — un LIEN
+  // SYMBOLIQUE vers `factory-forge-steering`, un nom de dépôt d'il y a DEUX renommages, qui
+  // n'existe pas. Seize jours d'ouvertures de poste, et aucune ligne ne l'a jamais nommé.
+  //
+  // LA CAUSE, et elle est structurelle, pas une distraction : `readdirSync(..., withFileTypes)`
+  // NE SUIT PAS les liens. Pour un `Dirent` de lien symbolique, `isDirectory()` ET `isFile()`
+  // valent FAUX tous les deux — seul `isSymbolicLink()` est vrai. Les deux versants du balayage
+  // filtrent l'un sur `isDirectory()`, l'autre sur `isFile()` : un lien tombe donc ENTRE eux.
+  // Mesuré ici même : `isDirectory:false | isFile:false | isSymbolicLink:true`.
+  //
+  // CE QUE ÇA COÛTE, et ce n'est PAS le lien brisé — un lien brisé est inerte. Le risque est
+  // qu'il redevienne VIVANT sans que personne l'ait voulu : le jour où un répertoire
+  // `factory-forge-steering` réapparaît à la racine (un clone sous un ancien nom, exactement ce
+  // que GitHub permet en redirigeant), ce lien pointe dessus, sous un nom qui dit « pilot ». On
+  // s'y installe en croyant être dans un dépôt mis de côté, et on écrit ailleurs. C'est le piège
+  // du second clone avec une indirection de plus.
+  //
+  // On DIT, on n'efface pas : un lien posé à la main l'a été pour une raison, même oubliée (R-29).
+  let liensSuspects = [];
+  try {
+    liensSuspects = readdirSync(racine, { withFileTypes: true })
+      .filter((e) => e.isSymbolicLink())
+      .map((e) => e.name);
+  } catch { liensSuspects = []; }
+  for (const nom of liensSuspects) {
+    const chemin = join(racine, nom);
+    let cible = "?";
+    try { cible = readlinkSync(chemin); } catch { /* cible illisible */ }
+    // `existsSync` SUIT le lien : faux ici veut dire « la cible n'existe pas », donc lien brisé.
+    const brise = !existsSync(chemin);
+    ligne("avert",
+      `${nom} — LIEN SYMBOLIQUE vers « ${cible} »${brise ? ", et sa cible N'EXISTE PAS" : ""} : ni ` +
+      "répertoire ni fichier pour le balayage, donc invisible aux deux autres versants de ce " +
+      "contrôle. " + (brise
+        ? "Brisé, il est inerte — mais il redeviendra VIVANT le jour où un répertoire de ce nom " +
+          "réapparaîtra, sous un nom qui n'est plus le sien. Un piège qui attend sa cible"
+        : "Vivant : on croit ouvrir ce nom-là et on écrit dans un autre dépôt") +
+      ". Supprimer un lien est un geste HUMAIN (R-29) — ce contrôle le déclare, il ne l'efface pas");
+    averts.push(nom);
+  }
+
+  if (!suspects.length && !fichiersSuspects.some((n) => existsSync(join(racine, n))) && !liensSuspects.length) ligne("ok", `racine propre — aucun dépôt hors liste, puits de redirection raté ni lien symbolique sous ${racine}`);
+  else if (!suspects.length) ligne("ok", `racine sans dépôt hors liste sous ${racine}`);
+  else for (const x of suspects) {
+    ligne("avert", `${x.nom} — ${x.motif}. Ne rien y exécuter ; supprimer un répertoire est un geste HUMAIN (R-29) — ce contrôle le déclare, il ne l'efface pas`);
+    averts.push(x.nom);
+  }
+}
+
+// 4 bis. Le pre-push du pilot, reporté de l'étape 3 : la forge des outils est maintenant présente --
+if (prePushReporte) {
+  const poseur = join(racine, "factory-forge-agents", ".claude", "skills", "quality-oracles", "scripts", "installer-hamecon-publication.mjs");
+  if (existsSync(poseur)) {
+    spawnSync(process.execPath, [poseur, ICI, "--seul=pre-push"], { encoding: "utf8" });
+    spawnSync(process.execPath, [join(ICI, "scripts", "verifier-hooks-git.mjs"), "--depot", ICI, "--installer"], { encoding: "utf8" });
+  }
+  const v = spawnSync(process.execPath, [join(ICI, "scripts", "verifier-hooks-git.mjs"), "--depot", ICI], { encoding: "utf8" });
+  if (v.status === 0) ligne("ok", "factory-pilot (pilot) — hook pre-push posé par l'installeur de la forge des outils (H3/H4 verts)");
+  else defaut(`factory-pilot (pilot) — ${prePushReporte}`, existsSync(poseur)
+    ? `l'installeur a été joué sans effet : node "${poseur}" "${ICI}" --seul=pre-push, lire sa sortie`
+    : `forge des outils absente (${poseur}) : relancer node bootstrap.mjs --pull`);
+}
+
+// 5. Preuves de points d'entrée (contrat d'interface) ---------------------------------------
+console.log("");
+for (const f of FORGES) {
+  const p = join(racine, f.nom, f.preuve);
+  if (privesHorsAcces.has(f.nom)) continue; // facultatif et silencieux (13/10/2026)
+  if (existsSync(p)) ligne("ok", `preuve ${f.nom} : ${f.preuve}`);
+  else defaut(`preuve absente : ${f.nom}/${f.preuve}`, "dépôt incomplet ou contrat d'interface changé — relancer --pull, sinon signaler");
+}
+
+// 6. Skills : ce qui s'exécute au poste doit être ce que les forges versionnent --------------
+// (K1 : skill versionné absent de la copie installée · K2 : copie divergente). oracle-skills
+// NOMME son remède ; --pull l'applique : la dérive versionné↔installé a été payée trois fois
+// (archive « 9 skills sur 20 », TF-0391, TF-0414) parce qu'aucun geste de mise à jour ne la
+// propageait. Sans --pull : mesure seule, défaut nommé.
+console.log("");
+if (sansSkills) ligne("avert", "skills non jugés (--sans-skills)");
+else {
+  const oracle = join(ICI, "oracles", "oracle-skills.mjs");
+  if (!existsSync(oracle)) ligne("avert", "oracles/oracle-skills.mjs absent — skills non jugés");
+  else {
+    // TF-1099 (14/09/2026) — L'ÉTAT INTERMÉDIAIRE D'UNE CAMPAGNE NE SE PROPAGE PAS. Ce bloc tourne à
+    // chaque ouverture de session : des arbres en cours de campagne (fichiers modifiés, commits non
+    // publiés) étaient recopiés vers la copie installée que toutes les sessions du poste exécutent.
+    // Un dépôt source qui a des changements NON PUBLIÉS sous ses skills ou ses hooks est épargné et
+    // NOMMÉ ; les autres se propagent. L'oracle n'est pas juge de l'état des dépôts : il obéit à
+    // `--sauf-sources`, et déclare ce qu'il a épargné (K12).
+    const SOUS = [".claude/skills", "skills", ".claude/hooks", "hooks"];
+    const enCours = [];
+    const sourcesDeSkills = [];
+    for (const e of readdirSync(racine, { withFileTypes: true })) {
+      if (!e.isDirectory()) continue;
+      const d = join(racine, e.name);
+      if (!existsSync(join(d, ".git"))) continue;
+      const presents = SOUS.filter((s) => existsSync(join(d, s)));
+      if (!presents.length) continue;
+      const sale = sortie(git(d, "status", "--porcelain", "--", ...presents)).split("\n").filter(Boolean).length;
+      const amont = git(d, "rev-list", "--count", "@{u}..HEAD", "--", ...presents);
+      const nonPublies = amont.status === 0 ? Number(sortie(amont)) || 0 : 0;
+      if (sale || nonPublies) enCours.push({ nom: e.name, chemin: d, sale, nonPublies });
+      else if (presents.some((s) => /skills$/.test(s))) sourcesDeSkills.push({ nom: e.name, chemin: d });
+    }
+    for (const x of enCours) {
+      ligne("avert", `skills de ${x.nom} NON propagés : ${x.sale} fichier(s) modifié(s) et ${x.nonPublies} commit(s) non publié(s) sous ses skills ou hooks — état intermédiaire ; ils le seront au prochain --pull sur un état propre et publié (TF-1099)`);
+      averts.push(`skills de ${x.nom} épargnés (TF-1099)`);
+    }
+    // TF-1337 (27/09/2026, décision humaine D-19 (a)) — LE FRONTMATTER D'UN SKILL SE JUGE AVANT QU'IL
+    // SE PROPAGE. Le 22/09, un skill est entré dans forge-agents avec une description de 1 244
+    // caractères, au-delà des 1 024 que la copie installée peut porter : la recette de quality-oracles
+    // l'aurait refusé, mais personne ne la joue avant l'enregistrement, et le hameçon livré le 26/09
+    // ne se pose que sur demande — il n'est posé sur aucun poste. La propagation, elle, passe par ICI
+    // à chaque `--pull` : c'est le seul chemin qu'on ne peut pas oublier de traverser. Le contrôle est
+    // celui de forge-agents (`frontmatter-skills-index.mjs --tous`, même lecteur et même barème que
+    // la recette), joué sur chaque dépôt source propre et publié ; un dépôt refusé est ÉPARGNÉ et
+    // NOMMÉ comme un dépôt en cours de campagne, les autres se propagent. Au premier passage sur le
+    // parc réel, il a trouvé un skill de forge-conception à 1 048 caractères depuis le 08/09.
+    // Contrôle absent (forge-agents antérieur au 26/09, ou non cloné) : DIT, jamais tu, et la
+    // propagation n'est pas bloquée par l'absence de son juge.
+    const refusesFrontmatter = [];
+    if (pull) {
+      const controleFm = join(racine, "factory-forge-agents", ".claude", "skills", "quality-oracles", "scripts", "frontmatter-skills-index.mjs");
+      if (!existsSync(controleFm)) {
+        ligne("avert", "frontmatter des skills NON jugé avant propagation : contrôle absent de factory-forge-agents (TF-1337)");
+        averts.push("frontmatter des skills non jugé (TF-1337)");
+      } else {
+        for (const s of sourcesDeSkills) {
+          const r = run(process.execPath, [controleFm, s.chemin, "--tous", "--json"], ICI);
+          let rapport = null;
+          try { rapport = JSON.parse(r.stdout); } catch { /* sortie illisible : dite ci-dessous */ }
+          if (r.status === 1 && rapport && (rapport.defauts || []).length) {
+            refusesFrontmatter.push({ ...s, defauts: rapport.defauts });
+          } else if (r.status !== 0) {
+            ligne("avert", `frontmatter des skills de ${s.nom} NON jugé : le contrôle rend ${r.status} (TF-1337)`);
+            averts.push(`frontmatter de ${s.nom} non jugé (TF-1337)`);
+          }
+        }
+        for (const x of refusesFrontmatter) {
+          const detail = x.defauts.slice(0, 3).map((d) => `${String(d.skill).split("/").pop()} : ${d.defaut}`).join(" · ");
+          defaut(`skills de ${x.nom} NON propagés : frontmatter refusé — ${detail} (TF-1337)`,
+            `corriger le SKILL.md dans ${x.nom}, publier, puis node bootstrap.mjs --pull ; contrôle : node "${controleFm}" "${x.chemin}" --tous`);
+        }
+      }
+    }
+    const epargnes = [...enCours, ...refusesFrontmatter];
+    // TF-0965 (20/09/2026) — LA PROPAGATION SAIT DÉSORMAIS REJOUER LES DÉPÔTS QUI CONSOMMENT LA
+    // COPIE INSTALLÉE, avant et après. Ce bloc-ci ne le lui demande PAS, et le dit : il tourne à
+    // CHAQUE ouverture de session, et les suites concernées vont jusqu'à vingt minutes chez
+    // forge-tests. Un contrôle qui ajouterait vingt minutes à toute ouverture serait coupé dans la
+    // semaine, et on aurait perdu les deux. La mesure appartient donc à la propagation DÉLIBÉRÉE —
+    // celle que la gate TF-0391 réserve à une décision humaine, et qui est exactement celle qui a
+    // cassé forge-tests le 08/09 et forge-design le 14/09. La commande est nommée ci-dessous : un
+    // raccourci qu'on ne nomme pas se lit comme une mesure verte.
+    const juger = (appliquer) => {
+      const argv = [oracle, "--racine", racine, "--installes", SKILLS_INSTALLES];
+      if (appliquer) argv.push("--appliquer", "--sans-consommateurs");
+      if (epargnes.length) argv.push("--sauf-sources", epargnes.map((x) => x.chemin).join(","));
+      const r = run(process.execPath, argv, ICI);
+      let rapport = {};
+      try { rapport = JSON.parse(r.stdout); } catch { /* sortie non JSON : jugée par le code de retour */ }
+      const echecs = (rapport.findings || []).filter((x) => x.statut === "FAIL");
+      return { code: r.status, verdict: rapport.verdict, echecs };
+    };
+    let v = juger(false);
+    if (v.code === 2) ligne("avert", `skills — non jugeables : ${v.verdict || "SKIP"} (aucun skill versionné trouvé sous la racine ?)`);
+    else if (v.code === 0) ligne("ok", `skills fournis par la marketplace : aucune copie attendue dans ${SKILLS_INSTALLES} (${SKILLS_DECIDE_PAR}), marketplace à jour avec les forges — oracle-skills, modèle du 25/11/2026`);
+    // Modèle marketplace (25/11/2026) : une marketplace en retard ne se « propage » pas, elle se reconstruit, se valide et s'enregistre — un geste
+    // humain, jamais fait par le bootstrap. Les autres écarts (hooks) gardent la voie d'avant.
+    else if (v.echecs.length && v.echecs.every((x) => x.regle === "K14")) defaut("skills — la marketplace est EN RETARD sur les forges (K14) : les plugins livreraient des skills périmés",
+      "node factory-marketplace/outils/construire.mjs, puis claude plugin validate, puis enregistrer le dépôt factory-marketplace");
+    else if (pull) {
+      const a = juger(true);
+      v = juger(false);
+      if (v.code === 0) {
+        ligne("ok", `skills propagés vers ${SKILLS_INSTALLES} — ${SKILLS_DECIDE_PAR} (oracle-skills --appliquer, décision portée par --pull) — rejeu PASS`);
+        // Le mode raccourci est DÉCLARÉ, jamais tu (TF-0965) : ce qui n'a pas été mesuré se dit à
+        // l'endroit où on lirait qu'il l'a été.
+        ligne("avert", "consommateurs NON rejoués autour de cette propagation (--sans-consommateurs) : une règle neuve du socle "
+          + `peut avoir rendu rouge une suite verte chez forge-tests, forge-design, forge-data ou forge-audit sans que rien ne le dise (TF-0965). `
+          + `Pour le savoir : node oracles/oracle-skills.mjs --racine "${racine}" --appliquer`);
+        averts.push("consommateurs des skills non rejoués (TF-0965)");
+      }
+      else defaut(`skills — ${v.echecs.length} règle(s) encore en échec après propagation : ${[...new Set(v.echecs.map((x) => x.regle))].join(", ")}`,
+        `node oracles/oracle-skills.mjs --racine "${racine}" (le verdict nomme le remède ; --purger si des orphelins subsistent)`);
+      if (a.code === 2) averts.push("propagation SKIP");
+    } else {
+      const regles = [...new Set(v.echecs.map((x) => x.regle))].join(", ");
+      defaut(`skills installés en écart avec les forges (${v.echecs.length} règle(s) : ${regles})`, "node bootstrap.mjs --pull");
+    }
+  }
+
+  // D-240 (b) du 23/11/2026 — LES SKILLS DE LA FACTORY CHEZ CODEX ET ANTIGRAVITY. Le 2e banc
+  // multi-agents a mesuré qu'aucun des deux ne chargeait un skill de la Factory. La copie est tenue
+  // à jour ici, sous --pull seulement, et jamais quand une recette désigne ses propres skills
+  // (FORGE_SKILLS_INSTALLES) : un banc sur dépôts factices n'écrit pas chez les agents du poste.
+  if (!sansSkills && !process.env.FORGE_SKILLS_INSTALLES) {
+    const propagateur = join(ICI, "scripts", "propager-skills-agents.mjs");
+    if (existsSync(propagateur)) {
+      const r = run(process.execPath, [propagateur, ...(pull ? [] : ["--verifier"])], ICI);
+      let j = {};
+      try { j = JSON.parse(r.stdout); } catch { /* jugé par le code de retour */ }
+      const agents = (j.cibles || []).map((c) => c.agent).join(" et ");
+      if (r.status === 2) ligne("ok", "skills des agents tiers : ni Codex ni Antigravity installés, rien à copier");
+      else if (r.status === 0) ligne("ok", `skills de la Factory copiés chez ${agents} (${j.skills} skills, D-240 (b))`);
+      else ligne("avert", `skills de la Factory en écart chez ${agents || "les agents tiers"} — node scripts/propager-skills-agents.mjs`);
+    }
+  }
+
+  // TF-1285 (22/09/2026, décision humaine D-2 (b)) — L'ENTRÉE DU DISPOSITIF EST POSÉE AU POSTE,
+  // et pas seulement dans le produit. Le 22/09 à 10:16, un projet neuf dont le premier message
+  // citait le dépôt du dispositif n'a rien enclenché : le hameçon `UserPromptSubmit` de la bonne
+  // forme n'existait qu'en portée PRODUIT, posé par l'ouverture du run — le déclencheur était
+  // installé par le geste qu'il devait déclencher. Même patron que les gardes de pré-commit
+  // (TF-1041) : on MESURE à chaque ouverture, on n'INSTALLE que sous --pull, et la fusion est non
+  // destructive (la recette du poseur porte 15 cas, dont toute la non-destruction).
+  //
+  // POURQUOI CE BLOC VIT SOUS LA MÊME GARDE QUE LES SKILLS. Le poste et la copie installée des
+  // skills sont le MÊME objet, résolu par `lib-config-installee` : une recette qui isole l'un doit
+  // isoler l'autre. Sans cette garde, un banc joué sur des dépôts factices écrirait dans le
+  // `settings.json` réel de l'humain.
+  {
+    const poseur = join(ICI, "scripts", "verifier-hook-poste.mjs");
+    if (!existsSync(poseur)) ligne("avert", "scripts/verifier-hook-poste.mjs absent — entrée du dispositif au poste non jugée");
+    else {
+      const r = run(process.execPath, [poseur, ...(pull ? ["--installer"] : [])], ICI);
+      const lignes = (r.stdout || "").trim().split(/\r?\n/).filter(Boolean);
+      for (const l of lignes.filter((x) => /^\[INSTALLÉ\]/.test(x))) ligne("ok", `amorçage au poste — ${l.replace(/^\[INSTALLÉ\]\s*/, "")}`);
+      if (r.status === 0) ligne("ok", "amorçage au poste — l'entrée du dispositif est déclarée sur le message humain, et son script existe");
+      else if (r.status === 2) ligne("avert", `amorçage au poste — ${lignes.join(" · ").slice(0, 200)}`);
+      else defaut(`amorçage au poste — ${lignes.filter((x) => x.startsWith("[FAIL]")).join(" · ").slice(0, 300)}`,
+        pull ? "corriger le settings.json du poste à la main, puis rejouer" : "node bootstrap.mjs --pull (pose l'entrée si elle manque)");
+    }
+  }
+}
+
+// 7. Bilan : versions, puis verdict ----------------------------------------------------------
+if (versions.length) {
+  console.log("\nVersions au poste :");
+  for (const v of versions) console.log(`  ${v.nom.padEnd(34)} ${String(v.version).padEnd(22)} ${v.sha.padEnd(8)} ${v.date}  ${v.etat}`);
+}
+console.log(
+  defauts.length
+    ? `\nPoste NON prêt — ${defauts.length} défaut(s), chacun avec son remède ci-dessus.`
+    : `\nPoste prêt — présent, à jour, skills fournis par la marketplace${avertsAffiches ? ` (${avertsAffiches} avertissement(s) non bloquant(s), affichés ci-dessus)` : ""}. Si la racine n'est pas le parent du pilot, exporter FORGE_ROOT=${racine} avant d'ouvrir la session.`
+);
+// TF-1657 : le verdict du parc, distinct de celui du poste. Il ne se tait que quand il n'y a rien à dire.
+if (defautsParc.length) console.log(`Parc NON sain — ${defautsParc.length} défaut(s) du parc (canal confidentiel)${pourProduit ? ", hors du périmètre de ce produit : avertis ci-dessus, à relever au lot de retours, jamais à corriger depuis le produit" : ", comptés dans le verdict du poste"}.`);
+// Confirmation explicite de l'installation (13/10/2026) : le dernier mot de la commande dit, sans
+// interprétation, si la Factory est utilisable sur ce poste.
+if (!defauts.length && !sousInstallateur) {
+  const forgesPresentes = FORGES.filter((f) => existsSync(join(racine, f.nom, ".git"))).length;
+  console.log("\n" + "═".repeat(72) +
+    `\n  FACTORY CORRECTEMENT INSTALLÉE — ${forgesPresentes} dépôt(s) de forge présent(s) et à jour, 0 défaut` +
+    "\n" + "═".repeat(72));
+}
+process.exit(defauts.length ? 1 : 0);

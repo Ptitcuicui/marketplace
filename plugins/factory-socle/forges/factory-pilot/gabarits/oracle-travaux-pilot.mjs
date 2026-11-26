@@ -1,0 +1,369 @@
+#!/usr/bin/env node
+/**
+ * oracle-travaux-pilot.mjs — juge la FORME d'un lot de travaux confiés par le pilot à un produit.
+ *
+ * ============================================================================================
+ * POURQUOI CE FICHIER EXISTE (TF-0627, 25/08/2026)
+ * ============================================================================================
+ *
+ * LE CONSTAT QUI L'A FAIT NAÎTRE, et il vient d'une question humaine : « les produits n'ont pas
+ * une TODO List dans laquelle on pourrait leur fournir les travaux à réaliser ? » La réponse
+ * mesurée est OUI pour le carnet — `docs\projet\TODO-PRODUIT.md`, porté par cinq produits sur
+ * sept, trois mis à jour le jour même — et NON pour le chemin : le pilot n'avait AUCUN écrivain
+ * vers lui. Tout ce qu'il possédait autour était en lecture (la projection HTML) ou en contrôle
+ * (R-20). *Le flux était à sens unique* : le canal produit → pilot est complet et outillé (lot de
+ * retours, sidecar, rejet atomique, dérogation tracée), le canal pilot → produit n'existait pas.
+ *
+ * CE QUE LA LACUNE COÛTAIT, mesuré : le relevé du 25/08 rend 38 artefacts d'héritage absents chez
+ * sept produits, dont le gabarit de restitution et son hook chez cinq. AUCUN des sept ne le
+ * savait, parce qu'aucune voie ne permettait de le lui dire. *Un état mesuré qui n'atteint pas son
+ * destinataire ne devient pas un travail fait.*
+ *
+ * LE CANAL EST SYMÉTRIQUE, ET C'EST LA CONDITION DE SON ACCEPTABILITÉ. Le pilot dépose un lot
+ * dans la BOÎTE D'ENTRÉE du produit (`input\00-travaux\`) — pas dans son carnet, pas dans son
+ * code. Le produit l'ingère lui-même, décide ce qu'il retient, et écarte le reste avec son motif.
+ * La règle « seuls les produits se modifient eux-mêmes » est donc tenue à la lettre : le pilot
+ * n'écrit rien que le produit n'ait choisi.
+ *
+ * IL NAÎT AVEC SON JUGE DES DEUX CÔTÉS, plutôt que de re-payer la leçon du canal inverse. Là-bas,
+ * la forme était écrite en PROSE chez l'émetteur et jugée en CODE chez le destinataire : six lots
+ * en une journée ont dû passer par dérogation. Ce module est la SOURCE unique des deux côtés — le
+ * pilot l'importe avant d'émettre, le produit en reçoit une copie conforme par l'héritage.
+ *
+ * ============================================================================================
+ * CE QUI EST JUGÉ, ET CE QUI NE L'EST PAS
+ * ============================================================================================
+ *
+ * T1 · chaque élément confié porte son **moyen de vérification** — la commande à rejouer ou le
+ *      fait à constater. *Un travail confié sans le moyen de constater qu'il est fait est une
+ *      intention, pas un travail* : c'est l'exigence que le pilot s'impose à lui-même à la
+ *      clôture de ses items (`gains_constates`), et il n'y a aucune raison qu'elle s'allège
+ *      quand il confie plutôt qu'il fait.
+ * T2 · chaque élément cite l'item du registre dont il vient (`TF-xxxx`). Sans cela, le produit ne
+ *      peut pas retrouver le raisonnement, et le pilot ne sait plus ce qu'il a confié à qui.
+ * T3 · le lot porte la section **« Ce que le pilot a déjà fait de son côté »**, ou déclare qu'il
+ *      n'y a rien. Sans elle, le produit ne peut pas savoir si le travail confié est le reste d'un
+ *      problème traité ou le problème entier. C'est le symétrique exact de R-45.
+ * T4 · le lot porte la section **« Ce que le pilot NE demande PAS »**, ou déclare qu'il n'y a
+ *      rien. C'est ce qui distingue un lot BORNÉ d'une liste de souhaits : sans borne déclarée,
+ *      un produit ne sait pas si le silence sur un sujet vaut accord ou oubli (loi n° 3).
+ * T5 · l'ordre recommandé est **justifié**. Une liste non ordonnée se lit dans l'ordre où elle a
+ *      été écrite, pas dans celui qui sert — même règle que S6 sur les restitutions.
+ * T6 · tout MODULE PRODUCTEUR nommé a été LU (TF-0819, 05/09/2026). Quand « ce qui est demandé »
+ *      dit qu'un artefact est « transcrit / produit / écrit / dérivé / généré / porté par
+ *      `<module>` », le lot porte une ligne « **Module producteur lu** : `<module>` … » qui cite
+ *      la source lue (un chemin, un SKILL.md, un en-tête). Le fait payé : le lot 20260905b
+ *      attribuait à `derive-les-vues` l'écriture d'un champ que ce verbe ne produit jamais ; la
+ *      forge a dû répartir le travail elle-même, et l'écart n'avait aucune classe où entrer.
+ *      *Nommer un producteur sans l'avoir lu, c'est confier une tâche à quelqu'un qui n'existe
+ *      pas.* T6 exige la lecture DÉCLARÉE, pas sa justesse (même borne que T1).
+ * T7 · tout fait portant sur une CONFIGURATION EXTERNE cite la COMMANDE qui l'a lue et sa DATE
+ *      (TF-0915, 08/09/2026). Le 05/09, un lot du pilot a affirmé une règle de branche (« avance
+ *      rapide seulement ») sans l'avoir lue chez l'hébergeur ; T1 à T6 ont rendu PASS, la forge
+ *      l'a lue comme vraie, et la configuration RÉELLE — une revue exigée, deux contrôles requis,
+ *      `enforce_admins` à faux, push forcé interdit — n'a été mesurée que le lendemain, par une
+ *      lecture directe de la protection de branche chez l'hébergeur. Coût : un aller-retour
+ *      humain et un lot de retours. *Une configuration externe se LIT en une commande ;
+ *      l'affirmer sans l'avoir lue est un choix, pas une contrainte.* T7 ne juge toujours pas la
+ *      VÉRACITÉ — le pilot ne rejoue rien chez l'hébergeur d'un produit — il juge que la lecture
+ *      a eu lieu et qu'elle est datée.
+ *
+ * NON JUGÉ, et c'est délibéré :
+ *   · la JUSTESSE de ce qui est demandé — un contrôle de forme ne juge pas un fond, et un
+ *     raisonnement écrit peut être faux et se corriger ; un raisonnement absent est perdu ;
+ *   · si le produit ACCEPTE le travail : ce n'est pas au juge de forme d'en décider, et c'est
+ *     précisément ce que le canal laisse au produit ;
+ *   · la VÉRACITÉ d'un moyen de vérification : T1 exige qu'il soit écrit, pas qu'il soit exact.
+ *     Vérifier cela demanderait de jouer la commande chez le produit, ce que le pilot ne fait pas.
+ *     T7 (TF-0915) réduit la portée de cette borne SANS la lever : pour une configuration EXTERNE
+ *     lisible en direct, la lecture est exigée et datée — c'est la seule classe de faits qu'un
+ *     émetteur peut vérifier sans entrer chez le destinataire ;
+ *   · le SORT DU LOT REÇU dans l'histoire du produit (TF-0883) : le gabarit le PRESCRIT depuis le
+ *     08/09 — le canal supposait la boîte d'entrée ignorée par git sans le dire, et deux fichiers
+ *     reçus sont restés non suivis indéfiniment — mais AUCUN juge ne l'exige encore. La règle
+ *     existe, écrite et éprouvée à double sens ; son entrée en vigueur demande une ligne dans
+ *     l'émetteur des lots (`todo\emettre-travaux.mjs`, en-tête du lot généré), hors du périmètre
+ *     d'écriture de la campagne qui a livré T7. Doctrine opposable, juge en attente : c'est
+ *     exactement l'état que TF-0923 nomme, et il est DÉCLARÉ plutôt que tu ;
+ *   · le vocabulaire déclencheur de T7 est BORNÉ et écrit : une configuration externe racontée en
+ *     d'autres mots ne sera pas vue. Faux négatif ASSUMÉ — le seuil conservateur protège de
+ *     l'inverse, exiger une lecture d'hébergeur sur une phrase ordinaire.
+ *
+ * Usage : node oracle-travaux-pilot.mjs <lot.md> [--json]
+ * Exit : 0 = forme tenue · 1 = forme en défaut · 2 = lot illisible.
+ */
+import { readFileSync, existsSync } from "node:fs";
+import { basename } from "node:path";
+
+export const VERSION = "1.2.0";
+
+const SECTION_TRAVAUX = /^##\s+Travaux\s+confi[ée]s\s*$/im;
+const SECTION_DEJA_FAIT = /^##\s+Ce\s+que\s+le\s+pilot\s+a\s+d[ée]j[àa]\s+fait\s+de\s+son\s+c[ôo]t[ée]\s*$/im;
+const SECTION_PAS_DEMANDE = /^##\s+Ce\s+que\s+le\s+pilot\s+NE\s+demande\s+PAS\s*$/im;
+const SECTION_ORDRE = /^##\s+Ordre\s+recommand[ée]\s*$/im;
+
+//: Un élément confié : un sous-titre `### TF-xxxx — …`. C'est le seul découpage du lot.
+const ELEMENT = /^###\s+(TF-\d{3,4})\b([^\n]*)$/gim;
+//: Le moyen de vérification, sous l'une des deux formes que le gabarit propose.
+const VERIFICATION = /comment\s+vous\s+saurez\s+que\s+c['’]est\s+fait|moyen\s+de\s+v[ée]rification/i;
+//: Le vocabulaire d'une justification d'ordre — le même que S6 des restitutions.
+const ORDRE_JUSTIFIE = /(parce\s+qu|car\b|d['’]abord|priorit|impact|risque|d[ée]pendance|levier)/i;
+//: Les déclarations d'absence : une section vide se DIT, elle ne se devine pas (loi n° 3).
+const AUCUN_DEJA_FAIT = /rien\s+n['’]a\s+[ée]t[ée]\s+corrig[ée]\s+au\s+pilot|aucun\s+travail\s+pr[ée]alable/i;
+const AUCUNE_BORNE = /aucune\s+borne|rien\s+n['’]est\s+[ée]cart[ée]\s+de\s+ce\s+lot/i;
+//: T6 — un module PRODUCTEUR nommé dans « ce qui est demandé » : « transcrit … par `x` », « produit par `x` »…
+//
+// TF-0888 (08/09/2026) — LE NOM « PORTE » N'EST PAS LE VERBE « PORTER ». Le motif acceptait tout
+// mot commençant par « port » (`port` + `[a-zéèê]*`) : le NOM commun « porte » — la porte de
+// publication, celle que la doctrine du pilot nomme dix fois — déclenchait donc la règle. Mesuré
+// le 08/09 en déposant un lot chez la forge des outils : la phrase « une porte muette par défaut
+// se contourne par `--no-verify` » a été refusée pour un module producteur imaginaire, et le lot
+// a dû être reformulé au lieu d'être corrigé. Deux bornes, chacune contre une moitié du défaut :
+//   · les FORMES VERBALES seulement — « porté », « portée », « portés », « portées » (participe
+//     passé, au sens de « porté dans une vue par … »), jamais « porte » ni « portes » ;
+//   · le complément doit être un NOM DE MODULE : une option de ligne de commande commence par un
+//     tiret (`--no-verify`), et une option n'a jamais produit d'artefact.
+const PRODUCTEUR_NOMME = /(?:(?:transcri|produi|[ée]cri|d[ée]riv|g[ée]n[ée]r|r[ée]g[ée]n[ée]r)[a-zéèê]*|porté(?:e?s)?)\s+(?:[^`\n]{0,60}?\s)?par\s+`([^`\n]+)`/gi;
+//: T6 (TF-0888) — un complément qui commence par un tiret est une OPTION, jamais un module.
+const EST_OPTION = (jeton) => /^-/.test(jeton.trim());
+//: T7 — une CONFIGURATION EXTERNE nommée : ce qui vit chez l'hébergeur, lisible en direct, et que
+//: personne ne peut deviner depuis le dépôt. Le vocabulaire est BORNÉ et écrit, jamais deviné.
+const CONFIGURATION_EXTERNE = /(r[èe]gle\s+de\s+branche|protection\s+de\s+branche|branch\s+protection|avance\s+rapide|fast[- ]forward|revue\s+(exig[ée]e|requise|obligatoire)|push\s+forc[ée]|force[- ]push|enforce_admins|contr[ôo]les?\s+requis|required\s+status\s+check|droits\s+d['’]acc[èe]s\s+du\s+d[ée]p[ôo]t|permissions\s+du\s+d[ée]p[ôo]t|secret[s]?\s+d['’]organisation|variable[s]?\s+d['’]environnement\s+de\s+l['’]h[ée]bergeur)/i;
+//: T8 — l'annonce du sort du lot reçu dans l'en-tête, et la commande qui départage les deux cas.
+const SORT_DU_LOT = /sort\s+du\s+lot\s+re[çc]u/i;
+//: T8 — la date à partir de laquelle la ligne est exigée. Le correctif de l'émetteur date du
+//: 08/09, mais un lot du 08/09 émis AVANT ce correctif ne se distingue pas d'un lot émis après :
+//: la date d'un lot n'a pas d'heure. La borne prend donc le jour SUIVANT — un jour de tolérance
+//: contre un rouge permanent sur un artefact qu'aucun geste licite ne peut plus corriger. Rien
+//: n'est perdu : l'émetteur produit la ligne d'office dès le 08/09, et un lot du 08/09 qui la
+//: porte passe T8 par le fond, pas par l'abstention.
+const ENTREE_EN_VIGUEUR_T8 = "20260909";
+const COMMANDE_QUI_DEPARTAGE = /git\s+check-ignore/i;
+//: T7 — la lecture déclarée d'une configuration externe : une commande EN BACKTICKS et une DATE.
+const LECTURE_EXTERNE = /configuration\s+externe\s+lue[^\n]*?`([^`\n]+)`[^\n]*?(\d{4}-\d{2}-\d{2}|\d{2}\/\d{2}\/\d{4}|\d{2}\/\d{2})/gi;
+//: T6 — la lecture déclarée du producteur : « **Module producteur lu** : `x` … » (une ligne par module).
+const LECTURE_PRODUCTEUR = /module\s+producteur\s+lu[^\n]*?`([^`\n]+)`/gi;
+
+/** Le corps d'un élément : du sous-titre au sous-titre suivant, ou à la section suivante. */
+function corpsDesElements(texte) {
+  const bornes = [];
+  ELEMENT.lastIndex = 0;
+  let m;
+  while ((m = ELEMENT.exec(texte)) !== null) bornes.push({ id: m[1], titre: m[2].trim(), debut: m.index });
+  return bornes.map((b, i) => {
+    const finSection = texte.slice(b.debut).search(/\n##\s+/);
+    const finElement = i + 1 < bornes.length ? bornes[i + 1].debut - b.debut : Infinity;
+    const fin = Math.min(finSection < 0 ? Infinity : finSection, finElement);
+    return { ...b, corps: texte.slice(b.debut, b.debut + (fin === Infinity ? texte.length : fin)) };
+  });
+}
+
+/** Une section porte-t-elle du contenu, ou seulement son titre ? Une section vide vaut absente. */
+function contenuDeSection(texte, motif) {
+  const m = texte.match(motif);
+  if (!m) return null;
+  const apres = texte.slice(m.index + m[0].length);
+  const fin = apres.search(/\n##\s+/);
+  return (fin < 0 ? apres : apres.slice(0, fin))
+    .split("\n").filter((l) => l.trim() && !l.trim().startsWith("<!--")).join("\n").trim();
+}
+
+export function verifier(cheminOuTexte, nomFichier) {
+  const estChemin = typeof cheminOuTexte === "string" && existsSync(cheminOuTexte);
+  const texte = estChemin ? readFileSync(cheminOuTexte, "utf8") : String(cheminOuTexte);
+  const nom = nomFichier || (estChemin ? basename(cheminOuTexte) : "<texte>");
+  const constats = [];
+  const ko = (regle, message, remede) => constats.push({ regle, statut: "FAIL", message, remede });
+  const ok = (regle, message) => constats.push({ regle, statut: "PASS", message });
+
+  const elements = corpsDesElements(texte);
+
+  // ---- T2 : chaque élément cite son item d'origine ----------------------------------------
+  // Jugé AVANT T1 : sans découpage en éléments, T1 n'a rien à juger, et un lot dont la section
+  // « Travaux confiés » existe mais ne porte aucun élément est un lot vide qui se croit plein.
+  if (!SECTION_TRAVAUX.test(texte)) {
+    ko("T2", "section « Travaux confiés » absente — sans elle, un lot ne dit pas ce qu'il confie",
+      "ajouter « ## Travaux confiés », puis un bloc `### TF-xxxx — <titre>` par élément");
+  } else if (!elements.length) {
+    const declare = /aucun\s+travail\s+confi[ée]\s+dans\s+ce\s+lot/i.test(contenuDeSection(texte, SECTION_TRAVAUX) || "");
+    if (declare) ok("T2", "aucun travail confié, et c'est DÉCLARÉ — un lot vide est licite s'il le dit");
+    else {
+      ko("T2", "la section « Travaux confiés » ne porte AUCUN élément `### TF-xxxx` — un lot vide qui ne se déclare pas vide est indiscernable d'un lot mal écrit",
+        "écrire un bloc `### TF-xxxx — <titre>` par élément, ou déclarer « aucun travail confié dans ce lot »");
+    }
+  } else {
+    ok("T2", `${elements.length} élément(s) confié(s), chacun rattaché à son item du registre`);
+  }
+
+  // ---- T1 : chaque élément porte son moyen de vérification --------------------------------
+  const sansVerif = elements.filter((e) => !VERIFICATION.test(e.corps));
+  if (elements.length && sansVerif.length) {
+    ko("T1", `${sansVerif.length} élément(s) sur ${elements.length} sans moyen de vérification (${sansVerif.map((e) => e.id).join(", ")}) — `
+      + "un travail confié sans le moyen de constater qu'il est fait est une intention, pas un travail",
+      "ajouter à chaque élément « - **Comment vous saurez que c'est fait** : <commande à rejouer ou fait à constater> »");
+  } else if (elements.length) {
+    ok("T1", `les ${elements.length} élément(s) portent leur moyen de vérification`);
+  }
+
+  // ---- T3 : ce que le pilot a déjà fait, ou la déclaration qu'il n'y a rien ---------------
+  const dejaFait = contenuDeSection(texte, SECTION_DEJA_FAIT);
+  if (dejaFait === null) {
+    ko("T3", "section « Ce que le pilot a déjà fait de son côté » absente — sans elle, le produit ne peut pas savoir si le travail confié est le RESTE d'un problème traité ou le problème ENTIER",
+      "ajouter la section. Rien à y mettre ? L'écrire : « rien n'a été corrigé au pilot pour ce lot »");
+  } else if (!dejaFait && !AUCUN_DEJA_FAIT.test(texte)) {
+    ko("T3", "la section « Ce que le pilot a déjà fait de son côté » est VIDE — une section vide se lit comme un oubli (loi n° 3)",
+      "y écrire ce qui a été corrigé au pilot, ou « rien n'a été corrigé au pilot pour ce lot »");
+  } else {
+    ok("T3", "le lot dit ce que le pilot a fait de son côté, ou déclare qu'il n'y a rien");
+  }
+
+  // ---- T4 : la borne du lot --------------------------------------------------------------
+  const borne = contenuDeSection(texte, SECTION_PAS_DEMANDE);
+  if (borne === null) {
+    ko("T4", "section « Ce que le pilot NE demande PAS » absente — c'est elle qui distingue un lot BORNÉ d'une liste de souhaits : sans borne déclarée, le silence sur un sujet ne se lit ni comme un accord ni comme un oubli",
+      "ajouter la section. Rien à y mettre ? L'écrire : « rien n'est écarté de ce lot »");
+  } else if (!borne && !AUCUNE_BORNE.test(texte)) {
+    ko("T4", "la section « Ce que le pilot NE demande PAS » est VIDE — une borne non écrite n'est pas une borne",
+      "y écrire ce qui est hors du lot avec son motif, ou « rien n'est écarté de ce lot »");
+  } else {
+    ok("T4", "le lot déclare sa borne : ce qu'il ne demande pas est écrit");
+  }
+
+  // ---- T5 : l'ordre recommandé est justifié ----------------------------------------------
+  const ordre = contenuDeSection(texte, SECTION_ORDRE);
+  if (elements.length > 1) {
+    if (ordre === null) {
+      ko("T5", "section « Ordre recommandé » absente alors que le lot confie plusieurs travaux — une liste non ordonnée se lit dans l'ordre où elle a été écrite, pas dans celui qui sert",
+        "ajouter la section avec un ordre et son motif (impact, dépendance, risque)");
+    } else if (!ORDRE_JUSTIFIE.test(ordre)) {
+      ko("T5", "l'ordre recommandé n'est pas JUSTIFIÉ — un ordre sans motif est un rangement, et le produit ne peut ni l'adopter en confiance ni le contredire",
+        "dire pourquoi cet ordre : « parce que », « d'abord … car », impact, dépendance, risque");
+    } else {
+      ok("T5", "l'ordre recommandé porte son motif");
+    }
+  } else {
+    ok("T5", "un seul travail confié (ou aucun) — aucun ordre à justifier");
+  }
+
+  // ---- T6 : tout module producteur nommé a été lu (TF-0819) --------------------------------
+  const lus = new Set();
+  LECTURE_PRODUCTEUR.lastIndex = 0;
+  for (let l; (l = LECTURE_PRODUCTEUR.exec(texte)) !== null;) lus.add(l[1].trim().toLowerCase());
+  const nonLus = [];
+  for (const e of elements) {
+    PRODUCTEUR_NOMME.lastIndex = 0;
+    for (let p; (p = PRODUCTEUR_NOMME.exec(e.corps)) !== null;) {
+      const module = p[1].trim();
+      if (EST_OPTION(module)) continue;   // TF-0888 : `--no-verify` n'est pas un producteur
+      if (!lus.has(module.toLowerCase())) nonLus.push(`${e.id} → \`${module}\``);
+    }
+  }
+  const nonLusUniques = [...new Set(nonLus)];
+  if (nonLusUniques.length) {
+    ko("T6", `${nonLusUniques.length} module(s) producteur(s) nommé(s) sans lecture déclarée (${nonLusUniques.join(", ")}) — `
+      + "nommer un producteur sans l'avoir lu, c'est confier une tâche à quelqu'un qui n'existe peut-être pas (lot 20260905b : un verbe chargé d'un champ qu'il ne produit jamais)",
+      "ajouter, par module, une ligne « - **Module producteur lu** : `<module>` produit <artefact> (source : <chemin ou SKILL.md lu>) »");
+  } else {
+    ok("T6", elements.length && lus.size ? `${lus.size} module(s) producteur(s) nommé(s), chacun lu et sa source citée`
+      : "aucun module producteur nommé — rien à lire");
+  }
+
+  // ---- T7 : un fait portant sur une CONFIGURATION EXTERNE cite la commande de lecture et sa
+  //           date (TF-0915) -----------------------------------------------------------------
+  //
+  // T1 exige qu'un moyen de vérification soit ÉCRIT, jamais qu'il soit EXACT — et c'est déclaré au
+  // non_juge depuis l'origine. Le 05/09, un lot du pilot a affirmé une règle de branche (« avance
+  // rapide seulement ») sans l'avoir lue chez l'hébergeur ; T1 à T6 ont rendu PASS, la forge l'a
+  // lue comme vraie, et la configuration RÉELLE — une revue exigée, deux contrôles requis,
+  // `enforce_admins` à faux, push forcé interdit — n'a été mesurée que le lendemain, par
+  // `gh api …/branches/main/protection`. Coût : un aller-retour humain et un lot de retours.
+  //
+  // CE QUE T7 CHANGE, ET CE QU'IL NE CHANGE PAS. Il ne juge toujours pas la VÉRACITÉ d'un fait —
+  // le pilot ne rejoue pas une commande chez l'hébergeur d'un produit. Il juge que le fait a été
+  // LU : une configuration externe est lisible en direct, donc l'affirmer sans citer sa lecture
+  // est un choix, pas une contrainte. C'est la même mécanique que T6 sur les modules producteurs,
+  // portée sur ce qui vit hors du dépôt. Le vocabulaire déclencheur est BORNÉ et écrit ci-dessus :
+  // une configuration racontée en d'autres mots ne sera pas vue, et c'est un faux négatif ASSUMÉ —
+  // le seuil conservateur protège de l'inverse, exiger une lecture sur une phrase ordinaire.
+  const luesExternes = new Set();
+  LECTURE_EXTERNE.lastIndex = 0;
+  for (let l; (l = LECTURE_EXTERNE.exec(texte)) !== null;) luesExternes.add(l[1].trim());
+  const sansLecture = elements.filter((e) => CONFIGURATION_EXTERNE.test(e.corps));
+  if (sansLecture.length && !luesExternes.size) {
+    ko("T7", `${sansLecture.length} élément(s) affirment une CONFIGURATION EXTERNE (${sansLecture.map((e) => e.id).join(", ")}) sans citer la commande qui l'a lue ni sa date — `
+      + "une règle de branche, un contrôle requis ou un droit d'accès se LIT en une commande ; l'affirmer sans l'avoir lue, c'est faire lire au produit une configuration inventée (lot 20260905f : « avance rapide seulement » sur une branche qui exigeait une revue)",
+      "ajouter à l'élément « - **Configuration externe lue** (T7) : `<commande de lecture>` le <AAAA-MM-JJ> → <ce qu'elle rend> »");
+  } else if (sansLecture.length) {
+    ok("T7", `${sansLecture.length} élément(s) affirment une configuration externe, et ${luesExternes.size} lecture(s) sont citées avec leur date`);
+  } else {
+    ok("T7", "aucun fait portant sur une configuration externe — rien à lire chez l'hébergeur");
+  }
+
+  // T8 (TF-0883) — LE SORT DU LOT REÇU SE DIT, DANS LES DEUX CAS.
+  //
+  // Le canal des lots supposait la boîte d'entrée du produit ignorée par git, et ne le disait
+  // nulle part. Mesuré le 06/09 chez un produit qui versionne `input\` À DESSEIN, et n'en exclut
+  // que deux entrants nommés : `git check-ignore` sur le lot déposé rendait 1, donc le lot n'était
+  // pas ignoré — ni lui ni le gabarit ne disaient s'il devait entrer dans l'histoire. La question
+  // a été tranchée dans le MANDAT HUMAIN qui accompagnait le lot, et deux fichiers reçus sont
+  // restés non suivis indéfiniment. Une garde qui vit dans un mandat ne protège que la session qui
+  // l'a reçue : elle se retranchera au lot suivant, et se retranchait déjà au précédent.
+  //
+  // La règle n'impose AUCUN des deux sorts — c'est au produit d'en décider par son `.gitignore`.
+  // Elle impose que le lot le DISE, et qu'il nomme la commande qui départage. C'est la loi n° 3
+  // mot pour mot : la surface implicite se traite d'office, jamais par omission.
+  // BORNÉE DANS LE TEMPS, parce qu'un lot déposé NE SE MODIFIE JAMAIS — le gabarit le dit en
+  // toutes lettres, et le lot suivant est un nouveau fichier daté. Sans borne, les onze lots
+  // émis avant le 08/09 deviendraient rouges à jamais, sans qu'aucun geste licite puisse les
+  // corriger : un juge qui condamne ce qu'on n'a pas le droit de réparer n'apprend rien à
+  // personne, et son rouge permanent finit par se lire comme du bruit. Même doctrine que R11 du
+  // registre. La date se lit dans le TITRE du lot (« — <produit> — <AAAAMMJJ><indice> ») ou, à
+  // défaut, dans son nom de fichier ; illisible des deux côtés, le lot EST jugé — l'abstention ne
+  // doit pas s'obtenir en effaçant sa date.
+  const dateLue = (/—\s*(\d{8})[a-z]?\s*$/m.exec(texte) || /(\d{8})[a-z]?\.md$/i.exec(nom) || [])[1];
+  if (dateLue && dateLue < ENTREE_EN_VIGUEUR_T8) {
+    constats.push({ regle: "T8", statut: "SANS_OBJET",
+      message: `lot du ${dateLue}, antérieur à l'entrée en vigueur de T8 (${ENTREE_EN_VIGUEUR_T8}) — un lot déposé ne se `
+        + "modifie jamais, et le juger sur une règle postérieure le condamnerait sans recours" });
+  } else if (!SORT_DU_LOT.test(texte)) {
+    ko("T8", "l'en-tête ne dit pas le SORT DU LOT REÇU — le canal suppose la boîte d'entrée du produit ignorée par git "
+      + "sans le dire, et chez un produit qui versionne `input\` le lot reste non suivi indéfiniment (mesuré le 06/09)",
+      "ajouter à l'en-tête « - **Sort du lot reçu** : ce lot entre dans l'histoire du produit — `git add` du fichier et de "
+      + "son sidecar — SAUF si `git check-ignore \"<ce fichier>\"` le déclare ignoré, auquel cas il reste hors de l'histoire »");
+  } else if (!COMMANDE_QUI_DEPARTAGE.test(texte)) {
+    ko("T8", "le sort du lot reçu est annoncé mais AUCUNE commande ne le départage — « déposez-le où il faut » n'est pas "
+      + "une règle : sans `git check-ignore`, le lecteur retranche la question à chaque lot",
+      "citer `git check-ignore \"<ce fichier>\"` dans la ligne du sort du lot");
+  } else {
+    ok("T8", "le sort du lot reçu est dit, dans les deux cas, et la commande qui les départage est citée");
+  }
+
+  return { fichier: nom, version: VERSION, constats,
+    verdict: constats.some((c) => c.statut === "FAIL") ? "FAIL" : "PASS" };
+}
+
+// ---- CLI --------------------------------------------------------------------------------
+const lanceEnDirect = process.argv[1]
+  && import.meta.url.toLowerCase().endsWith(process.argv[1].toLowerCase().replaceAll("\\", "/").replace(/^[a-z]:/, "").replace(/^\//, ""));
+if (lanceEnDirect || (process.argv[1] && process.argv[1].endsWith("oracle-travaux-pilot.mjs")) || (process.argv[1] && process.argv[1].endsWith("oracle-travaux.mjs"))) {
+  const cible = process.argv.slice(2).find((a) => !a.startsWith("--"));
+  if (!cible || !existsSync(cible)) {
+    console.error("usage : node oracle-travaux.mjs <lot.md> [--json]");
+    process.exit(2);
+  }
+  const r = verifier(cible);
+  if (process.argv.includes("--json")) console.log(JSON.stringify(r, null, 1));
+  else {
+    console.log(`oracle-travaux-pilot ${VERSION} — ${cible}`);
+    console.log(`verdict : ${r.verdict}`);
+    for (const c of r.constats) {
+      console.log(`  [${c.statut}] ${c.regle} — ${c.message}`);
+      if (c.remede) console.log(`      → ${c.remede}`);
+    }
+    if (r.verdict === "FAIL") {
+      console.log("\nCe lot serait REFUSÉ. Le corriger ici coûte une minute ; le laisser partir");
+      console.log("coûte au produit une lecture qu'il ne peut pas exploiter.");
+    }
+  }
+  process.exit(r.verdict === "FAIL" ? 1 : 0);
+}

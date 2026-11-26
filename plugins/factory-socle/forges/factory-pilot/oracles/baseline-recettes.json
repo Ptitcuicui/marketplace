@@ -1,0 +1,1205 @@
+{
+ "../scripts/generer-lisezmoi-output.mjs (parc réel)": {
+  "non_lu": true,
+  "motif": "entrée d'ÉTAT (I4) : jouée sur le PARC RÉEL, elle rend un verdict — « PASS sur le parc » — et non un compte de cas. Il n'y a rien à compter, et compter à zéro ferait échouer le cliquet sur une absence normale. Sa recette à double sens, quand elle existe, est comptée sous son autre entrée : l'exemption ne laisse donc aucun trou. CELLE-CI RÉPOND « sans verdict lisible sur le parc » : ce n'est pas un compte manquant, c'est un VERDICT manquant, et cela relève de l'invariant I4, pas du cliquet.",
+  "vu_le": "2026-08-27"
+ },
+ "../scripts/verifier-familles-mesure.mjs (parc réel)": {
+  "non_lu": true,
+  "motif": "entrée d'ÉTAT (I4) : jouée sur le PARC RÉEL, elle rend un verdict — « PASS sur le parc » — et non un compte de cas. Il n'y a rien à compter, et compter à zéro ferait échouer le cliquet sur une absence normale. Sa recette à double sens, quand elle existe, est comptée sous son autre entrée : l'exemption ne laisse donc aucun trou.",
+  "vu_le": "2026-08-27"
+ },
+ "../scripts/verifier-rendu-instances.mjs (parc réel)": {
+  "non_lu": true,
+  "motif": "entrée d'ÉTAT (I4) : jouée sur le PARC RÉEL, elle rend un verdict — « PASS sur le parc » — et non un compte de cas. Il n'y a rien à compter, et compter à zéro ferait échouer le cliquet sur une absence normale. Sa recette à double sens, quand elle existe, est comptée sous son autre entrée : l'exemption ne laisse donc aucun trou.",
+  "vu_le": "2026-08-27"
+ },
+ "./bootstrap-parc.test.mjs": {
+  "cas": 7,
+  "vu_le": "2026-08-26"
+ },
+ "./bootstrap.test.mjs": {
+  "cas": 30,
+  "vu_le": "2026-11-25"
+ },
+ "gabarits/documents/cascade-produit/generateur/generer-vue-cascade.mjs": {
+  "cas": 11,
+  "vu_le": "2026-10-14"
+ },
+ "gabarits/documents/construire-guide-socle.test.mjs": {
+  "cas": 3,
+  "vu_le": "2026-10-02"
+ },
+ "gabarits/documents/coquille-vues-plafond.test.mjs": {
+  "cas": 10,
+  "vu_le": "2026-10-13"
+ },
+ "gabarits/documents/espacement-4pt-herite.test.mjs": {
+  "cas": 29,
+  "vu_le": "2026-10-13"
+ },
+ "gabarits/documents/guide-de-reference/generateur/construire-guide.py": {
+  "cas": 11,
+  "vu_le": "2026-10-15"
+ },
+ "gabarits/documents/ordonnancement-mep-ecriture.test.mjs": {
+  "cas": 9,
+  "vu_le": "2026-10-13"
+ },
+ "gabarits/hooks-factory.test.mjs": {
+  "cas": 66,
+  "vu_le": "2026-11-25"
+ },
+ "gabarits/ledger.test.mjs": {
+  "cas": 88,
+  "vu_le": "2026-11-22"
+ },
+ "gabarits/oracle-demande-produit.test.mjs": {
+  "cas": 14,
+  "vu_le": "2026-11-16"
+ },
+ "gabarits/oracle-demande-tierce.test.mjs": {
+  "cas": 35,
+  "vu_le": "2026-10-12"
+ },
+ "gabarits/oracle-demande.mjs": {
+  "cas": 12,
+  "vu_le": "2026-11-16"
+ },
+ "gabarits/oracle-lot-retours.test.mjs": {
+  "cas": 109,
+  "vu_le": "2026-11-22"
+ },
+ "gabarits/oracle-revue-deck.test.mjs": {
+  "cas": 21,
+  "vu_le": "2026-10-12"
+ },
+ "gabarits/oracle-travaux-pilot.test.mjs": {
+  "cas": 27,
+  "vu_le": "2026-09-09"
+ },
+ "hook-ecriture.mjs": {
+  "cas": 14,
+  "vu_le": "2026-09-16"
+ },
+ "hook-lexique.mjs": {
+  "cas": 104,
+  "vu_le": "2026-11-25"
+ },
+ "hook-page-html.mjs": {
+  "cas": 17,
+  "vu_le": "2026-10-30"
+ },
+ "hook-produits-intacts.mjs": {
+  "cas": 14,
+  "vu_le": "2026-08-31"
+ },
+ "oracle-adoption-tests.mjs": {
+  "cas": 15,
+  "vu_le": "2026-10-15"
+ },
+ "oracle-amorcage-poste.mjs": {
+  "cas": 23,
+  "vu_le": "2026-09-22"
+ },
+ "oracle-banc-double-sens.mjs": {
+  "cas": 15,
+  "vu_le": "2026-09-22"
+ },
+ "oracle-boite-entree.mjs": {
+  "cas": 57,
+  "vu_le": "2026-11-22"
+ },
+ "oracle-cadence.mjs": {
+  "cas": 16,
+  "vu_le": "2026-08-26"
+ },
+ "oracle-cadence.mjs (parc réel)": {
+  "non_lu": true,
+  "motif": "entrée d'ÉTAT (I4) : jouée sur le PARC RÉEL, elle rend un verdict — « PASS sur le parc » — et non un compte de cas. Il n'y a rien à compter, et compter à zéro ferait échouer le cliquet sur une absence normale. Sa recette à double sens, quand elle existe, est comptée sous son autre entrée : l'exemption ne laisse donc aucun trou.",
+  "vu_le": "2026-08-27"
+ },
+ "oracle-caracteres-controle.mjs": {
+  "cas": 6,
+  "vu_le": "2026-09-08"
+ },
+ "oracle-cascade-isto.mjs": {
+  "cas": 32,
+  "vu_le": "2026-11-22"
+ },
+ "oracle-catalogues.mjs": {
+  "cas": 44,
+  "vu_le": "2026-11-22"
+ },
+ "oracle-chemin-ancre.mjs": {
+  "cas": 16,
+  "vu_le": "2026-11-13"
+ },
+ "oracle-chemin-prescrit.mjs": {
+  "cas": 53,
+  "vu_le": "2026-11-22"
+ },
+ "oracle-claude-md.mjs": {
+  "cas": 18,
+  "vu_le": "2026-11-05"
+ },
+ "oracle-coherence-restitution.mjs": {
+  "cas": 4,
+  "vu_le": "2026-10-02"
+ },
+ "oracle-conformite-projet.mjs": {
+  "cas": 309,
+  "vu_le": "2026-11-22"
+ },
+ "oracle-constantes-externes.mjs": {
+  "cas": 12,
+  "vu_le": "2026-08-26"
+ },
+ "oracle-controle-maison.mjs": {
+  "cas": 6,
+  "vu_le": "2026-09-16"
+ },
+ "oracle-controles-injoignables.mjs": {
+  "cas": 22,
+  "vu_le": "2026-09-05"
+ },
+ "oracle-couverture-exigences.mjs": {
+  "cas": 7,
+  "vu_le": "2026-08-26"
+ },
+ "oracle-depense-voie-par-defaut.mjs": {
+  "cas": 21,
+  "vu_le": "2026-11-05"
+ },
+ "oracle-domaines-declares.mjs": {
+  "cas": 10,
+  "vu_le": "2026-08-26"
+ },
+ "oracle-ecart-normal.mjs": {
+  "cas": 10,
+  "vu_le": "2026-10-12"
+ },
+ "oracle-ecosysteme.mjs": {
+  "cas": 11,
+  "vu_le": "2026-08-26"
+ },
+ "oracle-ecriture.mjs": {
+  "cas": 140,
+  "vu_le": "2026-11-22"
+ },
+ "oracle-empreintes.mjs": {
+  "cas": 13,
+  "vu_le": "2026-10-13"
+ },
+ "oracle-empreintes.mjs (parc réel)": {
+  "non_lu": true,
+  "motif": "entrée d'ÉTAT (I4) : jouée sur le PARC RÉEL, elle rend un verdict — « PASS sur le parc » — et non un compte de cas. Il n'y a rien à compter, et compter à zéro ferait échouer le cliquet sur une absence normale. Sa recette à double sens, quand elle existe, est comptée sous son autre entrée : l'exemption ne laisse donc aucun trou.",
+  "vu_le": "2026-08-27"
+ },
+ "oracle-enclenchement.mjs": {
+  "cas": 38,
+  "vu_le": "2026-10-17"
+ },
+ "oracle-engagements.mjs": {
+  "cas": 29,
+  "vu_le": "2026-11-10"
+ },
+ "oracle-etude-opportunite.mjs": {
+  "cas": 3,
+  "vu_le": "2026-10-12"
+ },
+ "oracle-fiche-constat-precos.mjs": {
+  "cas": 15,
+  "vu_le": "2026-10-14"
+ },
+ "oracle-fiche-produit.mjs": {
+  "cas": 31,
+  "vu_le": "2026-10-15"
+ },
+ "oracle-fraicheur-doc.mjs": {
+  "cas": 10,
+  "vu_le": "2026-09-22"
+ },
+ "oracle-gabarits-documents.mjs": {
+  "cas": 82,
+  "vu_le": "2026-11-10"
+ },
+ "oracle-gabarits-documents.mjs (parc réel)": {
+  "non_lu": true,
+  "motif": "entrée d'ÉTAT (I4) : jouée sur le PARC RÉEL, elle rend un verdict — « PASS sur le parc » — et non un compte de cas. Il n'y a rien à compter, et compter à zéro ferait échouer le cliquet sur une absence normale. Sa recette à double sens, quand elle existe, est comptée sous son autre entrée : l'exemption ne laisse donc aucun trou.",
+  "vu_le": "2026-08-27"
+ },
+ "oracle-glossaire.mjs": {
+  "cas": 11,
+  "vu_le": "2026-11-22"
+ },
+ "oracle-insatisfactions.mjs": {
+  "cas": 7,
+  "vu_le": "2026-08-26"
+ },
+ "oracle-integrations.mjs": {
+  "cas": 9,
+  "vu_le": "2026-08-26"
+ },
+ "oracle-invariant-mesure.mjs": {
+  "cas": 16,
+  "vu_le": "2026-09-22"
+ },
+ "oracle-invariants-traduction.mjs": {
+  "cas": 8,
+  "vu_le": "2026-09-22"
+ },
+ "oracle-livrable-conseil.mjs": {
+  "cas": 8,
+  "vu_le": "2026-10-14"
+ },
+ "oracle-modeles-en-service.mjs": {
+  "cas": 31,
+  "vu_le": "2026-10-13"
+ },
+ "oracle-modeles-tiers.mjs": {
+  "cas": 34,
+  "vu_le": "2026-11-16"
+ },
+ "oracle-parite-configuration.mjs": {
+  "cas": 19,
+  "vu_le": "2026-11-22"
+ },
+ "oracle-peremption-competences.mjs": {
+  "cas": 22,
+  "vu_le": "2026-11-22"
+ },
+ "oracle-pieges-regex.mjs": {
+  "cas": 30,
+  "vu_le": "2026-11-13"
+ },
+ "oracle-portee-doctrine.mjs": {
+  "cas": 18,
+  "vu_le": "2026-10-17"
+ },
+ "oracle-portee-doctrine.mjs (parc réel)": {
+  "non_lu": true,
+  "motif": "entrée d'ÉTAT (I4) : jouée sur le PARC RÉEL, elle rend un verdict — « PASS sur le parc » — et non un compte de cas. Il n'y a rien à compter, et compter à zéro ferait échouer le cliquet sur une absence normale. Sa recette à double sens, quand elle existe, est comptée sous son autre entrée : l'exemption ne laisse donc aucun trou.",
+  "vu_le": "2026-08-27"
+ },
+ "oracle-promesses.mjs": {
+  "cas": 10,
+  "vu_le": "2026-08-26"
+ },
+ "oracle-promesses.mjs (parc réel)": {
+  "non_lu": true,
+  "motif": "entrée d'ÉTAT (I4) : jouée sur le PARC RÉEL, elle rend un verdict — « PASS sur le parc » — et non un compte de cas. Il n'y a rien à compter, et compter à zéro ferait échouer le cliquet sur une absence normale. Sa recette à double sens, quand elle existe, est comptée sous son autre entrée : l'exemption ne laisse donc aucun trou.",
+  "vu_le": "2026-08-27"
+ },
+ "oracle-propagation.mjs": {
+  "cas": 8,
+  "vu_le": "2026-09-01"
+ },
+ "oracle-readme-dossiers.mjs": {
+  "cas": 7,
+  "vu_le": "2026-09-15"
+ },
+ "oracle-readme-dossiers.mjs (parc réel)": {
+  "non_lu": true,
+  "motif": "entrée d'ÉTAT (I4) : jouée sur le PARC RÉEL, elle rend un verdict — « PASS sur le parc » — et non un compte de cas. Il n'y a rien à compter, et compter à zéro ferait échouer le cliquet sur une absence normale. Sa recette à double sens, quand elle existe, est comptée sous son autre entrée : l'exemption ne laisse donc aucun trou.",
+  "vu_le": "2026-08-27"
+ },
+ "oracle-recette-rejouable.mjs": {
+  "cas": 18,
+  "vu_le": "2026-11-13"
+ },
+ "oracle-recouvrement-controles.mjs": {
+  "cas": 12,
+  "vu_le": "2026-08-26"
+ },
+ "oracle-reglages-surs.mjs": {
+  "cas": 36,
+  "vu_le": "2026-11-06"
+ },
+ "oracle-regle-sans-juge.mjs": {
+  "cas": 17,
+  "vu_le": "2026-09-22"
+ },
+ "oracle-remise-traduction.mjs": {
+  "cas": 11,
+  "vu_le": "2026-08-27"
+ },
+ "oracle-repere-externe.mjs": {
+  "cas": 13,
+  "vu_le": "2026-09-22"
+ },
+ "oracle-reprise.mjs": {
+  "cas": 39,
+  "vu_le": "2026-11-25"
+ },
+ "oracle-run-reseau.mjs": {
+  "cas": 54,
+  "vu_le": "2026-11-16"
+ },
+ "oracle-secrets-hors-perimetre.mjs": {
+  "cas": 17,
+  "vu_le": "2026-10-29"
+ },
+ "oracle-secrets-hors-perimetre.mjs (parc réel)": {
+  "non_lu": true,
+  "motif": "entrée d'ÉTAT (I4) : jouée sur le PARC RÉEL, elle rend un verdict — « PASS sur le parc » — et non un compte de cas. Il n'y a rien à compter, et compter à zéro ferait échouer le cliquet sur une absence normale. Sa recette à double sens, quand elle existe, est comptée sous son autre entrée : l'exemption ne laisse donc aucun trou.",
+  "vu_le": "2026-08-27"
+ },
+ "oracle-sidecars-arbre-lie.mjs": {
+  "cas": 17,
+  "vu_le": "2026-11-16"
+ },
+ "oracle-skills.mjs": {
+  "cas": 107,
+  "vu_le": "2026-11-25"
+ },
+ "oracle-skills.mjs (parc réel)": {
+  "non_lu": true,
+  "motif": "entrée d'ÉTAT (I4) : jouée sur le PARC RÉEL, elle rend un verdict — « PASS sur le parc » — et non un compte de cas. Il n'y a rien à compter, et compter à zéro ferait échouer le cliquet sur une absence normale. Sa recette à double sens, quand elle existe, est comptée sous son autre entrée : l'exemption ne laisse donc aucun trou.",
+  "vu_le": "2026-08-27"
+ },
+ "oracle-sollicitations.mjs": {
+  "cas": 10,
+  "vu_le": "2026-08-26"
+ },
+ "oracle-source-contenu.mjs": {
+  "cas": 12,
+  "vu_le": "2026-10-12"
+ },
+ "oracle-suivi-agents.mjs": {
+  "cas": 11,
+  "vu_le": "2026-11-22"
+ },
+ "oracle-synthese.mjs": {
+  "cas": 404,
+  "vu_le": "2026-11-25"
+ },
+ "oracle-tableau-de-bord-pilotage.mjs": {
+  "cas": 31,
+  "vu_le": "2026-10-18"
+ },
+ "oracle-trace-mutation-mep.mjs": {
+  "cas": 83,
+  "vu_le": "2026-11-14"
+ },
+ "oracle-unicite.mjs": {
+  "cas": 14,
+  "vu_le": "2026-08-26"
+ },
+ "oracle-verdict-visuel.mjs": {
+  "cas": 9,
+  "vu_le": "2026-09-02"
+ },
+ "oracle-verrou-unique.mjs": {
+  "cas": 15,
+  "vu_le": "2026-09-22"
+ },
+ "oracles/banc-defauts-echappes/banc.test.mjs": {
+  "cas": 3,
+  "vu_le": "2026-09-16"
+ },
+ "oracles/banc-mutation/banc-mutation.test.mjs": {
+  "cas": 15,
+  "vu_le": "2026-11-03"
+ },
+ "oracles/banc-paires/paires.test.mjs": {
+  "cas": 12,
+  "vu_le": "2026-11-13"
+ },
+ "oracles/banc-restitutions/restitutions.test.mjs": {
+  "cas": 11,
+  "vu_le": "2026-10-12"
+ },
+ "oracles/consommateurs-skills.test.mjs": {
+  "cas": 38,
+  "vu_le": "2026-11-02"
+ },
+ "oracles/decouvrir-oracles.test.mjs": {
+  "cas": 7,
+  "vu_le": "2026-09-23"
+ },
+ "oracles/familles-numerotees.test.mjs": {
+  "cas": 11,
+  "vu_le": "2026-10-13"
+ },
+ "oracles/hook-amorcage.test.mjs": {
+  "cas": 17,
+  "vu_le": "2026-09-22"
+ },
+ "oracles/hook-droits-accordes.test.mjs": {
+  "cas": 5,
+  "vu_le": "2026-10-13"
+ },
+ "oracles/hook-fiches.test.mjs": {
+  "cas": 9,
+  "vu_le": "2026-11-15"
+ },
+ "oracles/hook-fichiers-env.test.mjs": {
+  "cas": 173,
+  "vu_le": "2026-11-14"
+ },
+ "oracles/hook-flotte.test.mjs": {
+  "cas": 55,
+  "vu_le": "2026-11-22"
+ },
+ "oracles/hook-gardes-commande.test.mjs": {
+  "cas": 108,
+  "vu_le": "2026-11-22"
+ },
+ "oracles/hook-gestes-distants.test.mjs": {
+  "cas": 231,
+  "vu_le": "2026-11-16"
+ },
+ "oracles/hook-gestes-en-cours.test.mjs": {
+  "cas": 25,
+  "vu_le": "2026-11-04"
+ },
+ "oracles/hook-identite-sortante.test.mjs": {
+  "cas": 27,
+  "vu_le": "2026-11-10"
+ },
+ "oracles/hook-lecons.test.mjs": {
+  "cas": 86,
+  "vu_le": "2026-11-15"
+ },
+ "oracles/hook-lexique.test.mjs": {
+  "cas": 30,
+  "vu_le": "2026-11-16"
+ },
+ "oracles/hook-mutation-en-cours.test.mjs": {
+  "cas": 37,
+  "vu_le": "2026-11-04"
+ },
+ "oracles/hook-ouverture.test.mjs": {
+  "cas": 106,
+  "vu_le": "2026-11-25"
+ },
+ "oracles/hook-publication-hebergee.test.mjs": {
+  "cas": 12,
+  "vu_le": "2026-11-03"
+ },
+ "oracles/hook-puits-windows.test.mjs": {
+  "cas": 8,
+  "vu_le": "2026-10-13"
+ },
+ "oracles/hook-remisage.test.mjs": {
+  "cas": 20,
+  "vu_le": "2026-10-15"
+ },
+ "oracles/hook-remise-agent.test.mjs": {
+  "cas": 18,
+  "vu_le": "2026-11-16"
+ },
+ "oracles/hook-renommage-livrable.test.mjs": {
+  "cas": 95,
+  "vu_le": "2026-11-25"
+ },
+ "oracles/hook-restitution-frictions.test.mjs": {
+  "cas": 41,
+  "vu_le": "2026-11-09"
+ },
+ "oracles/hook-restitution-moyen.test.mjs": {
+  "cas": 42,
+  "vu_le": "2026-11-22"
+ },
+ "oracles/hook-restitution-selection.test.mjs": {
+  "cas": 7,
+  "vu_le": "2026-10-15"
+ },
+ "oracles/hook-restitution.test.mjs": {
+  "cas": 81,
+  "vu_le": "2026-11-25"
+ },
+ "oracles/hook-sessions.test.mjs": {
+  "cas": 26,
+  "vu_le": "2026-11-15"
+ },
+ "oracles/hook-suivi-agents.test.mjs": {
+  "cas": 59,
+  "vu_le": "2026-11-22"
+ },
+ "oracles/hook-taches-actives.test.mjs": {
+  "cas": 9,
+  "vu_le": "2026-11-14"
+ },
+ "oracles/lib-baseline-recettes.test.mjs": {
+  "cas": 29,
+  "vu_le": "2026-11-13"
+ },
+ "oracles/lib-calendrier.test.mjs": {
+  "cas": 17,
+  "vu_le": "2026-11-15"
+ },
+ "oracles/lib-chiffres-releves.test.mjs": {
+  "cas": 20,
+  "vu_le": "2026-11-03"
+ },
+ "oracles/lib-decisions.test.mjs": {
+  "cas": 24,
+  "vu_le": "2026-11-22"
+ },
+ "oracles/lib-enumeration-liste.test.mjs": {
+  "cas": 39,
+  "vu_le": "2026-11-06"
+ },
+ "oracles/lib-exhaustivite.test.mjs": {
+  "cas": 85,
+  "vu_le": "2026-10-18"
+ },
+ "oracles/lib-fiches-agents.test.mjs": {
+  "cas": 31,
+  "vu_le": "2026-11-15"
+ },
+ "oracles/lib-filtre-cas.test.mjs": {
+  "cas": 28,
+  "vu_le": "2026-11-06"
+ },
+ "oracles/lib-garde-arbre-suivi.test.mjs": {
+  "cas": 12,
+  "vu_le": "2026-10-26"
+ },
+ "oracles/lib-indice-nom.test.mjs": {
+  "cas": 6,
+  "vu_le": "2026-11-22"
+ },
+ "oracles/lib-produits-hors-table.test.mjs": {
+  "cas": 4,
+  "vu_le": "2026-10-30"
+ },
+ "oracles/lib-racine-parc.test.mjs": {
+  "cas": 10,
+  "vu_le": "2026-11-25"
+ },
+ "oracles/lib-recettes-dediees.test.mjs": {
+  "cas": 3,
+  "vu_le": "2026-11-15"
+ },
+ "oracles/lib-sens-rouge.test.mjs": {
+  "cas": 23,
+  "vu_le": "2026-10-13"
+ },
+ "oracles/mesure-refus-enclenchement.test.mjs": {
+  "cas": 12,
+  "vu_le": "2026-10-17"
+ },
+ "oracles/oracle-amorcage-poste.test.mjs": {
+  "cas": 23,
+  "vu_le": "2026-09-22"
+ },
+ "oracles/oracle-banc-double-sens.test.mjs": {
+  "cas": 15,
+  "vu_le": "2026-09-22"
+ },
+ "oracles/oracle-chemin-ancre.test.mjs": {
+  "cas": 16,
+  "vu_le": "2026-11-13"
+ },
+ "oracles/oracle-chemin-prescrit.test.mjs": {
+  "cas": 53,
+  "vu_le": "2026-11-22"
+ },
+ "oracles/oracle-controles-injoignables.test.mjs": {
+  "cas": 22,
+  "vu_le": "2026-09-05"
+ },
+ "oracles/oracle-depense-voie-par-defaut.test.mjs": {
+  "cas": 21,
+  "vu_le": "2026-11-05"
+ },
+ "oracles/oracle-ecart-normal.test.mjs": {
+  "cas": 10,
+  "vu_le": "2026-10-12"
+ },
+ "oracles/oracle-enclenchement.test.mjs": {
+  "cas": 38,
+  "vu_le": "2026-10-17"
+ },
+ "oracles/oracle-invariant-mesure.test.mjs": {
+  "cas": 16,
+  "vu_le": "2026-09-22"
+ },
+ "oracles/oracle-modeles-tiers.test.mjs": {
+  "cas": 34,
+  "vu_le": "2026-11-16"
+ },
+ "oracles/oracle-parite-configuration.test.mjs": {
+  "cas": 19,
+  "vu_le": "2026-11-22"
+ },
+ "oracles/oracle-regle-sans-juge.test.mjs": {
+  "cas": 17,
+  "vu_le": "2026-09-22"
+ },
+ "oracles/oracle-remise-traduction.test.mjs": {
+  "cas": 24,
+  "vu_le": "2026-09-23"
+ },
+ "oracles/oracle-repere-externe.test.mjs": {
+  "cas": 13,
+  "vu_le": "2026-09-22"
+ },
+ "oracles/oracle-reprise.test.mjs": {
+  "cas": 39,
+  "vu_le": "2026-11-25"
+ },
+ "oracles/oracle-source-contenu.test.mjs": {
+  "cas": 12,
+  "vu_le": "2026-10-12"
+ },
+ "oracles/oracle-verrou-unique.test.mjs": {
+  "cas": 15,
+  "vu_le": "2026-09-22"
+ },
+ "oracles/pre-commit-quantificateurs.test.mjs": {
+  "cas": 8,
+  "vu_le": "2026-09-10"
+ },
+ "oracles/releve-workflows-heberges.test.mjs": {
+  "cas": 24,
+  "vu_le": "2026-11-12"
+ },
+ "oracles/resoudre-pilot.test.mjs": {
+  "cas": 9,
+  "vu_le": "2026-08-26"
+ },
+ "outillage-tests-e2e/appels-reels.test.mjs": {
+  "cas": 14,
+  "vu_le": "2026-08-26"
+ },
+ "outillage-tests-e2e/orchestrer-boucle.test.mjs": {
+  "cas": 7,
+  "vu_le": "2026-08-26"
+ },
+ "outillage-tests-e2e/preparer-environnement.test.mjs": {
+  "cas": 8,
+  "vu_le": "2026-08-26"
+ },
+ "references/generer-compte-produits.test.mjs": {
+  "cas": 5,
+  "vu_le": "2026-10-02"
+ },
+ "scripts/adopter-projet-existant.test.mjs": {
+  "cas": 40,
+  "vu_le": "2026-10-15"
+ },
+ "scripts/allouer-indice.test.mjs": {
+  "cas": 48,
+  "vu_le": "2026-11-22"
+ },
+ "scripts/balayer-motifs-numeriques.test.mjs": {
+  "cas": 9,
+  "vu_le": "2026-08-26"
+ },
+ "scripts/boussole.test.mjs": {
+  "cas": 36,
+  "vu_le": "2026-11-25"
+ },
+ "scripts/compiler-flotte.test.mjs": {
+  "cas": 42,
+  "vu_le": "2026-11-16"
+ },
+ "scripts/compter-lecture-usage.test.mjs": {
+  "cas": 35,
+  "vu_le": "2026-10-30"
+ },
+ "scripts/contrat-agent-campagne.test.mjs": {
+  "cas": 27,
+  "vu_le": "2026-11-22"
+ },
+ "scripts/controle-comprehension.test.mjs": {
+  "cas": 12,
+  "vu_le": "2026-11-22"
+ },
+ "scripts/convertir-nombres-en-chiffres.mjs": {
+  "cas": 11,
+  "vu_le": "2026-09-16"
+ },
+ "scripts/detecter-demandes-recues.test.mjs": {
+  "cas": 6,
+  "vu_le": "2026-10-02"
+ },
+ "scripts/echecs-a-analyser.test.mjs": {
+  "cas": 13,
+  "vu_le": "2026-11-16"
+ },
+ "scripts/env-masque.test.mjs": {
+  "cas": 17,
+  "vu_le": "2026-11-14"
+ },
+ "scripts/env-session.test.mjs": {
+  "cas": 5,
+  "vu_le": "2026-11-22"
+ },
+ "scripts/fraicheur-depot.test.mjs": {
+  "cas": 5,
+  "vu_le": "2026-10-14"
+ },
+ "scripts/fusionner-env.test.mjs": {
+  "cas": 9,
+  "vu_le": "2026-11-12"
+ },
+ "scripts/fusionner-tables-confidentielles.test.mjs": {
+  "cas": 7,
+  "vu_le": "2026-09-27"
+ },
+ "scripts/gabarit-fonctionnel-lecture.test.mjs": {
+  "cas": 7,
+  "vu_le": "2026-11-15"
+ },
+ "scripts/generer-acces-local.test.mjs": {
+  "cas": 11,
+  "vu_le": "2026-11-16"
+ },
+ "scripts/generer-lisezmoi-output.test.mjs": {
+  "cas": 4,
+  "vu_le": "2026-10-02"
+ },
+ "scripts/generer-page-etude.mjs": {
+  "cas": 28,
+  "vu_le": "2026-10-13"
+ },
+ "scripts/generer-remplacements-historique.test.mjs": {
+  "cas": 11,
+  "vu_le": "2026-09-09"
+ },
+ "scripts/generer-vues.test.mjs": {
+  "cas": 14,
+  "vu_le": "2026-11-22"
+ },
+ "scripts/gitignore-captures.test.mjs": {
+  "cas": 16,
+  "vu_le": "2026-11-16"
+ },
+ "scripts/indicateurs-agents.test.mjs": {
+  "cas": 18,
+  "vu_le": "2026-11-16"
+ },
+ "scripts/indices-uniques.test.mjs": {
+  "cas": 5,
+  "vu_le": "2026-09-27"
+ },
+ "scripts/installer-projet.test.mjs": {
+  "cas": 31,
+  "vu_le": "2026-11-14"
+ },
+ "scripts/lecons.test.mjs": {
+  "cas": 52,
+  "vu_le": "2026-11-14"
+ },
+ "scripts/lecteur-isole.test.mjs": {
+  "cas": 16,
+  "vu_le": "2026-11-22"
+ },
+ "scripts/lib-config-installee.test.mjs": {
+  "cas": 7,
+  "vu_le": "2026-11-15"
+ },
+ "scripts/lib-extensions-jugees.test.mjs": {
+  "cas": 12,
+  "vu_le": "2026-10-14"
+ },
+ "scripts/lib-non-enregistre.test.mjs": {
+  "cas": 6,
+  "vu_le": "2026-10-12"
+ },
+ "scripts/lib-parc.test.mjs": {
+  "cas": 5,
+  "vu_le": "2026-10-01"
+ },
+ "scripts/lib-pseudonyme-produit.test.mjs": {
+  "cas": 8,
+  "vu_le": "2026-09-23"
+ },
+ "scripts/lib-vue-html.test.mjs": {
+  "cas": 23,
+  "vu_le": "2026-09-28"
+ },
+ "scripts/mesurer-reaffichage.test.mjs": {
+  "cas": 7,
+  "vu_le": "2026-11-22"
+ },
+ "scripts/mesurer-refus-fin-de-tour.test.mjs": {
+  "cas": 3,
+  "vu_le": "2026-11-05"
+ },
+ "scripts/mobiliser.test.mjs": {
+  "cas": 38,
+  "vu_le": "2026-11-22"
+ },
+ "scripts/nettoyer-copies.test.mjs": {
+  "cas": 13,
+  "vu_le": "2026-11-15"
+ },
+ "scripts/noter-fiche.test.mjs": {
+  "cas": 16,
+  "vu_le": "2026-11-16"
+ },
+ "scripts/oracles-design-page-generee.test.mjs": {
+  "cas": 13,
+  "vu_le": "2026-09-23"
+ },
+ "scripts/ouvrir-retour-reglage.test.mjs": {
+  "cas": 12,
+  "vu_le": "2026-11-06"
+ },
+ "scripts/ouvrir-run.test.mjs": {
+  "cas": 11,
+  "vu_le": "2026-10-15"
+ },
+ "scripts/pre-commit-index.test.mjs": {
+  "cas": 2,
+  "vu_le": "2026-09-27"
+ },
+ "scripts/processus-par-pid.test.mjs": {
+  "cas": 6,
+  "vu_le": "2026-11-22"
+ },
+ "scripts/produire-plan-ancres.test.mjs": {
+  "cas": 19,
+  "vu_le": "2026-09-23"
+ },
+ "scripts/prompt-produit-delegation.test.mjs": {
+  "cas": 6,
+  "vu_le": "2026-11-14"
+ },
+ "scripts/propager-skills-agents.test.mjs": {
+  "cas": 7,
+  "vu_le": "2026-11-25"
+ },
+ "scripts/ranger-secret.test.mjs": {
+  "cas": 63,
+  "vu_le": "2026-11-25"
+ },
+ "scripts/readme-dossiers.test.mjs": {
+  "cas": 41,
+  "vu_le": "2026-11-14"
+ },
+ "scripts/rebatir-clone.test.mjs": {
+  "cas": 7,
+  "vu_le": "2026-09-14"
+ },
+ "scripts/recette-pilot-hebergee.test.mjs": {
+  "cas": 17,
+  "vu_le": "2026-09-15"
+ },
+ "scripts/recopier-heritage.test.mjs": {
+  "cas": 28,
+  "vu_le": "2026-11-22"
+ },
+ "scripts/rejouer-fiche-securite.test.mjs": {
+  "cas": 15,
+  "vu_le": "2026-11-15"
+ },
+ "scripts/rejouer-verdicts-cites.test.mjs": {
+  "cas": 9,
+  "vu_le": "2026-10-12"
+ },
+ "scripts/relecture-intention.test.mjs": {
+  "cas": 121,
+  "vu_le": "2026-11-22"
+ },
+ "scripts/relever-appelants.test.mjs": {
+  "cas": 21,
+  "vu_le": "2026-11-13"
+ },
+ "scripts/relever-campagnes-tests.test.mjs": {
+  "cas": 8,
+  "vu_le": "2026-11-22"
+ },
+ "scripts/relever-contexte-sessions.test.mjs": {
+  "cas": 10,
+  "vu_le": "2026-10-26"
+ },
+ "scripts/relever-couts.test.mjs": {
+  "cas": 14,
+  "vu_le": "2026-11-06"
+ },
+ "scripts/relever-empreintes-skills.test.mjs": {
+  "cas": 8,
+  "vu_le": "2026-09-03"
+ },
+ "scripts/relever-flotte.test.mjs": {
+  "cas": 21,
+  "vu_le": "2026-11-15"
+ },
+ "scripts/relever-heritage.test.mjs": {
+  "cas": 55,
+  "vu_le": "2026-11-16"
+ },
+ "scripts/renommer-livrable.test.mjs": {
+  "cas": 22,
+  "vu_le": "2026-11-25"
+ },
+ "scripts/reserver-decision.test.mjs": {
+  "cas": 130,
+  "vu_le": "2026-11-22"
+ },
+ "scripts/sas-retours-doctrine.test.mjs": {
+  "cas": 10,
+  "vu_le": "2026-10-13"
+ },
+ "scripts/sessions-actives.test.mjs": {
+  "cas": 4,
+  "vu_le": "2026-11-15"
+ },
+ "scripts/sessions-par-transcriptions.test.mjs": {
+  "cas": 5,
+  "vu_le": "2026-11-22"
+ },
+ "scripts/structure-table-noms.test.mjs": {
+  "cas": 6,
+  "vu_le": "2026-11-22"
+ },
+ "scripts/synchroniser.test.mjs": {
+  "cas": 19,
+  "vu_le": "2026-10-29"
+ },
+ "scripts/verifier-avance-publication.test.mjs": {
+  "cas": 10,
+  "vu_le": "2026-10-02"
+ },
+ "scripts/verifier-bascule.test.mjs": {
+  "cas": 8,
+  "vu_le": "2026-08-26"
+ },
+ "scripts/verifier-carte-forges.mjs": {
+  "cas": 19,
+  "vu_le": "2026-11-03"
+ },
+ "scripts/verifier-contre-lecture.mjs": {
+  "cas": 9,
+  "vu_le": "2026-10-14"
+ },
+ "scripts/verifier-droits-accordes.test.mjs": {
+  "cas": 13,
+  "vu_le": "2026-10-01"
+ },
+ "scripts/verifier-etape-chaine.test.mjs": {
+  "cas": 27,
+  "vu_le": "2026-10-15"
+ },
+ "scripts/verifier-exigences-fatales.test.mjs": {
+  "cas": 22,
+  "vu_le": "2026-10-17"
+ },
+ "scripts/verifier-familles-mesure.mjs": {
+  "cas": 11,
+  "vu_le": "2026-09-15"
+ },
+ "scripts/verifier-formulaire-entra.test.mjs": {
+  "cas": 13,
+  "vu_le": "2026-11-09"
+ },
+ "scripts/verifier-garde-fous.test.mjs": {
+  "cas": 16,
+  "vu_le": "2026-11-06"
+ },
+ "scripts/verifier-hook-poste.test.mjs": {
+  "cas": 15,
+  "vu_le": "2026-09-22"
+ },
+ "scripts/verifier-hooks-git.test.mjs": {
+  "cas": 20,
+  "vu_le": "2026-11-03"
+ },
+ "scripts/verifier-jeu-livrables.test.mjs": {
+  "cas": 7,
+  "vu_le": "2026-08-31"
+ },
+ "scripts/verifier-jugement.test.mjs": {
+  "cas": 24,
+  "vu_le": "2026-10-15"
+ },
+ "scripts/verifier-ooxml.test.mjs": {
+  "cas": 3,
+  "vu_le": "2026-08-31"
+ },
+ "scripts/verifier-ouverture-cli.test.mjs": {
+  "cas": 3,
+  "vu_le": "2026-10-14"
+ },
+ "scripts/verifier-parcours-tiers.test.mjs": {
+  "cas": 17,
+  "vu_le": "2026-11-22"
+ },
+ "scripts/verifier-portes-du-jour.test.mjs": {
+  "cas": 14,
+  "vu_le": "2026-10-15"
+ },
+ "scripts/verifier-secours.test.mjs": {
+  "cas": 7,
+  "vu_le": "2026-08-26"
+ },
+ "scripts/verifier-sonde-glossaire.test.mjs": {
+  "cas": 27,
+  "vu_le": "2026-11-22"
+ },
+ "scripts/verifier-verdict-archive.test.mjs": {
+  "cas": 8,
+  "vu_le": "2026-09-15"
+ },
+ "todo/accueillir-lot.mjs": {
+  "cas": 11,
+  "vu_le": "2026-11-14"
+ },
+ "todo/adresses-ip.test.mjs": {
+  "cas": 14,
+  "vu_le": "2026-09-15"
+ },
+ "todo/anonymiser-entrant.mjs": {
+  "cas": 13,
+  "vu_le": "2026-11-05"
+ },
+ "todo/anonymiser-suivis.mjs": {
+  "cas": 12,
+  "vu_le": "2026-10-18"
+ },
+ "todo/bancs-isoles.test.mjs": {
+  "cas": 7,
+  "vu_le": "2026-09-15"
+ },
+ "todo/designation-projet.test.mjs": {
+  "cas": 5,
+  "vu_le": "2026-10-12"
+ },
+ "todo/emettre-travaux.test.mjs": {
+  "cas": 40,
+  "vu_le": "2026-10-21"
+ },
+ "todo/generer-page.test.mjs": {
+  "cas": 6,
+  "vu_le": "2026-10-12"
+ },
+ "todo/generer-recidives.test.mjs": {
+  "cas": 13,
+  "vu_le": "2026-10-02"
+ },
+ "todo/generer-todo-produit.test.mjs": {
+  "cas": 10,
+  "vu_le": "2026-11-15"
+ },
+ "todo/ingerer-anonymise-fichier.test.mjs": {
+  "cas": 5,
+  "vu_le": "2026-09-14"
+ },
+ "todo/ingerer-classe.test.mjs": {
+  "cas": 15,
+  "vu_le": "2026-11-22"
+ },
+ "todo/ingerer-controle.test.mjs": {
+  "cas": 2,
+  "vu_le": "2026-09-14"
+ },
+ "todo/ingerer-derogation.test.mjs": {
+  "cas": 11,
+  "vu_le": "2026-08-26"
+ },
+ "todo/ingerer-doublon.test.mjs": {
+  "cas": 4,
+  "vu_le": "2026-09-14"
+ },
+ "todo/ingerer-emetteur-forge.test.mjs": {
+  "cas": 3,
+  "vu_le": "2026-10-01"
+ },
+ "todo/ingerer-identifiants.test.mjs": {
+  "cas": 3,
+  "vu_le": "2026-09-15"
+ },
+ "todo/ingerer-personnes.test.mjs": {
+  "cas": 4,
+  "vu_le": "2026-10-12"
+ },
+ "todo/ingerer-r45.test.mjs": {
+  "cas": 8,
+  "vu_le": "2026-08-26"
+ },
+ "todo/ingerer-r46.test.mjs": {
+  "cas": 7,
+  "vu_le": "2026-08-26"
+ },
+ "todo/ingerer-r47.test.mjs": {
+  "cas": 10,
+  "vu_le": "2026-09-01"
+ },
+ "todo/ingerer-rattachement.test.mjs": {
+  "cas": 6,
+  "vu_le": "2026-09-28"
+ },
+ "todo/ingerer-rectification.test.mjs": {
+  "cas": 7,
+  "vu_le": "2026-08-31"
+ },
+ "todo/ingerer-registre-jetable.test.mjs": {
+  "cas": 4,
+  "vu_le": "2026-09-28"
+ },
+ "todo/journaliser.test.mjs": {
+  "cas": 35,
+  "vu_le": "2026-11-22"
+ },
+ "todo/localiser-produit.test.mjs": {
+  "cas": 11,
+  "vu_le": "2026-08-26"
+ },
+ "todo/noms-de-personnes.test.mjs": {
+  "cas": 11,
+  "vu_le": "2026-10-15"
+ },
+ "todo/normaliser-lot.test.mjs": {
+  "cas": 9,
+  "vu_le": "2026-09-01"
+ },
+ "todo/observer-recidives.test.mjs": {
+  "cas": 6,
+  "vu_le": "2026-09-22"
+ },
+ "todo/oracle-todo-r17.test.mjs": {
+  "cas": 5,
+  "vu_le": "2026-10-30"
+ },
+ "todo/pre-commit-anonymise.test.mjs": {
+  "cas": 21,
+  "vu_le": "2026-11-13"
+ },
+ "todo/preflight-collision.test.mjs": {
+  "cas": 7,
+  "vu_le": "2026-09-14"
+ },
+ "todo/rapprocher.test.mjs": {
+  "cas": 7,
+  "vu_le": "2026-08-26"
+ },
+ "todo/reempreinter-lot.test.mjs": {
+  "cas": 16,
+  "vu_le": "2026-10-13"
+ },
+ "todo/remesurer.test.mjs": {
+  "cas": 20,
+  "vu_le": "2026-11-03"
+ },
+ "todo/renumeroter.test.mjs": {
+  "cas": 8,
+  "vu_le": "2026-08-26"
+ },
+ "todo/revues-datees.test.mjs": {
+  "cas": 6,
+  "vu_le": "2026-10-16"
+ },
+ "todo/self-test.mjs": {
+  "cas": 64,
+  "vu_le": "2026-10-13"
+ },
+ "todo/semer-defauts.test.mjs": {
+  "cas": 12,
+  "vu_le": "2026-10-02"
+ },
+ "todo/stock-sans-classe.test.mjs": {
+  "cas": 4,
+  "vu_le": "2026-10-13"
+ },
+ "todo/verifications-lundi.test.mjs": {
+  "cas": 9,
+  "vu_le": "2026-10-26"
+ }
+}

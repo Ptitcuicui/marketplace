@@ -1,0 +1,208 @@
+# Bibliothèque de gabarits de documents
+
+Les gabarits de **livrables** que la factory propose à un projet, quel que soit son domaine :
+un projet qui doit rendre un rapport de données, un diagnostic, un rapport d'audit ou une
+fiche de sécurité prend le gabarit de sa famille plutôt que d'inventer une forme.
+
+La bibliothèque est autant un **index** qu'un atelier. Sur ses **quarante-neuf** familles (recomptées
+sur `catalogue.jsonl` le 10/11/2026 : 25 `ok`, 18 `porte_ailleurs`, 6 `a_extraire`, dont `dossier-de-competences-anonyme` née ce jour-là du lot 20261109c du produit marketing (TF-2337) ; le 06/11/2026 le compte annoncé ici était de quarante-huit familles, 24 `ok`, et `etude-reprise-activite` née ce jour-là du retour RT-51 ; le 02/11/2026 le compte annoncé ici était de quarante-sept familles, 23 `ok`, et `cadrage-reprise` née
+ce jour-là du retour RT-31 ; le 18/10/2026 le compte annoncé ici était de quarante-six familles, 22 `ok`, 17
+`porte_ailleurs` et 7 `a_extraire`, et `tableau-de-bord-pilotage`
+était née ce jour-là du retour RP-15 et de la décision D-31 (a), `fiche-constat-precos`
+et `cascade-produit` nées le 14/10 des retours RT-36 et RS-30, et `fiche-produit` et `presentation-restitution-audit` nées le 13/10 des
+retours RP-8 et RP-61 ; le 24/09/2026 le compte
+annoncé ici était resté à celui du 20/09, trente-huit familles dont 9 `ok`, alors que des familles
+avaient été extraites depuis), **dix-huit**
+sont des formes qu'une forge produit déjà : pour celles-là elle ne réécrit rien — elle dit où elles
+vivent, par quel outil les obtenir, et quel oracle les juge. **Écrire un gabarit est le cas
+minoritaire**, et c'est voulu : le doublon coûte plus cher que le renvoi.
+
+Source unique : **`catalogue.jsonl`** — une ligne par famille, avec sa **provenance** (le ou
+les livrables réels d'où la forme est tirée) et son **statut**. Les vues, s'il y en a un jour,
+s'en dérivent ; ce fichier ne se recopie pas à la main. Oracle : `oracles\oracle-gabarits-documents.mjs`
+(G1-G5 et G7-G12 sur le parc, joué par la recette du pilot ; **G6** sur appel, voir ci-dessous).
+
+**`lecteur` et `type_de_contenu` (TF-1097, 20/09/2026)** — chaque famille déclare **qui la lit**,
+par quatre sous-champs et jamais par un personnage (`decisions_attendues`, `savoir_prealable`,
+`vocabulaire_absent`, `contexte_de_lecture`), et la **nature du contenu de chaque partie**, dans
+un vocabulaire fermé de neuf valeurs tiré de DITA 1.3 et d'Information Mapping — `concept`,
+`tache`, `procedure`, `processus`, `principe`, `fait`, `structure`, `classification`,
+`reference`. Le type **dérive la forme** : un `fait` porte sa formule et son dénominateur, une
+`tache` s'écrit en étapes numérotées, une `reference` se trie et se filtre. Les **dix familles au
+statut `ok`** sont renseignées ; les vingt-neuf autres portent un **vide DÉCLARÉ**, jamais un
+silence — une famille sans gabarit écrit n'a pas encore de parties dont on puisse dire le type.
+
+**La fiche de conception amont (TF-1097)** — `FICHE-CONCEPTION.md`, remplie par l'agent **avant
+d'écrire** tout document d'une famille, et validée par l'humain pour les **seuls documents à fort
+enjeu** (critère écrit, § 6 du gabarit : sortie de l'écosystème, décision engageante, chiffres
+opposables, famille neuve, retour antérieur non soldé). Jugée par **G6** :
+`node oracles\oracle-gabarits-documents.mjs --fiche <fiche.md> [<document.md>]` — la conception
+d'abord, puis que le document la **tienne**. Exemple rempli à côté : `FICHE-CONCEPTION-EXEMPLE.md`.
+
+*Ce que G6 fonde, et sa réserve.* Le rétro-test du 14/09/2026 attribue à la seule conception amont
+**11 des 20 griefs** réels de lecteurs, contre un seuil fixé d'avance à 6. Mais ces vingt griefs
+ont été classés par **une seule session, sans second classeur à l'aveugle**, et la revue est fixée
+au **2026-10-14**. La règle ne prétend rien au-delà : elle rend la conception explicite et
+jugeable, elle ne promet pas moins de retours. Coût mesuré le 20/09/2026 : fiche remplie de
+**28 lignes / 279 mots**, jugement en **45 ms**. Le temps de REMPLISSAGE par l'agent n'est pas
+instrumenté, et cela se déclare plutôt que de s'estimer.
+
+**`sections_obligatoires` (TF-1170, 20/09/2026)** — une famille peut déclarer, au catalogue, les
+sections que sa doctrine DOIT porter ; **G7** vérifie qu'elles y sont. La règle ne juge que ce
+qu'une famille a déclaré : celle qui ne déclare rien n'est jamais accusée. C'est ce qui la rend
+adoptable — écrite en dur, elle aurait accusé les trente-huit familles le jour de sa naissance.
+
+**`point_de_depart` (14/09/2026)** — **G11** : toute famille déclarant `html` porte son
+`point_de_depart` — son TYPE (`squelette` · `generateur` · `canevas` · `aucun`) et, sauf pour `aucun`,
+le CHEMIN qui le porte, vérifié sur disque. *Relevé du 14/09 : sur 20 familles déclarant `html`, 3 ont
+un squelette, 2 un générateur, 1 les canevas d'un skill, et 14 n'ont aucun point de départ.* Le champ
+existe parce qu'un balayage qui ne cherchait qu'un `SQUELETTE.html` en comptait 17 — la question n'était
+décidable par aucune requête. **G12** : une famille sans point de départ dit ce qui l'empêche, dans
+un vocabulaire fermé. *Ces deux règles sont nées G5 et G6 sur la branche du 14/09 ; main ayant donné
+ces numéros à la largeur de page et à la fiche de conception, le report du 21/09/2026 les a
+renommées. Les synthèses datées du 14 au 17/09 gardent les numéros d'origine.*
+
+*Pourquoi cette bibliothèque existe.* Chaque projet réinventait la forme de ses livrables, et
+les défauts de forme se rejouaient d'un projet à l'autre — largeur de lecture, tableaux
+illisibles au mobile, schémas sans légende. Un projet est même allé jusqu'à produire son propre
+gabarit de rapport de données, barré et documenté (`Produit-10`, 13/08) : un travail utile resté
+chez lui, invisible aux autres. La bibliothèque hisse ces formes au niveau de la factory et
+leur applique, une fois pour toutes, ce que les retours ont coûté à découvrir.
+
+---
+
+## Ce qu'est un gabarit, ici
+
+Un gabarit est un **squelette déclaré**, jamais la copie d'un livrable client :
+
+- **`GABARIT.md`** — le contrat de structure : sections obligatoires, ce que chacune doit
+  contenir, emplacements à remplir écrits en `{…}`, et les règles de la doctrine que la
+  famille engage. C'est la pièce qui fait foi ; elle vaut pour tout format de sortie.
+- **`SQUELETTE.html`** — la page vide correspondante, bâtie sur le socle `factory-page-html`,
+  portant déjà les correctifs de forme listés ci-dessous. **Huit des dix familles au statut
+  `ok` en portent un** au 20/09/2026 ; `gd-diagnostic` et `gd-ordonnancement-mep` n'en ont pas
+  encore. Décision humaine D-6 option (b) du 20/09/2026 : une famille neuve reçoit son
+  squelette de page, jugé par le contrôle des pages.
+- **`INSTANCE.html`** / **`INSTANCE.md`** — la preuve que le squelette a été rempli une fois.
+  **Le format du squelette DICTE celui de l'instance** (G1) : un `SQUELETTE.html` exige un
+  `INSTANCE.html`. Une `INSTANCE.md` peut rester à côté — mesuré le 20/09/2026, G1 rend alors
+  « doctrine + instance(s) .html, .md face au squelette .html ».
+
+*Pourquoi l'instance n'est pas une formalité.* En remplissant les cinq squelettes du 20/09, la
+page instanciée s'est révélée **rouge là où le squelette était vert** : ses emplacements `{…}`
+sont courts, la prose réelle ne l'est pas, et quatre règles de largeur ne se déclenchaient qu'au
+remplissage. Elles ont été **reportées dans les squelettes**. Un squelette qui produit des
+documents rouges est un squelette défectueux, et seule l'instance le dit.
+
+**Aucune donnée client** dans un gabarit. La forme se hisse, le contenu reste chez le projet —
+c'est aussi ce que l'oracle vérifie (G5).
+
+**Une famille peut porter son GÉNÉRATEUR et ses COMPOSANTS** (24/09/2026, première famille à le
+faire : `guide-de-reference`). Quand le document est long et vit d'une source tenue à jour, le point
+de départ n'est plus une page à remplir mais un générateur (`generateur\`) qui construit la page
+depuis sa source Markdown, et les composants de la page vivent en fichiers séparés (`composants\`,
+catalogue `COMPOSANTS.md`) — chacun posable SEUL dans une autre page, scellé par l'empreinte de sa
+source, sa parité rejouable (`--poser`, `--constat`). Squelette et instance restent dus (G1) : ils
+sont alors GÉNÉRÉS, et c'est ce qui prouve le générateur.
+
+**Une famille peut porter son MOTEUR** (18/10/2026, `tableau-de-bord-pilotage`, TF-1855). Quand la
+page se recalcule dans le navigateur, son HTML ne porte aucun chiffre et un contrôle statique n'en
+juge que la forme : la famille embarque son moteur dans le squelette, recopié à l'identique dans
+l'instance, et son oracle recompte chaque chiffre affiché dans Chromium, à chaque état des commandes
+(`oracles\oracle-tableau-de-bord-pilotage.mjs`).
+
+## S'en servir
+### La boucle de retour — comment cette bibliothèque s'améliore
+
+Un gabarit ne vieillit pas en s'usant : il vieillit parce que la réalité des projets le dépasse
+et que personne ne le dit. La boucle tient en trois pièces, et elle est **câblée**, pas
+recommandée :
+
+| Pièce | Où | Ce qu'elle fait |
+|---|---|---|
+| **Le fil** | l'en-tête de chaque document produit | il porte `gabarit` (id de famille) et `version_du_gabarit`. Sans ce couple, « il manquait une section » ne se rattache à rien. Exigé des gabarits par **G4**, rendu dans la page — sauf pour une famille de documents remis à un tiers à propos d'une personne, qui déclare `couple_en_meta: true` au catalogue et le porte dans la balise `<meta name="factory:gabarit">` (TF-2338) — et cette ligne a annoncé un « G8 » que rien n'implémentait jusqu'au 14/09/2026 (TF-1256) |
+| **La demande** | `gabarits\RETOURS-FORGES.md`, section « Retours sur les documents produits » | quatre colonnes, par ordre d'utilité : ce qui a été **ajouté à la main**, ce qui a **gêné le lecteur**, ce qui a **manqué**, la **portée** |
+| **Le refus** | `ingerer-lot.mjs` et **B7** de `oracle-boite-entree` | un lot du 22/08 ou après qui ne porte pas la section est refusé à l'ingestion, registre intact (R-46) |
+
+**Le signal le plus fort est « ajouté à la main ».** Ce qu'un projet écrit hors gabarit est
+presque toujours une section que le gabarit devrait porter — c'est exactement ainsi que les
+quatre premières familles ont été extraites, en relevant ce que les projets refaisaient. La
+différence est qu'on l'a fait une fois, à la main, en balayant le corpus ; désormais la matière
+arrive avec chaque lot.
+
+Ce que la boucle NE fait pas : décider. Un manque signalé devient un candidat au registre, et
+c'est un humain qui tranche s'il change le gabarit — un oracle mesure une présence, jamais une
+valeur.
+
+### La remontée des documents mûrs — comment cette bibliothèque s'agrandit (R-57, 24/09/2026)
+
+La boucle ci-dessus fait remonter ce qu'un gabarit a COÛTÉ. La remontée fait monter ce qui en
+MÉRITE un : un document de projet dont la forme a mûri devient une famille, ou des composants.
+Décision humaine du 24/09/2026, mot pour mot : « afin que les documents matures comme celui-ci
+remonte automatiquement en gabarit à la Factory, pour être réutilisé entièrement ou en partie ».
+
+| Pièce | Où | Ce qu'elle fait |
+|---|---|---|
+| **Le déclencheur humain** | `oracles\hook-lexique.mjs`, hook `UserPromptSubmit` du pilot et de tout produit | un verdict de FORME (« le format […] est vraiment top ») ou une demande de gabarit injecte la consigne R-57 dans le tour : le document est **mûr déclaré**, et le verdict cité vaut décision |
+| **Le déclencheur mesuré** | `gabarits\oracle-lot-retours.mjs`, constat `LOT-MURS`, chez le produit | tout objet d'`output\` repris **cinq fois et plus** est **mûr mesuré** ; le lot qui le tait est refusé (`--murs <racine>` les liste avant d'écrire le lot) |
+| **La demande** | `gabarits\RETOURS-FORGES.md`, section « Documents mûrs » | chemin chez le produit, versions, oracles, verdict humain cité, composants, **verdict de remontée** — remonté, ou resté au produit « parce que… » |
+| **Le refus** | `todo\ingerer-lot.mjs`, qui importe le même juge | un lot du 29/09 ou après sans la section est refusé à l'ingestion, registre intact |
+
+**La forme, jamais la matière** : ce dépôt est publié, et aucun livrable client n'y entre (note de
+provenance d'`input\02-entrants-html\`). La famille remontée porte une instance FICTIVE et cite son
+produit d'origine par son pseudonyme. **Les composants** naissent dans leur famille et montent au
+socle `factory-page-html` dès qu'une seconde famille les emploie.
+
+
+
+1. Choisir la famille dans `catalogue.jsonl` (champ `famille`, `quand_l_employer`).
+2. Copier le dossier de la famille chez le projet, dans son `output\` (nommage D-15 :
+   `<Client> - <Objet> - AAAAMMJJ<indice>`).
+3. Remplir les emplacements. Un emplacement laissé tel quel est un défaut, pas un oubli
+   toléré : les gabarits n'ont pas de valeur par défaut silencieuse.
+4. Juger le résultat par l'oracle du domaine (HTML : `check_html.py` **et** `render_page.py`
+   du socle — les deux, le premier ne voit pas ce que le second mesure).
+
+**Avant de créer une famille, chercher le GÉNÉRATEUR — pas seulement les livrables produits.**
+Une forme peut être massivement réutilisée dans le corpus ET déjà outillée par une forge : douze
+fiches de sécurité et huit rapports d'audit ont été relevés comme preuve de réutilisation le
+21/08, alors que `factory-forge-audit` portait déjà leur gabarit, leur générateur, leur oracle
+et leur version anglaise. Deux gabarits ont été écrits en doublon avant que le
+`deliverables/templates/` de la forge ne soit ouvert. La règle qui en sort : **un balayage qui
+ne regarde que les SORTIES conclut toujours qu'il manque un gabarit.** Le statut
+`porte_ailleurs` existe pour ce cas — la bibliothèque indexe et renvoie, elle ne réécrit pas.
+
+Une famille absente du catalogue se **remonte** (candidat TF), elle ne s'improvise pas. Une
+famille en statut `a_extraire` porte déjà ses sources : le travail d'extraction est identifié,
+il n'est pas encore fait — et le dire vaut mieux qu'une bibliothèque qui a l'air complète.
+
+---
+
+## Doctrine transverse — les invariants de tout document généré
+
+Onze règles, toutes **nées d'un retour payé** sur un livrable réel. Elles ne dépendent ni du
+format ni de la forge productrice : un tableau illisible au mobile l'est autant dans un rapport
+d'audit que dans un rapport de données. Chaque gabarit déclare celles qu'il engage, et l'oracle
+vérifie que la déclaration existe (G4).
+
+| id | Règle | Le fait qui la fait naître |
+|---|---|---|
+| **D1** | **Largeur utile.** Le texte occupe la largeur qu'on lui offre, ou le conteneur se resserre. Jamais un texte bridé à 57 % d'un conteneur large : la moitié de page vide à droite est un défaut, pas une élégance. Une seule doctrine tranchée, écrite au référentiel, et le rendu jugé par l'oracle exécuté — jamais par citation de la doctrine. | Retour humain direct du 21/08 sur un rapport HTML remis (« des textes sur une partie de la largeur seulement »). Le point avait déjà été remonté le 13/08 (TF-0172) et clos « réfuté avec citation », sans que l'oracle qui le contredit soit joué. |
+| **D2** | **La règle se tient, pas seulement se satisfait.** Une mesure qui porte sur le conteneur se contourne en déplaçant la contrainte d'un cran, sans rien changer pour le lecteur. Un gabarit ne prescrit pas une forme satisfaisable à vide. | Mesuré le 21/08 : bride sur `p` → BLOQUANT ; **même** bride portée par le `div` parent → PASS, avec un texte occupant toujours 57 % de la fenêtre. |
+| **D3** | **Tableau large : un repli, pas seulement un ascenseur.** Un conteneur `overflow-x: auto` rend un tableau consultable ; il ne le rend pas lisible et ne fait pas passer le contrôle de débordement. Au-delà de 3 colonnes, le repli en cartes sous 900 px est dû. | Mesuré le 21/08 sur une page dont **tous** les tableaux étaient déjà dans un conteneur scrollable : 26 défauts de débordement à 390 px, 25 causes distinctes — **0** après repli en cartes. |
+| **D4** | **Filtre, tri, recherche : l'état vide est dû.** Une surface filtrable qui ne laisse rien doit le dire en toutes lettres, et rappeler comment revenir. Un tableau muet se lit comme une panne. | Lot Produit-05 du 20/08 : le composant de filtres masquait les lignes et mettait le compteur à zéro sans un mot (RD-7), et son panneau débordait de tout conteneur défilant (RD-8). |
+| **D5** | **Schéma : conventions déclarées, glyphes prouvés.** Toute superposition voulue se déclare (`data-overlap-ok`) et la convention est écrite ; tout glyphe employé en `content` CSS est prouvé présent dans la pile de repli déclarée ; légende et unités sont dues. | Lot Produit-05 du 20/08 : convention `data-overlap-ok` de fait, non documentée, imposée à tout SVG (RD-4) ; chevron `\25B6` absent des polices de repli, jamais vérifié par aucun contrôle (RD-12). |
+| **D6** | **Conformité mécanique n'est pas qualité.** Douze chapeaux identiques au mot près satisfont la règle qui les exige et dégradent la page. Un gabarit prescrit ce que la section doit APPRENDRE au lecteur, pas la présence d'un bloc. | Lot Produit-05 du 20/08 (RD-3) : L6/L7/L10 toutes PASS sur une version dont les chapeaux étaient interchangeables. |
+| **D7** | **Un livrable se juge sur verdict exécuté.** Deux oracles sur un HTML — conformité (`check_html.py`) **et** rendu (`render_page.py`) — parce que le premier ne mesure ni largeur, ni débordement, ni contraste. Le PASS de l'un ne vaut pas pour l'autre. | Le reconstat du 21/08 : la page passait `check_html` à 21 règles pendant que `render_page` la déclarait BLOQUANTE sur la largeur de lecture. |
+| **D8** | **Un livrable se CONÇOIT avant de s'écrire : intention → stratégie → tactique → opérationnel, et se vérifie en remontant.** Partir de l'INTENTION du lecteur, en dériver une STRATÉGIE de bout en bout, la décliner en TACTIQUE puis en OPÉRATIONNEL, et vérifier EN REMONTANT — opérationnel vers tactique, tactique vers stratégie, stratégie vers intention — que l'ensemble répond à l'intention de départ. Chaque chapitre de niveau 2 porte son intention (question du lecteur / ce que le chapitre apporte / ce qu'il permet de décider) ; un chapitre qui ne peut pas l'écrire sans paraphraser son titre se supprime. État de l'art, pas invention maison : Goal-Question-Metric (Basili, 1994 — aucune métrique sans la question qu'elle sert), pyramide de Minto (la réponse d'abord, les preuves ensuite), Rumelt (diagnostic, politique directrice, actions cohérentes — une liste d'ambitions n'est pas une stratégie), Double Diamond (divergence-convergence), V-model (vérification remontante). | TF-0759 (02/09) : un livrable de consolidation à dix-sept contrôles de forme verts, refusé deux fois par son lecteur — six chapitres écrits parce que le plan les prévoyait, dont un illisible. Le contrôle mécanisable (intention de chapitre, glossaire des termes de méthode, liste autoportante) est l'oracle « conception » de quality-oracles (TF-0758). |
+| **D9** | **Une mesure dit son DÉNOMINATEUR.** Tout chiffre publié énonce ce qu'il inclut ; on ne mesure un acteur que sur ce qu'il a eu l'occasion de faire ; une absence de déclaration n'est pas un échec et ne se compte pas comme un zéro ; un objet écarté d'un canal n'est pas retiré de la mesure ; un compte vaut mieux qu'un pourcentage quand le dénominateur est petit ou hétérogène ; et un pourcentage affiché SANS sa formule écrite à côté est un défaut. Pratique la moins chère : l'épreuve de l'étonnement — faire lire les résultats à qui connaît le terrain, et instruire LA MESURE d'abord quand un résultat le surprend. | TF-0760 (02/09) : une carte de chaleur juste case par case et fausse en bloc — un produit affiché à 0 % sur une exigence qu'il tient, parce que le dénominateur était fabriqué par les déclarations des AUTRES acteurs. Le contrôle mécanisable (pourcentage sans formule) est porté par oracle-calculs. |
+
+| **D10** | **La largeur de contenu est une propriété de la PAGE, pas du chapitre.** Un document est de lecture (tout bridé) ou de données (tout en pleine largeur) : il le déclare sur `<body data-largeur="lecture|donnees">`, et un chapitre qui s'en écarte se marque `largeur-exception`. Des largeurs qui alternent entre chapitres voisins, sans déclaration, sont un défaut — l'œil relit la mise en page au lieu du contenu. Jugé statiquement par **G5** d'`oracle-gabarits-documents` ; la largeur RENDUE reste au socle de rendu. | Retour humain direct du 11/09 (TF-1038) : « homogénéise la largeur des contenus de la page principale pour ne pas avoir des grandes largeurs mixées avec des petites » — neuf chapitres, cinq pleins et quatre bridés, dans l'ordre de leur NATURE et non de la lecture ; troisième demande du même lecteur dans le même message. |
+
+| **D11** | **Le document du LECTEUR ne porte pas le contenu de son AUTEUR.** Chaque gabarit déclare son `lecteur` — qui le lit, et quelles décisions il prend avec — et la frontière se tranche par un critère d'ACTION : une information qui change ce que le lecteur FAIT reste chez lui, y compris quand elle est inconfortable (« cette règle n'est pas encore opposable, appliquez-la et signalez tout écart ») ; une information qui ne change que ce que l'AUTEUR doit encore obtenir — registre d'arbitrages, historique des versions, statut de relecture — part dans le document d'auteur, cité en renvoi. **Et un document long se découpe en VUES d'un fichier unique, pas en fichiers**, sauf si son lecteur a demandé le contraire : le partage d'un livrable en onze morceaux est un coût pour lui, jamais pour son auteur. Jugé sur la bibliothèque par **G10** ; la frontière dans une INSTANCE reste une relecture. | Retour humain du 15/09/2026, mot pour mot : « pour que les sujets qui concernent le créateur du fichier n'arrivent pas à destination des lecteurs du fichier, ça n'est en aucun cas professionnel ». Mesuré sur le livrable : un registre de sept arbitrages avec leur instance et leur état, l'historique des versions, et un bandeau « statut projet, non opposable » sur chaque page d'un guide destiné à des développeurs — et onze fichiers livrés quand le destinataire en voulait un à onze vues (TF-1142). |
+
+*Ces règles sont une DOCTRINE, pas un oracle.* Ce qui les exécute vit ailleurs et est nommé
+famille par famille dans le catalogue (`oracles` de chaque ligne) : le socle HTML pour D1-D3 et
+D5-D7, la relecture humaine pour D6. `oracle-gabarits-documents.mjs` ne juge que la
+**bibliothèque** — que chaque famille déclare sa provenance, ses emplacements, ses règles et
+son oracle, et qu'aucune donnée client ne soit restée dans un squelette.

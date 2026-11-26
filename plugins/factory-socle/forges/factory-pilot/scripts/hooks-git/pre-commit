@@ -1,0 +1,37 @@
+#!/bin/sh
+# pre-commit — trois gardes, dans cet ordre, et toutes trois sur l'INDEX jamais sur l'histoire.
+#
+# COPIE VERSIONNÉE (TF-1041, 15/09/2026). Le hook installé vit dans .git/hooks/, qui ne voyage
+# pas : un clone frais ou rebâti n'en avait AUCUN, et les deux gardes ci-dessous étaient déclarées
+# sans jamais être appelées. `node scripts/verifier-hooks-git.mjs --installer` pose cette copie
+# quand le hook manque, la remet à niveau quand le hook installé est une version antérieure de
+# cette copie (TF-1325), et ne touche jamais un hook étranger ; bootstrap.mjs le joue à l'ouverture.
+#
+# 1. LE NOM EST RETIRE avant que le commit n'existe (TF-0980, decision D-31 a du 08/09). Cette
+#    garde-la CORRIGE le contenu indexe et le re-indexe : aucun refus, aucune interruption. Elle
+#    ne refuse que dans deux cas -- tables illisibles, ou NOM de fichier porteur -- et le dit
+#    alors avec la commande exacte.
+#
+# 2. AUCUN QUANTIFICATEUR NE DISPARAIT DU NOYAU (A-109, TF-1010, 10/09). Celle-ci REFUSE, et elle
+#    l'assume : le 10/09, le mot << seulement >> a ete retire de << Livrable accepte sur verdict
+#    d oracle execute seulement >> pour gagner cinq octets, et la regle a cesse d etre exclusive
+#    pendant 17 minutes de publication. La regle N4 de oracle-claude-md attrape ce cas mais compare
+#    a la version COMMISE : une fois l affaiblissement commis, elle ne le voit plus. Cette garde
+#    est la moitie manquante -- elle juge le passage travail -> commit, seul instant ou le mot est
+#    encore rattrapable sans reecrire l histoire.
+#
+# 3. LES INDEX SE REGENERENT AU MOMENT DE L ENREGISTREMENT (TF-1325, decision D-20 a du 26/09).
+#    Le hook d ecriture regenere les README d input\ et d output\ avant que le livrable soit suivi :
+#    l enregistrement emportait un index en retard d un fichier, et l arbre restait sale. Cette
+#    garde regenere puis re-indexe les index quand l enregistrement touche input\ ou output\. Elle
+#    ne refuse JAMAIS : un generateur qui echoue se dit, et l enregistrement passe.
+#
+# Les trois ne coutent que quelques secondes, la ou la porte de publication prenait de 15 a 27
+# minutes sur le pilot (mesure du 28/09/2026, TF-1448), et en prend encore plusieurs depuis qu'elle
+# juge chaque blob une fois -- c'est pour cela qu'elles vivent ici et non au push.
+#
+# Contournement explicite si vous savez ce que vous faites : git commit --no-verify
+RACINE="$(git rev-parse --show-toplevel)"
+node "$RACINE/todo/pre-commit-anonymise.mjs" || exit $?
+node "$RACINE/oracles/pre-commit-quantificateurs.mjs" || exit $?
+node "$RACINE/scripts/pre-commit-index.mjs" || exit $?

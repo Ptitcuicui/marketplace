@@ -1,0 +1,187 @@
+---
+role: convention transverse d'empreinte — un seul format déclaré pour juger la fraîcheur d'un artefact, et le registre des sites de scellement du parc
+sources_de_verite: [oracles/oracle-empreintes.mjs (le contrôle), forge-ops/oracles/oracle-ops.mjs (le format d'origine), todo/TODO.jsonl (les 7 items de la classe)]
+verifie_le: 2026-08-25
+---
+
+# Empreintes — un seul format, et un registre qui le fait tenir
+
+## Pourquoi cette convention existe, et ce que la dispersion a coûté
+
+L'écosystème hache du contenu pour juger la fraîcheur d'un artefact **en au moins cinq endroits**,
+chacun avec son format, sa granularité et sa durée de vie. Le coût n'est pas théorique : **sept
+items du registre relèvent de la même classe** et ont été traités isolément, sans qu'aucun ne
+produise de convention — TF-0072, TF-0247, TF-0253, TF-0288, TF-0294, TF-0298, TF-0338.
+
+**Deux redécouvertes strictes**, et elles suffisent à justifier ce document :
+
+| Le même défaut | Découvert ici | Rejoué là | Ce qui les sépare |
+|---|---|---|---|
+| fins de ligne non normalisées avant hachage | TF-0072 (forge-seo) | TF-0253 (pilot) | 2 forges, deux mois, aucune mémoire commune |
+| point de scellement manquant | TF-0288 (forge-ops, `deployer`) | TF-0298 (forge-ops, `canary`) | la **même forge**, et le second chemin oublié |
+
+La leçon est celle-là : **une classe de défaut sans convention se re-paie autant de fois qu'il y a
+de sites**. Le format le plus mûr existait déjà — `forge-ops/empreinte@1`, seul format **déclaré et
+versionné** du parc. L'enjeu n'était pas d'en construire un neuf : c'était de le **promouvoir** et
+d'armer un contrôle qui le fasse tenir.
+
+## Le format
+
+```json
+{
+  "format": "forge-ops/empreinte@1",
+  "release": "<identifiant de ce qui est scellé>",
+  "ts": "2026-08-23T09:00:00.000Z",
+  "fichiers": { "chemin/relatif.ext": "<sha256 hexadécimal>" }
+}
+```
+
+**Quatre champs, et aucun n'est décoratif.** `format` porte le nom ET la version : un lecteur qui
+rencontre `@2` sait qu'il ne sait pas lire. `release` dit ce qui est scellé, sans quoi une empreinte
+orpheline ne prouve rien. `ts` distingue deux scellements du même contenu. `fichiers` porte le
+sha256 **par fichier** — un haché global dit qu'il y a une différence, jamais laquelle.
+
+## Les trois écarts que le format doit absorber, tous déjà payés
+
+1. **Normalisation des fins de ligne AVANT hachage.** Sous Windows, le même contenu écrit par deux
+   outils rend deux empreintes. C'est exactement TF-0072, rejoué en TF-0253. La règle : hacher le
+   contenu **LF**, jamais les octets tels qu'ils sont sur le disque. Un repli sur l'empreinte brute
+   reste admis pour les artefacts scellés **avant** la normalisation — c'est une antériorité
+   déclarée, pas une tolérance (TF-0359).
+2. **Capture avant / après.** Ne jamais certifier un contenu qui a bougé pendant la mesure : on
+   relit après l'écriture, et on compare. Un code de retour 0 ne prouve pas qu'un octet a été
+   écrit — c'est ce que TF-0506 a payé sur un PDF verrouillé par une visionneuse.
+3. **Tous les chemins de scellement, pas seulement le principal.** TF-0288 a fermé `deployer` et
+   laissé `canary` ouvert : le même trou, dans la même forge, trouvé 2 fois. Quand un artefact
+   peut être produit par deux voies, les deux scellent, ou aucune ne compte.
+
+## Registre des sites de scellement
+
+Un site **déclaré** est un endroit du parc où l'on hache pour juger une fraîcheur ou une intégrité.
+Le contrôle compare cette table à ce que le parc contient réellement : **un site non déclaré est un
+constat**, et c'est ainsi que la convention tient — sans elle, le sixième mécanisme naîtrait comme
+les cinq premiers.
+
+**Comment lire cette table.** Une ligne par site, groupée par dépôt puis dans l'ordre où les
+sites ont été relevés — aucun tri implicite, et surtout aucune priorité. La colonne **Format**
+distingue trois natures qu'il ne faut pas confondre : `forge-ops/empreinte@1` est le format
+complet, tenu par le contrôle ; un **sceau court** (12 ou 16 hex dans une page générée) est une
+convention locale légitime, déclarée ici pour ne pas être redécouverte ; un **usage interne**
+(clé de cache, identifiant de trace, empreinte de jeu de règles) ne juge aucune fraîcheur
+d'artefact et n'est donc pas tenu au format. Ce qui est **exclu** de la table : tout hachage hors
+des emplacements lus par le contrôle, et les dépôts absents du poste — les deux sont écrits au
+`non_juge` plus bas.
+
+### Ce que le registre ne suffisait pas à tenir (TF-0615, 25/08/2026)
+
+Ce document et son contrôle sont nés de TF-0474, qui nommait la classe : *cinq mécanismes
+d'empreinte coexistent sans format commun*. Ils ont produit une **liste** et 2 règles qui la
+tiennent — E1 (aucun site déclaré n'est mort) et E2 (aucun site n'est indéclaré). **Ils n'ont pas
+produit de fonction**, et c'est par là que la classe est revenue une cinquième fois.
+
+Mesure du 25/08 : **trois générateurs de vues du registre** étaient dûment déclarés à la table
+ci-dessous **et hachaient les octets bruts**. `TODO-ARCHIVE.jsonl` pèse 1 554 831 octets et 0 CRLF
+sur un poste, 1 557 156 et 2 325 CRLF sur l'autre — l'écart valant exactement le nombre de retours
+chariot que le checkout ajoute — et les deux sceaux différaient pour un registre identique. Onze
+fichiers générés rebasculaient à chaque aller-retour entre 2 sessions.
+
+*Un registre qui déclare les sites empêche d'en **oublier** un ; il n'empêche pas d'en écrire un
+**mal**.* D'où deux ajouts, indissociables :
+
+- **`scripts/lib-empreinte.mjs`** — le calcul n'existe plus qu'à un endroit. Les huit sites du
+  pilot y délèguent, y compris les cinq qui normalisaient déjà **à la main** : cinq copies
+  correctes d'une même fonction sont cinq occasions que la sixième soit fausse ;
+- **la règle E4** — un site qui hache le contenu d'un **fichier** normalise ses fins de ligne, par
+  la fonction partagée ou visiblement. E1 et E2 tiennent la liste ; E4 tient le contenu.
+
+La portée d'E4 est **bornée au pilot**, et le motif est écrit : la fonction vit ici, une forge ne
+l'adopte qu'après publication, et chaque site demande son jugement — un scelleur de release hache
+peut-être des binaires à bon droit. Les sites des autres forges sont **nommés** par un constat non
+bloquant, jamais exclus par leur nom : une exclusion nommée signale une cause non traitée (N-13),
+un signal nommé ouvre un travail.
+
+> **Limite du rapprochement, constatée le 25/08** : E1 et E2 apparient un site à sa ligne par son
+> NOM DE FICHIER seul. `forge-ops` porte désormais son propre `scripts/lib-empreinte.mjs`, distinct
+> de celui du pilot — 2 fichiers homonymes dans 2 dépôts, que le contrôle compte comme un.
+> Il ne peut donc pas dire qu'un des deux serait indéclaré. La table est écrite pour un lecteur
+> humain, et elle nomme les deux ; le contrôle, lui, ne les distingue pas, et c'est déclaré ici
+> plutôt que supposé résolu.
+
+| Dépôt | Site | Ce qui est scellé | Format |
+|---|---|---|---|
+| pilot | **`scripts/lib-empreinte.mjs`** | LE calcul lui-même — `empreinteFichier`, `empreinteTexte`, `empreinteBinaire`, `tailleNormalisee` | **la fonction partagée** : fins de ligne normalisées LF, rien d'autre |
+| forge-ops | **`scripts/lib-empreinte.mjs`** · `scripts/ops.mjs` · `oracles/oracle-ops.mjs` | fichiers d'une release déployée ou promue (O-7) | `forge-ops/empreinte@1` — **texte normalisé LF, binaire brut**, vérification acceptant les deux formes (migration TF-0615) |
+| pilot | `oracles/oracle-conformite-projet.mjs` | parité source→projection de `TODO-PRODUIT`, `ARCHITECTURE`, `MODELE-DONNEES` (R-20/R-26) | sceau court (12 hex) dans la page générée |
+| pilot | `oracles/oracle-boite-entree.mjs` | lots entrants déjà ingérés (TF-0253) | sceau de contenu normalisé LF |
+| pilot | `oracles/oracle-empreintes.mjs` | ne scelle AUCUN fichier : la fixture de son propre self-test écrit un générateur factice qui hache, pour prouver que le balayage atteint `gabarits\documents\<famille>\generateur\` (TF-1415, 02/10/2026) | aucun format de sceau : le texte de la fixture n'est jamais exécuté |
+| pilot | `todo/pre-commit-anonymise.test.mjs` | empreinte d'une ingestion FICTIVE consignée dans un registre jetable, pour prouver que la porte d'anonymisation fait ré-empreinter un sidecar réécrit (TF-1213, 02/10/2026) | sha256 hexadécimal complet du contenu brut, comparé à celui que `todo/reempreinter-lot.mjs` reconnaît |
+| pilot | `scripts/installer-projet.test.mjs` | ne scelle rien : compare les octets d'un fichier d'un projet jetable avant et après l'installation, pour prouver que l'adoption n'en change aucun (TF-1637, 13/10/2026) | sha256 hexadécimal des octets bruts, calculé et jamais consigné ; brut à dessein, une conversion des fins de ligne est un changement |
+| pilot | `todo/reempreinter-lot.mjs` · `todo/reempreinter-lot.test.mjs` | ré-empreinte PROUVÉE d'un sidecar réécrit par l'anonymisation (02/09) : l'empreinte d'AVANT est reconnue (normalisée LF ou brute, TF-0253) dans l'historique git ou une copie, l'empreinte COURANTE est consignée au registre | sceau de contenu normalisé LF via `lib-empreinte` ; `sha256` brut sur les octets d'un blob git pour reconnaître une empreinte consignée avant la normalisation — jamais pour en consigner une |
+| pilot | `scripts/verifier-jugement.mjs` · `scripts/verifier-jugement.test.mjs` | jugements humains scellés (`pilot/jugement@1`) ; depuis le 26/09/2026 (TF-1330), un sceau sans champ `methode` se RECALCULE sous LF, sous CRLF et sur les octets du disque avant d'être jugé, et le banc fabrique un sceau d'avant la normalisation en hachant le contenu CRLF d'une fixture | sha256 par livrable ; au banc, sha256 des octets CRLF d'une fixture, calculé et jamais consigné |
+| pilot | `scripts/verifier-verdict-archive.mjs` · `scripts/verifier-verdict-archive.test.mjs` | ne scelle rien : RECALCULE l'empreinte d'un verdict archivé par forge-ops (`.ops-journal.jsonl`) et la confronte à la cible présente — FRAIS ou PÉRIMÉ (TF-1084, reste de TF-0579) | `forge-ops/empreinte@1` recalculé via `lib-empreinte` : texte normalisé LF, binaire brut, forme brute d'avant le 25/08 acceptée |
+| pilot | `scripts/verifier-sonde-glossaire.mjs` · `scripts/verifier-sonde-glossaire.test.mjs` | ne scelle AUCUN fichier : scelle la SORTIE d'une sonde citée dans un glossaire (`attendu sha256:… le AAAA-MM-JJ` dans la cellule `preuve`) et la confronte au rejeu — FRAIS, PÉRIMÉ ou NON SCELLÉ (TF-1084, reste de TF-0657). Le sceau est écrit À LA MAIN dans le glossaire par qui vérifie l'entrée ; l'outil le RELIT, il n'en pose jamais | sha256 hexadécimal du flux rendu par la commande (sortie standard et d'erreur concaténées), fins de ligne normalisées LF puis texte rogné (`trim`) ; comparaison sur la LONGUEUR du haché déclaré, 12 à 64 caractères — un préfixe suffit, et c'est déclaré plutôt que promis. `lib-empreinte` ne s'applique pas : elle hache des FICHIERS, ici il n'y en a aucun |
+| pilot | `oracles/oracle-trace-mutation-mep.mjs` | ne hache RIEN en production — TM4 délègue la confrontation des verdicts forge-ops archivés à `verifier-verdict-archive` (TF-1084). Seul son BANC appelle `empreinteFichier`, pour sceller ses fixtures exactement comme forge-ops scelle les siennes : une recette qui inventerait sa propre convention mesurerait sa convention, pas la règle | `forge-ops/empreinte@1` via `lib-empreinte` dans les fixtures uniquement ; aucun sceau consigné, aucun sceau produit |
+| pilot | `scripts/verifier-droits-accordes.mjs` | ne scelle aucun fichier du dépôt : son option `--rafraichir` scelle le TEXTE de la page publiée de référence des permissions Microsoft Graph qu'elle vient de lire, et l'écrit dans `references/PERMISSIONS-GRAPH.json` avec la date de mise à jour et le commit que la page déclare (TF-1497, 01/10/2026) ; le jugement des scripts ne hache rien | sha256 hex du texte lu, sans normalisation : la source est une page web relue à la demande, pas un fichier versionné |
+| pilot | `oracles/consommateurs-skills.mjs` | ne scelle AUCUN fichier : empreinte la SORTIE d'une vérification native de dépôt consommateur, avant et après une propagation de skills, comme REPLI déclaré quand aucun extracteur d'échecs n'est posé (TF-0965, 20/09). Deux sorties d'empreinte identique prouvent qu'aucun échec neuf n'y figure ; deux empreintes différentes ne prouvent rien et rendent INDÉTERMINÉ — l'empreinte ne sert jamais à accuser, seulement à innocenter | sha256 hexadécimal du flux rendu (sortie standard et d'erreur concaténées), fins de ligne normalisées LF puis texte rogné ; calculé à chaque mesure, jamais consigné. `lib-empreinte` ne s'applique pas : elle hache des FICHIERS, ici il n'y en a aucun |
+| pilot | `todo/semer-defauts.test.mjs` | ne scelle rien qui dure : SCEAU DE NON-ÉCRITURE — le banc du semis de défauts empreinte `todo/CLASSES.json` et `todo/generateurs-defauts.json` AVANT et APRÈS une campagne complète, et échoue si l'un des deux a bougé. Le verbe est en lecture seule sur le référentiel, et c'est ce cas qui le prouve plutôt que de le promettre (TF-1079) | sha256 hexadécimal, fins de ligne normalisées LF ; calculé au banc, jamais consigné |
+| pilot | `oracles/banc-mutation/banc-mutation.mjs` | ne scelle rien qui dure : SCEAU DE NON-ÉCRITURE — le banc de mutation empreinte chaque script d'oracle du manifeste AVANT et APRÈS une passe, et échoue si l'un d'eux a bougé : les mutations se jouent sur des copies, jamais sur l'oracle (TF-1551, 12/10/2026) | sha256 hexadécimal via `lib-empreinte`, fins de ligne normalisées LF ; calculé au banc, jamais consigné |
+| pilot | `todo/generer-page.mjs` · `todo/generer-archive.mjs` · `scripts/lib-socle-page.mjs` | parité registre→vue générée ; depuis le 23/09/2026 (TF-1321), le sceau des vues d'architecture et de modèle de données est posé par la bibliothèque du socle des pages (fonction `pageDeVue`) : la coquille écrite à la main qui le posait auparavant a été retirée | sceau court (12 hex), **normalisé LF** via `lib-empreinte` |
+| pilot | `todo/generer-vue.mjs` · `todo/generer-todo-produit.mjs` · `todo/generer-recidives.mjs` (03/09) | parité registre→vue Markdown, source produit→projection, et sources du tableau de bord des récidives (registre, archive, classes, relevés, héritage) | sceau court (12 hex), **normalisé LF** via `lib-empreinte` |
+| pilot | `catalogues/generer-vues.mjs` (TF-2667, 16/11/2026) | contenu des lignes de SERVICES du catalogue, par version, consigné dans `catalogues/versions.jsonl` (ajout seul) : `oracle-catalogues` K9 refuse un contenu qui diffère de la version scellée à en-tête égal ; la méta est exclue de l'empreinte | sha256 normalisé LF via `empreinteTexte` de `lib-empreinte` (64 hex) |
+| pilot | `todo/ingerer-lot.mjs` | lot de retours ingéré (empreinte d'idempotence) | sceau de contenu normalisé LF |
+| pilot | `oracles/oracle-reprise.mjs` | ne scelle rien dans un dépôt : état de SYNCHRONISATION d'un produit avec son canal de reprise, par poste, hors dépôt (`~/.factory-forge/reprise/`), qui décide fichier par fichier ce qui se restaure ou s'envoie (R-64, TF-1736, 15/10/2026), la mémoire Claude du projet comprise ; la clé du fichier d'état est l'empreinte du CHEMIN du produit, pas d'un contenu. Depuis D-224 (a) du 21/11/2026, il garde aussi la BASE du coffre de secrets. C'est l'empreinte de chaque VALEUR de clé à la dernière synchronisation de ce poste (`<cle>-secrets.json`, droits 0600). Elle tranche un conflit de valeur sans jamais écrire la valeur | fichiers : sha256 tronqué à 16 hex des OCTETS BRUTS, par `empreinteBinaire` : une synchronisation copie des octets, et un fichier passé de LF à CRLF a changé pour le poste qui le reçoit. Valeurs de secret : sha256 hexadécimal complet de la valeur en UTF-8, guillemets retirés comme le fait `analyser()` de fusionner-env. Pas de normalisation : ce n'est pas un fichier lu en brut (E4 sans objet). Limite dite : l'empreinte d'un secret faible se retrouve par essais, et le fichier d'état vit sur le poste qui porte déjà le `.env` en clair |
+| forge-agents | `factory-page-html/scripts/embarquer-composants.mjs` | copie EMBARQUÉE d'un composant du socle dans une page des skills (TF-0784, 03/09) : le bloc marqué `COMPOSANT-EMBARQUE` porte l'empreinte de sa source, posée par le poseur (`--ecrire`), constatée (`--constat`, exit 1 si dérive) | sha256 de la source (texte, seule transformation admise : échappement `</script`, exigé par le retour RA-1 — premier retour du lot remis par forge-agents sur le socle des pages) inscrit dans le marqueur du bloc |
+| forge-agents | `factory-page-html/scripts/mesurer_bruit.py` | ne scelle rien qui dure : CLÉ DE CACHE des rendus de la mesure de bruit sur le parc — un rendu par page, partagé entre les règles, réutilisé tant que la page et l'outil n'ont pas changé (TF-1225, 12/10/2026) | sha256 hexadécimal des OCTETS BRUTS de la page, du script de rendu du socle et des largeurs demandées, sans normalisation : une page passée en CRLF se rend à nouveau, ce qui coûte un rendu et ne fausse aucun verdict ; calculé à chaque passe, jamais consigné |
+| forge-agents | `oeil-critique/scripts/automatiques.mjs` | ne scelle rien qui dure : empreinte du fichier visé par une modification automatique, notée à la liste et recalculée à l'exécution pour refuser l'écriture si le fichier a changé entre-temps (TF-2070, 04/11/2026) | sha256 hexadécimal complet, fins de ligne normalisées LF pour un texte, octets bruts pour un binaire ; consigné au journal `todo/oeil-critique-automatiques.jsonl` du pilot |
+| forge-agents | `quality-oracles/scripts/oracle-parite-assets.mjs` | parité d'une copie embarquée avec sa source (P1 déclaration `data-composant`, P2 empreinte du jour `data-empreinte`, P3 parité octet pour octet, P4 exemption datée et motivée) — juge une arborescence sans rien écrire ; rejoué sur le dépôt réel par le self-test de quality-oracles | sha256 de la source recalculé au jugement et comparé à `data-empreinte` ; texte comparé après dé-échappement `</script` |
+| forge-agents | `factory-cv-review/scripts/analyser_cv.py` | ne scelle rien qui dure : empreinte du PDF du CV analysé, écrite dans la mesure pour relier la revue au fichier jugé sans recopier son nom (TF-2366, 10/11/2026) | sha256 hexadécimal des octets bruts du PDF, calculé à chaque analyse, jamais comparé à une valeur consignée |
+| forge-agents | `factory-page-html/scripts/self_test.py` (cas `run_fa4_tf2352`) | ne scelle rien qui dure : prouve que l'export aux polices de la charte travaille sur une copie et laisse la fixture source intacte (TF-2352, 10/11/2026) | sha256 hexadécimal des octets bruts de la fixture et des fichiers de `fixtures/`, avant et après l'export, comparés dans le même cas |
+| forge-audit | `tools/verifier-heritage.mjs` | dérive d'une copie CONFORME d'un dépôt frère : `HERITAGE.json` déclare ce que ce dépôt a copié et de qui, le contrôle recalcule l'empreinte de la SOURCE et la compare à celle qui est enregistrée (TF-0940, décision D-4 (b) du 20/09/2026). Trois issues, jamais deux — égale : OK · différente : DÉRIVE nommée, exit 1 · source ABSENTE du poste : SKIP nommé avec le chemin cherché, exit 0, ce qui est le cas de tout runner qui ne clone qu'un dépôt | sha256 hexadécimal complet, **fins de ligne normalisées LF** avant hachage — la normalisation est DÉCLARÉE dans `HERITAGE.json` à côté de chaque valeur, et l'auto-test la prouve dans les deux sens (même contenu en CRLF → même empreinte). `lib-empreinte` du pilot ne s'applique pas : le dépôt tient le contrat « scripts autoportants » de son `oracles/README.md`, et importer un dépôt frère le romprait |
+| forge-design | `oracles/oracle-dtcg.mjs` | fraîcheur d'une source de jetons DTCG qui déclare `$fraicheur` : empreinte d'un bloc EXTERNE qu'elle recopie (le `:root` du boilerplate du socle, le registre `*-solid`), confrontée à l'empreinte scellée dans la source — règle D4, optionnelle (TF-1034, 14/09) | sha256 hexadécimal complet, fins de ligne normalisées LF puis texte rogné (`trim`) |
+| pilot | `scripts/generer-avancement.mjs` | source du rapport d'avancement dérivé du registre (TF-0324) | sceau court (12 hex), normalisé LF |
+| forge-design | `oracles/oracle-images.mjs` | ne scelle rien qui dure : COMPARE deux actifs déclarés variantes (logo et logo-white, favicon clair et sombre) — règle I7, TF-1074, 16/09. L'empreinte n'est PAS l'invariant : 2 fichiers peuvent différer d'un octet de métadonnée et poser la même encre. I7a refuse deux charges utiles identiques, I7b refuse deux empreintes DIFFÉRENTES qui rendent la même encre — la corrélation entre l'empreinte et le rendu est rompue dans les deux sens, et c'est ce que le banc prouve | sha256 hexadécimal de la charge utile décodée, calculé au jugement et jamais consigné ; l'encre est mesurée à part, l'empreinte ne servant qu'à nommer le cas dans le message |
+| pilot | `scripts/ranger-secret.mjs` (TF-2127, D-167 (a) du 04/11/2026) | ne scelle AUCUN fichier : empreinte la VALEUR d'un secret reçu en session, au moment de la ranger dans le fichier d'environnement local du produit, pour que le ledger du produit consigne le nom de la variable et cette empreinte, jamais la valeur. Copié chez chaque produit sous forge/ranger-secret.mjs (copie conforme) ; son banc de recette (ranger-secret.test.mjs, même dossier) compare à des empreintes fixes et ne hache rien | sha256 hexadécimal complet de la valeur en UTF-8, sans fin de ligne ; pas de normalisation, ce n'est pas un fichier lu en brut (E4 sans objet). Limite dite : l'empreinte d'un secret faible se retrouve par essais, le geste est fait pour des jetons et des clés d'API |
+| pilot | `todo/self-test.mjs` | recette du registre : vérifie les sceaux qu'elle produit | usage de test, déclaré |
+| pilot | `oracles/hook-produits-intacts.mjs` | état de travail de chaque dépôt PRODUIT, relevé à l'ouverture et recomparé à la fin du tour | sceau court (12 hex) de l'état git |
+| pilot | `bootstrap.mjs` | divergence entre un skill versionné et sa copie installée (K2) | sha256 par fichier |
+| pilot | `oracles/oracle-skills.mjs` | chaque écrasement d'une copie installée par `--appliquer` (skill ou hook) : empreinte d'avant et d'après, journalisées hors dépôt dans `propagations-skills.jsonl`, à côté de la racine installée ; K11 confronte l'empreinte présente d'une copie à la dernière que la propagation y a posée (TF-1012) | sha256 hexadécimal complet, fins de ligne normalisées (`empreinteFichier` de `scripts/lib-empreinte.mjs`) |
+| pilot | `scripts/relever-empreintes-skills.mjs` | identité de chaque skill INSTALLÉ (`~/.claude/skills`) à l'ouverture, comparée à celle de l'ouverture précédente du même poste (TF-0788, 03/09) : une montée de version du socle se lit chez qui le consomme, pas seulement chez qui le publie ; identité publiée du socle (`check_html --version-regles`, `render_page --familles`) recopiée, pas dérivée | `pilot/empreintes-skills@1` — sceau court (12 hex) par skill, **normalisé LF**, hors sidecars d'oracles et artefacts d'atelier (mêmes exclusions qu'`oracle-skills`) ; journal `.oracles/empreintes-skills.json`, état machine ignoré par git |
+| pilot | `todo/appliquer-export.mjs` | export du registre rendu à un tiers | sha256 du lot, **normalisé LF** via `lib-empreinte` |
+| pilot | `scripts/relever-heritage.mjs` | artefact d'héritage chez un produit : « présent » contre « présent ET À JOUR » (TF-0626) — la seule distinction qu'une existence ne donne pas, et un produit portant une copie périmée croit être conforme | sceau court (12 hex), **normalisé LF** via `lib-empreinte` ; comparaison SOURCE↔CIBLE, aucun contenu rendu |
+| pilot | `todo/emettre-travaux.mjs` | le CONTENU CONFIÉ d'un lot de travaux — la liste des artefacts et leur état, PAS l'enveloppe qui les porte (TF-0627). Premier jet : le sceau portait le lot entier, titre compris, donc l'indice du jour — deux passages du même relevé déposaient deux lots identiques dans le fond, et la boîte du produit se remplissait. Trouvé par la recette d'idempotence, qui rendait 4 fichiers au lieu de 2 | sceau court (12 hex), **normalisé LF** via `lib-empreinte` ; ÉCRIT dans le lot lui-même, pour qu'un lot porte son identité sans être reparsé |
+| pilot | `gabarits/documents/guide-de-reference/generateur/construire-guide.py` | copie EMBARQUÉE de chaque composant posé (`--poser`) de la FAMILLE `gd-guide-de-reference` dans un document instancié : le bloc marqué `COMPOSANT-GABARIT` porte l'empreinte de sa source, constatée (`--constat`, dérive accusée). Site ajouté le 02/10/2026 (TF-1415) : le balayage du contrôle des empreintes ne couvrait que scripts, oracles, tools, todo et les scripts de skills — invisible sous `gabarits/documents/<famille>/generateur/`, il se faisait accuser « ne hache plus ou n'existe plus » dès qu'il était déclaré | sha256 de la source (texte, fins de ligne normalisées LF) inscrit dans le marqueur du bloc, forme en tout point celle de l'embarqueur de composants de forge-agents |
+| pilot | `scripts/compter-lecture-usage.mjs` (TF-1944, D-84 (a) du 26/10/2026) | le manifeste des cas, la consigne du lecteur et chaque texte de l'essai « lecteur d'usage de la restitution » : leurs empreintes sont inscrites au pré-enregistrement et au manifeste, et un contenu retouché après coup fait refuser le comptage (exit 1). Site déclaré le 29/10/2026 : publié le 26/10 sans déclaration, il tenait E2 rouge | sha256 hexadécimal, **fins de ligne normalisées LF** |
+| forge-seo-geo | `scripts/grille.py` · `scripts/gabarits.py` | empreinte de grille et registre d'évolutions (TF-0072) | sceau court dans le registre |
+| forge-audit | `tools/importer-doctrine.mjs` | la SOURCE du pack de doctrine par dimension (TF-1014, 11/09) : l'extraction de référence dont `core/dimensions/doctrine.yaml` est versé — le pack porte `source.empreinte_sha256`, jamais le nom du fichier source, pour qu'une réalimentation depuis une autre extraction se voie sans nommer un commanditaire | sha256 du JSON source, **normalisé LF** |
+| forge-audit | `tools/verifier-heritage.mjs` | la COPIE CONFORME d'un composant d'un dépôt frère (TF-0940, 20/09) : le moteur du canevas de modèle de données de `factory-schemas`, recopié dans le module du canevas de forge-audit et déclaré dans son fichier d'héritage — dérive nommée quand la source est présente, SKIP nommé quand le dépôt frère est absent du poste, jamais un rouge d'environnement | sha256 du bloc copié, **fins de ligne normalisées LF** avant hachage (déclaré dans `HERITAGE.json`), bloc de polices exclu |
+| forge-audit | `tools/verifier-gabarits.mjs` | le CONTENU de chaque gabarit de livrable du kit, ligne de version exclue, consigné avec son identifiant et sa version dans `deliverables/templates/gabarits-versions.json` (TF-1820, 15/10/2026) : un contenu changé à version inchangée est refusé, et `--maj` refuse d'enregistrer un contenu changé sans montée de version | sha256 hexadécimal complet, **fins de ligne normalisées LF**, ligne de version retirée avant hachage |
+| forge-conception | `oracles/oracle-tracabilite.mjs` · `oracles/oracle-vues-profil.mjs` | scellement d'`EXIGENCES.json` et parité de ses vues | sha256 du référentiel |
+| forge-conception | `scripts/vue-cascade.mjs` (TF-1686, 14/10/2026) | `CASCADE.md`, vue dérivée de `cascade/CASCADE.json` et du référentiel d'exigences, jugée par T3 et T5 d'`oracle-tracabilite` | trois sceaux dans la vue : sha256 de la cascade, du référentiel et du corps, **fins de ligne normalisées LF** |
+| forge-design | `skills/systeme-de-marque/scripts/generer-design-md.mjs` | `DESIGN.md`, vue dérivée des tokens et de la voix | sceau dans la vue, **normalisé LF** (TF-0615) |
+| forge-design | `oracles/lib/socle.mjs` (TF-0830, 08/09) | sceau d'un bloc `COMPOSANT-EMBARQUE` d'une page jugée, VÉRIFIÉ contre la source du socle installée avant toute exemption : la critique graphique n'impute pas à l'auteur un CSS qu'il n'a pas le droit de modifier, et un sceau seulement DÉCLARÉ n'exempte de rien — sans quoi deux commentaires suffiraient à échapper au jugement | sha256 de la source comparé à `data-empreinte`, **et** corps canonique comparé après ré-échappement `</script` à l'identique (jamais inversé : la transformation n'est pas inversible) |
+| forge-agents | `skills/quality-oracles/scripts/run-oracles.mjs` | clé de cache d'un lancement d'oracles (16 hex, **non persisté**) | usage interne, déclaré |
+| forge-agents | `skills/factory-page-html/scripts/check_html.py` | empreinte du JEU DE RÈGLES, citée au journal d'oracle (R-32) | empreinte de règles, pas de contenu |
+| forge-agents | `skills/forge-agents/scripts/otlp-project.mjs` | identifiant de trace d'un envoi de télémétrie | usage interne, déclaré |
+| forge-agents | `skills/factory-propale/scripts/construire-referentiel-ao.mjs` | référentiel d'exigences d'une réponse à appel d'offres construit depuis RC/CCTP (TF-1026, 14/09) : un sha256 par source (RC modifié → PÉRIMÉ) et un pour le corps du référentiel (clé `referentiel.md#corps` : ligne retirée → AMPUTÉ), vérifiés par `--verifier` ; recette `--self-test` | `forge-ops/empreinte@1` — texte normalisé LF, empreinte en commentaire HTML en tête du référentiel |
+| forge-agents | `skills/quality-oracles/scripts/oracle-image-conteneur.mjs` | ne scelle AUCUN fichier : nomme l'image TEMPORAIRE que son mode Dockerfile construit pour le scan trivy (TF-1499, 01/10/2026), d'après le chemin du Dockerfile et l'heure ; l'étiquette n'est jamais consignée, et l'image est retirée après le scan | usage interne, déclaré — 12 hex de sha256 dans l'étiquette `qo-scan-…` |
+
+**Contrôlé** : `node oracles\oracle-empreintes.mjs [racine]` — E1 les sites déclarés existent
+encore · E2 aucun site de scellement non déclaré · E3 une empreinte au format `@1` est complète et
+lisible (`--verifier <fichier.json>`).
+
+## Ce qui n'est pas jugé, et pourquoi c'est écrit
+
+- **La JUSTESSE d'un scellement** : que l'empreinte corresponde vraiment au contenu se vérifie sur
+  place, par l'oracle qui la lit — jamais d'ici.
+- **Les usages internes** : une clé de cache, un identifiant de trace, une empreinte de jeu de
+  règles ne jugent aucune fraîcheur d'artefact. Ils sont **déclarés** au registre pour qu'on ne les
+  redécouvre pas comme des sites oubliés, et ils ne sont pas tenus au format.
+- **Les sites hors des emplacements connus** : le contrôle lit `scripts/`, `oracles/`, `tools/`,
+  `todo/`, les scripts de skills et, depuis le 02/10/2026 (TF-1415), chaque `generateur/` sous
+  `gabarits/documents/<famille>/`, à profondeur bornée. Un hachage enfoui ailleurs reste invisible,
+  et c'est déclaré plutôt que promis.
+- **Le contenu des dépôts frères non clonés** : ce qui n'est pas sur le poste n'est pas jugé.
+- **La clé du registre est le NOM DE FICHIER**, pas le chemin : deux homonymes dans 2 dépôts
+  comptent pour une seule déclaration. C'est un choix — un chemin complet aurait rendu la table
+  fragile au moindre renommage de dossier — et sa conséquence est écrite : un second `self-test.mjs`
+  qui se mettrait à sceller autre chose passerait pour déclaré.

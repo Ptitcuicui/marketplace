@@ -1,0 +1,578 @@
+# Étapes d'un run produit — détail opérationnel
+
+Référence chargée à la demande depuis le noyau `CLAUDE.md` (TF-0053) : le noyau donne la
+séquence, ce fichier donne le mode opératoire de chaque étape. À charger à l'ouverture de
+l'étape concernée, pas d'un bloc.
+
+## 1. Ouvrir le run
+
+**Avant tout — deux commandes, quelques secondes, et un échec SUSPEND l'ouverture** (R-35,
+décidée le 15/08) :
+
+```
+node oracles\self-tests.mjs          # les oracles savent-ils encore ECHOUER ? (I1)
+node oracles\oracle-boite-entree.mjs # un lot est-il arrivé sans être pris ? (B1-B3)
+node oracles\oracle-skills.mjs       # skills, hooks, câblages = versionnés et vivants ? (K1-K8)
+```
+
+Verdicts portés au ledger en `oracles_verdict`. **Au ledger d'un produit (suivi par git), l'entrée de
+`oracle-boite-entree` ne porte que des comptes** (TF-2339, 10/11/2026) : la commande est
+`node oracles\oracle-boite-entree.mjs --pour-ledger`, qui rend le verdict et « 3 constats B1 », sans nom de
+fichier ni chemin. Le 11/09/2026, trois sidecars d'autres dépôts, nommés dans une entrée de ledger, étaient des
+noms de produits que la porte de publication a refusés sur 14 commits. La suspension n'est pas un excès de zèle :
+des oracles qui ne savent plus refuser ne peuvent rien juger de ce qui suit, et un lot non
+pris fausse tout ce qu'on croit savoir du reste-à-faire — on ouvrirait un run en croyant
+connaître le travail en attente.
+
+Le premier existe parce que chaque oracle portait sa recette à double sens sans que rien ne
+l'appelle : il fallait y penser, oracle par oracle. Dès son premier passage, le 15/08, il a
+trouvé que **`oracle-claude-md` — le gardien du plafond du noyau — n'avait aucun self-test**,
+donc n'avait jamais été vu refuser quoi que ce soit. Le second existe parce qu'un lot de
+5 candidatures est resté dans `input\00-retours\` sans être ingéré, découvert par hasard.
+
+Le troisième existe parce qu'un skill vit en **deux exemplaires** — la source versionnée dans
+une forge, et la copie sous `~\.claude\skills\` qui est celle que la session invoque. Mesure du
+15/08 : sur 20 skills versionnés, **4 divergeaient et 5 n'étaient pas installés du tout**. Neuf
+sur vingt n'étaient donc pas ce que le dépôt croyait livrer, dont `quality-oracles`, cité comme
+loi transversale. Une règle corrigée dans un dépôt et absente de la copie installée n'a
+strictement aucun effet. `--appliquer` remet à niveau ; il **refuse** d'écraser une copie plus
+récente que sa source (K5) — le jour de son écriture, `prompt-analyzer-l99` installé était en
+2.2.0 quand le dépôt en était à 2.1.0, et une synchronisation naïve aurait détruit une version.
+
+**DÉCLARER LE SCHÉMA DU LEDGER (TF-0385, 19/08 ; schéma 1.1 le 27/09)** — un champ au `run_open`,
+et il commande la suite : `schema_ledger: "1.1"`, avec **`forges_mobilisees`**, la liste des forges
+que le run mobilise (`["design", "tests"]`, noms courts ou complets), obligatoire depuis ce schéma
+(D-18 (a) du 26/09/2026) : c'est elle que le juge de l'enclenchement confronte aux verdicts
+consignés (étape 7). **Une forge mobilisée comme OUTIL se déclare avec ses parties (TF-1841,
+17/10/2026)** : `parties_mobilisees: { "agents": ["forge-agents"] }` nomme les skills mobilisés, et
+le juge ne réclame que leurs oracles — sans cette déclaration, forge-agents, mobilisée pour son seul
+journal, promettait jusqu'à 48 oracles. Une forge sans partie déclarée garde sa promesse entière ;
+une partie inconnue de la forge ne borne rien. **Le pilot n'y figure jamais**, ni dans `--forges` (TF-1444) : il orchestre le
+run, et ses oracles que tout run joue, la conformité et le contrôle du lot au moins, en sont le cadre.
+Le juge les range à part, sans avertir (`CONTRAT-INTERFACE.md` §3). Sans `schema_ledger`, le
+ledger est réputé **antérieur au schéma** et
+`ledger.mjs verify` ne juge pas la forme de ses entrées — il le DIT (`[NON VÉRIFIÉ]`), il ne le
+tait pas, et il ne met rien en échec. Avec lui, chaque `oracles_verdict` doit porter son `oracle`
+et son `verdict` (forme canonique : `CONTRAT-INTERFACE.md` §3). Un ledger qui déclare `1.0` reste
+jugé selon les règles de `1.0`, sans rien de neuf.
+
+*Ce que `ledger.mjs append` refuse depuis le 27/09 (TF-1366, TF-1367)*, sans rien écrire et en le
+nommant : un argument qu'il ne reconnaît pas, une entrée sans `type` ou réduite à son `type`, une
+entrée d'un type contraint à laquelle manque un champ dû sous le schéma déclaré, et un `seq` fourni
+par le payload — le numéro est attribué par l'outil, sous verrou. Le 21/09, chez un produit, un
+script de journal réécrit sur place avait écrit onze entrées vides, ensuite citées comme preuves :
+**un produit écrit son ledger par `ledger.mjs`, jamais par une copie réécrite.**
+
+*Pourquoi ce champ existe* : le 19/08, **huit** entrées `oracles_verdict` d'un même ledger réel
+portaient **six formes de champs différentes**. La liste des oracles qui avaient tourné n'était
+donc pas calculable, et aucun juge de l'enclenchement n'avait d'entrée. Le champ ne sert pas à
+documenter : il sert à rendre un fait **opposable**.
+
+*Un relevé qui porte plusieurs oracles produit plusieurs entrées*, une par oracle. C'est le prix
+de la calculabilité, et il est bas : `ledger.mjs consigner` les écrit depuis le rapport du lanceur
+(étape 7, TF-1319).
+
+**DÉCLARER LA COUVERTURE DES DIMENSIONS D'AUDIT (TF-1212, 13/10/2026)** — au `run_open` du ledger,
+champ `couverture_dimensions`, une valeur pour chacune des cinq dimensions du référentiel d'audit de
+la maison qu'aucune étape du run ne regardait : `performance`, `couts`, `observabilite`,
+`principes_data`, `gouvernance_ia`. La valeur nomme la forge ou le contrôle qui la tient, ou dit
+`aucune : <motif>` : « aucune » est une réponse **valide**, le silence n'en est pas une. *Pourquoi* :
+sur un produit déclaré prêt, l'audit a relevé 125 écarts (76 non conformes, 49 partiels) et 12
+contrôles fatals non tenus sur 175, dont **40 écarts sur ces cinq dimensions**, que personne ne
+regardait ; sur quatorze forges déclarées à l'ouverture, cinq n'avaient jamais été mobilisées, dont
+la forge d'audit. `oracle-conformite-projet` le juge en **R-19 ter**, en **avertissement non
+bloquant** (règle neuve, précédent D-70 (b)), sur le dernier `run_open` daté du 13/10/2026 ou après.
+*Ce que la règle ne fait pas* : elle n'ajoute pas d'étape d'audit obligatoire (l'option (b) de la
+décision n'est pas prise) et elle n'est pas bloquante. Les trois contradictions relevées entre la
+doctrine et le référentiel d'audit (route de déploiement manuelle contre pipeline exclusif, sauvegarde
+absente de l'oracle de mise en production, fournisseur d'identité sans règle) ne relèvent pas d'elle :
+elles sont **tranchées** par la décision humaine D-3 (a) du 17/10/2026, qui aligne la doctrine sur le
+référentiel — portes M-16, M-17 et M-18 de `ETAPE-MEP.md` § 3 terdecies, en avertissement.
+
+**DÉCLARER LES RÉFÉRENTIELS DISPONIBLES (TF-0373, 18/08)** — une fois par produit, avant tout.
+Pour chacun des trois, soit son chemin, soit `absent` avec son motif ; le `run_open` du ledger le
+porte en `referentiels` :
+
+| référentiel | ce qu'il donne à la mesure | où il vit d'habitude |
+|---|---|---|
+| `exigences` | le terme de comparaison EXTERNE des cas dérivés | `EXIGENCES.json` (`FORGE_TESTS_EXIGENCES`) |
+| `anomalies` | ce que le CLIENT sait déjà de ses défauts | export JSONL du gestionnaire de tickets (`FORGE_TESTS_ANOMALIES`) |
+| `contrat_interface` | ce que le produit promet à ses appelants | OpenAPI, schéma, cahier |
+
+*Pourquoi c'est un pas d'ouverture et pas une option* : treize anomalies clients vivaient dans un
+board depuis le 29/07 ; six campagnes ont tourné entre le 11 et le 18/08 ; **aucune n'a su qu'elles
+existaient**, et le sujet n'est apparu que parce qu'un humain a collé une URL dans une
+conversation. Le défaut n'est pas que la forge ne les ait pas trouvées — cinq relevaient
+d'exclusions écrites et légitimes — c'est que **leur absence n'a jamais été un terme DÉCLARÉ de la
+mesure**. Un SKIP muet est pire qu'un SKIP déclaré, et c'est la doctrine de cette factory partout
+ailleurs. Conséquence directe : le rapport de fin ne peut plus dire « au vert » sans dire **« au
+vert CONTRE QUOI »**. La question ne se pose qu'une fois par produit — la réponse vit à son
+`CLAUDE.md`, le run la recopie — et elle est tenue par **R-11 bis** d'`oracle-conformite-projet`.
+
+**POSER LE SOCLE PAR LE GESTE OUTILLÉ (TF-1697, TF-1724)** — dans un projet déjà adopté (`forge\`
+présent), le socle d'ouverture se pose par une commande, jamais à la main :
+`node <pilot>\scripts\ouvrir-run.mjs <projet> --run <id> --forges <forges mobilisées>`. Elle copie
+les fiches de `gabarits\docs-projet\` qui manquent (R-20), pose `README.md` (R-12) et `.env.example`
+sans aucune variable inventée (R-13), écrit le `run_open` par `ledger.mjs` (schéma 1.1,
+`forges_mobilisees`, `versions_forges`), puis joue `oracle-conformite-projet` et rend chaque FAIL
+restant comme un reste à faire nommé. Elle n'écrase rien et ne pose rien au second passage. Elle
+n'écrit ni `referentiels` ni `couverture_dimensions` : un run qui les déclare dès le `run_open`
+lance le geste sans `--run` ni `--forges`, puis écrit son `run_open` complet par `ledger.mjs`.
+*Pourquoi* (lot Produit-82 20261014a, RT-2) : après une adoption, une session a lu l'oracle de conformité pour
+deviner ses exigences et l'a rejoué trois fois (3 FAIL, 4 FAIL, puis PASS). Les paragraphes
+suivants décrivent ce que le socle contient ; ils ne remplacent pas le geste.
+
+Dans le projet produit, créer `forge\` (`ledger.jsonl` ouvert avec `run_open`, `BRIEF.md` avec
+le brief reçu, `etapes\`). Si `PROMPT-PRODUIT.md` n'est pas à la racine du projet, l'y copier
+depuis le pilot (auto-documentation et reprise). Écrivain unique du ledger : l'orchestrateur.
+Les chemins d'étapes se lisent `<projet>\forge\etapes\…`.
+
+**Socle projet** (`REGLES-PROJET.md`, décidé le 06/08) : créer `input\`, `output\`, `docs\`,
+le `.gitignore` socle (`.env`, `.venv/`, `__pycache__/`, `node_modules/`, `generated/`,
+`Old/`, sidecars d'oracles `*.oracles*.json[l]` avec exception `!forge/**` — TF-0065/C4), `.env.example` (toutes variables attendues, applicatives + infra, tierces marquées
+`# à fournir :`), le `CLAUDE.md` du produit **d'après `gabarits\CLAUDE-PRODUIT.md`** (la
+section « Routage forge » est obligatoire et remplie : c'est elle qui garantit que les
+sessions ad hoc dans le produit passent par les forges pour tout verdict — tests, évolution,
+déploiement — la boucle intérieure restant libre), le `README.md`, puis `git init -b main` +
+commit initial — commits locaux à chaque étape, **remote/push sur GO humain seulement**.
+Un verdict de porte cité dans un message de commit s'écrit en pied de message, `Verdict: <commande> => exit <N>`
+(`; contient "19/19"` pour un compte), et se rejoue AVANT l'envoi sur une copie propre du commit, jamais sur
+l'arbre de travail : `node <pilot>\scripts\rejouer-verdicts-cites.mjs --depot . --plage origin/main..HEAD`
+(TF-1400 : « 19/19 » au poste, 18/19 sur le commit propre, parce que la porte lisait un fichier que git ignore).
+Créer aussi `forge\retours\` avec une copie de `gabarits\RETOURS-FORGES.md` (le canal de
+retours du produit — règle 18) — et la **RECOPIER à chaque ouverture de run**, jamais
+seulement à la création. TF-0502 (22/08) : trois lots d'un même produit ont été refusés par
+R-45/R-46 en deux jours parce que le produit écrivait avec une copie du gabarit antérieure au
+21/08, date où les deux sections y sont entrées. La règle voyageait — elle est DANS le gabarit —
+mais la copie, elle, ne bougeait plus. Une copie prise une fois est une copie qui vieillit en
+silence. Ces artefacts sont DECLARES dans `gabarits\HERITAGE.json` et juges par **R-47** :
+presence ET fraicheur, chacun avec son mode (copie conforme, presence seule, presence + socle
+exige). R-47 se rejoue aussi a l'ARRIVEE D'UN LOT chez le pilot — un produit qui remet se nomme,
+et le controle ne depend alors plus de ce qui est installe chez lui. Copier enfin `gabarits\settings-produit.json` →
+`.claude\settings.json` et `gabarits\hooks-factory.mjs` → `forge\hooks\factory.mjs` (R-44 :
+les hooks de la factory — fraîcheur à l'ouverture, restitution jugée à chaque fin de tour de
+travail — sont actifs dès la première session du produit) ; la clause de **précédence**
+du `CLAUDE.md` produit (R-43) et ces hooks sont vérifiés par `oracle-conformite-projet`.
+Cette copie de `settings-produit.json` est un geste de CRÉATION, jamais répété (TF-1942) :
+`.claude\settings.json` est en mode `presence_et_motif`, et chaque ouverture n'y AJOUTE que les
+entrées de hook manquantes du gabarit, en ancrant la commande relative du lanceur (TF-1903). Les
+`permissions` du produit (`allow`, `ask`, `deny`, `defaultMode`), ses serveurs MCP et ses hooks
+propres ne sont jamais écrasés : seuls les artefacts en copie conforme se recopient à chaque ouverture.
+
+**Socle documentaire `docs\projet\` (R-20, TF-0086/TF-0091 — la création appartient à
+l'ouverture)** : copier les **8 gabarits** de `gabarits\docs-projet\` (TECHNOS,
+COMPOSANTS-OPS, PARAMETRAGE, ACCES-TEST, COMMANDES, FONCTIONNEL, ARCHITECTURE,
+MODELE-DONNEES), renseigner chaque frontmatter (`role`, `sources_de_verite`, `verifie_le`)
+et ce qui est déjà connaissable, puis générer les 2 projections :
+`node <pilot>\scripts\generer-architecture.mjs docs\projet\ARCHITECTURE.md` et
+`node <pilot>\scripts\generer-modele-donnees.mjs docs\projet\MODELE-DONNEES.md` (vues
+JAMAIS éditées à la main — R-20 exige leur présence). Chaque étape actualise ensuite SES
+fichiers : conception → FONCTIONNEL (vue d'`EXIGENCES.json`) · design/development → TECHNOS
+(ancré lockfiles, R-21), ARCHITECTURE et COMMANDES · development → MODELE-DONNEES **depuis
+le schéma réel** (provenance par table, R-26) · MEP → COMPOSANTS-OPS, PARAMETRAGE (URLs au
+motif R-24) et ACCES-TEST. **COMPOSANTS-OPS porte DEUX inventaires, pas un** (TF-0594, 24/08) :
+les composants DÉPLOYÉS *et* les **environnements de données INTERROGÉS** — par environnement, son
+nom d'affichage, son hôte, son identifiant, son metastore, son profil de connexion, son entrepôt
+et ses catalogues avec leur **mode d'accès** (lu / écrit / jamais ouvert), plus ceux connus par
+DOCUMENTS INTERPOSÉS. Un produit d'analyse qui ne déploie rien y écrivait « aucun composant
+déployé » en toute conformité, et un nom d'instance donné par un humain ne se rapprochait de rien
+dans le dépôt : la réponse rendue était fausse. La section se déclare même vide — « aucun
+environnement de données interrogé » — jamais par silence, et R-20 l'exige dès le premier
+`verifie_le` postérieur au 24/08 — toute édition d'une source régénère sa vue. Produit à surface web : copier aussi `gabarits\web\robots.txt` (agents IA autorisés par
+défaut — bloquer se décide et se consigne dans le fichier) et `gabarits\web\llms.txt`
+(carte tenue par development/MEP, R-27). Produit importé : rattrapage explicite à
+l'ouverture (socle créé depuis l'état constaté, `.env.example` reconstruit avant R-22).
+
+**Valider** : `node <pilot>\oracles\oracle-conformite-projet.mjs <projet>` → PASS exigé avant
+l'étape 2 ; rejouer l'oracle avant `run_close` — **un FAIL R-20 (socle incomplet) bloque la
+clôture** (TF-0086 : un run s'était clos à 1 fichier sur 5 sans signal), **comme un FAIL R-60**
+(la cascade du produit ne tient pas sa chaîne, TF-1678). Nommage : tout livrable copié dans
+`output\`/`docs\` porte `<Projet> - <Objet> - AAAAMMJJ<indice>` — **le nom du projet prime
+sur l'émetteur** (Q3-bis, décision humaine du 09/08) ; un livrable remplacé migre dans `old\`
+du même dossier — **versionné** (C1 tranché le 13/08, TF-0150 ; l'ancien libellé « jamais
+versionné » est caduc), et, tenu ouvert par une application, il attend un tour pendant que la
+nouvelle version sort (alinéa de la règle 7, TF-1503) ; le code, lui, n'est jamais daté — git est son seul magasin.
+
+## 2. Étape conception (mode dégradé, cf. contrat §5)
+
+Appliquer les **4 verbes** documentés dans `<racine>\factory-forge-conception\skills\` →
+`ENTRANT.md`, `SURFACE.md`, `EXIGENCES.json` + vues, puis `derive-les-vues` →
+`CADRAGE-DESIGN.md` (sha256 scellé). Un ton fourni par délégation (« reprendre le ton de X »)
+se résout par observation datée consignée en hypothèse — pas de suspension. Loi 3 : la
+surface implicite SaaS est proposée d'office en exigences candidates et s'écarte
+explicitement (cf. `enumere-la-surface`).
+
+**Cascade ISTO** (loi transverse n° 7, `references\INTENTION.md` 2.0.0) : l'intention est citée
+et **validée avec sa trace** avant la première exigence ; stratégies, tactiques, contraintes et
+non-objectifs vont dans `forge\etapes\conception\cascade\CASCADE.json` (gabarit
+`gabarits\CASCADE-ISTO.json`), chaque exigence rattachée à une tactique et à une seule. Sa
+vue `forge\etapes\conception\CASCADE.md` se génère par la famille `gd-cascade-produit`
+(`<pilot>\gabarits\documents\cascade-produit\generateur\generer-vue-cascade.mjs`), jamais à la
+main ; la porte R-60 rejoue la source avant `run_close`.
+
+**Valider** : `node <conception>\oracles\oracle-{exigences,tracabilite,surface,claims}.mjs
+<EXIGENCES.json>`, puis `node <pilot>\oracles\oracle-cascade-isto.mjs <CASCADE.json>
+--exigences <EXIGENCES.json> --tests <dossier des tests>`. Sous le seuil de suffisance → `bloque_question` : écrire `QUESTIONS.md`,
+suspendre.
+
+## 3. Étape design (mode dégradé, oracles natifs)
+
+Appliquer la méthode `systeme-de-marque` (→ `tokens.css` + `MARQUE.md` + page témoin, puis
+`DESIGN.md` dérivé : `node <design>\skills\systeme-de-marque\scripts\generer-design-md.mjs
+--tokens … --marque … --nom <Produit> --sortie etapes\design\DESIGN.md` — la charte
+consolidée, régénérée à toute évolution) puis, si le produit a une UI, `ameliore-le-design`
+(→ maquette HTML autonome). Champs `ton` et `contraintes reprises` non dérivables → question
+humaine si absents du brief.
+
+**Gates par défaut (loi n° 6, TF-0237)** — sans décision humaine ajoutée (R-29) :
+(a) la DA est **dérivée de l'expérience client visée** (formulée au brief ou reformulée à
+l'accueil), et la dérivation est **consignée dans `DESIGN.md`** — chaque choix graphique
+structurant motivé par cette expérience, jamais par défaut d'outillage ; (b) **généricité** :
+`node <design>\oracles\oracle-taste.mjs <html>` PASS exigé (`cat-des-09`) ; (c) **baseline
+visuelle** posée : `node <design>\oracles\oracle-baseline.mjs <maquette.html|url> --slug <nom> --racine <racine du produit> --approuver` (`cat-des-08`) ; un écart voulu après un FAIL s'approuve avec `--motif "<écart voulu>"`, tracé ; une application derrière connexion se rend par son URL avec `--etat-session`.
+Écart assumé possible mais explicite, jamais par omission (loi n° 3).
+
+**Valider** : `node <design>\oracles\run-oracles-design.mjs <html> --tokens <tokens.css>
+--json-only`, plus les gates (b) et (c) ci-dessus.
+
+## 4. Étape development (mode dégradé — `conductor` inutilisable en headless, dette D-V1)
+
+Construire le produit à la racine du projet à partir de `EXIGENCES.json` (périmètre MVP), de
+`tokens.css` et de `DESIGN.md` (copié dans `design\DESIGN.md` du produit — c'est le fichier
+que le gate design de forge-development linte).
+
+**Source unique des disciplines : `docs\run-playbook.md` de forge-development** (TF-0007) —
+en cas de divergence entre un résumé et le playbook, le playbook fait foi. En résumé :
+modifications chirurgicales, simplicité d'abord, chaque exigence MVP tracée vers son
+implémentation et son test ; **discipline d'auditabilité** (app en instance module
+`app.main.app`, couche SQL observable, contraintes nommées `<type>_<table>_<colonne>`,
+`responses=`/`status_code` exacts, migrations `-- +migrate Up/Down` exercées
+aller/retour/rejeu, tests citant les id d'exigences — cf. « Contrat du projet audité » du
+README de forge-tests) ; **disciplines de livrable** (lois 1, 2, 4) : zéro élément interactif
+sans effet, artefacts de démonstration derrière `*_MODE_DEMO` absent par défaut, données
+volatiles en base éditables datées sourcées.
+
+**Construire ce que l'audit exigera** (TF-1212, décision humaine D-3 (a) du 17/10/2026) : trois
+exigences fatales du référentiel d'audit de la maison se construisent ici, pas à la MEP. Le
+déploiement vers tout environnement géré est une étape de la chaîne du produit (pipeline versionné,
+ou chaîne de l'hébergeur déclenchée par la poussée), jamais une commande lancée d'un poste
+(CTL-D09-01). Tout actif de données critique a son RPO, son RTO, sa sauvegarde et un exercice de
+restauration (CTL-D05-09, CTL-D12-06, CTL-D16-09). Tout accès humain authentifié passe par un
+fournisseur d'identité central avec MFA, un compte local n'existant qu'avec sa procédure de secours
+(CTL-D03-01). Un produit qui n'a ni environnement géré, ni donnée critique, ni accès humain le
+déclare au dossier de MEP avec son motif. Juges : M-16, M-17, M-18 de `ETAPE-MEP.md` § 3 terdecies.
+
+**Valider** (gates rejoués) : les gates de l'écosystème du produit au vert ; chaque
+exigence MVP a ≥ 1 test qui la cite par son id (gate grep 100 %).
+
+**Gates par écosystème (RF-1, lot Produit-09 20260820a)** — la version précédente prescrivait
+`ruff check` + `pytest` sans voie de sortie : un produit JS/TS ne pouvait clore l'étape que par
+un écart écrit, à chaque fois, par chaque produit. La voie déclarée est le **manifeste du
+produit `.forge\profile.toml` (P-18)** : quand il déclare les gates, il **prime** ; sinon la
+table par défaut s'applique :
+
+| Écosystème | Gates de validation |
+|---|---|
+| Python | `ruff check` + `pytest` |
+| Node/TS (Next.js, Strapi…) | `npm run lint` + `npm test` + `npm run build` |
+| autre | à déclarer dans `.forge\profile.toml` — sans manifeste ni ligne ici, l'étape ne se clôt que par écart déclaré |
+
+Le ledger porte le couple **(gate prescrit, gate réellement joué)** dans l'`oracles_verdict` de
+l'étape : un gate substitué en silence serait un verdict sans référence. *Limite déclarée* :
+forge-tests ne lit pas encore ce manifeste (RF-3, même lot) — la table ci-dessus gouverne les
+gates de l'étape development, pas la racine d'exécution de l'audit.
+
+> **Process longs — toutes étapes (TF-0094)** : tout traitement dépassant ~2 minutes
+> (mutation, rendu, scan, migrations, déploiement, génération d'images) émet son
+> avancement **toutes les 3 minutes** au format `gabarits\AVANCEMENT-PROCESS.md`
+> (tableau 8 champs + `<run>/avancement.jsonl` ; émetteurs `scripts\avancement.*`).
+> Un process long muet est en défaut de contrat.
+
+## 5. Étape tests (mode natif)
+
+**5.0 — Smoke de frontière DÉPLOYÉE, avant toute mesure** *(RP-1, lot COMPTA du 14/08 —
+obligatoire dès qu'une URL de production ou de staging est déclarée au produit)*.
+
+Constat qui l'impose, et il est net : le run `20260814-tests-fournisseur-a` s'est conclu « boucle close,
+pans mesurables au vert » **pendant que le login de production était en impasse totale** —
+`GET /` → 303 vers `/.auth/login/aad` → 404. Mort depuis le premier déploiement, vu par aucun
+test, découvert par l'humain **en cliquant, minutes après la clôture**. L'oracle MEP
+(`ETAPE-MEP.md`, liste à jour) porte ce regard *à la mise en production* ; rien ne le portait en cycle de tests
+post-déploiement. Un produit déjà en ligne était donc audité **sans que personne ne regarde ce
+que voit son visiteur**.
+
+Quatre contrôles, **sans identité**, joués sur l'instance déployée et consignés au ledger :
+
+1. **santé** — la racine et l'endpoint de santé répondent ;
+2. **chaîne d'entrée** — depuis la racine, suivre les redirections et exiger qu'elles
+   aboutissent à une **mire identifiable** (200 + marqueur de contenu). Une chaîne qui finit en
+   404, en boucle ou sur une trace technique est un défaut **bloquant** : la porte est murée ;
+3. **en-têtes de sécurité** — verdict `forge-websec` sur l'origine déployée (R-33) ;
+4. **surface d'exposition** — la documentation d'API (`/docs`, `/openapi.json`) est fermée si
+   le produit ne l'expose pas volontairement.
+
+Outillage réel, tout en lecture (aucune exécution active — R-33 ne s'applique donc pas) :
+
+```
+FORGE_TESTS_QUALIF_URL=<url-deployee>   # pans qualif : 1 et 2, sans identifiants
+node scripts\capturer.mjs <url> --sortie <capture.json> --suivre-redirections
+node oracles\oracle-exposition.mjs <capture.json>          # 3 (EX-1…EX-11)
+node oracles\oracle-sca.mjs <racine-produit>               # gate : dépendances vulnérables (npm audit, pip-audit)
+```
+
+depuis `<racine>\factory-forge-websec`. La chaîne de redirections se lit **dans la capture**
+(`--suivre-redirections`), qui donne aussi le contrôle 4 sur `/docs`. Verdicts au ledger en
+`oracles_verdict`, l'URL auditée nommée. `oracle-sca` ne lit pas la capture : il se joue sur la RACINE du produit
+(`package-lock.json`, `requirements.txt`, `uv.lock`, `poetry.lock`) et rend 0 PASS, 1 FAIL ou 2 SKIP motivé (outil ou
+manifeste absent, registre injoignable). Un SKIP se consigne tel quel, avec son motif : l'audit des dépendances n'a pas eu
+lieu, ce n'est pas un PASS. *Le fait* : trois verdicts `oracle-sca` du 03/11/2026 ont été joués au gate chez un produit de
+l'écosystème (rapporté par l'agent du lot wc le 13/11/2026, non rejoué ici), et ce bloc ne nommait pas l'oracle (TF-2489).
+
+Le smoke ne remplace pas l'audit : il regarde la **frontière**, là où l'audit regarde
+l'intérieur. Un produit dont le smoke échoue ne « passe » pas au vert parce que ses pans
+internes sont mesurés — le constat de frontière est porté au rapport et au dossier.
+
+`uv run python -m forge_tests <racine-produit> --json` depuis
+`<racine>\factory-forge-tests`, stdout capturé et persisté dans
+`etapes\tests\rapport-forge-tests.json`. Exit 0 = PASS, 3 = PARTIEL acceptable (consigner les
+pans non couverts), 1 = FAIL → boucle de fermeture, 4 = refus G-1 (`--livrables` pointerait
+DANS le projet audité — corriger le chemin, jamais contourner). Ajouter `--livrables
+<dossier HORS du projet audité>` — par exemple
+`<racine>\factory-forge-tests\output\<projet>-livrables\` : cahiers de tests
+(fonctionnel, technique) + jeux de données synthétiques + dashboard HTML, **puis copiés
+datés dans `output\` du produit** (règle 16), ce qui est un geste explicite et non un
+effet de bord de l'audit.
+
+**Une recette qui consomme un état borné se rejoue (TF-2438, TF-2466, 13/11/2026).** Avant le premier audit,
+le pilot joue `node oracles\oracle-recette-rejouable.mjs <racine-produit>` sur le produit. Exit 0 : aucune recette
+ne nomme un budget, un quota ou une fenêtre glissante sans le déclarer, ou chacune porte sa ligne `Rejeu :`.
+Exit 1 : la recette consomme un état borné sans le déclarer, et elle ajoute `Rejeu : état créé à chaque passage`
+ou `Rejeu : période 24 h` (`references\CONVENTION-RECETTES.md`) avant l'audit. Exit 2 : aucun fichier de recette
+sous la racine, ce qui se consigne et ne vaut pas PASS. Le contrôle lit les fichiers de recette, il ne rejoue rien :
+qu'un second passage sur la même base soit réellement jugé reste à la recette de forge-tests. Le verdict entre au
+ledger en `oracles_verdict`.
+
+**Corrigé le 15/08 (TF-0271)** : cette ligne prescrivait `etapes\tests\livrables\`, chemin
+qui — résolu depuis la racine produit — tombe DANS le projet audité. La garde **G-1** le
+refuse (l'auditeur n'écrit pas chez l'audité) et le refuse désormais **bruyamment**
+(message terminal + code de sortie 4, distinct des erreurs de génération). La prescription
+fabriquait donc le refus à chaque run qui la suivait — deux exécutions perdues le 15/08.
+
+**Qui décide que la campagne est TERMINÉE : forge-tests, pas le pilot (TF-0360, 18/08).**
+Depuis TF-0352/0353, `forge_tests/boucle.py` porte la définition de fin — cinq points
+opposables (portes en exit 0 · aucun `xfail` sans arbitrage humain daté · suite verte sur
+N ≥ 2 passages consécutifs · chaque anomalie corrigée ou portée en écart assumé et ÉCRIT ·
+dernier tour REJOUÉ APRÈS son dernier correctif) — et chaque rapport la publie dans sa section
+`boucle`. **Le pilot LIT ce verdict, il ne le recalcule pas** : la forge qui prescrit une règle
+est celle qui la juge. Le journal de tours est tenu par le pilot chez le PRODUIT
+(`forge\journal-boucle.jsonl`) : c'est sa campagne. Câblage :
+`outillage-tests-e2e\appels-reels.mjs`. La borne ci-dessous reste au pilot — c'est un plafond
+de DÉPENSE (loi 5), jamais un critère de fin : on peut s'arrêter avant la fin, on ne peut pas
+décider que c'est fini.
+
+**Le journal de tours se tient dès le premier audit, et son absence se signale (TF-2727, 22/11/2026).** Le
+15/11/2026, 31 rapports d'audit de 6 produits (du 01/09 au 09/11) étaient tous PARTIEL, boucle `en_cours`, 30 à
+zéro tour : aucune campagne ne se prouvait menée à son terme depuis le 17/08, et la vitrine de la Factory n'en
+pouvait citer aucune. À l'étape tests d'un run, le tour d'un audit s'écrit au journal du produit
+(`forge\journal-boucle.jsonl`, `outillage-tests-e2e\appels-reels.mjs`) dès le premier rapport, jamais « au premier
+cycle de correction ». Le relevé, lu chez les produits sans rien y écrire :
+`node scripts\relever-campagnes-tests.mjs --parc <racine> [--depuis AAAA-MM-JJ]` rend, par produit, les rapports PARTIEL ou
+FAIL dont le journal n'a AUCUN tour (exit 1 : le signalement) et les campagnes dont le dernier rapport porte une boucle
+`terminee`, comptées sur la semaine écoulée. Il se joue à la demande, avant toute citation d'une campagne terminée ;
+aucune routine hebdomadaire n'est installée (une planification est une décision, pas un effet de bord). Mesuré le 22/11/2026 sur les dossiers de `C:\dev` : 10 produits portant `forge\etapes\tests\`, 69 rapports,
+53 PARTIEL ou FAIL sans tour, 2 produits avec un journal, 0 campagne terminée.
+
+**Boucle de fermeture bornée** : chaque item `actions[]` du rapport porte son `etape_cible` ;
+router les `auto_ia` — `development` (code, câblage), `tests-suite` (cas générés À ADOPTER
+ET EXÉCUTER — R-40 : trois états seulement, adopté/`non_testable` motivé/écarté par décision
+nommée ; exécuté sous les gates de development), `design` (état/écran manquant à la promesse → artefacts design puis delta
+development), `mep-config` (variable, peuplement — jamais dans le code), `forge` (défaut de
+l'AUDITEUR → sort de la boucle produit, part au lot de retours — on ne corrige jamais le
+produit pour contourner un bug de la forge). Chaque cycle se clôt par un RE-AUDIT COMPLET.
+**Au plus 5 cycles toutes étapes confondues, extensibles à 7 si chaque cycle réduit
+strictement le reste d'`auto_ia`** (mandat humain du 14/08 — l'ancienne borne de 3 laissait
+des actions automatisables au rapport final) ; la boucle ne s'arrête pas tant qu'il reste des
+`auto_ia` ET que la borne n'est pas atteinte — un rapport livré avec des `auto_ia` restants
+en explique le motif (borne atteinte, ou dépendance à une action humaine préalable, p. ex.
+configuration absente). Garde G-2 absolue : jamais d'assertion assouplie ni de seuil
+requalifié — un échec résistant = retour consigné avec diagnostic. Les items `manuelle_dev`
+et `manuelle_utilisateur` sont listés avec leur attendu détaillé (dashboard, onglet Actions)
+— l'objectif : maximiser l'auto-traité, ne laisser en manuel que l'irréductible.
+**La boucle ne se clôt pas sur un solde d'adoption non nul (R-40)** :
+`node oracles\oracle-adoption-tests.mjs <racine-produit>` (il lit d'office les cahiers sous `<racine>\factory-forge-tests\output\<projet>-livrables\`, ou `--livrables <dossier>`) rend PASS (solde nul par les trois
+issues — les deux issues non-adoption se déclarent dans `forge\cas-ecartes.jsonl`) ou
+SANS_OBJET motivé ; un FAIL est un reste-à-faire de la boucle, jamais un livrable clos.
+
+**Sécurité du produit livré (R-33, 14/08)** : les exigences ASVS curées de forge-websec
+s'opposent dès la *conception* (profil `webapp`), la méthode de test s'exécute *ici*, et le
+verdict websec est produit au *gate MEP* — **présent et non bloquant** par défaut, armable
+produit par produit avec `[gates] websec_bloquant = true` (R-33 bis). Toute exécution **active** (DAST, fuzzing, injection
+réelle, intrusion) est une voie **sur mandat humain**, jamais automatique — six garde-fous
+exigibles avant exécution, détaillés en `REGLES-PROJET.md` §M. Même discipline pour la
+dépense (R-34, §N) : un pan qui appelle un modèle payant s'active explicitement, sous plafond,
+et publie ce qu'il a consommé — un audit lancé sans option ne coûte rien.
+
+**Message de fin de traitement (v2, 14/08)** : toute clôture — de run, de campagne, de mandat —
+suit `gabarits\RESTITUTION.md` : huit blocs dans l'ordre, **aucun ne disparaît** (un bloc vide
+se dit en une ligne), en-tête **horodaté à l'heure près**, décisions en tête et en choix
+fermés, non traités **avec leur motif**, risques avec leur signal, prochaines actions par
+acteur ET par ordre justifié. Contrôle exécuté : `node oracles\oracle-synthese.mjs
+<synthese.md>` (S1-S8, self-test double sens). Une CLI ou une recette en tient la forme
+dégradée : horodatage · verdict · restes classés.
+
+## 5 bis. Revue graphique d'implémentation (en PARALLÈLE de l'étape tests)
+
+Regards indépendants : la fonction pour tests, la forme ici. Mode « critique
+d'implémentation » de forge-design
+(`skills\critique-le-design\references\critique-implementation.md`) — le produit jugé contre
+SA promesse design (tokens du run, écrans/états, CTA, rendu 2 thèmes, voix). Sortie :
+`etapes\design\revue-implementation.md`, écarts versés au ledger (`type: retour`,
+`source: produit`, destinataire development). Le verdict se dit dans le vocabulaire de
+forge-design, qui le rend : **Livrer**, **Renforcer** ou **Refondre**, et aucun autre. Un mandat
+d'agent recopie ces trois mots ; le 15/10/2026, un mandat qui disait « Accepter / Retravailler »
+a obligé la revue à publier une table de correspondance (TF-1801). Verdict Refondre ou ≥ 1
+bloquant → retour à development (boucle bornée partagée avec l'étape tests). Un écart voulu se
+consigne en hypothèse — la revue le classe « accepté », pas défaut.
+
+**Gate généricité rejoué (loi n° 6, TF-0237)** : `oracle-taste.mjs` PASS sur le rendu
+implémenté — le rendu se juge en pixels, pas sur la maquette seule ; la baseline
+(`oracle-baseline.mjs <page|url> --slug <nom> --racine <racine du produit>`) détecte toute dérive depuis l'approbation de l'étape 3.
+Une application derrière connexion se rend avec sa session : `render_page.py <url> --etat-session <état de session Playwright>` ; sans elle, seule la mire est jugée, et `render_page` le dit (« MIRE DE CONNEXION RENDUE », TF-1788).
+
+**Exploitabilité au volume réel (TF-1654, 14/10/2026).** Une revue jouée sur le seul jeu de
+démonstration ne dit rien de l'écran que l'utilisateur aura. Le 12/10/2026, chez Produit-80, les
+écrans avaient passé la critique d'implémentation, `render_page.py` aux 7 largeurs et plus de
+3 000 tests, tous sur 2 projets de démonstration ; à la première alimentation réelle, une fiche
+mesurait 5 220 px en 4 colonnes déséquilibrées, un écran de complétude 20 630 px, et des valeurs
+machine (`not_assessed`, objets sérialisés) s'affichaient brutes. La revue graphique se **rejoue
+donc sur une instance alimentée au volume réel** (la qualif populée, `ETAPE-MEP.md` § 3 bis), avec
+un contrôle d'exploitabilité mesuré dans le rendu : hauteur de page hors tableau filtrable,
+densité des lignes, valeurs machine visibles, colonnes déséquilibrées, libellés trop longs. Le
+contrôle commun est `<racine>\factory-forge-design\oracles\oracle-exploitabilite.mjs` (règles X0
+à X5, livré le 14/10/2026, part forge de TF-1654) : il juge une URL ou un fichier, et une
+application derrière une connexion avec `--etat-connexion <storageState.json>`. Il reprend les
+seuils de l'oracle écrit par le produit d'origine (9 échecs mesurés sur l'instance alimentée). Le verdict se consigne au ledger
+(`oracles_verdict`) et entre au dossier de MEP ; un écran jugé sur la seule démonstration se
+déclare comme tel, jamais par silence.
+
+## 6. Étape MEP (portée par le pilot — `ETAPE-MEP.md`)
+
+Dockerfile/compose dans le produit, déploiement **staging** réel, `ROLLBACK.md` testé une
+fois, oracle MEP exécuté (`ETAPE-MEP.md`, liste à jour ; build, healthcheck ×3, smoke tests des exigences critiques
+contre l'instance servie, rollback prouvé, scan secrets de l'image ; chaîne de déploiement,
+sauvegarde et fournisseur d'identité déclarés, M-16 à M-18 ; réglages de plateforme lus contre le registre
+et version servie lue avec O-26 et O-27, M-21 et M-22). Puis générer
+`DOSSIER-MEP.md` et demander le **GO humain** — la production n'est jamais lancée sans lui, et
+jamais depuis un poste : le GO est la porte d'approbation de la chaîne ou la poussée d'un commit nommé ;
+sans GO, clore en `pret_production_en_attente_GO` (état de succès).
+
+## 7. Clore le run
+
+**Le canal de capitalisation est SORTANT aussi (TF-0448, R-45 bis — 21/08).** À la clôture, le
+run ne remonte pas que ses retours : il **propose à la factory les livrables dont la FORME est
+réutilisable**. Le geste : déposer le couple *source jugée + rendu généré* dans
+`<pilot>\input\02-entrants-html\` (le rôle du dossier le couvre déjà) et en faire une
+candidature — la décision d'en tirer un gabarit reste humaine, comme pour tout candidat. La
+bibliothèque qui les reçoit vit dans `gabarits\documents\` (catalogue, doctrine transverse
+D1-D7, `oracle-gabarits-documents`) ; une famille déjà au catalogue en statut `a_extraire` se
+complète, elle ne se double pas.
+
+*Pourquoi ce pas existe.* Le canal de capitalisation n'existait qu'en ENTRÉE : `gabarits\` ne
+contenait que des gabarits écrits, aucun dérivé d'un livrable réel, et l'étape 7 ne remontait
+que le lot de retours. Mesuré le 21/08 : le couple source/rendu d'un diagnostic a été conçu
+intégralement pendant son run — heuristique de largeurs, repli en cartes, chapeaux, exemples de
+lecture — alors que **trois livrables de même nature existaient déjà** dans l'écosystème, dont
+un gabarit complet et barré produit par un autre projet le 13/08. Sans canal sortant, le
+quatrième le referait.
+
+**Juger l'enclenchement, à titre INFORMATIF (D-18 (a), 26/09/2026 ; TF-1319).** Avant `run_close`,
+jouer `node <pilot>\oracles\oracle-enclenchement.mjs forge\ledger.jsonl` depuis la racine du produit :
+il confronte les oracles que chaque forge mobilisée découvre sur son disque aux verdicts consignés
+au ledger (`CONTRAT-INTERFACE.md` §3). Les forges mobilisées se lisent au champ
+`forges_mobilisees` du `run_open`, sinon `--forges`. Son verdict se consigne au ledger en
+`oracles_verdict` et se cite dans la synthèse de clôture ; il **ne bloque pas** la clôture. *Pourquoi
+pas bloquant* : jugé sur les deux seuls runs réels qui déclarent leur schéma et leurs forges, il rend
+FAIL parce que ces runs consignent tous les verdicts d'un lanceur en UNE entrée ; un FAIL sur un
+regroupement n'est pas un oubli. Il reste informatif jusqu'à une mesure de ses refus à tort sur
+plusieurs runs (décision D-5 (b) du 17/10/2026, TF-1319).
+
+*Consigner un verdict PAR oracle (TF-1319, 17/10/2026)* : à chaque étape, le rapport d'un lanceur se
+consigne par `node <racine>\factory-forge-agents\.claude\skills\forge-agents\scripts\ledger.mjs
+consigner forge\ledger.jsonl --forge <forge> -- node <lanceur> <cible> --json-only` (ou
+`--rapport <rapport.json>`) : une entrée `oracles_verdict` par oracle du rapport, tout le lot ou rien.
+Le verdict du juge lui-même se consigne de la même façon (`-- node <pilot>\oracles\oracle-enclenchement.mjs
+forge\ledger.jsonl`). **Si le juge rend FAIL**, le run qualifie ce refus avant `run_close` par une
+entrée `type: qualification_enclenchement`, `qualification: "fonde"` (un contrôle dû n'a pas tourné
+ou n'a pas été consigné) ou `"a_tort"` (le run était complet, bloquer sa clôture aurait été une
+erreur), et sa `cause`. `node <pilot>\oracles\mesure-refus-enclenchement.mjs` compte ensuite, sur
+tous les produits, les clôtures que le juge aurait refusées et la part à tort, en séparant les runs
+qui ont consigné par l'outil : c'est sur ces chiffres que l'humain décidera du passage en bloquant.
+
+**Le lot part dans le tour où le retour est écrit, pas à la clôture (D-191 (a), TF-2329).** Le contrôle LOT du hook de fin de
+tour d'un produit (`oracles\hook-restitution.mjs`, recette `oracles\hook-restitution.test.mjs` cas 72 à 76) refuse un tour qui a
+écrit une entrée `type: retour` (ledger du run ou journal hors run) qu'aucun lot de `forge\retours\` ne cite par son seq, et
+`--prejuger` rend le même refus avant l'affichage ; un retour écrit avant le tour reste à l'alerte d'ouverture (TF-1988). La
+clôture ne compile donc plus que ce que les tours n'ont pas déjà remis, et le geste est le même :
+Compiler les entrées `type: retour` du ledger en un **lot de retours** —
+`forge\retours\<projet> - RETOURS - <AAAAMMJJ><indice>.md` + **sidecar `.tf.jsonl`** homonyme
+(candidatures SANS id, gabarit `gabarits\RETOURS-FORGES.md` ; le préfixe projet est
+obligatoire, décision 13/08) avec contrôle de complétude ledger↔lot — puis
+**remise automatique** : copie des deux fichiers dans le sas `<pilot>\input\00-retours\_arrivee\` (`node forge\retours\oracle-lot.mjs "<lot>.md" --remettre`, TF-2314). Ensuite `run_close`
+au ledger avec le bilan, et synthèse à l'humain. Hors run, toute inspection/incident produit
+son propre lot — un fichier par lot, jamais modifié après remise. **À réception d'un sidecar
+dans `input\00-retours\`** (côté pilot) : le confronter d'abord au registre ET à l'archive
+(un lot déjà traité par un autre canal part en `old\` sans ingestion), puis
+`node todo\ingerer-lot.mjs <sidecar>` — validation atomique,
+ids frappés, tout en `candidat` (l'automatique s'arrête là : la décision reste humaine),
+oracle + vue régénérée.
+
+## Contrat « prêt client »
+
+Les seuls critères — tous mesurables, aucun « optimal »/« confiance » : oracles des étapes
+1-3 verts · forge-tests exit 0 ou 3 avec seuils de couverture et de mutation tenus sur les
+pans mesurés · oracle MEP au complet en staging (`ETAPE-MEP.md`) · `DOSSIER-MEP.md` complet · traçabilité exigences
+MVP → tests 100 % · ledger vérifié par `ledger.mjs verify` · couverture des dimensions d'audit déclarée
+à l'ouverture du run (R-19 ter, TF-1212 ; **avertissement** tant que l'humain n'en a pas fait un blocage) ·
+chaîne de déploiement exclusive, sauvegarde des actifs critiques et fournisseur d'identité déclarés au
+dossier de MEP (M-16 à M-18, TF-1212 ; **avertissement** tant que l'humain n'en a pas fait un blocage).
+
+*« Prêt pour la production » exige aussi le pan `parcours-personas` de forge-tests et `oracle-exploitabilite` de forge-design, tous deux au verdict PASS dans le ledger du run* (TF-2124, D-166 (a) du 04/11/2026) : un manque rend un avertissement nommé jusqu'au 18/11/2026 inclus, puis un échec dès le 19/11/2026, jugé par la règle R-61 bis d'`oracles\oracle-conformite-projet.mjs`, rejouée avec `--declarer-pret` avant l'écriture du `run_close` ; la date se lit à l'horloge, `--aujourd-hui AAAA-MM-JJ` la fixe pour la recette.
+
+*Un forge-tests PARTIEL se motive avant « prêt »* (TF-2207, RP-27, décision R-58 du 06/11/2026) : l'exit 3 de la campagne reste acceptable, mais le `run_close` « prêt » est refusé, dès le 06/11/2026 et sans période d'avertissement, tant que le dernier verdict `PARTIEL` de la campagne (oracle `forge-tests` ou `forge_tests`) ne porte pas un champ `motif_partiel` de 20 caractères au moins, qui nomme les pans non couverts et dit pourquoi l'état est acceptable. Le motif se consigne par une entrée de plus (`oracles_verdict`, même oracle, même verdict) ; un PASS consigné ensuite lève aussi le refus. Même règle R-61 bis, même `--declarer-pret` : `ledger.mjs append` d'un `run_close` « prêt » la joue avant d'écrire. Mesuré le 05/11/2026 chez Produit-86 : trois `run_close` « prêt » sur un PARTIEL, 27 exigences sur 127 citées par un test de bout en bout.
+
+*« Livré » a une définition opposable* (R-61, TF-1711, 15/10/2026) : toutes les exigences de la fiche
+implémentées et testées, seuls les secrets restant à saisir par l'administrateur, par un geste guidé
+unique. Un run qui s'arrête avant le dit, écrit « N exigences sur M tenues » au bloc 0 ou au verdict de
+sa restitution, et nomme ce qui reste ; le critère de sortie d'une phase tenu se dit « phase close ».
+Juges : S70 à S72 d'`oracles\oracle-synthese.mjs`, avertissantes.
+
+*Une recette verte a joué chaque parcours dans un vrai navigateur, sur l'adresse publique*
+(TF-1766, 15/10/2026, **avertissement** ; rattachée au point 3 de R-61, « la mesure se fait par
+l'usage »). Le fait : une restitution annonçait 5 parcours de personas au vert, en local et chez
+l'hébergeur ; la première connexion humaine sur l'adresse publique a rendu « Application failed to
+respond », parce qu'un identifiant inconnu faisait planter le serveur. Les tests appelaient le portail
+par le réseau privé, avec les seules saisies attendues. Pour un produit à interface, la recette joue
+donc chaque parcours de la fiche (chapitre « Personas et usages », `gd-fiche-produit` 1.2.0) dans un
+vrai navigateur, sur l'adresse publique, avec au moins une saisie inattendue par formulaire ; la
+colonne « Parcours testé » de la fiche en porte la trace datée. Une restitution ne dit « fonctionnel »
+ou « livré » d'un produit à interface qu'avec cette trace. Juges, avertissants : FP8
+d'`oracles\oracle-fiche-produit.mjs` (la trace dans la fiche) et S75 d'`oracles\oracle-synthese.mjs`
+(la trace dans la restitution qui déclare la livraison).
+
+*L'intégrité du ledger ne s'attend plus jusqu'ici* (R-42, TF-0411, 20/08) : `oracle-conformite-projet` la juge à CHAQUE exécution, donc dès le pas 1 — seq continu, horodatages non décroissants, ouverture par `run_open`. Un défaut historique se **rectifie par ajout** (entrée `type: rectification_horodatage` nommant les `seq`, le `ts` consigné, le `ts` réel estimé et la cause) : l'écart reste imprimé en `[RECTIFIÉ]`, jamais effacé. Ce critère de fin de run est donc devenu une garde d'ouverture — un ledger rompu se voit avant d'avoir coûté un run entier.
+
+## 4 bis. L'auteur d'un brief ne juge pas son propre contrat de sortie (TF-0776 — 02/09/2026)
+
+**Le fait.** Vingt-deux critères d'un contrat de sortie rédigés ET vérifiés par la même session ;
+tous vrais, livrable illisible pour son destinataire. Un critère écrit par celui qui va l'exécuter
+décrit ce qu'il sait faire, pas ce que le lecteur attend.
+
+**La règle.** Le contrat de sortie d'un brief est DÉRIVÉ par un agent distinct de l'exécutant
+(sous-agent dédié, ou session distincte), consigné au ledger avec son auteur
+(« contrat_de_sortie » : auteur, fichier, date) ; l'exécution consigne son exécutant. Auteur et
+exécutant identiques = défaut nommé par l'oracle d'état de forge (quality-oracles, TF-0776). Le
+juge de lecture — l'oracle « lecture par un tiers » (TF-0774) — ne reçoit JAMAIS le contrat : il
+lit ce que le destinataire lira, sans brief ni code, et dit ce que la page lui permet de décider.
+
+**Bornes.** Tant que le ledger d'un produit ne porte pas les deux entrées, la règle ne juge pas :
+elle déclare un « non vérifié », jamais un PASS.

@@ -1,0 +1,862 @@
+#!/usr/bin/env node
+/**
+ * oracle-lot-retours.mjs — juge la FORME d'un lot de retours (R-45, R-46) AVANT sa remise.
+ *
+ * ============================================================================================
+ * POURQUOI CE FICHIER EXISTE (TF-0597, 24/08/2026)
+ * ============================================================================================
+ *
+ * En une seule journée, SIX lots ont dû être admis par DÉROGATION, tous pour la même faute de
+ * forme : les sections « Remarques restées au produit » (R-45) et « Retours sur les documents
+ * produits » (R-46) absentes. La cause a été cherchée jusqu'aux trois produits émetteurs, et
+ * elle est TRIPLE sous un symptôme identique :
+ *
+ *   1. le produit n'a JAMAIS REÇU le gabarit — R-47 le dit déjà (héritage non tenu) ;
+ *   2. le produit n'a JAMAIS ÉTÉ INSTANCIÉ — R-47 rend SANS_OBJET, c'est le sujet de TF-0514 ;
+ *   3. le produit A LE GABARIT, À JOUR, et n'applique pas la forme — R-47 rend **PASS**.
+ *
+ * Le troisième cas est le plus fréquent (quatre lots sur six), et c'est le seul qu'AUCUNE copie
+ * de fichier ne répare. Mesure qui l'établit : le gabarit du produit était identique à la source
+ * du pilot (comparaison hors fins de ligne), recopié le 24/08 à 10:04, et portant en clair à sa
+ * ligne 87 « SECTION OBLIGATOIRE depuis le 22/08/2026 ». Le lot a été écrit à 18:32 — HUIT HEURES
+ * plus tard, avec la consigne sur place — sans la section.
+ *
+ * LE TROU EST MÉCANIQUE, PAS MORAL. Les contrôles R-45/R-46 vivaient dans `todo\ingerer-lot.mjs`,
+ * c'est-à-dire À LA PORTE DU PILOT. Le produit qui rédige son lot n'avait AUCUN moyen de les
+ * jouer chez lui : il découvrait le refus après coup — et sous dérogation, il ne le découvrait
+ * même pas. Le gabarit prescrivait en PROSE ce que l'ingestion jugeait en CODE, et la loi n° 1
+ * dit qu'une affordance non câblée n'existe pas.
+ *
+ * UN SEUL JEU DE RÈGLES, DEUX ENDROITS OÙ LE JOUER. Ce module est la SOURCE des deux : la porte
+ * du pilot l'importe, et le produit en reçoit une copie conforme par l'héritage
+ * (`gabarits\HERITAGE.json` → `forge\retours\oracle-lot.mjs`). Deux implémentations de la même
+ * forme auraient donné deux vérités — le défaut que TF-0474 a nommé sur les empreintes, où cinq
+ * mécanismes de scellement coexistaient sans format commun et où la même classe de défaut a été
+ * redécouverte forge par forge.
+ *
+ * ============================================================================================
+ * CE QUI EST JUGÉ, ET CE QUI NE L'EST PAS
+ * ============================================================================================
+ *
+ * Jugé : la PRÉSENCE des deux sections, et sous chacune la présence d'un verdict (R-45) ou d'un
+ * rattachement à un gabarit (R-46) — ou de la phrase qui déclare qu'il n'y a rien à dire.
+ *
+ * NON jugé, et c'est délibéré : la JUSTESSE d'un verdict de généralisation. Un raisonnement
+ * écrit peut être faux et se corrige ; un raisonnement absent est perdu pour tout le monde.
+ *
+ * R-49 (TF-0884, 08/09/2026) — UN LOT REMIS ET INGÉRÉ NE SE RÉÉCRIT JAMAIS. Le 06/09, un compte
+ * rendu d'agent a pris l'indice « a » que son mandat nommait, déjà porté par un lot du même
+ * produit remis et ingéré le matin même ; une écriture ordinaire l'a remplacé, et rien ne s'y est
+ * opposé — ni le gabarit (qui écrit pourtant « un lot remis ne se modifie JAMAIS »), ni cet
+ * oracle (PASS sur l'écrasement), ni la boîte d'entrée, qui ne le voit qu'à l'ouverture suivante.
+ * La règle confronte l'empreinte du sidecar présent à celle consignée par l'événement d'ingestion
+ * portant le même nom de fichier ; deux empreintes différentes pour un même chemin = le fichier a
+ * été réécrit après sa remise, et le remède est l'INDICE SUIVANT, jamais une retouche. Hors du
+ * pilot — la copie de ce module que chaque produit reçoit par l'héritage n'a pas le registre sous
+ * la main — la règle rend SANS_OBJET et le DIT : un contrôle qui exige une donnée absente crie
+ * partout sauf là où il sert.
+ *
+ * LOT-SAS (TF-1054, 14/09/2026) — UN LOT ARRIVE PAR LE SAS. Un lot posé à la racine SUIVIE de
+ * `input\00-retours\` sous un nom réel n'est pas passé par `_arrivee\` : il est refusé, et le
+ * remède nomme le sas. Hors de la boîte du pilot, et dans la copie héritée, SANS_OBJET dit.
+ *
+ * LOT-IDS (TF-1039, 14/09/2026) — UN IDENTIFIANT DE RETOUR N'EST JAMAIS REPRIS. Le gabarit écrit
+ * « ids uniques par produit, numéro jamais réutilisé » ; personne ne le jugeait, et le 11/09 un
+ * lot a repris RT-50 à RT-52, déjà définis par deux lots antérieurs du même produit, dans le même
+ * dossier. La règle lit les lots VOISINS antérieurs du même produit (lecture de répertoire, pas
+ * de registre) et refuse un identifiant qu'ils définissent déjà, en donnant le premier libre.
+ * Bornée au 14/09 : un lot remis ne se modifie jamais, le passé ne se répare pas.
+ *
+ * ANTÉRIORITÉ DÉCLARÉE : R-45 ne juge que les lots datés du 21/08 ou après, R-46 du 22/08 ou
+ * après. La date se lit dans le NOM du fichier (`… - AAAAMMJJ<lettre>.md`), jamais sur le
+ * disque : une copie change la date de fichier, pas la date du lot.
+ *
+ * R-57 (24/09/2026, décision humaine) — UN DOCUMENT MÛR REMONTE À LA BIBLIOTHÈQUE, SA FORME JAMAIS
+ * SA MATIÈRE. Deux constats. `R-57` : le lot porte la section « Documents mûrs », et sous elle un
+ * verdict de remontée (« remonté » / « reste au produit, parce que… ») ou la déclaration qu'il n'y
+ * a aucun document mûr — même forme que R-45 et R-46. `LOT-MURS` : chez le PRODUIT (lot posé sous
+ * `<racine>\forge\retours\`), l'oracle balaie `<racine>\output\` et compte les versions datées de
+ * chaque objet ; un objet d'au moins SEUIL_MUR versions est MÛR MESURÉ, et le lot qui ne le nomme
+ * ni dans sa section ni dans celle d'un lot antérieur du même produit est refusé — la remontée
+ * cesse de dépendre de la mémoire de celui qui écrit le lot. À la porte du pilot, le lot a été
+ * pseudonymisé et l'`output\` réel n'est plus comparable : LOT-MURS y rend SANS_OBJET, et le dit.
+ * Seuil mesuré le 24/09/2026 sur le produit qui fonde la règle : 31 objets HTML, 12 à 3 versions
+ * ou plus, 8 à 5 ou plus, 6 à 8 ou plus — à 5, une déclaration unique de 8 documents, que
+ * l'historique des lots couvre ensuite. Le compte est une BORNE BASSE assumée : il ne dit rien de
+ * la qualité d'une forme, il empêche seulement qu'un document repris cinq fois reste invisible
+ * (seuil confirmé par le porteur le 28/09/2026). En vigueur le 29/09 : la règle entre au main le
+ * 28/09 (TF-1413), et les lots écrits jusque-là, sans elle, ne sont pas accusés (antériorité déclarée, comme en R-45).
+ *
+ * Usage :
+ *   node oracle-lot-retours.mjs <lot.md> [--json] [--remettre [<sas>]]   (TF-2314 : juge, puis copie au sas si le verdict n'est pas FAIL)
+ *   node oracle-lot-retours.mjs --murs <racine-produit>   (liste les documents mûrs mesurés)
+ * Exit : 0 = forme tenue (ou lot antérieur aux règles) · 1 = forme en défaut · 2 = lot illisible.
+ */
+import { readFileSync, existsSync, readdirSync, realpathSync, copyFileSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { createHash } from "node:crypto";
+
+export const VERSION = "1.11.0"; // 1.11.0 (22/11/2026) : LOT-SIDECAR passe de l'avertissement à l'ÉCHEC, un motif que la porte refuse rend FAIL et sortie 1, TF-2761 ; règle LOT-OCTETS, un caractère de contrôle dans le .md d'un lot est refusé, TF-2777 · 1.10.0 (16/11/2026) : `--remettre` ne copie pas un lot dont la porte REFUSERA le sidecar (LOT-SIDECAR), sortie 1, TF-2636 · 1.9.1 (16/11/2026) : un lot à double suffixe « za » à « zz » est jugé comme une lettre simple, TF-2681 · 1.9.0 (10/11/2026) : `--remettre [<sas>]` lie la copie au sas au verdict du juge, TF-2314 · 1.8.1 (15/10/2026) : le lancement direct se reconnaît par le chemin réel, un chemin à nom court Windows ne rend plus le module muet · 1.8.0 (15/10/2026) : LOT-IDS lit les copies reçues par le pilot (TF-1813), LOT-SIDECAR sans exemption de date et refus prédit dit au verdict (TF-1814), « gabarit non marqué » rattache en R-46 (TF-1752), règle LOT-RATTACHEMENT avertissante (TF-1757) · 1.7.0 (13/10/2026) : délai de grâce d'une règle neuve, TF-1570 · 1.6.0 (13/10/2026) : règle LOT-SIDECAR en avertissement, TF-1591 · 1.5.0 (02/10/2026) : règle GFP-LOT, TF-1526 · 1.4.1 (28/09/2026) : le remède nomme le gabarit canonique, TF-1430 · 1.4.0 (28/09/2026) : règles R-57 et LOT-MURS, TF-1413 · 1.3.0 (26/09/2026) : règle LOT-DATE, TF-1358
+
+/**
+ * Le gabarit que le remède de R-45, R-46 et R-57 fait ouvrir, sous sa cible CANONIQUE chez le
+ * produit (`gabarits\HERITAGE.json`, TF-0710). Le remède nommait encore l'alias de transition
+ * `forge\retours\RETOURS-FORGES.md` : un produit qui porte les deux ouvrait la copie périmée, et
+ * le lot qu'il en tirait arrivait sans classe et hors du sas (TF-1430, lot Produit-76 du 28/09).
+ * Non exporté, à dessein : la porte du pilot importe ce module, et ses exports ne bougent pas.
+ */
+const GABARIT_LOT = "forge\\retours\\GABARIT-LOT-RETOURS.md";
+
+// LOT-SAS (TF-1054) juge un NOM avec le MÊME juge que `todo\accueillir-lot.mjs` — deux juges des
+// noms qui ne s'accordent pas donnent le pire des deux mondes (leçon de la casse, 01/09). Import
+// DYNAMIQUE et toléré : la copie de ce module qu'un produit reçoit par l'héritage n'a pas le
+// module d'anonymisation à côté d'elle, et elle doit rester jouable seule.
+let anonymiserPilot = null;
+try {
+  ({ anonymiser: anonymiserPilot } = await import(new URL("../todo/anonymiser-entrant.mjs", import.meta.url).href));
+} catch { /* copie héritée chez un produit : la règle y rend SANS_OBJET et le dit */ }
+
+/** R-45 depuis le 21/08/2026, R-46 depuis le 22/08, R-57 depuis le 29/09, GFP-LOT depuis le 02/10 —
+ *  antériorité déclarée, jamais devinée. R-57 est décidée le 24/09 et entre au main le 28/09 : les
+ *  lots écrits jusque-là, sans la règle sous la main, ne sont pas accusés. Même chose pour GFP-LOT,
+ *  entrée en vigueur le jour où elle rejoint le gabarit (TF-1526). */
+export const SEUILS = { "R-45": "20260821", "R-46": "20260822", "R-57": "20260929", "GFP-LOT": "20261002", "LOT-SIDECAR": "20261013" };
+
+/**
+ * DÉLAI DE GRÂCE D'UNE RÈGLE NEUVE (TF-1570, 13/10/2026). Mesuré le 02/10 : la règle des documents mûrs
+ * (R-57) était entrée au juge du pilot le 28/09, la porte l'appliquait à tout lot daté du 29/09 ou après,
+ * et deux produits ont remis le 01/10 des lots que leur contrôle de remise, encore en 1.0.0 et 1.1.0,
+ * jugeait conformes : l'héritage qui porte la règle n'atteint un produit qu'à sa prochaine ouverture. La
+ * fenêtre entre l'entrée d'une règle au pilot et son arrivée chez le producteur a fait refuser des lots
+ * conformes à leur outillage. Une règle de SECTION dont le seuil est postérieur à `DATE_GRACE` rend donc
+ * un AVERTISSEMENT, et non un FAIL, pour tout lot daté de moins de `GRACE_JOURS` jours après son seuil ;
+ * ensuite elle bloque. Les règles antérieures (R-45, R-46, R-57, GFP-LOT) ne sont pas touchées : leur
+ * fenêtre est passée, et une grâce rétroactive affaiblirait ce qui est déjà tenu.
+ */
+export const GRACE_JOURS = 7;
+export const DATE_GRACE = "20261013";
+/** AAAAMMJJ + n jours, en jours civils UTC (le nom d'un lot porte une date, pas une heure). */
+export function jourPlus(aaaammjj, n) {
+  const d = new Date(Date.UTC(+aaaammjj.slice(0, 4), +aaaammjj.slice(4, 6) - 1, +aaaammjj.slice(6, 8) + n));
+  return d.toISOString().slice(0, 10).replaceAll("-", "");
+}
+
+const SECTION_R45 =/^##\s+Remarques\s+rest[ée]es?\s+au\s+produit\s*$/im;
+const SECTION_R46 = /^##\s+Retours\s+sur\s+les\s+documents\s+produits\s*$/im;
+const SECTION_R57 = /^##\s+Documents\s+m[ûu]rs\b[^\n]*$/im;
+// Pas de `\b` juste après la lettre accentuée : sans drapeau Unicode, elle n'a pas de frontière de
+// mot et la section ne serait jamais reconnue (même piège que VERDICT_R57, TF-0805).
+const SECTION_GFP = /^##\s+Garde-fou\s+de\s+plateforme\s+relev[ée][^\n]*$/im;
+//: Un identifiant du registre CONFIRMÉ (GFP-nnn), ou un garde-fou NOUVEAU décrit par ses champs —
+//: jamais une simple mention du mot, que le vocabulaire fermé du registre rend reconnaissable.
+const GARDE_FOU_GFP = /GFP-\d{3}|nouveau\s+garde-fou/i;
+const AUCUN_GFP = /aucun\s+garde-fou\s+(?:de\s+plateforme\s+)?relev[ée]/i;
+//: Le verdict de remontée d'un document mûr, ou la déclaration qu'il n'y en a aucun. Pas de `\b`
+//: APRÈS la lettre accentuée : sans drapeau Unicode, « remonté » suivi d'une espace n'a pas de
+//: frontière de mot, et le verdict le plus naturel n'était pas reconnu (recette du 24/09/2026).
+const VERDICT_R57 = /\bremont[ée]|\brest[ée]e?s?\s+au\s+produit\b/i;
+const AUCUN_R57 = /aucun\s+document\s+m[ûu]r/i;
+/** R-57 : un objet est MÛR MESURÉ à partir de ce nombre de versions datées (mesure du 24/09/2026). */
+export const SEUIL_MUR = 5;
+//: Le verdict de généralisation, ou la déclaration qu'il n'y a rien à généraliser.
+const VERDICT_R45 = /g[ée]n[ée]ralisab/i;
+const AUCUNE_R45 = /aucune\s+remarque\s+n['’]est\s+rest[ée]e?\s+au\s+produit/i;
+//: Le rattachement à un gabarit (son id `gd-…` ou sa version), ou la déclaration d'absence.
+// TF-1752 (15/10/2026) : « gabarit non marqué : <chemin> » est la formule prescrite par le gabarit des lots
+// pour un document issu d'un gabarit qui n'émet aucun `gd-…` ; elle rattache, elle ne déclare pas d'absence.
+const RATTACHEMENT_R46 = /gd-[a-z-]+|version[_ ]du[_ ]gabarit|gabarit\s+non\s+marqu[ée]/i;
+
+// ---- LOT-RATTACHEMENT (TF-1757, 15/10/2026) : « aucun item » au registre se prouve par la recherche citée ---
+export const SEUIL_RATTACHEMENT = "20261015";
+const AUCUN_ITEM = /aucun\s+item/i;
+const SECTION_RATTACHEMENT = /^##\s+Rattachement\s*$/im;
+const COMPTE_TROUVE = /\d+\s+lignes?(?:\(s\))?\s+trouvées?(?:\(s\))?/i;
+const BORNE = /\|\s*head\b|\bhead\s+-|(?:^|\s)-n\s*\d|--max-count\b|-m\s*\d|Select-Object\s+-First\b/i;
+const TOTAL_CITE = /\btotal\b[^\n]*\d|\d+\s+sur\s+\d+/i;
+const AUCUN_R46 = /aucun\s+document\s+produit\s+depuis\s+un\s+gabarit/i;
+
+/** La date portée par le NOM du lot — jamais celle du disque, qu'une copie suffit à changer. */
+export function dateDuLot(chemin) {
+  const nom = basename(String(chemin).split("\\").join("/"));
+  const m = /(\d{8})(?:z[a-z]|[a-z])?\.(?:md|tf\.jsonl)$/i.exec(nom)
+    || /(\d{8})(?:z[a-z]|[a-z])?\.normalise\.tf\.jsonl$/i.exec(nom);
+  return m ? m[1] : null;
+}
+
+/** LOT-IDS (TF-1039) : entrée en vigueur — antériorité déclarée, un lot remis ne se modifie jamais. */
+export const SEUIL_IDS = "20260914";
+/** LOT-OCTETS (TF-2777) : entrée en vigueur le jour de la règle, 22/11/2026 ; antériorité déclarée. */
+export const SEUIL_OCTETS = "20261122";
+// Un identifiant est DÉFINI en tête d'une ligne de tableau qui porte sa GRAVITÉ dans l'une des deux
+// cellules suivantes (`| RT-50 | majeur | …`, la forme du gabarit), ou en tête d'un titre
+// (`### RT-50 — …`). Cité dans la prose (« déjà remontée en RT-6 ») ou dans un tableau de RAPPEL
+// sans gravité, il ne l'est pas. Mesuré sur 247 lots réels le 14/09 : sans l'exigence de gravité,
+// un tableau de rappel (« ce que ce retour ajoute aux lots du jour ») accusait huit reprises à tort.
+const ID_EN_TETE_DE_LIGNE = /^\s*\|\s*\**\s*(R[A-Z])-0*(\d+)\b[^|\n]*\|(?:[^|\n]*\|)?\s*\**\s*(?:bloquant|majeur|mineur)\b/gim;
+const ID_EN_TITRE = /^#{2,4}\s+\**\s*(R[A-Z])-0*(\d+)\b/gm;
+// TF-2681 : l'indice d'un lot est une lettre, ou « za » à « zz » quand l'allocateur a épuisé les 26 lettres du jour.
+const NOM_DE_LOT = /^(.*) - RETOURS - (\d{8}(?:z[a-z]|[a-z])?)\.md$/i;
+
+/**
+ * TF-1458 (28/09/2026) — LE PRÉFIXE DE COMPARAISON, PAS LE PRÉFIXE BRUT. Au sas d'arrivée
+ * (`_arrivee\`), un lot porte encore le NOM RÉEL de son produit ; la boîte d'entrée (`00-retours\`
+ * et son `old\`) ne porte que des pseudonymes. Comparer les préfixes TELS QUELS ne trouve donc
+ * JAMAIS de voisin — les deux graphies ne concordent par construction pour AUCUN produit, et
+ * LOT-IDS comme le cumul des « documents mûrs » (R-57) rendaient leur verdict sur un ensemble
+ * vide. Le préfixe du lot JUGÉ se pseudonymise comme les autres avant la comparaison ; un lot déjà
+ * pseudonymisé (hors sas) traverse `anonymiser()` sans y changer quoi que ce soit.
+ */
+function prefixeComparable(nom, prefixe) {
+  if (!anonymiserPilot) return prefixe;
+  try {
+    const m = NOM_DE_LOT.exec(anonymiserPilot(nom).texte);
+    return m ? m[1] : prefixe;
+  } catch { return prefixe; }
+}
+
+/**
+ * Un dossier de lots, son `old\`, et les sous-dossiers d'`old\` : depuis le 16/10/2026, la boîte du pilot
+ * classe ses lots ingérés par émetteur (`old\<émetteur>\`, `scripts\ranger-dossiers.mjs`). Lire `old\`
+ * à plat perdrait en silence tout lot classé.
+ */
+function dossierEtArchives(d) {
+  const old = join(d, "old");
+  const sous = [];
+  try { for (const e of readdirSync(old, { withFileTypes: true })) if (e.isDirectory()) sous.push(join(old, e.name)); } catch { /* pas d'old */ }
+  return [d, old, ...sous];
+}
+
+/** Les identifiants qu'un lot DÉFINIT, numéros normalisés (`RT-050` = `RT-50`). */
+export function idsDefinis(texte) {
+  const ids = new Set();
+  for (const re of [ID_EN_TETE_DE_LIGNE, ID_EN_TITRE]) for (const m of String(texte).matchAll(re)) ids.add(`${m[1].toUpperCase()}-${Number(m[2])}`);
+  return ids;
+}
+
+/**
+ * Les identifiants de ce lot déjà définis par un lot ANTÉRIEUR du même produit, dans le même
+ * dossier (et son `old\`, où la boîte du pilot range ce qu'elle a ingéré). Rend `null` si le nom
+ * n'est pas celui d'un lot. `premierLibre` : par famille en double, le numéro qui suit le plus
+ * grand déjà défini par les voisins.
+ */
+export function idsEnDouble(cheminLot, texte) {
+  const nom = basename(String(cheminLot).split("\\").join("/"));
+  const m = NOM_DE_LOT.exec(nom);
+  if (!m) return null;
+  const [, prefixeBrut, cle] = m;
+  const prefixe = prefixeComparable(nom, prefixeBrut);
+  const dossier = dirname(resolve(String(cheminLot)));
+  const dossiers = dossierEtArchives(dossier);
+  if (/^_arrivee$/i.test(basename(dossier))) dossiers.push(...dossierEtArchives(join(dossier, "..")));
+  // TF-1813 (15/10/2026) — LES COPIES REÇUES PAR LE PILOT COMPTENT AUSSI. Le pilot renumérote parfois un
+  // identifiant à la réception (R-49, « Note de réception du pilot ») : chez Produit-64, RT-32 chez lui
+  // est devenu RT-58 au pilot, et le lot suivant a repris RT-58. La boîte du pilot (et son `old\`) se
+  // lit donc à côté des copies du produit ; ses noms sont sous pseudonyme, d'où le préfixe comparable.
+  const boite = boiteDuPilot(dossier);
+  if (boite) dossiers.push(...dossierEtArchives(boite));
+  const vus = new Set();
+  const comparables = new Map();
+  const comparable = (n, brut) => {
+    if (brut.toLowerCase() === prefixe.toLowerCase()) return brut;
+    if (!comparables.has(brut)) comparables.set(brut, prefixeComparable(n, brut));
+    return comparables.get(brut);
+  };
+  const porteurs = new Map(), max = {};
+  let voisins = 0;
+  for (const d of dossiers) {
+    const cleD = resolve(d).toLowerCase();
+    if (vus.has(cleD) || !existsSync(d)) continue;
+    vus.add(cleD);
+    for (const n of readdirSync(d)) {
+      const v = NOM_DE_LOT.exec(n);
+      // TF-1759 : joué par le relais depuis le pilot, le préfixe du lot se pseudonymise ; celui d'un
+      // voisin au nom réel aussi, sans quoi les lots antérieurs du produit ne se retrouveraient plus.
+      if (!v || n === nom || v[2] >= cle || comparable(n, v[1]).toLowerCase() !== prefixe.toLowerCase()) continue;
+      voisins++;
+      let t = "";
+      try { t = readFileSync(join(d, n), "utf8"); } catch { continue; }
+      for (const id of idsDefinis(t)) {
+        if (!porteurs.has(id)) porteurs.set(id, n);
+        const [fam, num] = id.split("-");
+        max[fam] = Math.max(max[fam] || 0, Number(num));
+      }
+    }
+  }
+  const doublons = [...idsDefinis(texte)].filter((id) => porteurs.has(id)).map((id) => ({ id, lot: porteurs.get(id) }));
+  const premierLibre = {};
+  for (const { id } of doublons) { const fam = id.split("-")[0]; premierLibre[fam] = `${fam}-${(max[fam] || 0) + 1}`; }
+  return { doublons, premierLibre, voisins, pilot: !!boite };
+}
+
+/**
+ * TF-1813 — la boîte d'entrée du pilot (`input\00-retours`), résolue comme le relais résout le pilot :
+ * `FORGE_ROOT\factory-pilot` quand la variable est posée (elle fait foi, comme pour les tables du
+ * canal confidentiel), sinon le pilot qui porte ce module, sinon le voisin `factory-pilot` du produit
+ * dont le lot vit sous `forge\retours\`. `null` si aucune n'existe : la vérification est alors partielle.
+ */
+export function boiteDuPilot(dossierLot) {
+  const boiteDe = (p) => join(p, "input", "00-retours");
+  const candidats = process.env.FORGE_ROOT
+    ? [join(process.env.FORGE_ROOT, "factory-pilot")]
+    : [join(dirname(fileURLToPath(import.meta.url)), ".."),
+      ...(/^retours$/i.test(basename(dossierLot)) && /^forge$/i.test(basename(dirname(dossierLot)))
+        ? [join(dirname(dirname(dirname(dossierLot))), "factory-pilot")] : [])];
+  const p = candidats.find((c) => existsSync(join(c, "todo")) && existsSync(boiteDe(c)));
+  return p ? boiteDe(p) : null;
+}
+
+/** Le corps d'une section, jusqu'au prochain titre de niveau 2. */
+const corpsDeSection = (texte, re) => (texte.split(re)[1] || "").split(/^## /m)[0] || "";
+
+// ---- R-57 · les documents MÛRS d'un produit, mesurés sur son `output\` -------------------------
+const LIVRABLE_DATE = /^(.+?) - (\d{8})([a-z]?)\.html?$/i;
+/** Minuscules, sans accents ni blancs répétés : « Guide développeur » = « guide  developpeur ». */
+export const normaliser = (s) => String(s).normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+  .toLowerCase().replace(/\s+/g, " ").trim();
+/** L'objet d'un livrable sans sa MARQUE : ce qui suit le premier « - » (convention R-4). Un lot
+ *  pseudonymisé à la porte du pilot garde ainsi l'objet qu'il nomme, même si la marque change. */
+export const objetSansMarque = (objet) => objet.includes(" - ") ? objet.slice(objet.indexOf(" - ") + 3) : objet;
+
+/**
+ * Les objets de `<racine>\output\` qui comptent au moins `seuil` versions datées, quel que soit le
+ * sous-dossier (famille, `old\`) où elles vivent. Rend [{ objet, versions, derniere }], triés par
+ * nombre de versions décroissant. Lecture de répertoire seule — aucun fichier n'est ouvert.
+ */
+export function documentsMurs(racine, seuil = SEUIL_MUR) {
+  const sortie = join(String(racine), "output");
+  if (!existsSync(sortie)) return null;
+  const parObjet = new Map();
+  const parcourir = (d) => {
+    let entrees = [];
+    try { entrees = readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const e of entrees) {
+      if (e.isDirectory()) { if (!/^(node_modules|\.git|\.oracles)$/.test(e.name)) parcourir(join(d, e.name)); continue; }
+      const m = LIVRABLE_DATE.exec(e.name);
+      if (!m) continue;
+      const cle = normaliser(m[1]);
+      const v = parObjet.get(cle) || { objet: m[1].trim(), versions: 0, derniere: "" };
+      v.versions++;
+      if (`${m[2]}${m[3]}` > v.derniere) v.derniere = `${m[2]}${m[3]}`;
+      parObjet.set(cle, v);
+    }
+  };
+  parcourir(sortie);
+  return [...parObjet.values()].filter((v) => v.versions >= seuil).sort((a, b) => b.versions - a.versions);
+}
+
+/** Le texte des sections « Documents mûrs » des lots ANTÉRIEURS du même produit, même dossier et `old\`. */
+function murDesLotsAnterieurs(cheminLot) {
+  const nom = basename(String(cheminLot).split("\\").join("/"));
+  const m = NOM_DE_LOT.exec(nom);
+  if (!m) return "";
+  const [, prefixeBrut, cle] = m;
+  const prefixe = prefixeComparable(nom, prefixeBrut);
+  const dossier = dirname(resolve(String(cheminLot)));
+  let cumul = "";
+  for (const d of dossierEtArchives(dossier)) {
+    if (!existsSync(d)) continue;
+    for (const n of readdirSync(d)) {
+      const v = NOM_DE_LOT.exec(n);
+      if (!v || n === nom || v[1].toLowerCase() !== prefixe.toLowerCase() || v[2] >= cle) continue;
+      try { cumul += "\n" + corpsDeSection(readFileSync(join(d, n), "utf8"), SECTION_R57); } catch { /* illisible : ignoré */ }
+    }
+  }
+  return cumul;
+}
+
+/**
+ * Juge un lot. Rend { verdict, date, constats[] } — chaque constat porte SON REMÈDE.
+ *
+ * Le remède n'est pas une politesse : un message qui prescrit la moitié du geste conduit tout
+ * droit à une seconde violation (leçon TF-0552), et un contrôle dont on ne sait pas quoi faire
+ * se contourne au lieu de se corriger (motif que R-33 bis donne pour le verdict websec).
+ */
+/** Le jour LOCAL de l'horloge qui juge, au format du nom d'un lot (AAAAMMJJ). */
+export function jourLocal(d = new Date()) {
+  return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`;
+}
+
+// ---- LOT-SIDECAR : la lecture du sidecar, rejouée comme `todo\ingerer-lot.mjs` la fait (TF-1591) -------
+const CHAMPS_SIDECAR = ["titre", "contenu", "demandeur", "source", "date_demande"];
+const SEUIL_CLASSE_PORTE = "20260903";
+const CLE_A_CREER = "classe-a-creer";
+
+/** Le référentiel des classes, là où il est à portée : à côté de ce juge chez le produit
+ *  (`forge\retours\CLASSES.json`, copie héritée), ou `todo\CLASSES.json` au pilot. `null` sinon. */
+function lireClasses() {
+  const ici = dirname(fileURLToPath(import.meta.url));
+  for (const p of [join(ici, "CLASSES.json"), join(ici, "..", "todo", "CLASSES.json")]) {
+    try { return JSON.parse(readFileSync(p, "utf8")); } catch { /* absent ou illisible : suivant */ }
+  }
+  return null;
+}
+
+/**
+ * Juge le sidecar d'un lot comme la porte le jugera. Rend `{ sansObjet }` quand il n'y a rien à juger,
+ * sinon `{ lignes, motifs, nonJugees, sansReferentiel }`. Ne rend jamais d'exception : un sidecar
+ * illisible est un motif, pas une panne du juge.
+ */
+function jugerSidecar(cheminLot, texteMd, date) {
+  const sidecar = String(cheminLot).replace(/\.md$/i, ".tf.jsonl");
+  if (!existsSync(sidecar)) return { sansObjet: `sidecar « ${basename(sidecar)} » absent — rien à juger (sa présence est tenue ailleurs : boîte d'entrée B3)` };
+  let brut;
+  try { brut = readFileSync(sidecar, "utf8"); } catch (e) { return { sansObjet: `sidecar illisible (${e.code || e.message}) — non jugé` }; }
+  const REF = lireClasses();
+  const classes = new Map((REF?.classes || []).map((k) => [k.cle, k]));
+  const familles = new Set([...classes.values()].map((k) => k.famille).concat((REF?.familles || []).map((f) => f.cle)));
+  const estUnLot = basename(String(cheminLot)).includes(" - RETOURS - ");
+  const classeExigee = estUnLot && date >= SEUIL_CLASSE_PORTE;
+  const motifs = [];
+  let lignes = 0, nonJugees = 0, sansReferentiel = false;
+  brut.split(/\r?\n/).filter((l) => l.trim()).forEach((l, i) => {
+    const n = i + 1;
+    let c;
+    try { c = JSON.parse(l); } catch { motifs.push(`ligne ${n} : JSON invalide`); return; }
+    if (c === null || typeof c !== "object" || Array.isArray(c)) { motifs.push(`ligne ${n} : ce n'est pas un objet JSON`); return; }
+    // Le format R10 BRUT d'un produit (sans `schema`) est normalisé par le pilot : la porte ne le voit jamais.
+    if (c.schema === undefined) { nonJugees++; return; }
+    lignes++;
+    if (c.schema !== 1) motifs.push(`ligne ${n} : schema attendu 1, reçu ${c.schema}`);
+    if (c.id) motifs.push(`ligne ${n} : une candidature ne porte JAMAIS d'id (frappé à l'ingestion)`);
+    for (const champ of CHAMPS_SIDECAR) if (!c[champ]) motifs.push(`ligne ${n} : champ ${champ} manquant`);
+    for (const [champ, v] of Object.entries(c)) {
+      if (typeof v !== "string") continue;
+      const k = [...v].findIndex((ch) => { const o = ch.charCodeAt(0); return (o < 32 && o !== 9 && o !== 10 && o !== 13) || o === 127; });
+      if (k >= 0) motifs.push(`ligne ${n} : le champ « ${champ} » porte un caractère de contrôle U+${[...v][k].charCodeAt(0).toString(16).padStart(4, "0").toUpperCase()} (chemin Windows écrit dans une chaîne non brute ?)`);
+    }
+    if (c.rectifie !== undefined) return; // une rectification vise un id : pas de classe à elle
+    if (String(c.classe) === CLE_A_CREER) {
+      const p = c.classe_proposee && typeof c.classe_proposee === "object" ? c.classe_proposee : {};
+      const manque = ["cle", "famille", "libelle"].filter((k) => !p[k] || !String(p[k]).trim());
+      if (manque.length) motifs.push(`ligne ${n} : classe « ${CLE_A_CREER} » sans classe_proposee complète — manque ${manque.join(", ")} ; la ligne porte "classe_proposee": {"cle", "famille", "libelle"} et le .md les nomme (section « La règle qui aurait évité le retour »)`);
+      else if (classes.has(String(p.cle))) motifs.push(`ligne ${n} : classe proposée « ${p.cle} » EXISTE déjà au référentiel — la porter directement dans "classe"`);
+      else if (REF && !familles.has(String(p.famille))) motifs.push(`ligne ${n} : famille « ${p.famille} » de la classe proposée inconnue — familles du référentiel : ${[...familles].join(", ")}`);
+      else if (!String(texteMd).includes(String(p.cle))) motifs.push(`ligne ${n} : la classe proposée « ${p.cle} » n'est pas nommée dans le .md du lot — section « La règle qui aurait évité le retour »`);
+      if (!REF) sansReferentiel = true;
+      return;
+    }
+    if (c.classe === undefined || c.classe === null || c.classe === "") {
+      if (classeExigee) motifs.push(`ligne ${n} : classe manquante — tout retour d'un lot daté du 03/09/2026 ou après désigne UNE classe du référentiel, ou porte « ${CLE_A_CREER} » avec sa classe_proposee`);
+      return;
+    }
+    if (!REF) { sansReferentiel = true; return; }
+    if (!classes.has(String(c.classe))) motifs.push(`ligne ${n} : classe « ${c.classe} » inconnue du référentiel — si aucune clé ne convient, porter "classe": "${CLE_A_CREER}" avec "classe_proposee": {"cle", "famille", "libelle"} (TF-1128)`);
+  });
+  return { lignes, motifs, nonJugees, sansReferentiel };
+}
+
+export function verifier(cheminLot, texteFourni, { aujourdhui = jourLocal() } = {}) {
+  const constats = [];
+  const ajouter = (regle, statut, message, remede) => constats.push({ regle, statut, message, remede });
+  const date = dateDuLot(cheminLot);
+
+  let texte = texteFourni;
+  if (texte === undefined) {
+    if (!existsSync(cheminLot)) return { verdict: "SKIP", date, constats: [{ regle: "—", statut: "SKIP", message: `lot introuvable : ${cheminLot}`, remede: "vérifier le chemin" }] };
+    texte = readFileSync(cheminLot, "utf8");
+  }
+
+  if (!date) {
+    // Sans date dans le nom, l'antériorité est indécidable. On ne juge pas plutôt que de juger
+    // au hasard — et on le DIT, parce qu'un contrôle qui se tait sans le dire est un contrôle
+    // absent. Le nommage lui-même est tenu ailleurs (R-4).
+    ajouter("—", "SANS_OBJET",
+      `le nom « ${basename(String(cheminLot))} » ne porte pas de date AAAAMMJJ — l'antériorité des règles est indécidable, la forme n'est donc pas jugée`,
+      "nommer le lot « <projet> - RETOURS - AAAAMMJJ<lettre>.md » (R-4)");
+    return { verdict: "SANS_OBJET", date, constats };
+  }
+
+  // ---- LOT-DATE · UN LOT N'EST PAS DATÉ D'UN JOUR À VENIR (TF-1358, D-21 (b) du 26/09/2026) --------
+  //
+  // Le fait, mesuré le 24/09 : un lot nommé « … - RETOURS - 20260925a » avait été écrit le 24/09 à
+  // 11:59 à l'horloge de son poste. Cet oracle a rendu « verdict : FAIL (lot du 20260925) » sur R-45 et
+  // R-46 seulement : la date elle-même n'était jugée par aucune règle. Or la date du NOM gouverne
+  // l'application de R-45, de R-46 et de la classe obligatoire, et l'indice ordonne les lots d'un même
+  // jour (R-49, TF-0750) : un lot daté de demain passe devant ceux qu'on écrira demain. La date se
+  // compare au jour LOCAL de l'horloge qui juge — celle du poste qui remet, et celle du pilot qui reçoit.
+  if (date > aujourdhui) {
+    ajouter("LOT-DATE", "FAIL",
+      `lot nommé du ${date}, jour À VENIR à l'horloge qui le juge (${aujourdhui}) — la date du nom gouverne R-45, R-46 et la classe obligatoire, et son indice ordonne les lots d'un même jour : daté de demain, il passe devant des lots écrits après lui`,
+      `renommer le lot et son sidecar à la date du jour d'écriture, « <projet> - RETOURS - ${aujourdhui}<indice>.md », en prenant le premier indice libre de ce jour`);
+  } else ajouter("LOT-DATE", "PASS", `lot du ${date}, pas postérieur au jour qui le juge (${aujourdhui})`, null);
+
+  // ---- LOT-OCTETS · UN LOT N'EST PAS UN FICHIER BINAIRE (TF-2777, 22/11/2026) -----------------------------
+  // Le fait : le lot 20261122f de Produit-12 a passé ce juge et a été remis avec un octet NUL à la ligne 5, là où
+  // « \00-retours » aurait dû s'écrire ; 2 autres lots (Produit-79 du 07/10, Produit-82 du 12/11) portent le même NUL.
+  // La suite `\0` d'un chemin Windows, écrite dans une chaîne non brute, devient un caractère de contrôle. Le sidecar
+  // est déjà jugé là-dessus (LOT-SIDECAR) ; le .md ne l'était pas. Refus : tout caractère de contrôle hors tabulation,
+  // saut de ligne et retour chariot. Antériorité déclarée : les lots d'avant le jour de la règle ne sont pas accusés.
+  if (date < SEUIL_OCTETS) {
+    ajouter("LOT-OCTETS", "SANS_OBJET", `lot du ${date}, antérieur à l'entrée en vigueur de LOT-OCTETS (${SEUIL_OCTETS}) — antériorité déclarée`, null);
+  } else {
+    const fautes = [];
+    String(texte).split("\n").forEach((l, i) => {
+      const trouves = [...l].filter((ch) => { const o = ch.charCodeAt(0); return (o < 32 && o !== 9 && o !== 13) || o === 127; });
+      if (trouves.length) fautes.push({ ligne: i + 1, codes: [...new Set(trouves.map((ch) => "U+" + ch.charCodeAt(0).toString(16).padStart(4, "0").toUpperCase()))] });
+    });
+    if (fautes.length) {
+      ajouter("LOT-OCTETS", "FAIL",
+        `${fautes.length} ligne(s) du lot portent un caractère de contrôle : ${fautes.slice(0, 5).map((f) => `ligne ${f.ligne} (${f.codes.join(", ")})`).join(" ; ")}${fautes.length > 5 ? ` ; et ${fautes.length - 5} autre(s)` : ""} — un NUL se lit mal, se coupe en chemin et ne se voit pas à l'écran`,
+        "retirer le caractère (le plus souvent un chemin Windows « \\00-retours » écrit dans une chaîne non brute : le « \\0 » est devenu un NUL — l'écrire avec l'outil d'écriture de fichier, ou doubler l'antislash), rejouer le juge, puis remettre");
+    } else ajouter("LOT-OCTETS", "PASS", "aucun caractère de contrôle (hors tabulation, fin de ligne) dans le lot", null);
+  }
+
+  // Une table NOMMÉE plutôt qu'un tableau positionnel, et le motif est une mesure et non un goût :
+  // le premier jet destructurait huit positions dans le mauvais ordre, et le message affiché
+  // annonçait une « section » dont le nom était en réalité la SUBSTANCE attendue. Un tableau
+  // positionnel se lit juste tant que personne n'y touche, et se relit faux au premier ajout.
+  const REGLES = [
+    { regle: "R-45", seuil: SEUILS["R-45"], section: SECTION_R45,
+      quoi: "Remarques restées au produit",
+      present: VERDICT_R45, absent: AUCUNE_R45,
+      substance: "verdict de généralisation (« généralisable : oui / non ») par remarque",
+      pourquoi: "ce qu'un produit corrige chez lui sans le remonter emporte la CLASSE du défaut avec lui — largeur de lecture, tableaux illisibles au mobile, états vides absents ont tous commencé comme « un défaut de ce livrable-là »",
+      rienADire: "aucune remarque n'est restée au produit" },
+    { regle: "R-46", seuil: SEUILS["R-46"], section: SECTION_R46,
+      quoi: "Retours sur les documents produits",
+      present: RATTACHEMENT_R46, absent: AUCUN_R46,
+      substance: "rattachement d'un retour à son gabarit (id `gd-…` ou version affichée en en-tête du document) — elle ne rattache aucun retour",
+      pourquoi: "ce qu'un document a coûté au gabarit — section manquante, champ non prévu, ajout à la main — est le SEUL canal par lequel la bibliothèque s'améliore",
+      rienADire: "aucun document produit depuis un gabarit" },
+    { regle: "R-57", seuil: SEUILS["R-57"], section: SECTION_R57,
+      quoi: "Documents mûrs",
+      present: VERDICT_R57, absent: AUCUN_R57,
+      substance: "verdict de remontée (« remonté » ou « reste au produit, parce que… ») par document mûr",
+      pourquoi: "un document que son lecteur a jugé réussi, ou que le produit a repris cinq fois, reste sinon invisible aux autres projets — sa FORME monte à la bibliothèque (famille ou composants), jamais sa matière",
+      rienADire: "aucun document mûr" },
+    // GFP-LOT (TF-1526, 02/10/2026) — LE REGISTRE DES GARDE-FOUS DE PLATEFORME (TF-1495) SE DIT
+    // ALIMENTÉ PAR LES LOTS DES PRODUITS (champ `alimentation` de references/GARDE-FOUS-PLATEFORME.json),
+    // ET LE GABARIT DES LOTS N'AVAIT AUCUNE PLACE POUR UN GARDE-FOU RELEVÉ : la chaîne déclarée
+    // (« un produit remonte et le suivant en profite ») n'avait pas son étape d'entrée. Même forme
+    // que R-45/R-46/R-57 : section présente, verdict ou déclaration d'absence sous elle. Un garde-fou
+    // CONFIRMÉ cite son identifiant GFP-nnn du registre ; un garde-fou NOUVEAU se décrit par ses
+    // champs (client pseudonyme, plateforme, mécanisme, effet, portée, ce qu'il vise, ce qu'il
+    // refuse, la date du relevé) — c'est au pilot, à l'ingestion, de l'inscrire au registre après
+    // vérification (GR-1/GR-2/GR-3, scripts/verifier-garde-fous.mjs) ; cette règle ne juge que la
+    // FORME de la remontée, jamais la justesse du garde-fou décrit.
+    { regle: "GFP-LOT", seuil: SEUILS["GFP-LOT"], section: SECTION_GFP,
+      quoi: "Garde-fou de plateforme relevé",
+      present: GARDE_FOU_GFP, absent: AUCUN_GFP,
+      substance: "un identifiant GFP-nnn confirmé du registre, ou un garde-fou NOUVEAU décrit par ses champs",
+      pourquoi: "un garde-fou heurté par un produit (stratégie de plateforme, processus du client) et jamais remonté ne sert à aucun autre — c'est exactement le trou mesuré le 29/09/2026 sur une stratégie Deny heurtée trois fois sans circuler",
+      rienADire: "aucun garde-fou de plateforme relevé" },
+  ];
+  for (const { regle, seuil, section, quoi, present, absent, substance, pourquoi, rienADire } of REGLES) {
+    if (date < seuil) {
+      ajouter(regle, "SANS_OBJET",
+        `lot du ${date}, antérieur à l'entrée en vigueur de ${regle} (${seuil}) — antériorité déclarée, jamais un défaut de produit`,
+        null);
+      continue;
+    }
+    // TF-1570 : une règle NEUVE (seuil à partir de DATE_GRACE) avertit pendant GRACE_JOURS jours, puis bloque.
+    const finGrace = seuil >= DATE_GRACE ? jourPlus(seuil, GRACE_JOURS) : null;
+    const enGrace = finGrace !== null && date < finGrace;
+    const echec = enGrace ? "AVERTISSEMENT" : "FAIL";
+    const grace = enGrace ? ` [délai de grâce : ${regle} avertit jusqu'au lot du ${jourPlus(finGrace, -1)} et bloque ensuite — l'héritage qui la porte n'atteint un produit qu'à sa prochaine ouverture]` : "";
+    if (!section.test(texte)) {
+      ajouter(regle, echec,
+        `section « ${quoi} » absente — ${pourquoi}${grace}`,
+        `ajouter la section « ## ${quoi} » au lot. Rien à y mettre ? L'écrire : « ${rienADire} ». La forme se déclare, elle ne se devine pas (loi n° 3). Gabarit : ${GABARIT_LOT}`);
+      continue;
+    }
+    const suite = corpsDeSection(texte, section);
+    if (!present.test(suite) && !absent.test(suite)) {
+      ajouter(regle, echec,
+        `la section « ${quoi} » ne porte ni ${substance}, ni la déclaration qu'il n'y a rien à dire — une section vide se lit comme un oubli, et l'omission ne vaut pas décision${grace}`,
+        `porter sous la section ${substance}, ou écrire « ${rienADire} »`);
+      continue;
+    }
+    ajouter(regle, "PASS", `section « ${quoi} » présente et substantielle`, null);
+  }
+
+  // ---- LOT-MURS · UN DOCUMENT MÛR MESURÉ NE SE TAIT PAS (R-57, 24/09/2026) --------------------
+  //
+  // La section R-57 se juge partout ; la MESURE ne se joue que là où l'`output\` réel est à portée :
+  // chez le produit, lot posé sous `<racine>\forge\retours\`. Un objet d'au moins SEUIL_MUR versions
+  // datées doit être NOMMÉ — par son objet sans la marque — dans la section de ce lot ou d'un lot
+  // antérieur du même produit : la déclaration se fait une fois, l'historique des lots la garde.
+  if (date >= SEUILS["R-57"]) {
+    const dossierLot = dirname(resolve(String(cheminLot)));
+    const chezLeProduit = /^retours$/i.test(basename(dossierLot)) && /^forge$/i.test(basename(dirname(dossierLot)));
+    const racine = chezLeProduit ? dirname(dirname(dossierLot)) : null;
+    const murs = racine ? documentsMurs(racine) : null;
+    if (!racine) {
+      ajouter("LOT-MURS", "SANS_OBJET",
+        "lot hors d'un produit (boîte du pilot, sas, copie) — la mesure des documents mûrs se joue chez le produit, AVANT la remise : la copie pseudonymisée ne se compare plus à son `output\\` réel", null);
+    } else if (murs === null) {
+      ajouter("LOT-MURS", "SANS_OBJET", `aucun dossier \`output\\\` sous ${racine} — rien à mesurer`, null);
+    } else {
+      const declare = normaliser(corpsDeSection(texte, SECTION_R57) + "\n" + murDesLotsAnterieurs(cheminLot));
+      const tus = murs.filter((d) => !declare.includes(normaliser(objetSansMarque(d.objet))));
+      if (tus.length) {
+        ajouter("LOT-MURS", "FAIL",
+          `${tus.length} document(s) MÛR(S) mesuré(s) (${SEUIL_MUR} versions datées ou plus) que ni ce lot ni un lot antérieur ne nomment : `
+          + tus.slice(0, 6).map((d) => `« ${objetSansMarque(d.objet)} » (${d.versions} versions)`).join(", ")
+          + (tus.length > 6 ? `, et ${tus.length - 6} autre(s)` : "") + " — un document repris autant de fois porte une forme que la bibliothèque n'a pas, ou une raison de la garder chez soi, et l'une comme l'autre s'écrit",
+          "nommer chacun sous « ## Documents mûrs », avec son verdict : « remonté » (sa forme devient une famille de gabarits\\documents\\ ou des composants) ou « reste au produit, parce que… » — une fois suffit, les lots suivants héritent de la déclaration (R-57)");
+      } else {
+        ajouter("LOT-MURS", "PASS", `${murs.length} document(s) mûr(s) mesuré(s) sous output\\, tous déclarés par ce lot ou un lot antérieur`, null);
+      }
+    }
+  } else {
+    ajouter("LOT-MURS", "SANS_OBJET", `lot du ${date}, antérieur à l'entrée en vigueur de R-57 (${SEUILS["R-57"]}) — antériorité déclarée`, null);
+  }
+
+  // ---- LOT-SIDECAR · LE SIDECAR SE JUGE COMME LA PORTE LE JUGERA (TF-1591, TF-1602, 13/10/2026) ------
+  //
+  // Le fait, mesuré le 04/10 : les lots Produit-02 du 03/10 sont refusés en rejet atomique par
+  // `todo\ingerer-lot.mjs` — « classe-a-creer sans classe_proposee complète » — alors que le produit avait
+  // la dernière copie de ce juge (1.5.0, depuis le 02/10) et l'avait jouée : PASS, honnêtement. Ce juge ne
+  // lisait JAMAIS le sidecar (hors R-49, qui en prend l'empreinte). La porte jugeait donc une chose que le
+  // contrôle distribué ne regardait pas, et son message affirmait « ce refus était évitable » : faux pour
+  // cette règle. Le contrôle distribué rejoue ici les rejets de la porte qui se décident SUR LE SIDECAR SEUL.
+  //
+  // CE QUI EST REJOUÉ (la même lecture que `ingerer-lot.mjs`, ligne à ligne) : JSON valide, `schema` 1,
+  // aucun `id`, les cinq champs obligatoires, aucun caractère de contrôle (TF-1067), et la classe — présente
+  // pour un lot daté du 03/09 ou après, connue du référentiel `CLASSES.json` quand il est à portée, et pour
+  // `classe-a-creer` une `classe_proposee` complète {cle, famille, libelle}, d'une clé encore libre, d'une
+  // famille connue, nommée dans le .md du lot (TF-1128).
+  //
+  // CE QUI NE L'EST PAS, et le dit : les rejets qui exigent le REGISTRE du pilot (rectification d'un id
+  // inconnu ou archivé TF-0703, doublon strict TF-0956, préflight de collision TF-0394) — le produit n'a pas
+  // ce registre ; la cible `forges_cibles_initiales`, que la porte déduit du texte (R-48) ; et un sidecar au
+  // format R10 BRUT (sans `schema`), que le pilot normalise lui-même (`normaliser-lot.mjs`).
+  //
+  // AVERTISSEMENT jusqu'au 22/11/2026 (campagne du 13/10, précédent D-70 (b)) : une règle neuve opposable à tous
+  // les produits entrait en avertissement. TF-2761 (22/11/2026) : mesuré le 21/11, le juge rendait « PASS — la porte
+  // REFUSERA ce lot » (code 0) et 10 lots de 11 sont partis ainsi. Un motif que la porte refuse est un ÉCHEC (FAIL,
+  // sortie 1) : la prédiction et le verdict ne se contredisent plus. Décision du pilot sous R-58 (campagne du 22/11).
+  // TF-1814 (2) (15/10/2026) : plus d'exemption par la date du lot. La porte juge le sidecar de TOUT lot
+  // remis, quelle que soit sa date (un lot du 25/09 remis le 15/10 sans classe a été refusé) ; la seule
+  // antériorité qu'elle connaît, la classe exigée dès le 03/09, est rejouée dans `jugerSidecar`.
+  {
+    const r = jugerSidecar(cheminLot, texte, date);
+    if (r.sansObjet) ajouter("LOT-SIDECAR", "SANS_OBJET", r.sansObjet, null);
+    else if (r.motifs.length) {
+      ajouter("LOT-SIDECAR", "FAIL",
+        `${r.motifs.length} motif(s) dont la porte du pilot REFUSERA ce lot (rejet atomique, registre intact) : ${r.motifs.slice(0, 6).join(" ; ")}${r.motifs.length > 6 ? ` ; et ${r.motifs.length - 6} autre(s)` : ""}`,
+        "corriger le sidecar AVANT la remise (un lot remis ne se modifie plus : la correction passe par l'indice suivant) ; une classe sans clé qui convienne se porte par « classe-a-creer » + « classe_proposee »");
+    } else {
+      ajouter("LOT-SIDECAR", "PASS", `${r.lignes} ligne(s) de sidecar jugée(s) comme la porte les jugera${r.nonJugees ? ` (${r.nonJugees} ligne(s) au format brut, normalisées par le pilot : non jugées)` : ""}${r.sansReferentiel ? " (référentiel des classes hors de portée : clés de classe non vérifiées)" : ""}`, null);
+    }
+  }
+
+  // ---- R-49 · UN LOT REMIS ET INGÉRÉ NE SE RÉÉCRIT JAMAIS (TF-0884, 08/09/2026) --------------
+  //
+  // Le fait, arrivé le 06/09 et réparé par l'agent qui l'avait commis : un compte rendu a pris
+  // l'indice « a » que son mandat nommait, déjà porté par un lot du MÊME produit remis et ingéré
+  // le matin même (commit e3031e1). Une écriture ordinaire l'a remplacé, et RIEN ne s'y est
+  // opposé — ni le gabarit (qui écrit pourtant « un lot remis ne se modifie JAMAIS »), ni cet
+  // oracle (PASS sur l'écrasement), ni la boîte d'entrée, qui ne le voit qu'à l'ouverture
+  // suivante. L'histoire du registre aurait divergé du fichier : le registre porte les
+  // candidatures du lot d'origine, le disque porte un autre texte, et plus rien ne les rapproche.
+  //
+  // CE QUI EST JUGÉ : le CHEMIN du sidecar de ce lot figure-t-il déjà dans un événement
+  // `ingestion` du registre, sous une empreinte DIFFÉRENTE de celle du sidecar présent ? Si oui,
+  // le fichier a été réécrit après sa remise, et le remède est l'indice SUIVANT — jamais une
+  // retouche. Empreinte normalisée en LF, comme à l'ingestion (idiome TF-0253/TF-0359) : sans
+  // quoi un simple aller-retour git en CRLF passerait pour une réécriture.
+  //
+  // POURQUOI SANS_OBJET AILLEURS QU'AU PILOT, et ce n'est pas un adoucissement : ce module est
+  // aussi la COPIE CONFORME que chaque produit reçoit par l'héritage, et un produit n'a pas le
+  // registre du pilot sous la main. Un contrôle qui exigerait une donnée absente crierait chez
+  // tout le monde sauf là où il sert. Le registre introuvable est DIT, jamais tu.
+  const sidecar = String(cheminLot).replace(/\.md$/i, ".tf.jsonl");
+  // `FORGE_REGISTRE` prime — recettes et registres jetables, même idiome que les tables du canal
+  // confidentiel (`FORGE_NOMS_INTERDITS`). Sans lui, la recette ne pourrait éprouver cette règle
+  // qu'en écrivant dans le registre RÉEL, ce qu'aucune recette n'a le droit de faire.
+  const registre = process.env.FORGE_REGISTRE
+    || join(dirname(fileURLToPath(import.meta.url)), "..", "todo", "TODO.jsonl");
+  if (texteFourni !== undefined) {
+    // Jugé sur un texte en mémoire : il n'y a pas de fichier à confronter au registre.
+  } else if (!existsSync(registre)) {
+    ajouter("R-49", "SANS_OBJET",
+      "registre des ingestions hors de portée (copie du module chez un produit) — l'écrasement d'un lot déjà ingéré se juge à la porte du pilot",
+      null);
+  } else if (!existsSync(sidecar)) {
+    ajouter("R-49", "SANS_OBJET", `sidecar « ${basename(sidecar)} » absent — aucune empreinte à confronter aux ingestions`, null);
+  } else {
+    const empreinteActuelle = createHash("sha256").update(readFileSync(sidecar, "utf8").split("\r\n").join("\n")).digest("hex");
+    const cle = basename(sidecar).toLowerCase();
+    const ingestions = readFileSync(registre, "utf8").split("\n").filter((l) => l.trim())
+      .map((l) => { try { return JSON.parse(l); } catch { return null; } })
+      .filter((e) => e && e.ev === "ingestion" && typeof e.fichier === "string"
+        && basename(e.fichier.split("\\").join("/")).toLowerCase() === cle);
+    if (!ingestions.length) {
+      ajouter("R-49", "PASS", `« ${basename(String(cheminLot))} » n'a jamais été ingéré sous ce nom — la remise est une première`, null);
+    } else if (ingestions.some((e) => e.lot_sha === empreinteActuelle
+      || (e.reempreinte && e.reempreinte.lot_sha_avant === empreinteActuelle))) {
+      ajouter("R-49", "PASS", `« ${basename(String(cheminLot))} » est ingéré, et son sidecar porte encore l'empreinte consignée — le lot n'a pas été réécrit`, null);
+    } else {
+      ajouter("R-49", "FAIL",
+        `« ${basename(String(cheminLot))} » a DÉJÀ été ingéré (empreinte consignée ${String(ingestions[ingestions.length - 1].lot_sha).slice(0, 12)}, le ${String(ingestions[ingestions.length - 1].ts || "?").slice(0, 10)}) et son sidecar en porte une AUTRE (${empreinteActuelle.slice(0, 12)}) — `
+        + "un lot remis ne se modifie JAMAIS : le registre porte les candidatures du texte d'origine, et son histoire vient de diverger du fichier",
+        `restaurer le lot d'origine (\`git checkout HEAD -- "${cheminLot}" "${sidecar}"\`) et remettre le nouveau texte sous l'INDICE SUIVANT — \`node scripts\\allouer-indice.mjs\` le donne`);
+    }
+  }
+
+  // ---- LOT-SAS · UN LOT NE SE DÉPOSE JAMAIS À LA RACINE DE LA BOÎTE SOUS UN NOM RÉEL (TF-1054) --
+  //
+  // Le fait, mesuré le 11/09 : le sas `input\00-retours\_arrivee\` (ignoré par git, TF-0981)
+  // existait depuis trois jours, et DEUX lots portant un nom réel de client étaient posés à la
+  // racine SUIVIE de la boîte — indexables, un `git add -A` les emportait. Le gabarit qui voyage
+  // jusqu'au producteur nommait encore la racine comme destination.
+  //
+  // CE QUI EST JUGÉ : un lot posé DIRECTEMENT dans `00-retours\` dont le NOM change sous le juge
+  // d'`accueillir-lot` — il n'a donc pas pu arriver par le sas, qui l'aurait pseudonymisé. Un lot
+  // au nom déjà pseudonymisé à la racine est la sortie normale du sas, pas un défaut. Le contenu
+  // n'est pas jugé ici : l'anonymiseur laisse à dessein en place une occurrence collée à un
+  // identifiant (TF-0927), et refuser ces lots fermerait la porte à des lots accueillis.
+  const dossierDuLot = basename(dirname(resolve(String(cheminLot))));
+  const nomDuLot = basename(String(cheminLot).split("\\").join("/"));
+  if (/^_arrivee$/i.test(dossierDuLot)) {
+    ajouter("LOT-SAS", "PASS", "lot déposé au sas d'arrivée — `node todo\\accueillir-lot.mjs` le pseudonymise avant qu'il ne devienne indexable", null);
+  } else if (!/^00-retours$/i.test(dossierDuLot)) {
+    ajouter("LOT-SAS", "SANS_OBJET", "lot hors de la boîte d'entrée du pilot — sa destination se juge quand il y est copié", null);
+  } else if (!anonymiserPilot) {
+    ajouter("LOT-SAS", "SANS_OBJET", "juge des noms hors de portée (copie héritée du module) — la destination se juge à la porte du pilot", null);
+  } else {
+    let juge = null;
+    try { juge = anonymiserPilot(nomDuLot); } catch (e) {
+      ajouter("LOT-SAS", "SANS_OBJET", `tables de pseudonymisation introuvables — le nom n'est pas jugé, et c'est dit (${String(e.message).slice(0, 80)})`, null);
+    }
+    if (juge && juge.texte !== nomDuLot) {
+      ajouter("LOT-SAS", "FAIL",
+        `« ${nomDuLot} » est posé à la RACINE suivie de la boîte sous un nom réel — il n'est pas passé par le sas, et un \`git add -A\` l'emporte dans l'histoire`,
+        "déplacer le lot ET son sidecar dans `input\\00-retours\\_arrivee\\` (ignoré par git), puis jouer `node todo\\accueillir-lot.mjs` : il pseudonymise le nom et le contenu et redépose le lot à la racine");
+    } else if (juge) {
+      ajouter("LOT-SAS", "PASS", `« ${nomDuLot} » porte un nom déjà pseudonymisé — sortie normale du sas`, null);
+    }
+  }
+
+  // ---- LOT-RATTACHEMENT · « AUCUN ITEM » SE PROUVE PAR LA RECHERCHE CITÉE (TF-1757, 15/10/2026) ----------
+  // Le 15/10, un retour déclaré « aucun item » doublonnait TF-1201 : `grep … | head -5` avait coupé la sixième
+  // ligne. Le gabarit prescrit une section « ## Rattachement » : la commande jouée entre accents graves et
+  // « N ligne(s) trouvée(s) » ; une borne (head, -n, --max-count, Select-Object -First) exige le total.
+  // Règle neuve : AVERTISSEMENT, jamais blocage (précédent D-70 (b)).
+  if (date < SEUIL_RATTACHEMENT) {
+    ajouter("LOT-RATTACHEMENT", "SANS_OBJET", `lot du ${date}, antérieur à l'entrée en vigueur de LOT-RATTACHEMENT (${SEUIL_RATTACHEMENT}) — antériorité déclarée`, null);
+  } else if (!AUCUN_ITEM.test(texte)) {
+    ajouter("LOT-RATTACHEMENT", "SANS_OBJET", "aucun retour ne déclare « aucun item » au registre — rien à prouver", null);
+  } else {
+    const remede = "porter sous « ## Rattachement » : Registre interrogé le <JJ/MM/AAAA> : `<commande jouée, sans borne>` → <N> ligne(s) trouvée(s). Puis citer chaque item recoupé par son id (gabarit des lots, TF-1757)";
+    if (!SECTION_RATTACHEMENT.test(texte)) {
+      ajouter("LOT-RATTACHEMENT", "AVERTISSEMENT", "un retour déclare « aucun item » au registre sans section « ## Rattachement » qui en porte la preuve — le 15/10/2026, une recherche tronquée a fait remonter comme neuf un doublon de TF-1201", remede);
+    } else {
+      const s = corpsDeSection(texte, SECTION_RATTACHEMENT);
+      const commandes = [...s.matchAll(/`([^`\n]+)`/g)].map((m) => m[1]);
+      if (!commandes.length || !COMPTE_TROUVE.test(s)) {
+        ajouter("LOT-RATTACHEMENT", "AVERTISSEMENT", `la section « Rattachement » ne cite pas ${!commandes.length ? "la commande jouée (entre accents graves)" : ""}${!commandes.length && !COMPTE_TROUVE.test(s) ? " ni " : ""}${!COMPTE_TROUVE.test(s) ? "le compte « N ligne(s) trouvée(s) »" : ""}`, remede);
+      } else if (commandes.some((c) => BORNE.test(c)) && !TOTAL_CITE.test(s)) {
+        ajouter("LOT-RATTACHEMENT", "AVERTISSEMENT", `la recherche citée porte une borne (${commandes.find((c) => BORNE.test(c))}) sans le total : une sortie bornée n'est pas une recherche`, "retirer la borne, ou dire le total à côté (« … sur un total de N »)");
+      } else ajouter("LOT-RATTACHEMENT", "PASS", "« aucun item » porte sa recherche : commande citée et compte des lignes trouvées", null);
+    }
+  }
+
+  // ---- LOT-IDS · UN IDENTIFIANT DE RETOUR N'EST JAMAIS REPRIS (TF-1039) ----------------------
+  if (date < SEUIL_IDS) {
+    ajouter("LOT-IDS", "SANS_OBJET", `lot du ${date}, antérieur à l'entrée en vigueur de LOT-IDS (${SEUIL_IDS}) — antériorité déclarée`, null);
+  } else {
+    const r = idsEnDouble(cheminLot, texte);
+    if (!r) {
+      ajouter("LOT-IDS", "SANS_OBJET", "le nom n'est pas celui d'un lot (« <projet> - RETOURS - AAAAMMJJ<lettre>.md ») — les voisins ne se trouvent pas", null);
+    } else if (r.doublons.length) {
+      ajouter("LOT-IDS", "FAIL",
+        `${r.doublons.length} identifiant(s) déjà défini(s) par un lot antérieur du même produit : ${r.doublons.map((d) => `${d.id} (${d.lot})`).join(", ")} — deux retours différents porteraient la même référence au registre`,
+        `renuméroter à partir du premier libre : ${Object.values(r.premierLibre).join(", ")} — un numéro n'est jamais réutilisé, la séquence continue celle des lots précédents`);
+    } else {
+      ajouter("LOT-IDS", r.pilot ? "PASS" : "AVERTISSEMENT", r.pilot
+        ? `aucun identifiant repris des ${r.voisins} lot(s) antérieur(s) du même produit, copies reçues par le pilot comprises`
+        : `aucun identifiant repris des ${r.voisins} lot(s) antérieur(s) lus — vérification PARTIELLE : pilot introuvable (FORGE_ROOT, ou le voisin factory-pilot), ses copies reçues, parfois renumérotées à la réception, ne sont pas lues (TF-1813)`,
+        r.pilot ? null : "exporter FORGE_ROOT vers le dossier qui contient factory-pilot, puis rejouer");
+    }
+  }
+
+  // TF-1814 (1) : un motif de refus PRÉDIT (LOT-SIDECAR) se porte au résultat ; la ligne de verdict le dit.
+  const refusPredit = constats.some((c) => c.regle === "LOT-SIDECAR" && c.statut === "FAIL");
+  return { verdict: constats.some((c) => c.statut === "FAIL") ? "FAIL" : "PASS", date, constats, ...(refusPredit ? { refus_predit: true } : {}) };
+}
+
+// ---- TF-2314 (10/11/2026, RT-58 de Produit-84) · LA COPIE AU SAS SE LIE AU VERDICT DU JUGE ----------------------------
+// Le 09/11/2026 à 21:14, la copie d'un lot au sas a été jouée dans la même commande que ce juge, qui rendait FAIL (R-45, GFP-LOT, LOT-SIDECAR) : le lot est parti. Même enchaînement
+// le 04/11/2026. Aucun geste outillé ne liait la copie au verdict. `--remettre [<sas>]` est ce geste : il joue le juge, puis copie le lot et son sidecar au sas, et RIEN si le
+// verdict est FAIL. Le sas par défaut est celui du pilot qui porte ce module (`input\00-retours\_arrivee\`) ; un sas introuvable, un sidecar absent ou un fichier déjà au sas
+// avec un autre contenu sont refusés (R-49 : un lot remis ne se réécrit pas), jamais contournés. Un `cp` à la main reste possible : le verrouiller exigerait un hook câblé chez
+// chaque produit, hors de ce changement ; ce geste est l'unique voie prescrite (RETOURS-FORGES.md, ouverture des produits).
+/** Copie `cheminLot` et son sidecar `.tf.jsonl` dans `sas` si `verdict` n'est pas FAIL. Rend `{ remis, raison, copies }`. */
+export function remettreAuSas(cheminLot, verdict, sas, { refusPredit = false } = {}) {
+  const sansEcriture = (raison) => ({ remis: false, raison, copies: [] });
+  // TF-2636 puis TF-2761 : un refus PRÉDIT (LOT-SIDECAR) rend FAIL ; la porte du pilot refusera ce lot tel quel, le copier coûte un lot de plus (un lot remis ne se modifie plus).
+  // Il se dit AVANT le motif générique du FAIL, pour que la remise nomme la règle.
+  if (refusPredit) return sansEcriture("refus prédit à la porte du pilot (LOT-SIDECAR, motifs ci-dessus) : le lot n'est pas copié au sas — corriger le sidecar, rejouer le juge, puis remettre");
+  if (verdict === "FAIL") return sansEcriture("verdict FAIL : le lot n'est pas copié au sas — corriger le lot, rejouer le juge, puis remettre");
+  const sidecar = String(cheminLot).replace(/\.md$/i, ".tf.jsonl");
+  if (!existsSync(cheminLot)) return sansEcriture(`lot introuvable : ${cheminLot}`);
+  if (!existsSync(sidecar)) return sansEcriture(`sidecar introuvable (${basename(sidecar)}) : un lot sans sidecar n'est ingérable par aucun canal, il n'est pas remis`);
+  if (!existsSync(sas)) return sansEcriture(`sas introuvable (${sas}) : il n'est pas créé ici, le dossier du pilot est celui qui le porte`);
+  const copies = [];
+  for (const source of [cheminLot, sidecar]) {
+    const destination = join(sas, basename(source));
+    if (existsSync(destination)) {
+      if (!readFileSync(destination).equals(readFileSync(source))) return sansEcriture(`${basename(source)} est déjà au sas avec un AUTRE contenu : un lot remis ne se réécrit pas (R-49), le remettre sous l'indice suivant`);
+      continue;
+    }
+    copyFileSync(source, destination);
+    copies.push(basename(source));
+  }
+  return { remis: true, raison: copies.length ? `copié au sas ${sas} : ${copies.join(", ")}` : `déjà au sas ${sas}, contenu identique`, copies };
+}
+
+// ---- CLI : le geste qui précède la remise ----------------------------------------------------
+// C'est CE geste que le gabarit de retours nomme. Il coûte une seconde au produit et lui évite
+// un refus à la porte du pilot — ou, pire, une dérogation qui lui épargne le refus ET la leçon.
+// 15/10/2026 — LE LANCEMENT DIRECT SE RECONNAÎT PAR LE CHEMIN RÉEL. Comparer l'adresse du module au chemin
+// reçu échouait quand ce chemin porte un nom court Windows (`SBASTI~1`) que Node résout en nom long
+// (`Sébastien`) : le module se taisait, exit 0, et un lot passait sans être jugé (recette TF-1759 rouge
+// sur un tel poste). Les deux formes d'origine restent admises.
+const LANCE_DIRECTEMENT = (() => {
+  try { return !!process.argv[1] && realpathSync(resolve(process.argv[1])).toLowerCase() === realpathSync(fileURLToPath(import.meta.url)).toLowerCase(); }
+  catch { return false; }
+})();
+if (LANCE_DIRECTEMENT || import.meta.url === `file://${process.argv[1]?.split("\\").join("/")}`
+    || (process.argv[1] && import.meta.url.endsWith(encodeURI(process.argv[1].split("\\").join("/"))))) {
+  const args = process.argv.slice(2);
+  // TF-2314 : `--remettre [<sas>]` joue le juge PUIS copie le lot et son sidecar au sas, et ne copie qu'à un verdict sans FAIL.
+  const iRemettre = args.indexOf("--remettre");
+  const sasDonne = iRemettre >= 0 && args[iRemettre + 1] && !args[iRemettre + 1].startsWith("--") ? args[iRemettre + 1] : null;
+  const cible = args.find((a, i) => !a.startsWith("--") && !(iRemettre >= 0 && i === iRemettre + 1));
+  const jsonSeul = args.includes("--json");
+  if (args.includes("--murs")) {
+    // R-57 : ce que le lot devra déclarer, mesuré AVANT de l'écrire.
+    const racine = cible || ".";
+    const murs = documentsMurs(racine);
+    if (murs === null) { console.error(`aucun dossier output\\ sous ${racine}`); process.exit(2); }
+    console.log(`documents mûrs mesurés sous ${racine}\\output\\ (${SEUIL_MUR} versions datées ou plus) : ${murs.length}`);
+    for (const d of murs) console.log(`  ${String(d.versions).padStart(3)} versions · dernière ${d.derniere} · ${objetSansMarque(d.objet)}`);
+    process.exit(0);
+  }
+  if (!cible) {
+    console.error("usage : node oracle-lot-retours.mjs <lot.md> [--json] [--remettre [<sas>]]");
+    process.exit(2);
+  }
+  const r = verifier(cible);
+  if (jsonSeul) {
+    process.stdout.write(JSON.stringify({ oracle: "oracle-lot-retours", version: VERSION, cible, ...r }, null, 1) + "\n");
+  } else {
+    console.log(`oracle-lot-retours ${VERSION} — ${cible}`);
+    console.log(`verdict : ${r.verdict}${r.date ? ` (lot du ${r.date})` : ""}${r.refus_predit ? " — la porte du pilot REFUSERA ce lot tel quel (LOT-SIDECAR ci-dessous), corriger le sidecar avant la remise" : ""}`);
+    for (const c of r.constats) {
+      console.log(`  [${c.statut}] ${c.regle} — ${c.message}`);
+      if (c.remede) console.log(`      → ${c.remede}`);
+    }
+    if (r.verdict === "FAIL") console.log("\nCe lot serait REFUSÉ à l'ingestion. Le corriger ici coûte une minute ;\nle faire refuser à la porte coûte un aller-retour, et une dérogation coûte la leçon.");
+  }
+  if (iRemettre >= 0) {
+    const sas = sasDonne || join(dirname(fileURLToPath(import.meta.url)), "..", "input", "00-retours", "_arrivee");
+    const m = remettreAuSas(cible, r.verdict, sas, { refusPredit: !!r.refus_predit });
+    console.error(`remise au sas : ${m.remis ? "FAITE" : "NON FAITE"} — ${m.raison}`);
+    process.exit(r.verdict === "FAIL" || r.refus_predit ? 1 : (m.remis ? 0 : 2));
+  }
+  process.exit(r.verdict === "FAIL" ? 1 : 0);
+}

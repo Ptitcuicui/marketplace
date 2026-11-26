@@ -1,0 +1,95 @@
+#!/usr/bin/env node
+/**
+ * lib-sens-rouge.test.mjs — LE MÉCANISME QUI MESURE LE DOUBLE SENS LE TIENT LUI-MÊME (TF-1082).
+ *
+ * Un compteur de couverture qui compterait tout le monde serait rassurant et faux : c'est
+ * exactement la classe de défaut qu'il existe pour mesurer. Chaque règle de lecture est donc
+ * prouvée dans ses DEUX sens — une sortie qui DÉCLARE un cas rouge est reconnue, une sortie qui
+ * n'en déclare aucun ne l'est PAS, et les pièges du dépôt (le « 0 FAIL » de fin de résumé, les
+ * entrées d'état du parc, les recettes en échec) sont chacun leur propre borne.
+ *
+ * Joué par `oracles\self-tests.mjs` (I2 : tout `*.test.mjs` du dépôt est joué).
+ */
+import { marquesSensRouge, porteUneRecette, confronterSensRouge, verdictSensRouge, SEUIL_I6_BLOQUANT } from "./lib-sens-rouge.mjs";
+
+const echecs = [];
+const verifier = (nom, condition) => { if (!condition) echecs.push(nom); };
+
+// ── SENS VERT — ce qui DOIT être reconnu, dans les trois formes observées au dépôt ──────────
+verifier("VERT — un cas étiqueté rouge dans une ligne de détail est reconnu",
+  marquesSensRouge("  [PASS] rouge R13 : classe hors référentiel → FAIL exit 1, règle nommée").length > 0);
+verifier("VERT — une couverture « DEUX sens » annoncée au résumé est reconnue",
+  marquesSensRouge("lib-vue-html (TF-0907) : 8/8 — chaque règle prouvée dans ses DEUX sens").length > 0);
+verifier("VERT — une recette « à double sens » est reconnue",
+  marquesSensRouge("recette à double sens de oracle-conformite-projet : 93 PASS").length > 0);
+verifier("VERT — l'intention écrite « doit échouer » est reconnue",
+  marquesSensRouge("le cas suivant doit échouer, et il échoue").length > 0);
+
+// TF-1245 (13/10/2026) — le REFUS joué : un cas qui PASSE en annonçant un refus est un contrôle qui a refusé.
+verifier("VERT — un cas « REFUS : … » qui passe est reconnu (todo/renumeroter.test.mjs)",
+  marquesSensRouge("  [PASS] REFUS : motif trop court — une renumérotation sans raison est le défaut qu'on répare").length > 0);
+verifier("VERT — un verdict de cas « le commit est refusé » / « arbre sale → refus » est reconnu",
+  marquesSensRouge("  [PASS] le mot est retiré et INDEXÉ : le commit est refusé").length > 0
+  && marquesSensRouge("  [PASS] arbre sale → refus (exit 2), rien n'est touché").length > 0);
+verifier("ROUGE — « le refus recommande » décrit un cas VERT, il ne vaut pas cas rouge",
+  marquesSensRouge("  [PASS] la REFORMULATION que le refus recommande passe — l'exclusivité est conservée").length === 0);
+verifier("ROUGE — un texte CITÉ qui contient « refusé » (la synthèse refusée par le hook) ne vaut pas cas rouge",
+  marquesSensRouge("  [PASS] niveau — « complet : pourquoi le hook a-t-il refusé ma synthèse » → Complexe").length === 0);
+verifier("ROUGE — un cas EN ÉCHEC qui dit REFUS n'est pas un refus joué et réussi",
+  marquesSensRouge("  [FAIL] REFUS : le nouvel id est déjà pris").length === 0);
+
+// ── SENS ROUGE — ce qui NE DOIT PAS être reconnu. Sans ces cas, le compteur compterait tout ──
+verifier("ROUGE — une recette qui ne joue que des fixtures conformes n'est PAS comptée couverte",
+  marquesSensRouge("  [PASS] verte : projet conforme → PASS exit 0\nSelf-test : 12 PASS").length === 0);
+verifier("ROUGE — le « 0 FAIL » qui clôt presque tous les résumés du dépôt ne vaut PAS cas rouge",
+  marquesSensRouge("Self-test TODO-FORGE : 58 PASS, 0 FAIL").length === 0);
+verifier("ROUGE — le mot « échec » seul ne vaut pas l'intention « doit échouer »",
+  marquesSensRouge("aucun échec relevé sur le parc").length === 0);
+verifier("ROUGE — une sortie vide ou absente n'est jamais comptée couverte",
+  marquesSensRouge("").length === 0 && marquesSensRouge(undefined).length === 0);
+
+// ── LES BORNES DE POPULATION — qui est MESURÉ, et qui ne l'est pas ───────────────────────────
+verifier("BORNE — un oracle d'état joué sur le parc réel (I4) n'est pas une recette : il rend un verdict, pas des cas",
+  !porteUneRecette({ statut: "OK", via: "I4 (oracle d'état)", sortie: "" }));
+verifier("BORNE — une recette EN ÉCHEC n'est pas mesurée : elle a déjà son verdict",
+  !porteUneRecette({ statut: "ECHEC", via: "--self-test", sortie: "  [PASS] rouge : …" }));
+verifier("BORNE — une recette verte jouée par --self-test ou par I2 EST mesurée",
+  porteUneRecette({ statut: "OK", via: "--self-test", sortie: "" })
+  && porteUneRecette({ statut: "OK", via: "I2 (fichier de test du dépôt)", sortie: "" }));
+
+// ── LE BILAN — il compte ce qu'il dit compter, et nomme ce qui manque ────────────────────────
+{
+  const bilan = confronterSensRouge([
+    { nom: "a.test.mjs", statut: "OK", via: "I2", sortie: "[PASS] rouge : la règle refuse" },
+    { nom: "b.test.mjs", statut: "OK", via: "I2", sortie: "[PASS] verte : 3 PASS, 0 FAIL" },
+    { nom: "c.mjs (parc réel)", statut: "OK", via: "I4 (oracle d'état)", sortie: "PASS sur le parc" },
+    { nom: "d.test.mjs", statut: "ECHEC", via: "I2", sortie: "[FAIL] rouge : …" },
+  ]);
+  verifier("BILAN — seules les recettes vertes portant des cas sont mesurées (2 sur 4)", bilan.mesurees === 2);
+  verifier("BILAN — le compte des couvertes est juste (1)", bilan.avecRouge === 1);
+  verifier("BILAN — la recette sans cas rouge est NOMMÉE, jamais fondue dans un total",
+    bilan.sansRouge.length === 1 && bilan.sansRouge[0].nom === "b.test.mjs");
+  verifier("BILAN — l'entrée d'état du parc n'entre ni au numérateur ni au dénominateur",
+    !bilan.sansRouge.some((x) => x.nom.includes("parc réel")));
+}
+
+// ── I6 BLOQUANT (D-4 (a) du 13/10/2026) — la bascule datée, dans ses deux sens ──────────────
+{
+  const manque = { sansRouge: [{ nom: "b.test.mjs", via: "I2" }] };
+  const tenu = { sansRouge: [] };
+  verifier("I6 — cas rouge : une recette sans cas rouge, le jour du seuil, est BLOQUANTE",
+    verdictSensRouge(manque, SEUIL_I6_BLOQUANT).bloquant === true);
+  verifier("I6 — la veille du seuil, le même manque n'est qu'un avertissement",
+    verdictSensRouge(manque, "2026-10-19").bloquant === false && verdictSensRouge(manque, "2026-10-19").avertissement === true);
+  verifier("I6 — sans manque, rien ne bloque ni n'avertit, même après le seuil",
+    verdictSensRouge(tenu, "2027-01-01").bloquant === false && verdictSensRouge(tenu, "2027-01-01").avertissement === false);
+}
+
+if (echecs.length) {
+  console.error("lib-sens-rouge : FAIL\n  - " + echecs.join("\n  - "));
+  process.exit(1);
+}
+console.log("lib-sens-rouge (TF-1082) : 23/23 PASS — I6 bloquant à partir du " + SEUIL_I6_BLOQUANT + " (cas rouge joué le jour du seuil), les quatre formes de cas ROUGE du dépôt (dont le refus joué, TF-1245) sont "
+  + "reconnues, une recette qui ne joue que des fixtures conformes ne l'est PAS, le « 0 FAIL » de "
+  + "fin de résumé ne vaut pas preuve, et les bornes de population tiennent (état du parc et "
+  + "recette en échec hors mesure) ; chaque règle de lecture est prouvée dans ses DEUX sens");

@@ -1,0 +1,8 @@
+{
+  "schema": "factory/embarque@1",
+  "mode": "embarque",
+  "mallette": "factory-socle",
+  "depot": "factory-pilot",
+  "commit": "98f58dc5845fc61a8c3e66e3314e79caf4dffd11",
+  "note": "Copie embarquée de la partie outil du pilot (doctrine, oracles, gabarits, scripts), livrée par la mallette factory-socle. Elle n'est pas un clone : rien ne s'y tire ni ne s'y pousse, et la marketplace la met à jour. Ce que le poste y écrit (TODO, retours) reste sur le poste."
+}

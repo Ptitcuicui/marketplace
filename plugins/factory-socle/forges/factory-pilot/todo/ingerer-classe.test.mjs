@@ -1,0 +1,197 @@
+#!/usr/bin/env node
+/**
+ * ingerer-classe.test.mjs — la CLASSE d'un retour se déclare, la RÉCIDIVE se compte (03/09/2026).
+ *
+ * Le fait fondateur (mandat d'amélioration continue, pas 0) : 50 items du registre déclaraient
+ * une récidive en toutes lettres et aucun champ ne permettait de les compter ; un classement
+ * automatique par famille rendait 94 % de faux positifs. La règle qui en sort : le producteur
+ * déclare UNE classe par retour, prise dans un référentiel fermé et daté ; une classe déjà close
+ * en corrige marque le retour `recidive_de` — sans jamais le refuser.
+ *
+ * Ce que ces cas verrouillent : le refus à l'ingestion d'un lot daté du 03/09 ou après sans
+ * classe (rouge) ou à classe inconnue avec les clés proches (rouge) ; l'admission d'une récidive
+ * MARQUÉE, jamais refusée (verte) ; l'antériorité (un lot du 01/09 sans classe passe) ; la
+ * candidature hors lot sans classe (passe) ; la classe suspecte (signalée, admise) ; et le
+ * référentiel illisible (refus, jamais un passage). Joué par `oracles\self-tests.mjs` (I2).
+ */
+import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { spawnSync } from "node:child_process";
+
+// TF-0957 — LES TABLES DE CE BANC SONT JETABLES, ET C'EST LUI QUI LES POSE.
+//
+// Le 08/09, les 46 bancs du dépôt ont été joués d'affilée avec FORGE_NOMS_INTERDITS et
+// FORGE_PRODUITS_PSEUDO pointant sur les tables RÉELLES du canal confidentiel. Ce banc n'en
+// posait pas : il héritait de l'environnement, ses produits jouets sont entrés dans la table de
+// PRODUCTION — neuf clés, « Produit-65 » à « Produit-73 » — et la porte de publication a ensuite
+// refusé le dépôt sur 81 constats, tous nés de noms inventés par des fixtures.
+//
+// Un banc qui hérite du référentiel de production ne s'éprouve pas : il l'abîme. Et les
+// sous-processus qu'il lance héritent de `process.env`, donc les poser ICI suffit à isoler
+// toute la chaîne, y compris `ingerer-lot.mjs` lancé plus bas.
+{
+  const _iso = mkdtempSync(join(tmpdir(), "ingerer-classe-tables-"));
+  writeFileSync(join(_iso, "_noms-interdits.json"),
+    JSON.stringify({ noms: [], identifiants: [], sigles: [], pseudonymes: {} }), "utf8");
+  writeFileSync(join(_iso, "_produits-pseudonymes.json"), JSON.stringify({ produits: {} }), "utf8");
+  process.env.FORGE_NOMS_INTERDITS = join(_iso, "_noms-interdits.json");
+  process.env.FORGE_PRODUITS_PSEUDO = join(_iso, "_produits-pseudonymes.json");
+}
+
+
+const ICI = dirname(fileURLToPath(import.meta.url));
+const OUTIL = join(ICI, "ingerer-lot.mjs");
+let pass = 0, fail = 0;
+const check = (nom, fn) => {
+  try { fn(); console.log(`  [PASS] ${nom}`); pass++; }
+  catch (e) { console.error(`  [FAIL] ${nom} — ${e.message}`); fail++; }
+};
+
+const T = mkdtempSync(join(tmpdir(), "classe-"));
+const CLASSES = join(T, "CLASSES.json");
+writeFileSync(CLASSES, JSON.stringify({
+  schema: "pilot/classes@1", version: "0.0.1-recette", date: "2026-09-03",
+  familles: [{ cle: "page-html-socle", libelle: "f" }, { cle: "lot-forme", libelle: "f2" }],
+  classes: [
+    { cle: "page-html-polices-distantes", famille: "page-html-socle", libelle: "polices distantes", creee_le: "2026-09-03", fondee_par: ["TF-0001"], regle: "A1", oracle: "check_html A1", voisines: [] },
+    { cle: "page-html-sommaire-absent", famille: "page-html-socle", libelle: "sommaire", creee_le: "2026-09-03", fondee_par: [], regle: "I2", oracle: "check_html", voisines: [] },
+    { cle: "lot-sans-classe", famille: "lot-forme", libelle: "clé neuve sans clôture", creee_le: "2026-09-03", fondee_par: [], regle: "-", oracle: "-", voisines: ["page-html-polices-distantes"] },
+  ],
+}), "utf8");
+// Registre de départ : TF-0001 clos en corrige le 27/08 (la classe est fondée par lui).
+const REGISTRE_BASE = [
+  JSON.stringify({ ev: "creation", ts: "2026-08-20T10:00:00.000Z", id: "TF-0001", titre: "t", contenu: "c", demandeur: "pilot", source: "s", date_demande: "2026-08-20", statut: "candidat", forges_cibles_initiales: ["factory-pilot"], score: { gain: 3, preuve: 1, effort: 1, valeur: 3 } }),
+  JSON.stringify({ ev: "maj", ts: "2026-08-21T10:00:00.000Z", id: "TF-0001", statut: "decide", decideur: "humain", date_decision: "2026-08-21" }),
+  JSON.stringify({ ev: "maj", ts: "2026-08-27T10:00:00.000Z", id: "TF-0001", statut: "corrige", date_correction: "2026-08-27", gains_constates: "g", corrections_realisees: "x" }),
+].join("\n") + "\n";
+const MD = "# lot\n\n## pilot\n\ntable\n\n## Remarques restées au produit\n\n| Remarque | Corrigée comment | Généralisable ? | Verdict |\n|---|---|---|---|\n| tri cassé | index ajouté | non | propre au schéma de ce produit |\n\n## Retours sur les documents produits\n\nAucun document produit depuis un gabarit de la bibliothèque sur ce lot.\n";
+const cand = (sur) => JSON.stringify({
+  schema: 1, titre: "pilot : un retour de recette", contenu: "c", demandeur: "produit-recette",
+  source: "lot de recette", date_demande: "2026-09-03", forges_cibles_initiales: ["factory-pilot"], ...sur,
+});
+let serie = 0;
+const ingerer = ({ nomLot, lignes, md = MD, classes = CLASSES }) => {
+  const registre = join(T, `reg-${++serie}.jsonl`);
+  writeFileSync(registre, REGISTRE_BASE, "utf8");
+  const sidecar = join(T, `${nomLot}.tf.jsonl`);
+  writeFileSync(sidecar, lignes.join("\n") + "\n", "utf8");
+  if (md !== null) writeFileSync(join(T, `${nomLot}.md`), md, "utf8");
+  const r = spawnSync(process.execPath, [OUTIL, sidecar, "--registre", registre, "--sans-fetch", "--classes", classes], { encoding: "utf8" });
+  const evs = readFileSync(registre, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
+  return { code: r.status, sortie: (r.stdout || "") + (r.stderr || ""), evs, creations: evs.filter((e) => e.ev === "creation" && e.id !== "TF-0001") };
+};
+
+check("rouge — lot du 03/09 SANS classe : refusé, registre intact, le refus nomme les familles", () => {
+  const r = ingerer({ nomLot: "PROD - RETOURS - 20260903a", lignes: [cand({})] });
+  if (r.code !== 1) throw new Error(`exit ${r.code} attendu 1 : ${r.sortie.slice(0, 300)}`);
+  if (!/classe manquante/.test(r.sortie)) throw new Error("le refus ne dit pas que la classe manque");
+  if (!/page-html-socle/.test(r.sortie)) throw new Error("le refus ne liste pas les familles");
+  if (r.creations.length) throw new Error("le registre a été touché malgré le refus");
+});
+
+// TF-2764 (21/11/2026) : 17 lignes de 11 lots d'un produit portaient une clé de FAMILLE là où le
+// registre attend une clé de classe, et le refus ne le disait pas.
+check("rouge — TF-2764 : une clé de FAMILLE donnée comme classe, le refus le dit et nomme les classes de la famille", () => {
+  const r = ingerer({ nomLot: "PROD - RETOURS - 20260903f", lignes: [cand({ classe: "page-html-socle" })] });
+  if (r.code !== 1) throw new Error(`exit ${r.code} attendu 1`);
+  if (!/est une FAMILLE/.test(r.sortie)) throw new Error(`le refus ne dit pas que la clé est une famille : ${r.sortie.slice(0, 400)}`);
+  if (!/page-html-polices-distantes/.test(r.sortie) || !/page-html-sommaire-absent/.test(r.sortie)) throw new Error("le refus ne nomme pas les classes de la famille");
+  if (r.creations.length) throw new Error("le registre a été touché malgré le refus");
+});
+
+check("rouge — TF-2764 : le refus SANS classe dit que les familles ne sont pas des clés", () => {
+  const r = ingerer({ nomLot: "PROD - RETOURS - 20260903g", lignes: [cand({})] });
+  if (!/ne sont PAS des cl/.test(r.sortie)) throw new Error(`le refus énumère les familles sans dire qu'elles ne sont pas des clés : ${r.sortie.slice(0, 400)}`);
+});
+
+check("rouge — classe INCONNUE : refusé, les clés proches sont nommées", () => {
+  const r = ingerer({ nomLot: "PROD - RETOURS - 20260903b", lignes: [cand({ classe: "page-html-polices" })] });
+  if (r.code !== 1) throw new Error(`exit ${r.code} attendu 1`);
+  if (!/inconnue du référentiel/.test(r.sortie)) throw new Error("le refus ne dit pas que la clé est inconnue");
+  if (!/page-html-polices-distantes/.test(r.sortie)) throw new Error("la clé proche n'est pas proposée");
+  if (r.creations.length) throw new Error("registre touché");
+});
+
+check("verte — RÉCIDIVE d'une classe close en corrige : le lot ENTRE, marqué recidive_de, l'oracle censé la jouer est nommé", () => {
+  const r = ingerer({ nomLot: "PROD - RETOURS - 20260903c", lignes: [cand({ classe: "page-html-polices-distantes" })] });
+  if (r.code !== 0) throw new Error(`exit ${r.code} attendu 0 : ${r.sortie.slice(0, 300)}`);
+  if (r.creations.length !== 1) throw new Error(`${r.creations.length} création(s), 1 attendue`);
+  const c = r.creations[0];
+  if (c.classe !== "page-html-polices-distantes") throw new Error("classe non portée par la création");
+  if (!Array.isArray(c.recidive_de) || c.recidive_de[0] !== "TF-0001") throw new Error(`recidive_de attendu [TF-0001], reçu ${JSON.stringify(c.recidive_de)}`);
+  if (!/\[RÉCIDIVE\]/.test(r.sortie) || !/check_html A1/.test(r.sortie)) throw new Error("la récidive n'est pas annoncée avec son oracle");
+  const ing = r.evs.find((e) => e.ev === "ingestion");
+  if (!ing || ing.recidives !== 1) throw new Error("l'événement d'ingestion ne compte pas la récidive");
+});
+
+check("verte — classe connue SANS clôture antérieure : pas de récidive, recidive_de null", () => {
+  const r = ingerer({ nomLot: "PROD - RETOURS - 20260903d", lignes: [cand({ classe: "page-html-sommaire-absent" })] });
+  if (r.code !== 0) throw new Error(`exit ${r.code} attendu 0 : ${r.sortie.slice(0, 300)}`);
+  if (r.creations[0].recidive_de !== null) throw new Error("recidive_de devrait être null");
+  if (/\[RÉCIDIVE\]/.test(r.sortie)) throw new Error("récidive annoncée à tort");
+});
+
+check("borne — un lot du 01/09 sans classe passe : antériorité, jamais un défaut de produit", () => {
+  const r = ingerer({ nomLot: "PROD - RETOURS - 20260901a", lignes: [cand({ date_demande: "2026-09-01" })] });
+  if (r.code !== 0) throw new Error(`exit ${r.code} attendu 0 : ${r.sortie.slice(0, 300)}`);
+  if (r.creations[0].classe !== null) throw new Error("classe devrait être null");
+});
+
+check("borne — une candidature HORS lot sans classe passe (elle n'a pas de lot)", () => {
+  const r = ingerer({ nomLot: "revue-classes-20260903a", lignes: [cand({})], md: null });
+  if (r.code !== 0) throw new Error(`exit ${r.code} attendu 0 : ${r.sortie.slice(0, 300)}`);
+});
+
+check("signal — classe SUSPECTE (créée sans clôture, < 30 j après un retour d'une voisine) : admise et signalée", () => {
+  const r = ingerer({ nomLot: "PROD - RETOURS - 20260903e", lignes: [cand({ classe: "lot-sans-classe" })] });
+  if (r.code !== 0) throw new Error(`exit ${r.code} attendu 0 : ${r.sortie.slice(0, 300)}`);
+  if (!/\[CLASSE SUSPECTE\]/.test(r.sortie)) throw new Error("la classe suspecte n'est pas signalée");
+  if (!r.creations[0].classe_suspecte) throw new Error("la création ne porte pas classe_suspecte");
+});
+
+// TF-1128 — UN DÉFAUT VRAIMENT NEUF A UNE SORTIE CONFORME. Le producteur suit la consigne « aucune
+// clé ne convient » : clé réservée `classe-a-creer`, proposition dans la ligne ET dans le .md. Le
+// cas vert JOUE ce remède et doit passer (la fixture du remède est aussi obligatoire que celle du
+// défaut) ; les rouges verrouillent chacune des quatre conditions.
+const PROP = { cle: "tableau-sans-unite", famille: "page-html-socle", libelle: "tableau chiffré sans unité" };
+const MD_PROP = MD + "\n## La règle qui aurait évité le retour\n\nClasse proposée : `tableau-sans-unite` (famille page-html-socle) — tableau chiffré sans unité.\n";
+check("TF-1128 vert — le remède joué : clé réservée + proposition complète + clé nommée au .md → le lot ENTRE, sans classe, avec la proposition", () => {
+  const r = ingerer({ nomLot: "PROD - RETOURS - 20260915a", lignes: [cand({ classe: "classe-a-creer", classe_proposee: PROP })], md: MD_PROP });
+  if (r.code !== 0) throw new Error(`exit ${r.code} attendu 0 : ${r.sortie.slice(0, 400)}`);
+  const c = r.creations[0];
+  if (!c || c.classe !== null) throw new Error(`classe attendue null (jamais la clé réservée) : ${JSON.stringify(c && c.classe)}`);
+  if (!c.classe_a_creer || c.classe_a_creer.cle !== "tableau-sans-unite") throw new Error("la proposition n'est pas portée par la création");
+  if (!/\[CLASSE À CRÉER\]/.test(r.sortie)) throw new Error("le pilot n'est pas averti qu'une classe est à créer");
+});
+check("TF-1128 rouge — clé réservée SANS proposition : refusé, le manque est nommé", () => {
+  const r = ingerer({ nomLot: "PROD - RETOURS - 20260915b", lignes: [cand({ classe: "classe-a-creer" })], md: MD_PROP });
+  if (r.code !== 1 || !/manque cle, famille, libelle/.test(r.sortie)) throw new Error(`exit ${r.code} : ${r.sortie.slice(0, 300)}`);
+  if (r.creations.length) throw new Error("registre touché");
+});
+check("TF-1128 rouge — clé proposée absente du .md : refusé (le lecteur humain doit la trouver)", () => {
+  const r = ingerer({ nomLot: "PROD - RETOURS - 20260915c", lignes: [cand({ classe: "classe-a-creer", classe_proposee: PROP })] });
+  if (r.code !== 1 || !/n'est pas nommée dans le \.md/.test(r.sortie)) throw new Error(`exit ${r.code} : ${r.sortie.slice(0, 300)}`);
+});
+check("TF-1128 rouge — clé proposée qui EXISTE déjà, ou famille inconnue : refusé, chaque motif nommé", () => {
+  const r1 = ingerer({ nomLot: "PROD - RETOURS - 20260915d", lignes: [cand({ classe: "classe-a-creer", classe_proposee: { ...PROP, cle: "page-html-sommaire-absent" } })], md: MD_PROP + "page-html-sommaire-absent\n" });
+  if (r1.code !== 1 || !/EXISTE déjà/.test(r1.sortie)) throw new Error(`clé existante : exit ${r1.code} : ${r1.sortie.slice(0, 300)}`);
+  const r2 = ingerer({ nomLot: "PROD - RETOURS - 20260915e", lignes: [cand({ classe: "classe-a-creer", classe_proposee: { ...PROP, famille: "famille-inventee" } })], md: MD_PROP });
+  if (r2.code !== 1 || !/famille « famille-inventee »/.test(r2.sortie)) throw new Error(`famille inconnue : exit ${r2.code} : ${r2.sortie.slice(0, 300)}`);
+});
+check("TF-1128 — le refus d'une classe inconnue indique désormais la sortie conforme, plus l'écriture du référentiel", () => {
+  const r = ingerer({ nomLot: "PROD - RETOURS - 20260915f", lignes: [cand({ classe: "page-html-polices" })] });
+  if (!/classe-a-creer/.test(r.sortie)) throw new Error("le refus ne nomme pas la clé réservée");
+  if (/créer la clé dans todo\/CLASSES\.json/.test(r.sortie)) throw new Error("le refus renvoie encore le producteur au référentiel du pilot");
+});
+
+check("rouge — référentiel de classes ILLISIBLE : un lot du 03/09 est refusé, jamais admis en silence", () => {
+  const r = ingerer({ nomLot: "PROD - RETOURS - 20260903f", lignes: [cand({ classe: "page-html-polices-distantes" })], classes: join(T, "absent.json") });
+  if (r.code !== 1) throw new Error(`exit ${r.code} attendu 1`);
+  if (!/illisible/.test(r.sortie)) throw new Error("le refus ne nomme pas le référentiel illisible");
+});
+
+rmSync(T, { recursive: true, force: true });
+console.log(`\ningerer-classe : ${pass} PASS, ${fail} FAIL`);
+process.exit(fail ? 1 : 0);

@@ -1,0 +1,218 @@
+#!/usr/bin/env node
+/**
+ * hook-page-html.mjs — LES RÈGLES DE SOCLE D'UNE PAGE HTML SE JOUENT CHEZ LE PRODUIT, AU MOMENT
+ * OÙ IL L'ÉCRIT — pas au pilot, trois livraisons plus tard.
+ *
+ * LE FAIT (lot du produit 02 du 02/09, TF-0765). Le brief d'une console de données exigeait « tri et
+ * filtres » sans nommer la règle L4 ni le composant de filtres du socle ; les hooks du produit ne
+ * jouaient pas `oracle-filtres-tableau` ; la console est partie avec un tri maison hors en-tête,
+ * jugée conforme par ses propres oracles, et l'humain a dû redemander « comme demandé par la
+ * factory ». Une règle que le producteur ne rencontre pas au moment où il produit n'existe pas
+ * pour lui (TF-0757, R12 : la boucle de retour doit REDESCENDRE).
+ *
+ * CE QUE FAIT CE HOOK. Hook `PostToolUse` (Write | Edit) lancé DANS le produit par
+ * `forge/hooks/factory.mjs page-html` (gabarits/settings-produit.json). Il lit sur stdin l'entrée
+ * du tool, ne s'intéresse qu'aux fichiers `.html` existants, et joue dessus les contrôles de socle
+ * installés sur le poste : `oracle-filtres-tableau.mjs` (quality-oracles, G1-G6 : un tableau de
+ * données porte ses filtres de colonne ou son exemption motivée). Verdict imprimé, exit 0 TOUJOURS :
+ * il AVERTIT au moment de l'écriture, il ne bloque pas — bloquer une édition est le rôle du gate
+ * d'écriture du poste (C7), et une page se construit en plusieurs écritures.
+ *
+ * LA FAMILLE DU LIVRABLE (G8, TF-1874, 19/10/2026). Comme `hook-ecriture.mjs` pour un `.md`, il demande
+ * au catalogue la famille d'une page écrite sous `output\` ou `livrables\` (`jouerFamille`, importée
+ * de ce hook) : sans cela, la famille n'était vérifiée à l'écriture que pour un `.md`.
+ *
+ * BORNES : rien si le poste n'a pas le skill (dit, jamais tu) ; rien hors `.html` ; un oracle qui ne
+ * rend pas de JSON est rapporté ILLISIBLE, pas ignoré.
+ *
+ * Usage : node oracles/hook-page-html.mjs [--fichier <page.html>] [--self-test]   (stdin : JSON du hook)
+ */
+import { existsSync, readFileSync, writeFileSync, mkdtempSync, rmSync, mkdirSync } from "node:fs";
+import { join, resolve, dirname } from "node:path";
+import { tmpdir } from "node:os";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { cheminSkillsInstalles } from "../scripts/lib-config-installee.mjs";
+import { jouerFamille, jouerFiche, jouer as jouerEcriture } from "./hook-ecriture.mjs";
+
+const SKILLS = cheminSkillsInstalles();
+// Les chemins que le hook d'écriture écarte aussi (copies, dépendances, historique) : une page y est un artefact, pas un texte écrit.
+const ECRITURE_IGNORES = [/(^|[\\/])node_modules[\\/]/i, /(^|[\\/])\.git[\\/]/i, /(^|[\\/])old[\\/]/i];
+const ORACLE_FILTRES = join(SKILLS, "quality-oracles", "scripts", "oracle-filtres-tableau.mjs");
+// TF-1098 (14/09/2026) — la LECTURE PAR UN TIERS et la CONCEPTION DU LIVRABLE se jouent d'office.
+// Mesure du 14/09 (todo\RECIDIVES.md) : la classe lecture-tiers-non-jugee récidive 7 fois sur 7,
+// parce que ces deux oracles ne tournaient que sur invocation explicite. Joués ici en
+// AVERTISSEMENT, comme le reste de ce hook — leur taux d'accusation se mesure avant tout blocage.
+const ORACLE_LECTURE = join(SKILLS, "quality-oracles", "scripts", "oracle-lecture-tiers.mjs");
+const ORACLE_CONCEPTION = join(SKILLS, "quality-oracles", "scripts", "oracle-conception-livrable.mjs");
+export const ORACLES_DOCUMENTAIRES = [
+  { libelle: "lecture par un tiers (T1-T3)", chemin: ORACLE_LECTURE },
+  { libelle: "conception du livrable (C1-C4)", chemin: ORACLE_CONCEPTION },
+];
+
+/** Le fichier visé par l'entrée du hook (Write/Edit), ou null. */
+export function fichierVise(entree) {
+  try {
+    const j = typeof entree === "string" ? JSON.parse(entree || "{}") : (entree || {});
+    const p = j?.tool_input?.file_path || j?.tool_input?.path || null;
+    return p && /\.html?$/i.test(p) ? p : null;
+  } catch { return null; }
+}
+
+/** Joue les contrôles de socle sur une page ; rend des lignes à imprimer. */
+export function jouer(page, oracle = ORACLE_FILTRES) {
+  const lignes = [];
+  if (!existsSync(page)) return lignes;
+  if (!existsSync(oracle)) {
+    lignes.push(`[page-html] règles de socle NON jouées sur ${page} : ${oracle} absent de ce poste — installer les skills (bootstrap.mjs --pull)`);
+    return lignes;
+  }
+  const r = spawnSync(process.execPath, [oracle, page], { encoding: "utf8", timeout: 60000 });
+  let j = null;
+  try { j = JSON.parse((r.stdout || "").slice((r.stdout || "").indexOf("{"))); } catch { /* illisible */ }
+  if (!j) { lignes.push(`[page-html] oracle-filtres-tableau ILLISIBLE sur ${page} (exit ${r.status}) — ce n'est pas un constat sur la page`); return lignes; }
+  const fails = (j.findings || []).filter((f) => f.statut === "FAIL");
+  if (j.verdict === "PASS" || j.verdict === "SKIP" || j.verdict === "SANS_OBJET") {
+    lignes.push(`[page-html] ${page} : filtres de tableau ${j.verdict} (${(j.findings || []).length} contrôle(s))`);
+  } else {
+    lignes.push(`[page-html] ${page} : filtres de tableau ${j.verdict} — ${fails.length} règle(s) de socle en défaut (L4 / G1-G6 de factory-page-html) :`,
+      ...fails.slice(0, 6).map((f) => `  - ${f.regle} : ${String(f.message || "").slice(0, 160)}`),
+      "  Règle de socle : un tableau de données porte ses filtres de colonne (composant table-filters du skill) ou son exemption motivée — c'est ce que le brief doit citer (CLAUDE-PRODUIT « Règles de socle applicables »).");
+  }
+  return lignes;
+}
+
+/**
+ * TF-1098 — un oracle documentaire joué en AVERTISSEMENT : son verdict et ses règles en défaut,
+ * jamais un blocage. Un oracle absent du poste est DIT ; un verdict illisible n'est pas un constat.
+ */
+export function jouerAvertissement(page, { libelle, chemin }) {
+  if (!existsSync(page)) return [];
+  if (!existsSync(chemin)) return [`[page-html] ${libelle} NON jouée sur ${page} : ${chemin} absent de ce poste — installer les skills (bootstrap.mjs --pull)`];
+  const r = spawnSync(process.execPath, [chemin, page], { encoding: "utf8", timeout: 60000 });
+  let j = null;
+  try { j = JSON.parse((r.stdout || "").slice((r.stdout || "").indexOf("{"))); } catch { /* illisible */ }
+  if (!j) return [`[page-html] ${libelle} ILLISIBLE sur ${page} (exit ${r.status}) — ce n'est pas un constat sur la page`];
+  const fails = (j.findings || []).filter((f) => f.statut === "FAIL");
+  if (!fails.length) return [`[page-html] ${page} : ${libelle} ${j.verdict}`];
+  return [`[page-html] ${page} : ${libelle} ${j.verdict} — AVERTISSEMENT, non bloquant (TF-1098) : ${fails.length} règle(s) en défaut`,
+    ...fails.slice(0, 4).map((f) => `  - ${f.regle} : ${String(f.message || "").slice(0, 160)}`)];
+}
+
+function selfTest() {
+  const dir = mkdtempSync(join(tmpdir(), "hook-page-html-"));
+  const casse = [];
+  // Un faux oracle : FAIL sur une page qui porte « sans-filtres », PASS sinon.
+  const faux = join(dir, "oracle.mjs");
+  writeFileSync(faux, `import { readFileSync } from "node:fs";
+const t = readFileSync(process.argv[2], "utf8");
+const fail = t.includes("sans-filtres");
+console.log(JSON.stringify({ verdict: fail ? "FAIL" : "PASS", findings: fail ? [{ regle: "G1", statut: "FAIL", message: "tableau sans marquage de filtres" }] : [{ regle: "G1", statut: "PASS" }] }));
+process.exit(fail ? 1 : 0);
+`, "utf8");
+  const rouge = join(dir, "rouge.html"); writeFileSync(rouge, "<table class='sans-filtres'></table>", "utf8");
+  const verte = join(dir, "verte.html"); writeFileSync(verte, "<table data-filtres='oui'></table>", "utf8");
+  const r = jouer(rouge, faux), v = jouer(verte, faux);
+  if (!r.some((l) => /FAIL/.test(l) && /G1/.test(r.join(" ")))) casse.push("une page en défaut n'est pas signalée avec sa règle");
+  if (!v.some((l) => /PASS/.test(l))) casse.push("une page conforme n'est pas déclarée PASS");
+  if (jouer(join(dir, "absente.html"), faux).length) casse.push("un fichier absent produit une sortie");
+  if (!jouer(rouge, join(dir, "nulle-part.mjs")).some((l) => /NON jouées/.test(l))) casse.push("un oracle absent du poste est tu au lieu d'être dit");
+  if (fichierVise(JSON.stringify({ tool_input: { file_path: "c:/x/page.html" } })) !== "c:/x/page.html") casse.push("le fichier .html du hook n'est pas reconnu");
+  if (fichierVise(JSON.stringify({ tool_input: { file_path: "c:/x/notes.md" } })) !== null) casse.push("un fichier non-HTML est pris pour une page");
+  if (fichierVise("{pas du json") !== null) casse.push("une entrée illisible n'est pas ignorée");
+  // TF-1098 : un oracle documentaire en défaut AVERTIT (règle nommée) ; conforme, il le dit ; absent, il le dit.
+  const fauxDoc = join(dir, "doc.mjs");
+  writeFileSync(fauxDoc, `import { readFileSync } from "node:fs";
+const t = readFileSync(process.argv[2], "utf8");
+const fail = t.includes("sans-intention");
+console.log(JSON.stringify({ verdict: fail ? "FAIL" : "PASS", findings: fail ? [{ regle: "T1", statut: "FAIL", message: "la page ne dit pas ce qu'elle permet de décider" }] : [{ regle: "T1", statut: "PASS" }] }));
+process.exit(fail ? 1 : 0);
+`, "utf8");
+  const docRouge = join(dir, "doc-rouge.html"); writeFileSync(docRouge, "<main class='sans-intention'></main>", "utf8");
+  const dr = jouerAvertissement(docRouge, { libelle: "lecture par un tiers (T1-T3)", chemin: fauxDoc });
+  if (!dr.some((l) => /AVERTISSEMENT/.test(l)) || !dr.some((l) => /T1/.test(l))) casse.push("un oracle documentaire en défaut n'avertit pas avec sa règle (TF-1098)");
+  if (!jouerAvertissement(verte, { libelle: "lecture par un tiers (T1-T3)", chemin: fauxDoc }).some((l) => /PASS/.test(l))) casse.push("une page conforme à l'oracle documentaire n'est pas dite PASS");
+  if (!jouerAvertissement(verte, { libelle: "conception", chemin: join(dir, "nulle-part.mjs") }).some((l) => /NON jouée/.test(l))) casse.push("un oracle documentaire absent est tu au lieu d'être dit");
+  if (ORACLES_DOCUMENTAIRES.length !== 2) casse.push("les deux oracles documentaires ne sont plus déclarés");
+  // TF-1874 (19/10/2026) : la famille du livrable (G8) se joue à l'écriture d'une PAGE comme à celle d'un
+  // `.md` (hook-ecriture). Trois sens, jugés par le hook LANCÉ pour de bon sur une page jetable : hors
+  // `output\` la question ne se pose pas ; un type du catalogue résout sa famille ; un type absent est NOMMÉ.
+  // Date de banc fixe, comme JOUR_BANC de hook-ecriture : la revue des listes (EC-13) n'y est pas encore due.
+  const JOUR_BANC = "2026-10-19";
+  const lancerHook = (page, jour = JOUR_BANC) => spawnSync(process.execPath, [fileURLToPath(import.meta.url), "--fichier", page, "--aujourd-hui", jour],
+    { encoding: "utf8", timeout: 120000 }).stdout || "";
+  const pageHorsLivrable = join(dir, "note.html"); writeFileSync(pageHorsLivrable, "<p>x</p>", "utf8");
+  if (/\[famille\]/.test(lancerHook(pageHorsLivrable))) casse.push("la famille est demandée à une page qui n'est pas un livrable (hors `output\\`)");
+  mkdirSync(join(dir, "output", "04-plans"), { recursive: true });
+  const pageCouverte = join(dir, "output", "04-plans", "Factory - Synthese Mandat - Campagne close - 20260916a.html");
+  const pageNue = join(dir, "output", "04-plans", "Factory - Note Migration - Chemins renommes - 20260916a.html");
+  writeFileSync(pageCouverte, "<p>x</p>", "utf8"); writeFileSync(pageNue, "<p>x</p>", "utf8");
+  if (!/\[famille\][^\n]*famille « restitution »/.test(lancerHook(pageCouverte))) casse.push("une page « Synthese … » ne résout pas sa famille à l'écriture (TF-1874)");
+  if (!/\[famille\][^\n]*G8 — aucune famille/.test(lancerHook(pageNue))) casse.push("une page d'un type ABSENT du catalogue n'est pas nommée à l'écriture : la classe gabarit-famille-manquante récidive par ce silence (TF-1874)");
+  // TF-1907 (21/10/2026) : la fiche de conception amont (D8) se demande aussi à l'écriture d'une PAGE — le rapport
+  // du 18/10 était un HTML. Trois sens sur le hook LANCÉ pour de bon, dans un projet jetable : une page d'une famille
+  // qui engage D8 (« Kit partenaire ») sans fiche est SIGNALÉE ; la même avec une exemption motivée se tait ; une
+  // page d'une famille qui n'engage pas D8 (« Synthese … ») se tait aussi.
+  const projetD8 = join(dir, "projet-d8"); mkdirSync(join(projetD8, "output"), { recursive: true });
+  const lancerProjet = (page) => spawnSync(process.execPath, [fileURLToPath(import.meta.url), "--fichier", page],
+    { encoding: "utf8", timeout: 120000, cwd: projetD8 }).stdout || "";
+  const pageKit = join(projetD8, "output", "Factory - Kit partenaire - Revendeurs - 20261021a.html");
+  writeFileSync(pageKit, "<!doctype html><html><body><h1>Kit</h1></body></html>", "utf8");
+  if (!/\[fiche\][^\n]*D8/.test(lancerProjet(pageKit))) casse.push("une page d'une famille qui engage D8, écrite sans fiche, n'est pas signalée à l'écriture (TF-1907)");
+  writeFileSync(pageKit, "<!doctype html><html><head><meta name=\"fiche-de-conception\" content=\"exemption — page interne sans lecteur externe\"></head><body><h1>Kit</h1></body></html>", "utf8");
+  if (/\[fiche\]/.test(lancerProjet(pageKit))) casse.push("une page à exemption motivée (meta fiche-de-conception) est encore signalée (TF-1907)");
+  const pageSynth = join(projetD8, "output", "Factory - Synthese Mandat - Campagne close - 20261021a.html");
+  writeFileSync(pageSynth, "<p>x</p>", "utf8");
+  if (/\[fiche\]/.test(lancerProjet(pageSynth))) casse.push("une page d'une famille qui n'engage pas D8 est signalée : la donnée du catalogue décide (TF-1907)");
+  // TF-1968 (29/10/2026) : le plancher d'écriture se joue sur le TEXTE d'une page, à son écriture. Avant, une page de
+  // 807 phrases dont 15 de plus de 35 mots n'avait aucun juge, le hook d'écriture écartant tout fichier qui n'est pas un
+  // `.md`. Trois sens, jugés par le hook LANCÉ pour de bon : ROUGE sept phrases de 40 mots d'affilée (style FAIL, EC-2) ;
+  // VERT les mêmes mots en phrases de 10 mots (style PASS) ; SILENCE sous `old\` (l'historique n'est pas réécrit).
+  // Des mots tous différents, en lettres seules : trois phrases qui ouvrent sur le même mot avertiraient (EC-5) et brouilleraient le vert.
+  const motDe = (i) => "t" + i.toString(26).replace(/[0-9a-p]/g, (c) => "abcdefghijklmnopqrstuvwxyz"[parseInt(c, 26)]);
+  const motsDe = (n, depart) => Array.from({ length: n }, (_, i) => motDe(depart + i)).join(" ") + ".";
+  const pageDeTexte = (paragraphes) => `<!doctype html><html lang="fr"><head><title>Rapport</title></head><body><h1>Rapport</h1>${paragraphes}</body></html>`;
+  const pageLongue = join(dir, "page-phrases-longues.html");
+  writeFileSync(pageLongue, pageDeTexte(Array.from({ length: 7 }, (_, k) => `<p>${motsDe(40, k * 40)}</p>`).join("\n")), "utf8");
+  const pageCourte = join(dir, "page-phrases-courtes.html");
+  // Les MÊMES 280 mots, en 7 paragraphes de 4 phrases : EC-20 (née après ce cas) refuse un paragraphe de plus de 6 phrases.
+  writeFileSync(pageCourte, pageDeTexte(Array.from({ length: 7 }, (_, p) => `<p>${Array.from({ length: 4 }, (_, k) => motsDe(10, (p * 4 + k) * 10)).join(" ")}</p>`).join("\n")), "utf8");
+  mkdirSync(join(dir, "old"), { recursive: true });
+  const pageAncienne = join(dir, "old", "page-phrases-longues.html");
+  writeFileSync(pageAncienne, readFileSync(pageLongue, "utf8"), "utf8");
+  if (!/\[ecriture\][^\n]*style FAIL/.test(lancerHook(pageLongue)) || !/\[ecriture\][^\n]*EC-2/.test(lancerHook(pageLongue)))
+    casse.push("TF-1968 : sept phrases de 40 mots d'affilée dans une PAGE ne sont pas signalées à son écriture (style FAIL, EC-2)");
+  if (!/\[ecriture\][^\n]*style PASS/.test(lancerHook(pageCourte)))
+    casse.push("TF-1968 : les MÊMES mots coupés en phrases de 10 mots ne sont pas déclarés style PASS — le remède échoue");
+  if (/\[ecriture\][^\n]*style PASS/.test(lancerHook(pageCourte, "2099-01-01")))
+    casse.push("TF-1968 : la date imposée n'est pas transmise au plancher d'écriture (le vert reste PASS en 2099, revue des listes due)");
+  if (/\[ecriture\]/.test(lancerHook(pageAncienne)))
+    casse.push("TF-1968 : une page sous old\\ est jugée — l'historique ne se réécrit pas");
+  rmSync(dir, { recursive: true, force: true });
+  console.log(casse.length ? `Self-test hook-page-html : ${casse.length} DÉFAUT(S)\n - ${casse.join("\n - ")}`
+    : "Self-test hook-page-html : 17/17 PASS — 14 cas d'avant + D8 (TF-1907, page sans fiche signalée, exemption motivée en meta silencieuse, famille sans D8 silencieuse) PASS — les 14 d'avant : (cas rouge : page en défaut signalée avec sa règle ; page conforme PASS ; fichier absent silencieux ; oracle absent DIT ; entrée .html reconnue ; .md ignoré ; JSON illisible ignoré ; oracle documentaire en défaut AVERTIT avec sa règle ; conforme dit PASS ; absent DIT ; deux oracles documentaires déclarés ; G8 dans ses TROIS sens sur une page lancée pour de bon — pas de famille demandée hors `output\\`, famille résolue sur une « Synthese … », type absent du catalogue NOMMÉ à l'écriture, TF-1874)");
+  return casse.length ? 1 : 0;
+}
+
+const lanceEnDirect = process.argv[1] && fileURLToPath(import.meta.url).toLowerCase().replaceAll("\\", "/") === process.argv[1].toLowerCase().replaceAll("\\", "/");
+if (lanceEnDirect) {
+  const args = process.argv.slice(2);
+  if (args.includes("--self-test")) process.exit(selfTest());
+  let page = null;
+  // Date imposée au plancher d'écriture (recette seulement, 25/11/2026) : sans elle, EC-13 (revue datée des listes) fait
+  // dépendre le banc du calendrier. Hors recette, la date du jour reste la règle.
+  const iJour = args.indexOf("--aujourd-hui");
+  const jourImpose = iJour >= 0 && /^\d{4}-\d{2}-\d{2}$/.test(args[iJour + 1] || "") ? args[iJour + 1] : null;
+  const i = args.indexOf("--fichier");
+  if (i >= 0) page = args[i + 1];
+  else { let stdin = ""; try { stdin = readFileSync(0, "utf8"); } catch { /* pas de stdin */ } page = fichierVise(stdin); }
+  if (!page) process.exit(0);
+  // TF-1874 : la famille du livrable (G8), jouée comme `hook-ecriture.mjs` la joue pour un `.md`.
+  // TF-1968 : le plancher d'écriture se joue aussi sur le TEXTE d'une page (`oracle-ecriture` lit un `.html` par son texte
+  // visible) ; il n'était joué que sur les `.md`, et une page de 807 phrases dont 15 de plus de 35 mots n'avait aucun juge.
+  const lignes = [...jouer(resolve(page)), ...ORACLES_DOCUMENTAIRES.flatMap((o) => jouerAvertissement(resolve(page), o)),
+    ...(ECRITURE_IGNORES.some((re) => re.test(page)) ? [] : jouerEcriture(resolve(page), undefined, jourImpose)),
+    ...jouerFamille(resolve(page)), ...jouerFiche(resolve(page))];
+  if (lignes.length) console.log(lignes.join("\n"));
+  process.exit(0);
+}

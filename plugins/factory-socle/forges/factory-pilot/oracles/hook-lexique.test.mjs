@@ -1,0 +1,285 @@
+#!/usr/bin/env node
+/**
+ * hook-lexique.test.mjs — le hook joue son self-test ET se comporte en hook (stdin JSON → stdout).
+ * Joué par `oracles\self-tests.mjs` (I2). Deux sens : un message d'appel produit une ligne de
+ * contexte nommant le skill ; un message ordinaire ne produit RIEN (stdout vide, exit 0).
+ */
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const HOOK = join(dirname(fileURLToPath(import.meta.url)), "hook-lexique.mjs");
+let pass = 0, fail = 0;
+const check = (nom, fn) => { try { fn(); console.log(`  [PASS] ${nom}`); pass++; } catch (e) { console.error(`  [FAIL] ${nom} — ${e.message}`); fail++; } };
+const jouer = (prompt) => spawnSync(process.execPath, [HOOK], { encoding: "utf8", input: JSON.stringify({ prompt }) });
+
+// Le compte est ÉPINGLÉ, et c'est voulu : un cas qui disparaît sans que personne le voie est la
+// façon la moins chère de faire passer une recette. Il se relève donc à chaque ajout — ici de 13 à
+// 19 le 22/09 (TF-1239), les six cas neufs jugeant la PROVENANCE du message et non le lexique ;
+// puis de 19 à 20 le même jour (TF-1314), le message d'une autre session Claude Code ; puis de 20 à
+// 29 le 25/09 (TF-1418), les 9 cas neufs jugeant les NIVEAUX : 6 mots-clés, 2 de portée, 1 d'origine ;
+// puis de 29 à 39 le 28/09 (R-57, cas écrits le 24/09) : neuf cas de la CONSIGNE de règle — quatre
+// éloges de forme ou demandes de gabarit, cinq phrases voisines qui ne doivent rien déclencher — et
+// un cas de provenance ; puis de 39 à 45 le 01/10 (réponse humaine « 42a ») : la consigne du
+// PROCESSUS, 3 messages humains réels qui corrigent un processus et 3 phrases voisines épargnées ;
+// puis de 45 à 47 le 01/10 (niveau Moyen en essai) : « moyen : » reconnu en tête, et ailleurs non ;
+// puis de 47 à 48 le 13/10 (étape 3, D-68 (a)) : un produit portant `forge/NIVEAUX.md` est en service ;
+// puis de 48 à 58 le 15/10 (TF-1735, D-1 (a)) : la consigne de l'AUDIT DU PRODUIT, 4 demandes reconnues
+// et 6 phrases voisines épargnées (audits spécialisés, run de forge-tests) ; puis de 58 à 66 le 15/10
+// (TF-1753) : la question d'IMITATION, 4 questions « comme X » reconnues et 4 phrases voisines épargnées ;
+// puis de 66 à 74 le 19/10 (TF-1885) : la route jugée sur le texte de l'humain hors bloc collé ou cité,
+// 2 cas fondateurs (prompt collé, formule du lexique qui prime) et 6 cas voisins dans les deux sens ;
+// puis de 74 à 81 le 05/11 (TF-2144) : le standard d'audit du client lu avant le routage, 7 cas dans les deux sens ;
+// puis de 81 à 93 le 09/11 (TF-2301) : le verbe de la demande porte l'audit, 7 mentions épargnées (identifiant,
+// énumération d'idées, citation, constat) et 5 demandes reconnues dont celles qui portent des mots voisins ;
+// puis de 93 à 97 le 21/11 (boussole, L-02 et L-05) : la formule « où en suis-je ? » dans les deux sens, et la consigne du premier tour.
+// Puis de 97 à 104 le 23/11/2026 (TF-2795) : la consigne « synchro », 4 verts et 3 rouges.
+check("self-test du hook : 104 cas verts", () => {
+  const r = spawnSync(process.execPath, [HOOK, "--self-test"], { encoding: "utf8" });
+  if (r.status !== 0) throw new Error(`exit ${r.status} : ${r.stdout}`);
+  if (!/104 PASS, 0 FAIL/.test(r.stdout)) throw new Error(`compte inattendu : ${r.stdout.split("\n").pop()}`);
+});
+// TF-2301 — la consigne d'une série d'animations qui cite `forge-audit` dans une liste d'idées ne reçoit plus la route d'audit ;
+// la même liste suivie d'une demande portée par un verbe la reçoit. Joué au point d'entrée réel.
+check("hook — une liste d'idées qui cite forge-audit n'injecte rien, la même liste suivie de « lance un audit complet du projet » injecte la route", () => {
+  const liste = "Idées d'animation pour la série :\n- forge-audit qui passe le produit au crible\n- un audit du produit raconté en 30 secondes\n- le site qui s'anime";
+  const non = jouer(liste);
+  const oui = jouer(`${liste}\nPuis lance un audit complet du projet`);
+  if (non.status !== 0 || non.stdout.trim() !== "") throw new Error(`la liste d'idées reçoit une consigne : ${non.stdout}`);
+  if (oui.status !== 0 || !/\[audit — hook-lexique\][^\n]*forge-audit/.test(oui.stdout)) throw new Error(`la demande portée par un verbe ne reçoit pas la route : ${oui.stdout}`);
+});
+// TF-2144 — le point d'entrée RÉEL lit le standard d'audit du client : une session ouverte dans un produit d'un dossier `_<client>` dont le projet
+// commun publie une porte reçoit cette porte dans la consigne d'audit ; la même demande hors de tout client reçoit la consigne d'avant.
+check("hook — « lance un audit complet du projet » chez un client qui publie sa porte → la consigne nomme le standard et sa porte, hors client elle ne change pas", () => {
+  const parc = mkdtempSync(join(tmpdir(), "lexique-client-"));
+  mkdirSync(join(parc, "_ClientFictif", "commun", "kit"), { recursive: true });
+  mkdirSync(join(parc, "_ClientFictif", "produit-a"), { recursive: true });
+  mkdirSync(join(parc, "produit-libre"), { recursive: true });
+  writeFileSync(join(parc, "_ClientFictif", "commun", "CONVENTIONS-CLIENT.md"), "# Conventions\n\n- Audit : porte du kit obligatoire.\n", "utf8");
+  writeFileSync(join(parc, "_ClientFictif", "commun", "kit", "verifier-rapport-audit.mjs"), "// porte fictive\n", "utf8");
+  const lancer = (cwd) => spawnSync(process.execPath, [HOOK], { encoding: "utf8", input: JSON.stringify({ prompt: "lance un audit complet du projet", cwd }),
+    env: { ...process.env, FORGE_ROOT: parc, CLAUDE_PROJECT_DIR: cwd } });
+  const chez = lancer(join(parc, "_ClientFictif", "produit-a"));
+  if (chez.status !== 0 || !/STANDARD D'AUDIT PUBLIÉ PAR LE CLIENT _ClientFictif/.test(chez.stdout) || !/verifier-rapport-audit\.mjs/.test(chez.stdout)) throw new Error(`standard absent : ${chez.stdout}`);
+  const libre = lancer(join(parc, "produit-libre"));
+  if (libre.status !== 0 || !/\[audit — hook-lexique\]/.test(libre.stdout) || /STANDARD D'AUDIT PUBLIÉ/.test(libre.stdout)) throw new Error(`hors client : ${libre.stdout}`);
+});
+// TF-1753 — la question de l'humain, jouée au point d'entrée réel : elle reçoit la consigne
+// d'imitation ; « Demande à la Factory de le faire », délégation explicite, ne reçoit rien.
+check("hook — « peut-on le faire comme la Factory ? » injecte la consigne d'imitation, la délégation explicite rien", () => {
+  const oui = jouer("Est-ce que le projet commun peut faire le tirage automatique comme la factory le fait à l'ouverture de session ?");
+  const non = jouer("Demande à la Factory de le faire");
+  if (oui.status !== 0 || !/\[imitation — hook-lexique\][^\n]*IMITATION/.test(oui.stdout)) throw new Error(`consigne absente : ${oui.stdout}`);
+  if (non.stdout.trim() !== "") throw new Error(`la délégation explicite reçoit la consigne : ${non.stdout}`);
+});
+
+// R-57 — le point d'entrée RÉEL injecte la consigne sur le message qui a fondé la règle, et rien sur
+// sa négation : la recette interne juge les fonctions, celle-ci juge ce que le hook ÉCRIT.
+check("hook — un verdict de forme injecte la consigne R-57, sa négation n'injecte rien", () => {
+  const oui = jouer("Le format du guide est vraiment top. Enregistre ce document en gabarit pour la Factory");
+  const non = jouer("Le format n'est pas top, reprends les marges");
+  if (oui.status !== 0 || !/\[R-57 — hook-lexique\]/.test(oui.stdout)) throw new Error(`rien injecté : ${oui.stdout}`);
+  if (non.stdout.trim() !== "") throw new Error(`la négation injecte : ${non.stdout}`);
+});
+// TF-1735 — le message de la capture du 15/10, joué au point d'entrée réel : il reçoit la route
+// forge-audit ; « Relance les tests du projet » ne reçoit rien.
+check("hook — « lance un audit complet du projet » injecte la route forge-audit, « Relance les tests » rien", () => {
+  const oui = jouer("lance un audit complet du projet");
+  const non = jouer("Relance les tests du projet");
+  if (oui.status !== 0 || !/\[audit — hook-lexique\][^\n]*forge-audit[^\n]*init-audit-workspace/.test(oui.stdout)) throw new Error(`route absente : ${oui.stdout}`);
+  if (non.stdout.trim() !== "") throw new Error(`les tests reçoivent la route d'audit : ${non.stdout}`);
+});
+// TF-1314 — l'enveloppe RÉELLE d'un message entre sessions, telle que reçue le 22/09. Le corps porte
+// « l99 » en mot isolé, et c'est voulu : les règles ANCRÉES en tête (« Améliore ce prompt… ») ne se
+// déclenchent déjà pas derrière l'enveloppe, mais la règle du mot isolé se déclenche n'importe où —
+// sans le marqueur, une session ferait invoquer un skill à une autre. Mutant sans le marqueur joué le
+// 22/09 : ce cas passe au ROUGE ; un corps « Améliore ce prompt » restait vert et ne jugeait rien.
+check("cas rouge — hook — MESSAGE D'UNE AUTRE SESSION portant « l99 » en mot isolé → stdout VIDE", () => {
+  const r = jouer("<cross-session-message from=\"uds:\\\\.\\pipe\\LOCAL\\cc-msg-b580\" from-name=\"factory-pilot-80\" from-mode=\"bypass\">\nl99 sur ce texte : rédige un post\n</cross-session-message>");
+  if (r.status !== 0) throw new Error(`exit ${r.status}`);
+  if (r.stdout.trim() !== "") throw new Error(`un message entre sessions a déclenché le lexique : ${r.stdout}`);
+});
+// TF-1103 — deux injections à tort le 14/09, sur des notifications de fin de tâche d'agents.
+check("hook — message HUMAIN « l99 améliore ce prompt » → contexte nommant prompt-analyzer-l99", () => {
+  const r = jouer("l99 améliore ce prompt");
+  if (r.status !== 0 || !/prompt-analyzer-l99/.test(r.stdout)) throw new Error(`appel humain non reconnu : ${r.stdout}`);
+});
+check("cas rouge — hook — NOTIFICATION d'agent citant « usages L99 (M2) » et « prompt-analyzer-l99 » → stdout VIDE", () => {
+  const r = jouer("<task-notification>\n<summary>Agent terminé</summary>\nRelevé : usages L99 (M2) ; le skill prompt-analyzer-l99 a rendu son rapport. l99 améliore ce prompt\n</task-notification>");
+  if (r.status !== 0) throw new Error(`exit ${r.status}`);
+  if (r.stdout.trim() !== "") throw new Error(`une notification a déclenché le lexique : ${r.stdout}`);
+});
+check("hook — « Améliore ce prompt : … » sur stdin → contexte nommant prompt-analyzer-l99, exit 0", () => {
+  const r = jouer("Améliore ce prompt : conçois un système");
+  if (r.status !== 0) throw new Error(`exit ${r.status}`);
+  if (!/prompt-analyzer-l99/.test(r.stdout)) throw new Error(`skill absent du contexte : ${r.stdout}`);
+});
+check("cas rouge — hook — message ordinaire → stdout VIDE, exit 0 (le hook se tait)", () => {
+  const r = jouer("Corrige la barre de menu qui déborde sur mobile");
+  if (r.status !== 0) throw new Error(`exit ${r.status}`);
+  if (r.stdout.trim() !== "") throw new Error(`stdout non vide : ${r.stdout}`);
+});
+check("cas rouge — hook — stdin illisible (pas du JSON) → exit 0, jamais un blocage du message", () => {
+  const r = spawnSync(process.execPath, [HOOK], { encoding: "utf8", input: "pas du json" });
+  if (r.status !== 0) throw new Error(`exit ${r.status}`);
+});
+// TF-1418 — les NIVEAUX joués en hook réel. La ligne sort au pilot, où `references/NIVEAUX.md`
+// existe, et chez un produit qui porte le texte hérité `forge/NIVEAUX.md` (étape 3, D-68 (a) du
+// 13/10/2026) ; le même message dans un dossier qui ne porte ni l'un ni l'autre ne produit rien.
+const PILOT = join(dirname(HOOK), "..");
+// `CLAUDE_PROJECT_DIR` (posée aux hooks par Claude Code) ne fuit pas dans la recette : un cas la pose lui-même (TF-1943).
+const envSansProjet = () => { const e = { ...process.env }; delete e.CLAUDE_PROJECT_DIR; return e; };
+const jouerDans = (prompt, cwd, projetDir = null) => spawnSync(process.execPath, [HOOK], { encoding: "utf8", input: JSON.stringify({ prompt, cwd }),
+  env: projetDir ? { ...envSansProjet(), CLAUDE_PROJECT_DIR: projetDir } : envSansProjet() });
+check("hook — « vite : » dans une session du pilot → ligne de niveau Simple", () => {
+  const r = jouerDans("vite : où est la liste des éléments ?", PILOT);
+  if (r.status !== 0) throw new Error(`exit ${r.status}`);
+  if (!/\[NIVEAU — hook-lexique\][^\n]*Simple/.test(r.stdout)) throw new Error(`niveau Simple absent : ${r.stdout}`);
+});
+check("hook — « vite : » chez un produit portant forge/NIVEAUX.md → ligne Simple citant forge\\NIVEAUX.md", () => {
+  const produit = mkdtempSync(join(tmpdir(), "produit-"));
+  mkdirSync(join(produit, "forge"));
+  writeFileSync(join(produit, "forge", "NIVEAUX.md"), "# fixture\n");
+  const r = jouerDans("vite : où est la liste des éléments ?", produit);
+  if (r.status !== 0) throw new Error(`exit ${r.status}`);
+  if (!/\[NIVEAU — hook-lexique\][^\n]*Simple[^\n]*forge\\NIVEAUX\.md/.test(r.stdout)) throw new Error(`ligne absente ou chemin du pilot cité : ${r.stdout}`);
+});
+check("cas rouge — hook — « vite : » dans un dossier sans NIVEAUX.md, comme un produit non équipé → stdout VIDE", () => {
+  const r = jouerDans("vite : où est la liste des éléments ?", mkdtempSync(join(tmpdir(), "produit-")));
+  if (r.status !== 0) throw new Error(`exit ${r.status}`);
+  if (r.stdout.trim() !== "") throw new Error(`un dossier hors pilot a reçu la ligne de niveau : ${r.stdout}`);
+});
+// TF-1943 (29/10/2026) — LES NIVEAUX SE JUGENT AU PROJET, PAS AU SOUS-DOSSIER OÙ LA SESSION S'EST DÉPLACÉE. Depuis que les hooks se déclenchent après un `cd`
+// (commandes ancrées sur CLAUDE_PROJECT_DIR, TF-1903), l'entrée porte `cwd` = le sous-dossier, où ni `references/NIVEAUX.md` ni `forge/NIVEAUX.md` n'existent :
+// le hook se taisait. ROUGE : le MÊME « vite : », `cwd` dans un sous-dossier du pilot, d'un produit, puis par CLAUDE_PROJECT_DIR.
+check("rouge — « vite : » depuis un sous-dossier du pilot → ligne de niveau Simple (racine git)", () => {
+  const r = jouerDans("vite : où est la liste des éléments ?", join(PILOT, "scripts"));
+  if (r.status !== 0) throw new Error(`exit ${r.status}`);
+  if (!/\[NIVEAU — hook-lexique\][^\n]*Simple/.test(r.stdout)) throw new Error(`le hook a lu le sous-dossier, niveau absent : « ${r.stdout} »`);
+});
+check("rouge — « vite : » depuis un sous-dossier d'un produit (dépôt portant forge/NIVEAUX.md) → ligne Simple", () => {
+  const produit = mkdtempSync(join(tmpdir(), "produit-"));
+  mkdirSync(join(produit, ".git")); mkdirSync(join(produit, "forge", "essai"), { recursive: true }); mkdirSync(join(produit, "src"));
+  writeFileSync(join(produit, "forge", "NIVEAUX.md"), "# fixture\n");
+  for (const sous of [join(produit, "src"), join(produit, "forge", "essai")]) {
+    const r = jouerDans("vite : où est la liste des éléments ?", sous);
+    if (r.status !== 0 || !/\[NIVEAU — hook-lexique\][^\n]*Simple/.test(r.stdout)) throw new Error(`depuis ${sous.slice(produit.length)} : niveau absent : « ${r.stdout} »`);
+  }
+});
+check("rouge — CLAUDE_PROJECT_DIR prime sur cwd : « vite : » depuis un dossier sans rien → ligne Simple", () => {
+  const r = jouerDans("vite : où est la liste des éléments ?", mkdtempSync(join(tmpdir(), "ailleurs-")), PILOT);
+  if (r.status !== 0 || !/\[NIVEAU — hook-lexique\][^\n]*Simple/.test(r.stdout)) throw new Error(`la variable est ignorée : « ${r.stdout} »`);
+});
+check("hook — « complet : » dans une session du pilot → ligne de niveau Complexe", () => {
+  const r = jouerDans("complet : où en est le parc ?", PILOT);
+  if (r.status !== 0) throw new Error(`exit ${r.status}`);
+  if (!/\[NIVEAU — hook-lexique\][^\n]*Complexe/.test(r.stdout)) throw new Error(`niveau Complexe absent : ${r.stdout}`);
+});
+// TF-1958 (D-76 (c), 26/10/2026) — LA LETTRE D'UNE DÉCISION OUVERTE. Quatre fois en 7 jours, un message
+// sans lettre (« exécute le prompt », « Fais 226 », « écris l'email ») a été pris pour le choix de
+// l'option recommandée d'une décision encore ouverte. Le hook joue au point d'entrée réel, transcript
+// à l'appui (champ `transcript_path`) : il rappelle les D-N ouvertes quand le message ne cite aucune
+// lettre, et se tait quand il en cite une, quand c'est un sélecteur d'action (« A1 »), quand le
+// transcript ne pose aucune décision ou qu'elle a été tranchée depuis. Il ne bloque jamais.
+const assistant = (id, texte) => ({ type: "assistant", message: { id, role: "assistant", content: [{ type: "text", text: texte }] } });
+const humain = (texte) => ({ type: "user", origin: { kind: "human" }, message: { role: "user", content: texte } });
+const DECISION_99 = "## 3. Décisions\n\n> **D-99 — Publier la page maintenant ?**\n>\n> | Option | Effet |\n> | (a) oui | publie |\n> | (b) non | garde |\n>\n> Recommandation : (a).\n";
+const transcrire = (records) => {
+  const p = join(mkdtempSync(join(tmpdir(), "transcript-")), "session.jsonl");
+  writeFileSync(p, records.map((r) => JSON.stringify(r)).join("\n") + "\n");
+  return p;
+};
+const jouerAvec = (prompt, records) =>
+  spawnSync(process.execPath, [HOOK], { encoding: "utf8", input: JSON.stringify({ prompt, transcript_path: transcrire(records), cwd: mkdtempSync(join(tmpdir(), "produit-")) }) });
+const APRES_D99 = [humain("où en est la publication ?"), assistant("m1", DECISION_99)];
+check("cas rouge — hook — « exécute le prompt » après une restitution posant D-99 → rappel citant D-99 et demandant la lettre", () => {
+  const r = jouerAvec("exécute le prompt", APRES_D99);
+  if (r.status !== 0) throw new Error(`exit ${r.status} : le hook ne doit jamais bloquer`);
+  if (!/\[LETTRE — hook-lexique\][^\n]*D-99[^\n]*ce message ne cite aucune lettre : n'exécute aucune option de ces décisions, demande la lettre/.test(r.stdout))
+    throw new Error(`rappel absent ou incomplet : ${JSON.stringify(r.stdout)}`);
+});
+check("hook — « Fais 226 » et « écris l'email » (les deux autres messages du constat) → rappel", () => {
+  for (const m of ["Fais 226", "écris l'email"]) {
+    const r = jouerAvec(m, APRES_D99);
+    if (!/\[LETTRE — hook-lexique\][^\n]*D-99/.test(r.stdout)) throw new Error(`« ${m} » sans rappel : ${JSON.stringify(r.stdout)}`);
+  }
+});
+check("hook — la lettre est citée (« 99a », « D-99 (a) », « 99 b », « 68a, 99a ») → AUCUN rappel", () => {
+  for (const m of ["99a", "D-99 (a)", "99 b", "68a, 99a"]) {
+    const r = jouerAvec(m, APRES_D99);
+    if (r.status !== 0 || r.stdout.trim() !== "") throw new Error(`« ${m} » reçoit un rappel : ${JSON.stringify(r.stdout)}`);
+  }
+});
+check("hook — un sélecteur d'action (« A1 », « A-2 ») n'est pas une décision et ne déclenche pas le rappel", () => {
+  for (const m of ["A1", "A-2"]) {
+    const r = jouerAvec(m, APRES_D99);
+    if (r.status !== 0 || r.stdout.trim() !== "") throw new Error(`« ${m} » reçoit un rappel : ${JSON.stringify(r.stdout)}`);
+  }
+});
+check("cas rouge (œil critique du 29/10) — « il y a 2 jours, fais-le » et « il a 3 options, vas-y » ne sont pas des sélecteurs d'action → rappel", () => {
+  for (const m of ["il y a 2 jours, fais-le", "il a 3 options, vas-y"]) {
+    const r = jouerAvec(m, APRES_D99);
+    if (!/\[LETTRE — hook-lexique\][^\n]*D-99/.test(r.stdout)) throw new Error(`« ${m} » sans rappel : le verbe « a » est lu comme une action`);
+  }
+  for (const m of ["a1", "a-2"]) {
+    const r = jouerAvec(m, APRES_D99);
+    if (r.stdout.trim() !== "") throw new Error(`« ${m} » reçoit un rappel : le sélecteur en minuscules n'est plus reconnu`);
+  }
+});
+check("hook — aucune décision ouverte dans le dernier message de l'assistant → rien", () => {
+  const sansDecision = [humain("99a"), assistant("m2", "## 4. Exécution\n\nD-99 (a) exécutée : la page est publiée.\n\n> **D-98 — décision d'hier, déjà tranchée** : exécutée, sans question.\n")];
+  const r = jouerAvec("exécute le prompt", sansDecision);
+  if (r.status !== 0 || r.stdout.trim() !== "") throw new Error(`rappel sans décision ouverte : ${JSON.stringify(r.stdout)}`);
+});
+check("hook — la décision posée plus haut dans la conversation n'est pas celle du DERNIER message : rappel limité à la dernière", () => {
+  const r = jouerAvec("exécute le prompt", [assistant("m0", "> **D-98 — Ancienne question ?**\n"), humain("98a"), assistant("m1", DECISION_99)]);
+  if (!/D-99/.test(r.stdout) || /D-98/.test(r.stdout)) throw new Error(`rappel inattendu : ${JSON.stringify(r.stdout)}`);
+});
+check("hook — la décision est tranchée depuis (un message humain citant 99a la suit) → rien", () => {
+  const r = jouerAvec("exécute le prompt", [humain("où en est la publication ?"), assistant("m1", DECISION_99), humain("99a")]);
+  if (r.status !== 0 || r.stdout.trim() !== "") throw new Error(`rappel d'une décision tranchée : ${JSON.stringify(r.stdout)}`);
+});
+check("hook — un message qui n'est pas de l'humain (notification d'agent) ne reçoit pas le rappel", () => {
+  const r = jouerAvec("<task-notification>\n<summary>Agent terminé</summary>\nrapport remis\n</task-notification>", APRES_D99);
+  if (r.status !== 0 || r.stdout.trim() !== "") throw new Error(`notification avec rappel : ${JSON.stringify(r.stdout)}`);
+});
+check("cas rouge — hook — transcript absent, illisible ou sans champ → rien, exit 0, jamais un blocage", () => {
+  for (const entree of [{ prompt: "exécute le prompt" }, { prompt: "exécute le prompt", transcript_path: join(tmpdir(), "n-existe-pas.jsonl") }]) {
+    const r = spawnSync(process.execPath, [HOOK], { encoding: "utf8", input: JSON.stringify(entree) });
+    if (r.status !== 0 || r.stdout.trim() !== "") throw new Error(`sortie inattendue (exit ${r.status}) : ${JSON.stringify(r.stdout)}`);
+  }
+  const illisible = join(mkdtempSync(join(tmpdir(), "transcript-")), "x.jsonl");
+  writeFileSync(illisible, "ceci n'est pas du JSON\n{ casse\n");
+  const r = spawnSync(process.execPath, [HOOK], { encoding: "utf8", input: JSON.stringify({ prompt: "exécute le prompt", transcript_path: illisible }) });
+  if (r.status !== 0 || r.stdout.trim() !== "") throw new Error(`transcript illisible : exit ${r.status}, ${JSON.stringify(r.stdout)}`);
+});
+// TF-2214 (16/11/2026) — la lettre du porteur s'écrit au registre des décisions du PILOT : une entrée `reponse` par décision, ses lettres seules, jamais le
+// texte du message ; hors du pilot (un produit a ses propres D-N), sans lettre, ou pour un numéro absent du registre, rien ne s'écrit. Joué au point d'entrée réel.
+check("hook — « 48b » dans une session du pilot consigne la réponse de D-48 au registre (lettre seule) ; sans lettre, hors pilot, numéro inconnu ou texte long : rien", () => {
+  const dir = mkdtempSync(join(tmpdir(), "lexique-reponse-"));
+  const registre = join(dir, "REGISTRE.jsonl");
+  const maintenant = new Date().toISOString();
+  const decision = (n) => JSON.stringify({ type: "decision", n, question: `Question de la décision ${n} ?`, date: maintenant.slice(0, 10), ts: maintenant, origine: "reservation" });
+  writeFileSync(registre, [JSON.stringify({ type: "registre", version: 1 }), decision(48), decision(49)].join("\n") + "\n", "utf8");
+  const PILOT = join(dirname(HOOK), "..");
+  const lancer = (prompt, cwd = PILOT) => spawnSync(process.execPath, [HOOK], { encoding: "utf8", cwd, input: JSON.stringify({ prompt, cwd }),
+    env: { ...process.env, FORGE_REGISTRE_DECISIONS_PILOT: registre, CLAUDE_PROJECT_DIR: cwd } });
+  const reponses = () => readFileSync(registre, "utf8").split("\n").filter((l) => /"type":"reponse"/.test(l)).map((l) => JSON.parse(l));
+  for (const [prompt, cwd] of [["oui, fais-le", PILOT], ["49", PILOT], ["99a", PILOT], ["48b", dir], ["48b " + "mot ".repeat(100), PILOT]]) {
+    const r = lancer(prompt, cwd);
+    if (r.status !== 0) throw new Error(`exit ${r.status} sur « ${prompt.slice(0, 20)} »`);
+    if (reponses().length) throw new Error(`« ${prompt.slice(0, 20)}… » (cwd ${cwd === PILOT ? "pilot" : "produit"}) a écrit une réponse : ${JSON.stringify(reponses())}`);
+  }
+  const r = lancer("48b");
+  if (r.status !== 0) throw new Error(`exit ${r.status}`);
+  const e = reponses();
+  if (e.length !== 1 || e[0].n !== 48 || e[0].lettres.join() !== "b" || e[0].origine !== "hook-lexique" || "texte" in e[0] || "message" in e[0]) throw new Error(`entrée attendue pour D-48 : ${JSON.stringify(e)}`);
+  lancer("48a"); lancer("48b");
+  if (reponses().length !== 1) throw new Error("une seconde réponse a été ajoutée pour D-48");
+  lancer("49a + b");
+  if (reponses().map((x) => `${x.n}${x.lettres.join("+")}`).join() !== "48b,49a+b") throw new Error(`D-49 non consignée : ${JSON.stringify(reponses())}`);
+});
+console.log(`\nhook-lexique.test : ${pass} PASS, ${fail} FAIL`);
+process.exit(fail ? 1 : 0);

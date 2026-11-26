@@ -1,0 +1,2372 @@
+# Boucle d'amélioration des forges
+
+> **Depuis le 08/08 au soir : le suivi actif vit dans `todo\` (registre TODO-FORGE).**
+> Ce document est le **journal narratif** (campagnes, décisions, contexte) — il référence les
+> ids `TF-xxxx` et ne duplique plus les listes d'items. Les plans A/B/C de la revue du 08/08
+> et les candidats encore ouverts des sections ci-dessous sont **migrés** dans le registre
+> (TF-0001…TF-0041, tous en `candidat`) ; les sections historiques restent telles quelles
+> comme archive narrative.
+
+Version 1.0.0 — 2026-08-04
+
+Le steering améliore les 5 forges par **itérations bornées**. Jamais d'amélioration spontanée,
+jamais d'application sans validation humaine.
+
+## Tri des retours en 3 voies et barrière dès la 2e fois (T1, TF-1946, D-68 (a) du 26/10/2026)
+
+Source : diagnostic `output/03-etudes/Factory - Diagnostic Factory - Oeil critique - 20261026a.md`, §d-T1. Le fait : 35 corrections sur 105 répétaient une consigne déjà donnée en 30 jours, et chaque reproche devenait une règle de plus au pilot.
+
+- **Portée** : chaque retour passe le test de généralité du skill `oeil-critique` 1.1.0, étape 4. Une préférence de l'humain va à `references/PREFERENCES-PORTEUR.md` ; une convention de client va au `CONVENTIONS-CLIENT.md` de son projet commun ; ces 2 fichiers se chargent à chaque ouverture, 2 Ko au plus chacun.
+- **3 voies** : préférence ou convention au fichier ; défaut de livrable corrigé chez le produit, sans lot ; défaut systémique en contrôle au pilot, admis s'il rejoue le cas qui l'a fait naître, rouge avant, vert après.
+- **Forçage** : « remonte à la Factory » fait partir le lot même si le test dit « produit ».
+- **Barrière dès la 2e fois** : une récidive appelle une barrière, pas un texte. Accord avec T2 : les règles de forme du compte rendu restent non bloquantes ; la barrière vise un défaut de fond, ou une règle de forme dont la récidive a fait intervenir l'humain, mesurée par ses messages. Outillée par la règle R17 de `todo/oracle-todo.mjs` : une création marquée `recidive_de` ne passe pas en corrige sans `barriere` {type : hook, oracle, defaut ou script ; chemin} (recette `todo/oracle-todo-r17.test.mjs`).
+
+## Un mécanisme de relecture passe le banc avant d'être adopté (TF-1073, 14/09/2026, D-3 (a))
+
+Un persona, une fiche d'expert, une grille de lentilles, un juge : tout dispositif proposé au parc
+pour **trouver plus de défauts** se mesure avant d'entrer, et il se mesure contre une relecture qui
+n'a pas le dispositif. Le banc est `oracles\banc-defauts-echappes\` — 9 défauts échappés RÉELS,
+trouvés par un humain après un vert des oracles, avec leur livrable reconstitué dans son état
+d'avant correction, le protocole figé, la relecture de référence et le script de décompte.
+
+**Le seuil ne se renégocie pas après la mesure** : une condition candidate est retenue si elle
+retrouve au moins deux livrables de plus que la référence sans dépasser le double de ses constats
+faux (`manifeste.json`, clé `seuil`). Il est écrit dans le manifeste, daté, et le décompte est
+exécuté — `node oracles\banc-defauts-echappes\decompter.mjs` rend `retenu: oui|non`, jamais une
+appréciation. La recette du banc est jouée par le harnais (I2, 3 cas, sous cliquet).
+
+*Ce que la première mesure a coûté et pourquoi le banc est gardé* : sur les 9 défauts, la
+relecture de référence sans persona en retrouve 2 ; trois relectures avec persona — exploitant,
+utilisateur final, mainteneur — en retrouvent 1, 3 et 3, pour un seuil fixé d'avance à 4. Six
+défauts sur neuf ne sont vus par AUCUNE relecture : ils ne se constatent qu'en exécutant, en
+rendant, ou en connaissant le contexte de diffusion. La mesure a demandé 1 920 959 jetons délégués
+à 9 sessions, dont l'essentiel — reconstituer les livrables, contrôler les fuites, juger à
+l'aveugle — serait à refaire pour chaque dispositif proposé si le banc n'était pas gardé.
+
+**Ce que le banc ne dit pas, et c'est la moitié la plus utile de son verdict** : il mesure le
+RAPPEL d'un mécanisme de relecture, jamais la valeur d'un dispositif qui sert à autre chose
+qu'à trouver des défauts. Un persona qui améliore la formulation d'une réponse sans en trouver
+davantage échoue ce banc et peut rester utile ailleurs — l'écrire évite de lui faire dire plus
+qu'il ne dit. Le banc s'enrichit des défauts échappés remontés d'ici la revue du 14/12/2026,
+dont au moins un de la phase de tests, absente de l'échantillon d'aujourd'hui.
+
+## Revue des classes — l'anticipation à partir de faits (03/09/2026, mandat d'amélioration continue)
+
+La boucle corrective ferme des retours un par un. Ce qu'elle ne voit pas, c'est la CLASSE qui
+revient chez plusieurs producteurs sous des symptômes différents — et c'est là que vit
+l'anticipation : proposer une règle, un oracle, un gabarit ou un changement du contrat d'échange
+AVANT le retour suivant, à partir de ce qui a déjà été compté, jamais à partir d'une intuition.
+Mesure fondatrice (pas 0 du mandat, 03/09) : 50 récidives déclarées en prose sur 788 items, en
+hausse chaque semaine d'août, invisibles à tout compteur.
+
+**Cadence** : au plus UNE revue par quinzaine, jouée à l'ouverture d'un tour du pilot, à partir de
+`todo\RECIDIVES.md` régénéré (`node todo\generer-recidives.mjs`) — jamais d'un souvenir.
+
+**Seuil** : toute classe comptée sur **au moins 2 produits** ou **au moins 3 occurrences**
+(fondateurs compris) produit UNE candidature au registre — jamais une application. La candidature
+porte : la mesure (classes, produits, dates, lues à la vue), la forge cible, et la FORME proposée
+parmi quatre — règle au socle ou au gabarit, oracle, gabarit de document, changement du contrat
+d'échange. Elle entre en `candidat` par un sidecar `revue-classes-<AAAAMMJJ><indice>.tf.jsonl`
+dans `input\01-candidatures\` (source : « revue des classes du <date> »), et suit la
+gouvernance ordinaire : décision humaine, clôture sur gains constatés, descente R12.
+
+**Contre-lecture obligatoire** : la revue lit la contre-métrique de la vue (classes créées par
+semaine, classes sans fondateur, retours entrés sous une classe suspecte) et le nombre d'items
+non classés. Une quinzaine qui crée plus de classes qu'elle ne clôt de récidives fait l'objet
+d'une candidature de RELECTURE du référentiel, pas d'une règle de plus.
+
+**Format des échanges** : quand une candidature de revue propose de changer le contrat de lot
+(gabarit `RETOURS-FORGES.md`, sidecar, sections R-45/R-46, classe), le changement est VERSIONNÉ
+(version du gabarit, seuil daté dans `ingerer-lot.mjs` comme R-45, R-46 et la classe), et les lots
+en attente s'ingèrent encore : l'ingestion accepte les deux formes pendant la transition, et une
+règle neuve entre avertissante avant de se durcir (doctrine v2.5.0). Casser le format ferait
+re-remonter ce qui l'était déjà — l'inverse du but.
+
+**Première revue (03/09/2026)**, jouée sur la mesure du pas 0 faute de classes au registre : la
+famille `page-html-socle` compte 13 récidives déclarées sur 5 producteurs, `versionnement-livrable`
+10 sur 4 — les deux dépassent le seuil. La candidature qui en sort ne demande pas une règle de
+plus (les 28 classes seed en portent déjà une chacune) : elle demande que la vue soit
+SURVEILLÉE ENTRE LES RUNS par forge-observability — sonde `rapport_json` sur le tableau de bord,
+dérive = une récidive de plus ou une classe de plus par rapport au relevé précédent — parce qu'une
+mesure que personne ne relit entre deux tours est une mesure qui ne change rien (N-1). **Décidée le
+03/09 (D-2, option a) et câblée le jour même** : plan `todo\observabilite\plan-recidives.json`,
+lanceur `todo\observer-recidives.mjs` (recette 4 cas rouge/vert), cadence hebdomadaire tenue par
+le hook d'ouverture du pilot, premier passage exercé — voir `fiches\forge-observability.md`.
+
+**Plan étendu le 17/09/2026 (TF-1163, TF-1164, TF-1165 — décision D-2 (a) sur l'étude
+`output\03-etudes\2026-09\20260917-etude-opportunite-revue-hebdomadaire-de-l-existant.md`).** L'étude a
+écarté une revue hebdomadaire rédigée : sur 709 items clos en 4 semaines, le pilot décide et clôt
+en moins d'un jour en médiane. Le retard mesuré vit dans la descente chez les produits (88 couples
+produit × classe non atteints sur 164), dans le stock d'items décidés non clos (de 3 à 40 en
+4 semaines) et dans le silence des sources. Le plan lit désormais ces grandeurs, et le relevé des
+contrôles sans appelant y entre comme sonde `commande`. Le tableau de bord porte trois sections de
+plus : la descente PAR PRODUIT avec la relance proposée, jamais jouée d'office ; le stock et sa
+contre-mesure, candidatures émises contre tranchées ; le silence des sources. Mêmes cadence,
+porteur et signal ; seuils à régler après deux passages ; verdict de l'étude revu le 2026-10-15.
+
+## Canal des retours produits (règle 18, 06/08/2026)
+
+Chaque produit prépare ses retours dans `forge\retours\` — un lot = un fichier
+`RETOURS-<AAAAMMJJ><indice>.md` (gabarit : `gabarits\RETOURS-FORGES.md`), généré à chaque
+clôture de run et à chaque inspection/incident. **Remise progressive** : l'humain copie le lot
+dans `input\` du steering quand il veut déclencher une campagne — l'original reste chez le
+produit (historique), le lot remis ne se modifie plus. Côté steering : chaque lot reçu est
+traité comme campagne de ce document (généralisation, mise en œuvre, preuve, push), consigné
+ci-dessous avec sa source. Les confirmations positives des lots closent les entrées « à
+vérifier » du backlog.
+
+Convention confirmée par l'usage (RS-8, lot 03) : **un fichier par remise, jamais ré-augmenté
+après transmission** — un fichier cumulatif forcerait le steering à re-trier les lots déjà
+traités. La forme historique `RETOURS-FORGES-<NN>.md` est acceptée au même titre que la forme
+canonique datée ; un `RETOURS-FORGES.md` de tête peut servir d'**index des lots** du produit.
+
+**Cas nominal prouvé** (RS-9, lot 03) : lot 01 remis le 05/08 au soir → RT-6/RT-7 implémentés
+dans la nuit → **constatés en service par le run produit le 06/08** (pan interface 196/196 sur
+16 écrans, `non_testables[]` et `--reprendre` au rapport, 4 divergences réelles attrapées puis
+leur correction validée). Première itération complète de la boucle inter-forges : retour →
+campagne → application → vérification en service, en moins de 24 h. RT-6/RT-7 : **soldés**.
+
+## Le cycle (borné par construction)
+
+```
+retour consigné ──► qualification ──► PROPOSITION (diff + justification) ──► validation humaine ──► application ──► vérification
+     (ledger)        (1 itération =                                          (feu vert explicite,     (par le steering,    (oracles/self-test
+                      1 déclencheur,                                          scopé à ce diff)         commit dans la       de la forge
+                      1 forge,                                                                         forge concernée)     concernée au vert)
+                      1 proposition)
+```
+
+- **Déclencheur** : un `retour` consigné dans un ledger de run. Trois sources : la forge elle-même
+  (défaut rencontré en l'invoquant), une autre forge (incompatibilité d'interface), le produit
+  construit (défaut du livrable remonté à sa forge d'origine). Pas de retour consigné → pas d'itération.
+- **Périmètre** : une itération = **une forge**, un ensemble cohérent de modifications répondant à
+  **un** retour. Pas de refonte opportuniste, pas de drive-by.
+- **Sortie** : un fichier `propositions\<AAAAMMJJ>-<forge>-<slug>.md` contenant : le retour d'origine
+  (référence ledger), le diagnostic, le diff proposé, la justification, le test de vérification
+  (quel oracle/self-test prouvera que c'est corrigé sans régression).
+- **Validation** : le « ok » de l'humain porte sur **cette proposition précise**. Un ok sur le
+  diagnostic ne vaut pas mandat d'application.
+- **Vérification** : après application, exécuter le self-test/les oracles de la forge modifiée ;
+  un rouge = revert et retour au diagnostic.
+
+## État au 04/08/2026 (soir) — campagne de mise en œuvre exécutée
+
+Sur mandat humain explicite (« mets-les en œuvre, teste-les, pousse-les »), une campagne a traité
+le backlog, chaque forge vérifiée par sa recette native puis rejouée par l'orchestrateur avant push :
+
+- **Appliqués et poussés** : forge-tests R-T1/T2*/T3/T4/T5/T6/T7/T8/T9 + dette uv.lock
+  (5 commits, recette 12/12 rouge + 0 bloquant vert, e2e miniveille exit 3 sans PYTHONUTF8) ·
+  conception R-C3(doc)/C5/C6 (3 commits, self-test 14 règles vert, 4 oracles PASS sur livrable réel) ·
+  design R-D1/D2/D4/D5/D6 (3 commits, self-test vert, run-oracles exit 0 sur livrable réel) ·
+  development R-V1/R-V5-CLI+doc (3 commits, ruff 0, mypy strict 0, 284 tests verts, 19 nouveaux) ·
+  agents R-A1/A2/A3 + durcissement verrou Windows (4 commits, self-test 6/6 rejoué 5×,
+  preuve de concurrence 51/51 seq sans collision).
+- *R-T2 partiel assumé : le `webServer` Playwright du projet audité peut encore écrire chez lui
+  (déclaré `non_juge`) ; pans visuel (goldens versionnés) et mutation (modifie-restaure) déclarés
+  au README de forge-tests plutôt que corrigés.
+- **Différés (exigent un arbitrage humain de fond)** : R-D3 (producteur d'images Gemini — chantier
+  neuf), R-V2 (adaptateurs amont conception/design → development) + R-V4 (recouvrements BMAD et
+  gates — arbitrage de périmètre), R-V3 (délégation des HITL — constitutionnel), ruff à 0 sur
+  forge-tests (30 erreurs préexistantes, dont des défauts PLANTÉS du banc — les corriger
+  fausserait la recette).
+
+## 08/08/2026 (soir) — Revue stratégique de l'écosystème (audit delta, 8 périmètres)
+
+Rapport : `output\01-revues-et-propositions\Factory - Revue Forge - Écosystème - 20260808a.md` — santé re-exécutée 8/8
+(sauf self-test quality-oracles : 3 échecs repo / 6 installation), modèle de scorage durable
+(GAIN×PREUVE÷EFFORT), test d'admission des nouvelles forges. **Top 10 scoré au rapport** —
+têtes : trancher le statut du conductor (10,0), RT-13 (8,0), régression CRLF SKILL.md (6,0),
+audit complet sur projet libre (4,0), versions_forges jamais consignés au produit réel (4,0).
+**Candidats nouveaux au backlog** : sémantique du registre de dette tests (« resolue » ≠
+corrigé, 0 ok/89) · conductor dormant (Q-A) · dérive repo↔installation prouvée 2.6.1/2.9.1 ·
+oracle-motion complet jamais committé · MISSION.md orpheline · archive pilote hors git ·
+reprise idempotente jamais exercée · CLAUDE.md ×3,4 sans plafond · auto-violation D-02 chez
+organization. **Nouvelles forges** : forge-ops ADMISE candidate (trou prouvé : MEP sans forge,
+déploiement artisanal, qualif sans instances outillées) · forge-contenu faible (à re-proposer
+sur preuve) · securite/docs/data/migration écartées nominativement. **Décisions humaines du 08/08** : **Q-A** — le conductor RESTE (décision : « il a été utilisé
+pour Produit-12, on laisse » — statut actif côté produit, l'item « trancher » sort du top
+10 ; D-V1 reste au backlog pour le jour où le steering voudra l'invoquer en headless).
+**Q-B** — « organization organise, steering pilote » : organization = atelier amont des
+conventions, steering = décideur-encodeur-vérificateur (encodé au CLAUDE.md). **Q-C** — top 10
+re-présenté à décision (voir rapport, ajusté post-Q-A).
+
+## 08/08/2026 — forge-seo et forge-organization au référentiel
+
+2 forges ajoutées (inventaires exhaustifs au dossier INVENTAIRE.md §6-7) : forge-seo
+(post-MEP récurrente, CLI natif, une mission client réelle livrée, validate 9/9 vérifié) et
+forge-organization (doctrine transverse, mise sous git + GitHub privé par le steering le
+08/08). Bootstrap étendu à 7 forges avec preuves. **Candidats consignés** : réconciliation
+D-01→D-12 (organization) ↔ REGLES-PROJET.md (steering) — deux sources de gouvernance sur le
+même domaine ; côté seo : D-S1→D-S4 (générateurs manquants, snapshot non validé machine,
+moteurs ad hoc chez la mission à généraliser) — au fil des lots.
+
+## 07/08/2026 — cahiers de tests vivants + dashboard d'exécution + boucle de fermeture
+
+Campagne sur prompt humain amélioré (L99). **forge-tests** (5 commits) : cahiers fonctionnel/
+technique DÉRIVÉS et scellés sha256 (exhaustivité opposable : couvert-ou-nommé, chapitres
+dérivés du registre des adaptateurs), jeux de données synthétiques à garde-fou levant (6 motifs
+de refus, domaines `.test`), **`actions[]` ternaire au rapport** (auto_ia / manuelle_dev /
+manuelle_utilisateur × etape_cible development/tests-suite/design/mep-config/forge), dashboard
+HTML autonome 6 onglets à source unique (totaux recomparés au rapport — un total faux est
+détecté en recette ; check_html + render_page PASS, contrastes et débordements mobiles corrigés
+par render_page), `--precedent` pour la tendance, `--reprendre` régénère les livrables.
+Recette : 52 vérifications nouvelles chacune avec son rouge, S-01 tenu, rejouée par
+l'orchestrateur. **steering** : boucle de fermeture bornée multi-étapes (3 cycles, G-2,
+re-audit complet, défaut d'auditeur → canal lots), DOSSIER-MEP embarque dashboard + actions
+utilisateur. Preuve ASD (lecture seule 169/169) : 207 éléments fonctionnels / 204 cas /
+3 non couverts nommés ; 38 exigences orphelines nommées ; audit dégradé DÉCLARÉ (un agent
+travaillait sur le produit — v0.3.0 ; audit complet à rejouer projet libre).
+
+**Retour candidat né de la campagne (RT-13, majeur)** : sous `FORGE_TESTS_SANS_EXECUTION=1`,
+`qualification.qualifier` attribue `FORGE_TESTS_QUALIF_URL` comme champ manquant à TOUS les
+pans SKIP (data/api/migrations compris) — le mécanisme doit préférer le `CHAMPS_REQUIS` propre
+au pan. Conséquence constatée : 16 actions manuelle_utilisateur d'ASD demandent une URL à tort.
+
+## 06/08/2026 (soir) — lot 03 : couverture au-dessus des standards + précisions de perception
+
+Source : `input/RETOURS-FORGES-03.md` + campagne pré-rédigée par le run produit
+(`Produit-12/forge/PROMPT-AMELIORATION-FORGE-TESTS.md`), déroulée avec ses critères
+exécutables. **forge-tests** (8 commits) : mutation à périmètre TOTAL (33/34 modules d'ASD
+mutés contre 7, échantillonnage profondeur-seulement, exclusions nominatives), `modules[]`
+sans module silencieux, 6 seuils opposables versionnés (`seuils.py`), **pan `qualif`** (12ᵉ)
+généralisé du prototype produit (bancs servis en HTTP par la recette, rouge 5 défauts nommés /
+vert 14/14), `pans_non_couverts {pour_couvrir}`, RT-9 (garde déportée résolue 1 niveau),
+RT-10 (montages statiques exclus). Résultat de fond : le produit « 100 % vert » sort à
+**mutation 0,505** — dix modules métier sous 0,35, deux à 0,00 : RT-12 est mesuré et opposable.
+La campagne a trouvé 3 défauts non prévus au mandat, dont une **violation G-1 dormante**
+(LF→CRLF sur 23 fichiers du produit — restauré 165/165 empreintes, cause corrigée, témoin en
+recette) et les f-strings Python 3.12 mutées en mutants équivalents. Recette 16/16 rejouée 2×
+identique + rejouée indépendamment par l'orchestrateur. **conception/design** : RC-4 (critère
+onboarding = expérience dominante), RD-6 (un seul CTA visible par écran + test-garde au texte
+visible), RD-7 (aide à 3 niveaux, écran 10 du socle). **RS-8/RS-9** au canal. Non-faits
+déclarés : qualif non exécutée contre ASD servi (G-1 — SKIP motivé accepté par le mandat),
+19 ruff préexistants, suite unitaire propre de forge-tests (dette connue).
+
+## 06/08/2026 — socle de règles projet (17 règles décidées + oracle exécutable)
+
+Inventaire de 11 dépôts → `REGLES-PROJET.md` (17 règles, 4 conflits arbitrés par l'humain :
+Old\ hors git, commits locaux par défaut, code jamais daté, journaux d'oracles versionnés).
+Encodé : socle créé à l'ouverture de run (CLAUDE.md étape 1), rattrapage en tête de run de
+version, et `oracles\oracle-conformite-projet.mjs` (self-test double sens 3/3 ; preuve terrain :
+8 findings nommés sur Produit-12, dont l'absence de git).
+
+## Campagne du 11/08/2026 — création de forge-ops (TF-0040 décidé → corrigé)
+
+Mandat humain : prompt réécrit L99 lancé (« Je décide TF-0040 »), tracé au registre. La 9ᵉ
+forge comble le dernier trou prouvé du pipeline : la MEP portée à la main, déploiement
+artisanal. **Preuve par le geste dès la v0** : le self-test rejoue un déploiement réel local
+(v1→v2), un rollback effectif et le refus des 4 défauts types — 14 PASS (2 itérations de
+boucle sur 3 : un faux positif O4 corrigé — être sur la plus ancienne release après
+restauration est un état sain).
+
+Livré : dépôt `factory-forge-ops` (ops.mjs — healthcheck AVANT bascule, COURANT atomique,
+journal au contrat ledger ; oracle-ops O-1…O-4 ; frontières écrites : la forge outille, le
+pilot décide, l'humain donne le GO, M-1…M-5 jamais dupliqué). Les 8 documents pilot mis en
+cohérence, chacun sous son oracle : bootstrap (9 forges, exit 0), CLAUDE.md dégraissé
+6182→6056 octets (oracle PASS — et 4 docs de veille déménagés de `references\` vers
+`veille\`, orphelins N3 résolus), CONTRAT-INTERFACE §5 (Ops **natif**, dettes D-P1 cibles
+cloud / D-P2 garde-fou produit-direct), ETAPE-MEP §0 bis (articulation gestes/verdicts),
+INVENTAIRE §9, fiches/forge-ops.md, README, schéma V1e « 10 forges » (nœud ops + lien
+outillage MEP, check+render PASS, PNG inspecté). TF-0040 clos avec gains constatés.
+
+## Campagne du 10/08/2026 (soir) — ouverture publique de l'écosystème (mandat humain)
+
+Décision humaine : toutes les forges publiques sous MIT, « comme development », avec
+chantiers d'assainissement en amont. Réalisé :
+
+- **7 forges publiées telles quelles** après balayage (0 secret, 0 `.env` d'historique) :
+  pilot, conception, design, development (déjà publique), tests, seo, organization —
+  LICENSE MIT « Copyright (c) 2026 Ptitcuicui » partout.
+- **forge-agents : chantier d'assainissement puis publication.** Bundle privé archivé hors
+  dépôt ; artefacts d'engagement retirés de l'index mais conservés sur disque (`input/` avec
+  CDC client et propales, `p4/`, `defs-p4/`, `output/`, `.queue/`, ledgers, 5 agents compilés
+  d'engagement — tous ignorés par git) ; corpus/fiches experts **anonymisés** (secteur et
+  techno conservés, noms clients retirés) ; règle appliquée : *nom seul toléré (déjà public
+  au pilot) · nom + détail d'engagement anonymisé · document d'engagement retiré*.
+  **Historique neuf** (1 commit, auteur gmail) — précédent maison auditcore (RAF-029).
+  Self-tests au vert avant push : 10/10 · 133 · 28/28. → PUBLIC + MIT.
+- **audit : la séparation produit/tenant fait la décision** (doctrine
+  `SEPARATION-PRODUIT-TENANT`) : **auditcore** (produit marque blanche, 0 mention tenant
+  vérifié, 0 secret) → **PUBLIC + MIT** ; `factory-forge-audit` (espace d'engagement Client-A,
+  189 fichiers client, submodules privés) → **reste privé**, par conception.
+
+État final : **9 dépôts publics MIT** (8 forges + auditcore), 1 privé (engagement audit).
+
+**Post-scriptum 11/08 — nommage stabilisé** (décision humaine) : le produit prend le nom
+canonique — `factory-forge-auditcore` → **`factory-forge-audit`** (public MIT) ; l'espace
+d'engagement → **`factory-forge-audit_client-a`** (privé). Recâblé partout : `.gitmodules` de
+l'engagement, remotes locaux, clone du produit en `c:\dev\factory-forge-audit`, preuve
+bootstrap = `core/invariants.json`. Le bootstrap équipe désormais les postes avec le produit
+public ; les engagements restent hors bootstrap.
+
+**Post-scriptum 11/08 bis — identité** : historiques des 10 dépôts réécrits en
+`le compte GitHub Ptitcuicui` uniquement (l'email d'engagement traînait en config locale du dépôt
+audit et dans les commits antérieurs) ; protection de branche development levée puis remise
+à l'identique ; tag auditcore migré ; pin submodule recalé.
+
+## Campagne du 10/08/2026 — santé des transverses (C1-C5, mandat humain direct)
+
+Source : diagnostic read-only des 3 skills transverses (question humaine « faut-il une passe
+Opus 5 ? » → réponse : non aux réécritures, oui aux défauts mesurés). Baseline : forge-agents
+10/10, page-html 28/28, **quality-oracles 123 ✅ / 9 ❌**. Cinq corrections mandatées « fais
+les 5 », toutes vérifiées par self-test avant push :
+
+- **C1 · portabilité Windows de la résolution Python** (8 des 9 échecs) : `which` (Unix),
+  `python3` (nom Unix) et l'alias Microsoft Store combinés. Nouveau `lib/python.mjs`
+  (validation fonctionnelle : seul un interpréteur qui exécute `import sys` est retenu),
+  branché sur oracle-pptx, oracle-charte-pptx-semantique, oracle-programme-formation et le
+  runner de fixtures du self-test. quality-oracles : **PASS (133 contrôles)**.
+- **C2 · oracle-motion écrit** (le 9ᵉ échec — entrée de registre sans exécutant) : R1-R7
+  dérivées de review-animations (E. Kowalski, MIT), fixtures rouge/verte, câblé au self-test
+  design (**7 oracles, 45 règles**) et à `run-oracles-design`.
+- **C3 · divergences installé/source résorbées** : quality-oracles (l'installé avait 16
+  oracles, la source 46) et page-html resynchronisés — source forge-agents = canonique.
+- **C4 · durcissement UTF-8 stdout généralisé** (crash cp1252 sur ✅/①-⑤/— constaté 4× dans
+  la journée) : garde `reconfigure("utf-8")` posée sur oracle-a11y, oracle-visual-diff,
+  check_html, self_test (render_page déjà fait le matin).
+- **C5 · génération de modèles épinglée** au CONTRAT-INTERFACE §4 : famille Claude 5
+  (Fable 5 / Opus 5 / Sonnet 5 / Haiku 4.5), datée, avec rappel que tout saut de génération
+  re-teste l'a priori de routage (§4 bis) au lieu de le reconduire.
+
+Verdict final : 4 self-tests verts (133 + 10 + 28 + 45 contrôles/règles). Leçon d'écosystème :
+les défauts venaient de l'environnement (Windows) et d'une dette de registre — pas du modèle
+qui a écrit le code ; les oracles restent le seul juge de correction.
+
+## 06/08/2026 — revue graphique d'implémentation (nouvelle capacité)
+
+Sur proposition humaine validée : forge-design intervient désormais AUSSI en aval — mode
+« critique d'implémentation » de `critique-le-design` v1.1.0 (le produit implémenté jugé contre
+sa promesse design : tokens, écrans/états, CTA, rendu 2 thèmes, voix ; écarts ancrés versés au
+ledger comme retours vers development). Étape 5 bis du steering, en parallèle de tests
+(fonction/forme, frontière écrite avec le pan `interface`). Exercé sur le run pilote : tokens
+conformes, rendu PASS, 1 écart CTA réel détecté du premier coup.
+
+## Campagne du 05/08/2026 (soir) — retours de PRODUCTION v0.1.0, généralisés
+
+Source : `input/RETOURS-FORGES-02.md` (complément production : 12 défauts trouvés par
+l'utilisateur en 10 min malgré 100 % de couverture mesurée). Mandat : généraliser — traiter les
+causes racines sur un périmètre large. **Quatre lois transverses** encodées dans le CLAUDE.md du
+steering et déclinées dans chaque forge :
+1. *Toute affordance est câblée ou n'existe pas* — conception : exigence socle candidate ·
+   design : pattern « un CTA = une cible » + contrôle C15 exécutable dans check_maquette.py ·
+   development : discipline + test · tests : **nouveau pan `interface`** (contrôle statique des
+   éléments inertes, tout le projet, limites déclarées) — prouvé : 5/5 câblés sur MiniVeille,
+   5 inertes nommés sur la fixture rouge.
+2. *Frontières d'environnement explicites* — `*_MODE_DEMO` absent par défaut (development,
+   conception), **qualif populée** avant GO (ETAPE-MEP §3 bis) avec endpoint de peuplement gated.
+3. *L'oubli n'existe pas* — surface implicite SaaS proposée d'office et écartée explicitement
+   (enumere-la-surface, exception close et versionnée).
+4. *Une donnée volatile est une donnée* — catalogues/tarifs en base, datés, sourcés
+   (development, conception).
+Plus : **RT-6** `non_testables[]` agrégé au-dessus des 11 adaptateurs + `--reprendre <rapport>`
+(rejoue uniquement le non-exercé, provenance à l'élément — vérifié : `pans_repris_sans_rejeu`) ·
+**RT-8** généralisé en module `forge_tests/sql.py` partagé (3 autres lecteurs corrigés du même
+motif « parser avant filtrer », littéraux gérés, recette 13/13) · **RS-6** run de version défini
+(ledger N = entrée du run N+1, delta par étape, tests toujours complets) · **fraîcheur des
+forges** : pull obligatoire à l'ouverture de run + versions consignées dans `run_open`.
+Différé : RT-7 volet Playwright (« effet observable » dynamique — le contrôle statique couvre le
+repli) ; composants `.jsx/.tsx/.vue/.svelte` hors pan interface (déclaré `non_juge`).
+
+## Campagne du 05/08/2026 — retours du premier produit réel (Produit-12)
+
+Source : `input/RETOURS-FORGES.md` (compilé à la clôture du premier run bout en bout réel,
+brief → production Railway). Mise en œuvre sur mandat humain, chaque forge revérifiée par
+l'orchestrateur avant clôture :
+
+- **forge-tests** : RT-1 (repli sqlite3 dans la sonde data + motifs explicites — prouvé sur
+  MiniVeille : « 33 instructions SQL OBSERVÉES… schéma créé par le code applicatif »), RT-2
+  (`FORGE_TESTS_APP=module:attribut` + finding `sonde-muette:api`), RT-3 (section « Contrat du
+  projet audité » au README, chaque affirmation vérifiée dans le code — 2 écarts découverts et
+  documentés : Alembic non mesuré, batch limité à `app/batch.py`), RT-4 (DDL jamais évincé de la
+  fenêtre, contrainte résiduelle documentée). Recette 12/12 rouge + 0 bloquant vert, 2 runs
+  identiques.
+- **forge-conception** : RC-1 (S1 en `SANS_OBJET` nommé quand ratio ≥ seuil — le `--seuil` de S2
+  devient opérant, self-test double sens conservé), RC-2 (ton par délégation documenté dans
+  derive-les-vues).
+- **forge-design** : RD-2 (`--rendu` sur run-oracles-design : render_page clair + sombre
+  auto-généré + oracle-a11y, SKIP motivé si outillage absent). RD-1 (faux positif V4 intra-icône
+  SVG < 48 px) corrigé dans `${CLAUDE_PLUGIN_ROOT}/skills/factory-page-html/scripts/render_page.py` —
+  **hors git, non poussable**, prouvé dans les deux sens (icône composite ignorée, vrai
+  chevauchement de layout toujours détecté).
+- **forge-development** : RV-1/RV-2 (run-playbook : traçabilité `E-xxx` en docstring + gate grep
+  100 %, checklist « produit auditable » vérifiée contre le code de forge-tests).
+- **forge-agents** : RA-1 (`ledger.mjs append --fichier`, BOM PowerShell absorbé, self-test 8/8
+  rejoué 5×), RA-3 (déclencheur « CDC de cadrage » restreint au motif `## SECTION 0` — un README
+  ne matche plus, le gabarit matche ; **l'installation `~/.claude` porte encore le défaut**, à
+  corriger sur décision). RA-2 (calibrage Sonnet vs Opus) : à mesurer au prochain run.
+- **steering** : RS-1 (verbe 4 natif, D-C2/D-C4 soldées), RS-2 (discipline d'auditabilité à
+  l'étape development), RS-3 (règle de sélection des smoke tests M-3 : impact max du
+  référentiel), RS-4 (M-4 premier déploiement : N-1 = N accepté déclaré), RS-5 (ton par
+  délégation au prompt canonique).
+- **Vérifiés en conditions réelles** (RT-5, confirmations du run) : R-T1/T2/T3/T4/T5/T8 du
+  04/08 tiennent sur un projet réel — entrées closes.
+
+## Backlog initial (issu de l'inventaire du 2026-08-04)
+
+Retours candidats déjà collectés, par forge, priorisés. Statut : `candidat` tant que l'humain n'a
+pas demandé de proposition.
+
+### forge-tests (les plus urgents — bloquent l'étape 4 en conditions réelles)
+| id | Retour | Gravité |
+|---|---|---|
+| R-T1 | `subprocess.TimeoutExpired` non attrapée (`execution.py:191`) tue l'audit entier sans rapport | bloquant |
+| R-T2 | Garde-fou lecture-seule G-1 violé : artefacts écrits dans le projet audité (34 Mo constatés) | bloquant |
+| R-T3 | `text=True` sans `encoding=` → `UnicodeDecodeError` cp1252 sous Windows | majeur |
+| R-T4 | Rapport non persistable (`--sortie` absent) ; `--generer --json` pollue stdout | majeur |
+| R-T5 | Pan front vise localhost au lieu de `FORGE_TESTS_BASE_URL` | majeur |
+| R-T6 | README périmé (« aucun code produit ») ; exit code 2 spécifié non implémenté | mineur |
+| R-T7 | *(run pilote)* dépendance `coverage` exigée dans le venv du projet cible, déclarée nulle part — « couverture non mesurable » sans message actionnable | majeur |
+| R-T8 | *(run pilote)* `UnicodeEncodeError` cp1252 à l'impression du rapport `--json` sous Windows (contournement invocation : `PYTHONUTF8=1`) | majeur |
+| R-T9 | *(run pilote)* `RapportRefuse` (règle conjointe) meurt en traceback avec un JSON de 0 octet au lieu de produire un rapport de refus structuré | majeur |
+
+Note : des correctifs pour R-T1/R-T2/R-T3/R-T5 sont déjà rédigés dans le prompt de reprise de
+forge-tests, avec la mention « ne rien appliquer sans mon feu vert » — la proposition steering
+consistera à les reprendre tels quels, pas à les réinventer.
+
+### forge-conception
+| id | Retour | Gravité |
+|---|---|---|
+| R-C1 | ~~Verbe 4 `derive-les-vues` absent~~ — **résolu côté forge** (constaté le 04/08 à la mise sous git : `skills/derive-les-vues/` existe) | résolu |
+| R-C2 | ~~Lien mort `references/formulation.md`~~ — **résolu côté forge** (fichier présent au 04/08) | résolu |
+| R-C3 | Pas de manifeste/README ; état « bloqué sous le seuil » sans protocole machine | majeur |
+| R-C4 | `MISSION.md` sans gabarit ni fixture ; oracles non enregistrés au registre quality-oracles | mineur |
+| R-C5 | *(run pilote)* prédicat binaire E3 matché par sous-chaîne exacte — les formes accordées (« sont présentes ») ne matchent pas, ce qui force des formulations artificielles | mineur |
+| R-C6 | *(run pilote)* oracle-claims A1 scanne `besoins[].enonce` qui n'a aucun champ pour loger une source — un chiffre légitime dans un besoin est un FAIL non réparable | mineur |
+
+### forge-design
+| id | Retour | Gravité |
+|---|---|---|
+| R-D1 | Critères bloquants C1/C6/C7 sans exécutant (render_page.py, oracle-claims, oracle-nommage non résolus) | majeur |
+| R-D2 | `run-oracles-design.mjs` non documenté ; skills non installés ; dist/ désynchronisé | majeur |
+| R-D3 | Producteur d'images Gemini spécifié, jugé (oracle-images), jamais implémenté | majeur |
+| R-D4 | Aucune convention d'emplacement des sorties, ledger de run exigé mais non spécifié | mineur |
+| R-D5 | *(run pilote)* `tokens.md` n'offre aucun token sémantique erreur/succès alors que la page témoin doit démontrer un état d'erreur | mineur |
+| R-D6 | *(run pilote)* l'exemple d'échelle typographique de `tokens.md` viole sa propre règle ratio ≥ 1.25 (premier pas ×1.167) | mineur |
+
+### forge-development
+| id | Retour | Gravité |
+|---|---|---|
+| R-V1 | Aucune sortie machine (`SprintReport` jeté, exit toujours 0) | majeur |
+| R-V2 | Aucun adaptateur amont (EXIGENCES.json → `_bmad-output/` ; tokens.css/MARQUE.md → `design/DESIGN.md`) | majeur |
+| R-V3 | `HumanGate` headless toujours False — pas de délégation possible des HITL à un orchestrateur | majeur |
+| R-V4 | Recouvrement non arbitré : BMAD refait la conception, les gates internes recouvrent forge-tests | majeur |
+| R-V5 | Paramètres clés (`saas_scope`, `brand_charter`) inaccessibles par le CLI ; dogfooding DE-1 non fait | mineur |
+
+### forge-agents
+| id | Retour | Gravité |
+|---|---|---|
+| R-A1 | `ledger.mjs` sans verrou d'écriture concurrente (collision seq constatée) | majeur |
+| R-A2 | Chemins absolus obsolètes (`C:/dev/Forge-Agents/`) dans profil d'admission et ledger | majeur |
+| R-A3 | Pas de convention de runs (defs/ vs defs-p4/), pas de README/CLAUDE.md | mineur |
+
+## Ordre recommandé (si l'humain demande des propositions)
+
+1. **R-T1 + R-T2 + R-T3 + R-T5** (forge-tests) — correctifs déjà rédigés côté forge, il ne manque
+   que le feu vert ; débloquent l'étape 4 sur projets réels.
+2. **R-C1** (verbe 4) — débloque la sortie native conception → design et supprime la dette D-C2.
+3. **R-V2** (adaptateurs amont) — c'est la couture centrale de l'écosystème ; à concevoir avec
+   l'arbitrage R-V4.
+4. Le reste au fil des retours de runs.
+
+## 09/08/2026 — renommage : forge-steering devient forge-pilot
+
+Décision humaine du 09/08. Dépôt GitHub renommé (`factory-forge-pilot`, l'ancien nom
+redirige), dossier local renommé avec **jonction de compatibilité**
+`c:\dev\factory-forge-steering → factory-forge-pilot` (les produits existants et leurs
+chemins absolus continuent de fonctionner jusqu'à leur rattrapage en run de version).
+Documents vivants mis à jour ; l'HISTOIRE n'est pas réécrite (ledgers, TODO.jsonl,
+entrées passées de ce journal, livrables datés d'output\ : le mot « steering » y reste un
+fait d'époque). Les événements TF futurs portent `demandeur: pilot`.
+
+## 09/08/2026 (soir) — boucle TODO sur mandat global : 41 items construits en une campagne
+
+**Mandat humain** : « Boucle pour construire tous les éléments de la TODO qui ne nécessitent
+pas d'entrants de ma part. » Décision globale tracée au registre (`decideur` sur chaque
+`decide`). Périmètre : 44 items pris (41 construits + 3 clos de fait sur preuves de la
+veille), 12 laissés en `candidat` avec leur raison (entrant humain requis), 2 restés
+`en_cours` (TF-0029 recommandé à l'écart, TF-0039 attend une décision D-xx).
+
+**Dispositif** : première campagne sous `gabarits\AGENT-CAMPAGNE.md` (TF-0050, construit en
+ouverture puis utilisé par les 7 prompts) — 7 agents parallèles, un par dépôt cible, le
+pilot construisant ses propres items pendant ce temps (R10, R-19, noyau CLAUDE.md ≤ 6 Ko +
+`references\`, oracle-claude-md, archive du run pilote, fiches d'audit, exercice de reprise,
+règles §3 bis et §4 bis du contrat). Chaque rapport vérifié par sondage avant clôture
+(self-tests rejoués, commits inspectés, arbres contrôlés). Détail par item : registre
+TF (`gains_constates` exigés partout), commits cités dans `version_forge_corrigee`.
+
+**Routage instrumenté** (§4 bis du contrat — première campagne mesurée) :
+
+| Tranche | Modèle | Items | Tokens | Outils | Durée | Verdict |
+|---|---|---|---|---|---|---|
+| installations | Sonnet | 2/2 | 76 k | 17 | 2,5 min | vert |
+| organization | Opus | 5/5 | 177 k | 59 | 18 min | vert |
+| conception | Sonnet | 2/2 | 205 k | 97 | 18 min | vert |
+| development | Sonnet | 3/3 | 201 k | 121 | 19 min | vert |
+| seo | Opus | 5/6 | 218 k | 148 | 27 min | vert (1 item non fondé) |
+| tests | Opus | 5/5 | 299 k | 193 | 39 min | vert |
+| agents | Opus | 10/10 | 309 k | 202 | 47 min | vert |
+
+`escalade_modele` : **aucune** sur 7 tranches. Donnée saillante : les 3 tranches Sonnet —
+dont development, qui portait des gates exécutables et le conductor — sont toutes vertes au
+premier coup à coût comparable. Le tableau §4 a désormais de quoi être challengé : la
+prochaine campagne comparable devrait tenter une tranche « construction » de plus en Sonnet.
+
+**Écritures dans les dépôts frères** : couvertes par le mandat global de ce jour, garde-fou
+reformulé au noyau (« hors mandat humain explicite ») — les campagnes mandatées écrivent,
+tout le reste passe par lots et propositions. Le harnais a signalé ces écritures comme
+sensibles sur 3 campagnes : lecture faite, elles sont conformes au mandat (commits locaux,
+jamais de push). Décision à valider séparément : la réconciliation `740ec6c` (quality-oracles
+installation→dépôt) verse sous git du travail de la session du 08/08 — commit isolé,
+réversible seul, vérifié strictement additif (440+/7−).
+
+**Constats de campagne devenus candidatures** : TF-0063…TF-0078 (16 créations, dont la
+dérive skill↔dashboard qui met la recette de forge-tests en rouge — TF-0063 — et la
+canalisation des sidecars du hook qualité — TF-0065). L'incident structurel du jour : trois
+campagnes ont dû nettoyer les journaux `.oracles*` semés par le hook de session dans leurs
+dépôts cibles.
+
+**Bilan registre** : 48 `corrige` (dont les 5 de la veille), 28 `candidat`, 2 `en_cours` ;
+oracle R1-R10 PASS, self-tests TODO 18/18 et conformité 3/3, vue et page régénérées
+(sceau 82c9248684ef).
+
+## 12/08/2026 — campagne « catalogues de services & prompts d'usage » (mandat humain de session)
+
+**Mandat** : message humain du 12/08 (prompt de campagne passé au crible L99 puis barré —
+3 barres validées au registre la-barre : Backstage descriptor format pour le catalogue,
+standard AGENTS.md pour la surface d'entrée agent, rustup.rs pour les prompts 2 lignes).
+
+**Livrables** : `catalogues\catalogue.jsonl` (source unique, 42 services / 10 forges, 33
+prouvés / 9 déclarés, champs cycle_de_vie + challenge_date, comptages vérifiés sur pièces) ·
+vues générées `catalogues\CATALOGUES.md` + section README (`generer-vues.mjs`, --check) ·
+`oracles\oracle-catalogues.mjs` (K1-K7, self-test double sens 5/5) · `AGENTS.md` + en-tête
+agent du README (phase 0 idempotente) · `references\ACCUEIL.md` (protocole d'accueil 7 étapes,
+accord explicite avant exécution, 2 tours de correction max) · section « Prompts d'usage »
+réécrite au format 2 lignes (0-6, PROMPT-PRODUIT.md rétrogradé en voie optionnelle à
+fichier) · coquilles README corrigées (scripts\new_mission.py, forge\retours\) · **lot D en
+proposition** : `output\05-catalogues-readmes-forges\` (10 sections README de forge,
+AUCUNE écriture dans les dépôts frères — application forge par forge sur GO humain).
+
+**Challenge état de l'art (A3)** : 4 agents Sonnet en parallèle, ≥ 3 sources datées par forge,
+constats convergents (le marché 2026 est passé du one-shot au continu ; standards gagnants
+gratuits et inspectables). 13 candidatures ingérées (lot `dd28b8a70c37`, sidecar +
+`ingerer-lot.mjs`) dont 2 nouvelles forges candidates (sécurité agentique, observabilité
+continue) et 1 constat de dérive documentaire (INVENTAIRE vs réel : options CLI forge-tests,
+5/20 oracles-règles conception, 73/169 ADR-contrôles audit).
+
+**Routage instrumenté (§4 bis)** — 4 tranches équivalentes (challenge par forge), toutes Sonnet :
+
+| Tranche | Modèle | Tokens | Outils | Durée | Verdict |
+|---|---|---|---|---|---|
+| conception+organization+audit | Sonnet | 76 k | 19 | 2,9 min | vert |
+| design+development | Sonnet | 73 k | 22 | 2,5 min | vert |
+| tests+seo | Sonnet | 97 k | 26 | 3,5 min | vert |
+| agents+ops+data | Sonnet | 61 k | 20 | 3,1 min | vert |
+
+`escalade_modele` : **aucune** (4/4 vertes au premier coup — l'a priori « recherche/synthèse
+= Sonnet » tient). Construction (catalogue, oracle, ACCUEIL, README) : pilot en session.
+
+**Vérifications natives** : oracle-catalogues self-test 5/5 puis réel PASS (K1-K7) ·
+generer-vues --check PASS · oracle-claude-md PASS (noyau recompressé à 6 143 octets après
+citation d'ACCUEIL.md) · oracle-ecosysteme PASS · oracle-todo R1-R10 PASS · self-test TODO
+18/18. État préexistant du working tree : 2 événements TODO non commités de la session du
+11/08 (TF-0100 + ingestion) — embarqués dans ce commit, ils appartiennent au registre ;
+entrants `input\` non liés laissés intacts. Test à froid : consigné à l'entrée suivante.
+
+**Test à froid (12/08, complément au commit 4d3b1bf)** : clone du pilot (état commité) dans
+un répertoire vierge du scratchpad — AGENTS.md, references\ACCUEIL.md et
+catalogues\catalogue.jsonl présents au clone — puis `node bootstrap.mjs --racine <vierge>` :
+10 forges clonées, preuves vérifiées, fin **« Poste prêt »**, exit 0. Contre-épreuve
+d'idempotence : la phase 0 de la même session sur poste équipé (`git pull --ff-only` +
+`bootstrap --pull`) a fini « Poste prêt » sans erreur. Les deux critères décisifs du contrat
+sont PASS ; la parité GitHub suivra le push (décision humaine).
+
+## 12/08/2026 (suite) — mandat global : push, lot D appliqué, 16 items TODO exécutés
+
+**Mandat humain** : « Pousse sur github, go par forge lot D, puis exécute les éléments de la
+TODO. » Pilot poussé (`45f883a`) ; lot D appliqué et poussé sur les 10 forges (GO par forge) ;
+15 items construits en 10 campagnes parallèles + TF-0113 par le pilot ; TF-0073 resté
+`en_cours` (la mission source est absente du poste — entrant humain requis) ; TF-0111/0112
+restés `candidat` (périmètre de nouvelles forges à trancher).
+
+**Routage instrumenté (§4 bis)** — 10 tranches, TOUTES Sonnet (a priori issu de la campagne
+mesurée du 09/08), items de construction complexe compris :
+
+| Tranche | Items | Tokens | Outils | Durée | Verdict |
+|---|---|---|---|---|---|
+| data | 1 (3 sous) | 105 k | 57 | 8 min | vert |
+| ops | 1 (3 sous) | 141 k | 54 | 14 min | vert |
+| seo | 2 | 174 k | 96 | 16 min | vert (TF-0073 non clos, motivé) |
+| conception | 1 (3 sous) | 203 k | 95 | 21 min | vert |
+| agents | 1 (3 sous) | 213 k | 98 | 21 min | vert |
+| development | 1 (3 sous) | 195 k | 118 | 23 min | vert |
+| organization | 1 (3 sous) | 212 k | 140 | 24 min | vert |
+| audit | 1 (4 sous) | 249 k | 171 | 28 min | vert |
+| tests | 5 | 322 k | 144 | 33 min | vert |
+| design | 1 (3 sous) | 264 k | 133 | 34 min | vert |
+
+`escalade_modele` : **aucune** sur 10 tranches — Sonnet 5 tient la construction complexe
+(gates, oracles, formats) au premier coup ; le tableau §4 est confirmé dans sa version
+challengée. Chaque rapport vérifié par **sondage pilot** (self-tests et suites rejoués, commits
+et arbres inspectés) avant clôture — verdicts consignés aux événements `corrige`.
+
+**Incidents du jour** : (1) le lot D avait introduit le nom d'un tenant réel dans le README
+public d'audit (gate N0 rouge) — détecté par la campagne audit, corrigé à la source
+(catalogue anonymisé, vues régénérées, commit `5c95d6b` chez audit, N0 revenu à 0 finding) ;
+(2) une session tierce travaille forge-tests en parallèle — ses fichiers préservés, un bug
+G-1 dans sa version en cours consigné en candidature ; (3) 7 constats de campagne ingérés en
+candidatures (lot `b3e32cb3b6bf`) : CRLF conception, généralisation fraîcheur (3 dérives de
+plus), G-1 mutation tiers, dashboard NULL, gates jq fail-open, .queue non versionné,
+mutation 61,1 % à durcir.
+
+**Bilan registre** : 15 `corrige` (TF-0097→0110, 0113), 1 `en_cours` (TF-0073), 9 `candidat`
+(dont TF-0111/0112 et les 7 nouveaux) ; oracle R1-R10 PASS, vue et page régénérées (sceau
+06a3a32f3c10). Push des campagnes forges : décidé par le mandat de ce jour, effectué après
+vérification par sondage.
+
+**TF-0073 clos (12/08, fin de journée)** : `livrables-gen.py` remis par l'humain en `input\`,
+généralisé en `scripts\scorer_actions.py` chez forge-seo (`bc7341d`) — score recalculé,
+vocabulaires contrôlés, UTF-8 sans BOM, 17/17 + bout-en-bout 8/8, zéro trace client (grep
+pilot, dépôt public). Catalogue v1.2.0 (59 services, +cat-seo-07). 1 candidature nouvelle
+(scoring.md « quick win » vs schéma « quick-win », lot 7c041a2cefa5). Tranche Sonnet, 173 k
+tokens, 62 outils, 11 min, verte — escalade : aucune.
+
+## 12/08/2026 (soir) — mandat « Implémente les 10 candidats » : 11 items clos, l'écosystème passe à 12 forges
+
+**Mandat humain** : « Implémente les 10 candidats », complété en session par trois décisions
+de structure (forge dédiée `factory-forge-agents-security`, forge unique
+`factory-forge-observability`, dépôts GitHub publics immédiats). TF-0122 — régression du
+correctif TF-0100 constatée en cours de journée — a été inclus au mandat sur décision pilot
+tracée (réparer sa propre régression relève du mandat qui l'a produite). 11 items clos.
+
+**2 forges nées et publiées** : agents-security (scan statique CAP-1..4 + dynamique
+TC-1..5 fail-closed, 24 PASS) et observability (plans déclaratifs, snapshots append-only,
+dérive — 30 PASS). Intégration écosystème complète en un commit (`bafc30a`) : bootstrap,
+fiches, INVENTAIRE, CONTRAT §5, noyau (recompressé, 6 138 o), README, **schéma V12
+« 13 forges »** (édition chirurgicale sur copie, rendu render_page PASS + inspection
+visuelle — deux chevauchements introduits par le décalage détectés par l'oracle et corrigés),
+catalogue v1.3.0 (64 services). oracle-ecosysteme PASS 12/12.
+
+**Routage instrumenté (§4 bis)** — 8 tranches, zéro escalade :
+
+| Tranche | Modèle | Tokens | Outils | Durée | Verdict |
+|---|---|---|---|---|---|
+| seo TF-0121 | **Haiku** | 85 k | 35 | 2,6 min | vert (1re tranche Haiku — l'a priori « mécanique » tient) |
+| conception TF-0114 | Sonnet | 102 k | 50 | 7,5 min | vert |
+| agents-security TF-0111 (construction) | Sonnet | 134 k | 59 | 9,8 min | vert |
+| observability TF-0112 (construction) | Sonnet | 137 k | 46 | 9,8 min | vert |
+| agents TF-0118/0119 | Sonnet | 136 k | 71 | 14,6 min | vert |
+| development TF-0120 | Sonnet | 272 k | 100 | 26 min | vert |
+| tests TF-0122/0117/0116 | Sonnet | 288 k | 116 | ~78 min (3 reprises — l'agent s'endormait sur sa recette d'arrière-plan, relancé 2×) | vert |
+| pilot TF-0115 + intégration + schéma | Fable (session) | — | — | — | vert |
+
+**Faits saillants** : TF-0120 mesuré et non estimé (61,1 % → 94,25 % de mutation, Docker ×2,
+job CI bloquant) ; TF-0115 a détecté le jour même deux dérives documentaires nées des
+campagnes du matin ; TF-0122 avait coûté ~50 min sur Produit-01 (audit entier perdu) — fermé
+avec reproduction du cas réel ; la session tierce sur forge-tests a été intégralement
+préservée (diff identique début/fin de campagne), le try/finally de mutation.py reste
+suspendu à son commit (reste explicite de TF-0116).
+
+**Bilan registre** : 27 corrigés au total ce 12/08, 0 en cours, 0 candidat — la TODO est
+vide. Oracle R1-R10 PASS. Pushes : pilot + les 12 forges (dont les 2 créations GitHub).
+
+## 12/08/2026 (nuit) — étude d'opportunité : 4 forges candidates → 1 forge, 3 profils, 1 règle
+
+**Mandat humain** : analyse d'opportunité (cybersecurity, website, webapp, mobile) — analyse
+seulement, prompt barré/L99 au préalable. Livrable :
+`output\03-etudes\2026-08\20260812-etude-opportunite-forges.md` (grille : partition → non-recouvrement cité
+contre le catalogue v1.3.0 → état de l'art sourcé → options tranchées → coût).
+
+**Verdicts** : cybersecurity → **forge dédiée recommandée** (modèle seo ; trou prouvé sur
+5 surfaces citées ; ASVS 5.0 comme contrat ; échéance externe CRA 11/09/2026) ·
+website/webapp/mobile → **un seul axe « type de produit »**, servi par des
+**profils-référentiels du pilot** (loi n° 4 + précédent BEST-PRACTICES-HTML ; la part
+machine est déjà outillée gratuitement — axe-core, CrUX, Lighthouse, validations stores) ;
+clause de réveil mobile natif au premier brief réel · **R-28 proposée** (critère d'admission
+d'une forge : verbes outillés + née exercée + cadence propre + surfaces le jour même ; un
+corpus sans verbe = référentiel) — sa fixture de validation : appliquée aux 4 candidats,
+elle redonne les verdicts rendus.
+
+**Instrumentation (§4 bis)** : 2 tranches recherche Sonnet (55 k/12 outils/1,6 min ;
+57 k/16 outils/1,6 min), 20 sources datées au total, escalade : aucune ; synthèse et
+non-recouvrement : pilot (citations vérifiées sur pièces). Zéro construction : git status
+des 12 forges inchangé, aucun dépôt créé. 3 candidatures ingérées (lot `0f1d020d1f60`) —
+la décision reste humaine : nom de la forge cyber (« websec » proposé), GO des profils,
+encodage R-28.
+
+## 12/08/2026 (nuit, suite) — mandat « fais 1, 2 & 3 » : websec née, profils produit livrés, R-28 encodée
+
+**Mandat humain** : exécution des 3 candidatures de l'étude + étude des autres profils.
+TF-0123 : **forge-websec** née exercée (23 PASS, sens rouge sur CVE réelles) et publiée —
+l'écosystème passe à **13 forges** (schéma V13 « 14 forges », oracle-ecosysteme
+13/13, catalogue v1.4.0 à 67 services). TF-0124 : profils\{website,webapp,mobile} +
+doctrine, routés par ACCUEIL. TF-0125 : R-28 encodée (section H) — sa fixture : les 4
+candidatures du jour redonnent leurs verdicts. **Étude « autres profils »** versée au
+rapport §5 : aucun de plus maintenant, 5 « au premier brief » (api-headless, e-commerce,
+extension-navigateur, desktop, chatbot — vigilance verbe nouveau), dashboard couvert,
+iot/jeu/cli hors périmètre ; critère générique versé au LISEZMOI des profils.
+
+**Routage (§4 bis)** : websec construction Sonnet 200 k/83 outils/19 min · profils Sonnet
+88 k/37/4,5 min · étude autres profils Sonnet 44 k/5/1,9 min · R-28 + intégration + schéma :
+pilot. Escalade : aucune. Sondages : self-tests rejoués, périmètres d'écriture inspectés
+(l'agent profils a similairement signalé et préservé les fichiers de session vivante).
+
+**TF-0126 clos (12/08, nuit)** : profils produit vague 2 (api-headless, e-commerce,
+extension-navigateur, desktop) sur mandat humain anticipant le « premier brief » — commit
+`46b0df0`, sources rafraîchies en recherche (OpenAPI 3.2.0, MV2/Chrome 138, Authenticode
+15 mois), section « Trou d'outillage » de desktop (delta forge-ops documenté, jamais
+improvisé). 7 profils actifs, chatbot seul en attente (vigilance R-28). Tranche Sonnet
+94 k / 47 outils / 5 min, escalade : aucune. Incident de process consigné : deux événements
+registre à id null écrits par le pilot (script sans garde) puis retirés avant commit —
+l'oracle R1-R10 les avait signalés ; garde ajoutée au geste (assert sur l'id).
+
+**TF-0127 clos (12/08, nuit)** : profil chatbot livré (`4d2ec60`, 9 sources datées, section
+Frontière R-28) — **8 profils actifs, liste d'attente vide**. L'agent a refusé de citer des
+stats non primaires (halucination « 71-89 % ») : le doute marqué plutôt que le chiffre
+affirmé. Au passage : les 2 sidecars dormants d'`input\` (r21-lockfiles du 11/08,
+socle-docs-projet) enfin ingérés (lots `d00b0a9043fe`, `731c8f3e7856` — 3 candidatures,
+décision humaine). Tranche Sonnet 83 k / 35 outils / 4,5 min, escalade : aucune.
+
+**TF-0128/0129/0130 traités (12/08, nuit)** : R-21 réécrite (`b507ff6` — monorepos vus,
+sources_de_verite lues, versions sans source = FAIL ; self-test 5→6 PASS, fixture rouge
+reproduisant Produit-11). TF-0129 et TF-0130 **écartés en doublons** : les sidecars du 11/08
+décrivaient des défauts corrigés le jour même (TF-0086/0087/0091) — l'agent l'a prouvé par
+lecture directe au lieu de re-livrer, et l'ingestion du 12/08 n'avait pas détecté le
+recouvrement. Leçon consignée : **vérifier le recouvrement avec l'archive avant d'ingérer
+un sidecar dormant** (candidature possible : contrôle de similarité à l'ingestion).
+Tranche Sonnet 136 k / 46 outils / 8 min, escalade : aucune.
+
+**TF-0131 clos (12/08, nuit)** : R-29 « l'IA fait, l'humain décide » (loi transverse n° 5 au
+noyau — 6 100 octets après compression — + §I de REGLES-PROJET + ACCUEIL §5 + gabarits) et
+R-30 « thème clair + bascule sombre câblée » (§J + pattern S-G1 au BEST-PRACTICES, fixtures
+témoins prouvées : verte PASS — un défaut L2 réel corrigé pendant la fabrication —, rouge
+FAIL contraste 1,51:1, sombre forcé PASS AA, print clair vérifié Playwright). Grep
+anti-subjectivité : 0/5. Deux candidatures aval (lot des sidecars : règle d'oracle
+forge-design ; versement boilerplate + règle check_html — le toggle mort est prouvé
+invisible au check_html actuel). Tranche Sonnet 170 k / 76 outils / 15 min + noyau par le
+pilot ; escalade : aucune.
+
+**TF-0133/0134 clos (12/08, nuit — aval R-30 complet)** : oracle-bascule natif chez
+forge-design (`9e46ee9`, 48→52 règles, 4 rouges à écart unique — zèle conforme au gabarit)
+et S-G1 versé au skill factory-page-html (`6e8c891` chez forge-agents, source vivante +
+copie installée synchronisées, check_html 30→33 avec règle G1 « bascule morte »). La chaîne
+R-30 est fermée de bout en bout : règle → pattern → boilerplate natif → 2 oracles
+(design + socle) → fixtures prouvées. Tranches Sonnet 153 k/48/11,6 min et 135 k/63/8,8 min,
+escalade : aucune. Rappel des sondages pilot : 52 règles et 33/33 rejoués, toggle mort FAIL,
+diff source↔installé vide.
+
+**Refonte TODO.html (12/08, mandat humain)** : `generer-page.mjs` réécrit — largeur portée à
+75-100 % (`min(94vw,1680px)`), items en **cartes détaillées à puces** (constat + proposition
+découpée), ajout de la **date de création**, d'une **priorité de traitement** (dérivée du
+score : Haute ≥5 / Moyenne 3-4 / Basse <3) et de l'**impact sur la forge** (coût constaté) ;
+colonnes « décider » (cases) et « commentaire » **supprimées** — la vue devient lecture seule,
+la décision se prend en session. Premier livrable HTML conforme R-30 de bout en bout : bascule
+sombre S-G1 câblée (oracle-bascule forge-design PASS), et double vérification au rendu —
+check_html PASS, render_page PASS en clair ET en sombre forcé (AA tenu dans les deux thèmes,
+2 défauts de contraste `--faint`/accents-sur-fill trouvés et corrigés pendant la fabrication).
+Le flux d'export (appliquer-export.mjs) devient orphelin — laissé en place, non supprimé.
+
+**TF-0132/0135 clos (12/08) — les deux derniers candidats** : forge-tests corrigée sur deux
+faux verdicts de la famille des correctifs du matin. TF-0135 (`5977168`) : l'analyse des
+gardes lit tous les modules du paquet (plus le seul main.py), un handler non résolu dégrade
+en non_juge au lieu d'un bloquant faux — fixture Produit-01 : 2 bloquants faux → 0. TF-0132
+(`4e108b2`) : `--trace on` n'est plus forcé (var FORGE_TESTS_PLAYWRIGHT_TRACE + config projet
+respectée), « trace indisponible » distingué de « suite e2e rouge ». Sondage pilot : pytest
+123 vert, recette divergences 18 cas, banc-vert identique à adba38c (mutant d'un timeout shell
+restauré par l'agent avant tout commit — transparence). Tranche Sonnet 214 k / 89 outils /
+24 min, escalade : aucune. **Défaut préexistant surfacé** en candidature (lot 6973bf33629b) :
+recette section corpus rouge sur D-01 (suite e2e banc-rouge, getByTestId non visible) —
+reproduit avant/après par git stash, donc antérieur ; à instruire (fixture ou env du poste).
+Registre : 38+... items du jour archivés, actifs = 1 (ce nouveau candidat D-01).
+
+**TF-0136 clos (12/08) — D-01 : ce n'était pas un bug de la forge**. Cause racine prouvée :
+le port 4173 (défaut vite preview) était tenu par un `vite preview` d'Produit-01 (PID 60184),
+et `reuseExistingServer:true` faisait tester SILENCIEUSEMENT la mauvaise appli — d'où le
+testid `lien-connexion` introuvable. Corrigé (`91b80fc`) : reuseExistingServer→false sur les
+deux bancs (échec fort + fin de la contamination croisée rouge↔vert), motif `_PORT_OCCUPE`
+prioritaire dans execution.py (« port occupé par un AUTRE processus » — jamais confondu avec
+« trace indisponible » TF-0132 ni « suite rouge »), 3 tests. pytest 123→126. Le vert de
+surface de la recette reste conditionné à la libération du port par l'humain (process d'un
+autre produit — garde-fou : non tué). Candidature déposée (lot 7768d224fe52) : migrer les
+bancs vers un port moins commun. Tranche Sonnet 135 k / 86 outils / 19 min, escalade : aucune.
+
+**TF-0137 clos (12/08) — ports dédiés + une révélation**. Bancs migrés hors du 4173 par
+défaut (rouge 41733, vert 41743, `91a12be`) : classe de collision éliminée, contamination
+rouge↔vert supprimée, et **D-01 résolu sur le fond** — la recette corpus voit enfin le banc
+rouge servir sa propre appli (16/16 défauts, plus le blocage getByTestId d'Produit-01). MAIS
+la correction a **révélé** ce que la collision masquait : `recette --section corpus` reste
+ECHEC car le banc-VERT (témoin propre) sort 26 bloquants (attendu 0) — condition réelle,
+sans mutant résiduel sur disque (vérifié), versée en candidature séparée (lot dcfdd2ff23a3,
+à ventiler par pan et diagnostiquer). Je n'ai pas maquillé : mandat de migration rempli,
+recette toujours rouge pour une cause nouvelle et nommée. Fait par le pilot en direct (change
+chirurgical à 2 lignes × 4 fichiers, sous mandat explicite), vérif pytest 126 + recette réelle.
+
+## 12/08/2026 — étude d'opportunité « spécialisations forge-data par moteur »
+
+**Mandat humain** (prompt barré L99) : pertinence de 4 spécialisations forge-data (Databricks,
+Oracle, Postgres, Azure SQL). Analyse seulement — `output\03-etudes\2026-08\20260812-etude-forge-data-moteurs.md`.
+
+**Verdict** : NE PAS créer 4 spécialisations. Grille R-28 : les formats de forge-data
+(assertions@1/contrat@1/lineage@1) sont agnostiques du moteur et jugent des artefacts, jamais
+une connexion. Le seul trou réel n'est pas par moteur mais **un verbe d'import unique**
+(`importer` : parser un schéma EXPORTÉ → brouillon d'assertions/contrat, zéro connexion,
+Postgres-first car seul artefact 100 % libre pour la fixture). Le « par moteur » est du
+**dialecte** = profils-moteur versionnés (loi n° 4, créés au premier run réel, pas d'avance).
+Databricks traité à part (lakehouse + lineage colonne Unity Catalog → traducteur B différé,
+artefact payant). Connecteur live refusé (garde-fou paiement — première dépendance externe
+payante de l'écosystème sinon). 3 candidatures (lot 18e202a0ce8e). Recherche Sonnet 68 k /
+17 outils / 2,8 min, 8+ sources datées ; escalade aucune ; zéro écriture dans forge-data.
+
+## 12/08/2026 (nuit) — « fais tout » : 4 candidats exécutés, registre soldé à 0
+
+**Mandat humain** : exécuter les 4 candidats actifs. Deux agents, dépôts disjoints, tous
+vérifiés par sondage pilot ; catalogue v1.5.0 (69 services).
+
+- **TF-0138** (tests, `e92cc12`) — banc-vert : les 26 bloquants n'étaient PAS un banc sale
+  mais le **pan front qui sur-signalait** (trace:off légitime lue « 0 % couverture » au lieu
+  de « non mesurable »). Corrigé → banc-vert 0 bloquant, et **banc-rouge détecte D-01 sur son
+  vrai signal (7/25) au lieu d'un faux total (0/25)** : la détection d'avant était accidentelle.
+  `recette --section corpus` = **OK corpus** (rouge=FAIL 16/16, vert=PASS), pytest 128.
+- **TF-0139** (data, `6068fad`) — verbe **importer** : DDL exporté → brouillon assertions/contrat,
+  round-trip prouvé (passe les oracles existants), self-test 30→36. Un verbe transverse, pas
+  4 spécialisations (verdict de l'étude tenu).
+- **TF-0140** (data, `6371987`) — 4 **profils-moteur** (référentiels datés-sourcés) ; anticipation
+  tracée au LISEZMOI (mandat « fais tout », dérogation assumée à « au premier run »).
+- **TF-0141** (data, `85a8934`) — **traducteur Unity Catalog → lineage@1**, self-test 36→41,
+  validé sur fixture synthétique (marqué ; export réel = workspace payant, reste utilisateur).
+
+Routage §4 bis : forge-data 177 k/76 outils/17 min ; banc-vert 149 k/104/20 min ; escalade
+aucune. **Registre : 0 actif** (142 archivés) — pour la 1re fois depuis l'ouverture du TODO,
+plus rien en attente ni en cours.
+
+## 13/08/2026 — plan « stratégie de tests e2e complète et autonome-sous-gates » (insatisfaction Produit-11)
+
+**Mandat humain** (prompt barré L99) : plan détaillé d'une stratégie de tests de bout en bout,
+complète et autonome, après un run Produit-11 insatisfaisant. Livrable = plan (document) + candidatures :
+`output\04-plans\2026-08\20260813-plan-strategie-tests-e2e.md`.
+
+**Diagnostic Produit-11 sur pièces** (rapport-tests.json, verdict PARTIEL) : forge-tests n'est pas
+cassée — elle CONSTATE correctement et donne le `pour_couvrir` de chaque pan. Les pans sont
+PARTIEL pour 3 familles de cause, aucune n'étant un bug de la forge : (a) environnement non
+préparé (node_modules absent → front/visuel ; front non servi), (b) contrat projet non renseigné
+(app ASGI absente → api inventaire vide), (c) surface absente/faible (pas de couche SQL → data/
+migrations ; mutation back 0,11 ≪ 0,70). Le trou : forge-tests nomme mais n'exécute pas les
+recettes, ne prépare pas l'environnement, ne génère pas les cas, ne boucle pas.
+
+**Plan** : 8 phases (préparation env → analyse/cible → génération de cas exécutables → volumétrie
+seedée par cas → exécution + rapport test-par-test → plan d'action classé R-29 → boucle bornée
+≤3 à ÉTAT TERMINAL MESURÉ (jamais « jusqu'au vert » — banni, réfuté partout) → autonomie/GO
+humain → feuille de route R-28). Trois acteurs séparés (tests audite/génère/exécute · development
+remédie le produit sous run · pilot orchestre). 3 mesures distinctes (couverture ≠ passage ≠
+mutation). Anti-triche (mutation + « aucun ✓ sans oracle »). 5 candidatures (lot 3ab9c56ce738) :
+harnais d'environnement, générateur de cas exécutables, volumétrie seedée par cas, orchestrateur
+de boucle (pilot), rapport test-par-test. Recherche/diagnostic : pilot (Fable) sur pièces ;
+aucune écriture hors pilot (git status forges + Produit-11 inchangés).
+
+## 13/08/2026 (suite) — « fais tout » : 5 briques v0 de la stratégie e2e construites
+
+**Mandat humain** : construire les 5 candidats du plan e2e. Deux agents, dépôts disjoints
+(forge-tests / pilot), tous vérifiés par sondage ; catalogue v1.6.0 (70 services).
+
+**Côté pilot** (`outillage-tests-e2e\`, nouveau dossier isolé) :
+- TF-0142 (`7e883b9`) **harnais d'environnement** — deps, port dédié libre, FORGE_TESTS_APP
+  dérivé, contrat-audit.json + healthcheck ; self-test 8/8. Le trou n° 1 de Produit-11 outillé.
+- TF-0145 (`54db9e7`) **orchestrateur de boucle** — R-29, ≤ N cycles (G-2), état terminal
+  cible_atteinte|cycles_epuises, `garantirHonnetete()` qui LÈVE sur vert forcé ; self-test 7/7.
+  « Jusqu'au vert » devient un invariant vérifié par CODE.
+
+**Côté forge-tests** (pytest 128→154) :
+- TF-0143 (`4696f3b`) **cas collectables** — verifier_syntaxe + oracle _collectable (pytest
+  --collect-only) : le générateur prouve du collectable, plus seulement du plausible.
+- TF-0144 (`57ea83d`) **volumétrie par cas** — jeux_par_cas seedé/déterministe, accès opposable.
+- TF-0146 (`77f51f9`) **rapport test-par-test** — section essais (verdict motivé par test,
+  passant non couvert signalé) + lecteur JUnit zéro dépendance. Le grief explicite comblé.
+
+Tous les v0 sont nés EXERCÉS sur fixtures ; l'intégration e2e réelle (harnais→forge-tests→
+orchestrateur→development sur un vrai projet) est le **jalon suivant**, annoncé et non promis.
+Routage §4 bis : forge-tests 211 k/89 outils/20 min ; pilot 127 k/59/9 min ; escalade aucune.
+Défaut préexistant surfacé (lot dba05b5f348d) : recette --section dette ECHEC (invariants
+désynchronisés, prouvé antérieur). Registre : 2 candidats (dette + une restitution d'une autre
+session), 147 archivés.
+
+## 13/08/2026 (suite) — mandat « rangement output » : dossiers numérotés + old\, écosystème entier
+
+Mandat humain : ranger les fichiers des forges dans `output\` en dossiers numérotés
+(01-, 02-…), une seule version à la racine, antérieures dans `old\` — même méthode chez les
+projets produits. Constat sur pièces : **forge-audit_client-a appliquait déjà la méthode**
+(01-…07- + `old\`) — elle devient le modèle de l'écosystème.
+
+- **pilot** : 5 familles — `01-revues-et-propositions`, `02-schema-ecosysteme` (+ `old\` :
+  3 versions antérieures du schéma + rendus `.oracles`), `03-etudes`, `04-plans`,
+  `05-catalogues-readmes-forges` ; `output\LISEZMOI.md` (structure + mapping anciens chemins,
+  le registre TODO n'étant jamais réécrit) ; références réécrites : profils ×8,
+  REGLES-PROJET, CONTRAT-INTERFACE, CATALOGUES, bootstrap.mjs, outillage-tests-e2e.
+  **Collision constatée avec la session « fais tout »** (commits `7e883b9`→`2f2d320` tombés
+  pendant le rangement, catalogue régénéré v1.6.0 sur l'ancien chemin) — résolue par
+  convergence : v1.6.0 versé dans `05-`, ancien chemin supprimé.
+- **forges** : agents `01-pv`/`02-skills` (`output\` non versionné → mv simple) ; design
+  `01-pages-temoins` (`1b0d769`) ; organization `01-etudes`/`02-composants` + README
+  (`6fecff3`) — **preuves exécutées après déplacement** : gate-conventions PASS, oracle
+  filtres-tableau fixtures rouge FAIL / verte PASS ; seo `01-decisions`/`02-veille` + README
+  (`d684909`). Commits locaux, jamais poussés.
+- **sans action** : audit_client-a (déjà conforme, modèle d'origine) ; produit Produit-01
+  (`output\` racine vide, `audit\output\` déjà numéroté `00 -`, arbre en session vivante —
+  garde-fou « projets autonomes »).
+- Candidat remis : encoder la méthode en convention transverse (organization) et trancher
+  `old\` (mandat + audit_client-a) vs `Old\` (D-06, CLAUDE-PRODUIT).
+
+## 13/08/2026 (suite) — « Implémente les TODOs » : 3 items clos
+
+TF-0147 (`145b803`) : consigne de restitution `gabarits\RESTITUTION.md` — forme seule, pas de
+persona-juge (seul delta positif de l'étude personas). TF-0148 (`68725ea`) : registre de dette
+resynchronisé — cause racine prouvée (TF-0135 avait modifié invariants.py sans régénérer le
+registre) ; **la recette forge-tests passe S-01 TENU pour la 1re fois** (12/12 sections). TF-0149
+(org `bc27652` + pilot `b8c8e62`) : D-15 encode le rangement output\ en familles numérotées,
+casse `old\` minuscule tranchée par l'humain. Deux décisions non tranchées versées en
+candidatures plutôt qu'écrasées : versionnement de old\ (C1 vs état de fait, lot 1dd9cefdde51)
+et rappel de régénération des registres dérivés au gabarit de campagne (process). Deux agents
+Sonnet (tests, organization) + pilot ; escalade aucune ; sondages rejoués (recette S-01 TENU,
+self-test conventions 10/10, oracle noyau PASS).
+
+## 13/08/2026 (suite) — Campagne TF-0153 : le dashboard de tests devient l'interface de décision
+
+Mandat humain direct (« vas y » sur prompt L99 + barre), périmètre étendu par cahier de
+retours Produit-11 (13 constats A1-A13, tous vérifiés sur pièce, glossaire validé à la gate).
+Barre : Allure Report (démo publique, test d'existence PASS, registre la-barre).
+**forge-tests `47e8950`** (branche locale `campagne/tf-0153-dashboard`, jamais poussée) :
+gabarit dashboard réécrit — clair par défaut STRICT (l'auto-sombre OS, conforme à la lettre
+de S-G1, était la cause du retour humain) ; synthèse par pan ; tuiles-KPI cliquables
+(filtre + ancre + delta) ; seuils et tendance expliqués (glossaire.py, ids gelés §3 bis) ;
+grille commune (picto+libellé, « Passé — aucun constat », tooltips, chapeau non-rattachés) ;
+tables outillées (recherche/tri/réinit/compteur) ; **D-12 enfin initialisé** (affordance
+morte depuis l'origine) ; plan de rejeu auto_ia borné G-3 ; détail de cas dépliable ≤ 2 clics
+(dérivation des cahiers, mêmes références) ; contrôle pré-génération §2 bis à chaque
+génération (sidecar TODO sur dérive). Preuves exécutées : recette **12/12, S-01 TENU**
+(assertions thèmes évoluées avec le mandat, 3 contrôles au lieu d'1) ; check_html PASS sans
+avertissement ; render_page PASS ×3 largeurs ; **oracle de câblage Playwright 20/20** sur le
+livrable réel ; dashboard Produit-11 `20260813b` régénéré en proposition (G-1). Boucle : 3
+itérations (L3 → thèmes/D-12 → badges tendance), bornée tenue. Candidats remis : TF-0158
+(trancher S-G1 : prefers-color-scheme vs clair vécu), TF-0159 (tendance multi-runs, barre
+B3). Routage : pilotage Fable, aucune escalade ; artefact d'encodage PowerShell sur l'oracle
+détecté et neutralisé (5 faux FAIL, page innocentée).
+
+## 13/08/2026 (soir) — Mandat global : retours Produit-10 + TODO + input\ + favicon (22 items clos)
+
+Mandat humain à 6 volets. **input\ réorganisé** sur le modèle d''output\ : pilot (5 familles,
+`00-retours\` avec **préfixe projet obligatoire**, LISEZMOI + mapping) et 6 forges sœurs
+(audit_client-a : exemption motivée, fichiers référencés par nom dans auditcore) ; convention
+encodée (règle 18 amendée, CLAUDE.md, gabarit RETOURS-FORGES, ETAPES-RUN, TODO-FORGE).
+**Incident d''intake détecté et réparé** : 32 doublons créés par ingestion aveugle de sidecars
+déjà traités par d''autres canaux — retirés à la seconde, garde « confronter au registre ET à
+l''archive avant d''ingérer » encodée. **Favicon-lettre systématisé** (G2) : boilerplate skill,
+TODO.html (F), veille (F), lib-vue-html (paramétré), dashboard forge-tests (lettre du produit).
+**Retours Produit-10 ingérés (TF-0160→0172) et tous implémentés** : forge-data `fc5ddce` (RD-1
+faux positif [c:id], RD-2 messages P2, RD-3 service cat-dat-08 porté du run réel — garde
+lecture-seule 8/8, RD-4 etat constate|propose) ; skill factory-page-html (RA-1 </script>
+échappé + règle A1-bis à fixture, RA-3 indice, RA-4 barème par colonne, RA-2 seuil calibré ;
+**source forge-agents trouvée en retard et synchronisée** `655c757`, self-test 34/34) ; pilot
+(RV-1 RUN-MANDAT.md 3e voie, RV-2 alinéa R-4, RV-3 PARAMETRAGE, RV-4 **R-32 gate aval** +
+oracle + fixture, RV-5 réfuté sur pièce). **TODO mandatée close** : TF-0150 (C1 tranché
+versionné, R-7 inversée + fixtures), TF-0151 (registres dérivés au gabarit campagne), TF-0152
+(veille + témoin PASS, Google Fonts retirés ×3), TF-0154 (inventaire 7 forges, design → TF-0174
+L8/SPA), TF-0155 (gabarit + oracle étude d''opportunité E1-E7, self-test 2/2), TF-0156 (R-31
+admission objet durable), TF-0157 (motif_ecart, règle datée, 19/19), TF-0158 (**clair par
+défaut strict partout** — R-30 amendé), TF-0159 (tendance multi-runs `14731d4`, recette 12/12
+S-01 TENU, `<link>` jugé au lieu d''être banni — affiné, pas affaibli). Preuves : self-tests
+34/34 (skill ×2 emplacements) · 41/41 (data) · 19/19 (todo) · 6/6 (conformité) · 2/2 (étude) ·
+8/8 (mesure) · recette forge-tests S-01 TENU · oracles K PASS (cat-dat-08) · noyau PASS.
+Boucles bornées tenues (max 3 itérations, thème `<link>` compris). Routage : pilotage Fable,
+aucune escalade. Registre : 22 clos archivés, 2 actifs (TF-0173 autre session, TF-0174).
+
+## 13/08/2026 (nuit) — Post-mortem du refus + dashboard v2 : « ok, fais tout » (4 items, registre à zéro)
+
+Le dashboard v1.8.0, tous oracles verts, avait été REFUSÉ par son destinataire sur six points
+de lisibilité — post-mortem instruit sur pièces (affaiblissement silencieux « chaque liste »
+→ « ≥ 8 lignes » ; oracles de présence, pas de lecture ; revue sur état FERMÉ ; composant
+D-12 livré sans CSS ; synthèse-redite structurelle). **TF-0176** ferme les quatre chemins :
+« Écarts à la lettre » (L99 Ch8 §5 bis + AGENT-CAMPAGNE), revue sur états OUVERTS
+(`render_page --etats-ouverts`), composant avec son CSS jumeau (H5), synthèse à fait nouveau
+(H4). **TF-0175** (forge-tests `44c2609`) livre la v2 : panneau de filtres charté, lecture
+reconstruite depuis les findings, colonnes non joués/non testables, outillage par CHAPITRE,
+libellés d'éléments dérivés (24 motifs), détail en ligne pleine largeur — **acceptation
+10/10 sur le livrable Produit-11 `20260813d`, une capture d'état ouvert par retour** ; recette
+12/12 S-01 TENU, pytest 154. **TF-0174** : L8 exempte le routage SPA câblé (`data-nav` +
+script, fixtures double sens) et le comptage h1 ignore les gabarits JS — la maquette design
+est innocentée ; source forge-agents synchronisée (`0ff49b5`). **TF-0173** : le RELAIS d'un
+process long est sous contrat (§4 ter : guetteur armé ou premier plan, `relais_arme` au
+ledger) — appliqué séance tenante. Trois incidents attrapés par les gates pendant la
+campagne même : « NOT NULL » hors garde L11 (pytest), balise en toutes lettres dans un
+commentaire CSS (famille RA-1, avalait le body au comptage h1), fenêtre de garde 80 car.
+(garde posé au plus près du libellé). Registre : **0 actif, 179 archivés**.
+
+## 14/08/2026 — Lot c Produit-10 + fonds de tiroir : « ok, fais tout » (7 items clos, 1 candidat neuf)
+
+**Écart déclaré d''entrée** (gate TF-0176 appliqué à soi-même) : « tout » = lot c + delta n°6
++ restes mécanisables + entrants — PAS la résolution des dettes d''intégration du CONTRAT §5
+(D-C1…D-P2), chacune exigeant sa campagne mandatée ; triage : D-T1/T2/T4 et D-D4 sont des
+candidats bon marché pour une prochaine campagne forge-tests/design ; D-V1 (conductor
+headless) et D-V3 (arbitrage BMAD) sont structurels ; D-C3/D-D1 (skills non installés)
+relèvent du poste. **Lot c ingéré** (garde anti-doublons exécutée, 2 faux positifs levés,
+TF-0177→0183) et implémenté en entier : lexique d''invocation AU NOYAU (arbitrage tranché :
+trim des garde-fous, détail versé dans ACCUEIL — noyau 6110/6144 PASS) ; ACCUEIL pas 4 +
+catalogue complété (cat-agt-07..11, K PASS) ; **la-barre admise dans forge-agents** (R-31
+rejoué, test_existence PASS depuis la source) ; tri opt-in au composant D-12 (RA-5, détails
+transportés) ; piège du th documenté (RA-6) ; **tests d''interactions au socle** (RA-7 :
+méthode + 2 scripts éprouvés portés) ; champ `dimension` au contrat de la barre (RB-1).
+**Delta n°6 soldé** : règle L13 (liste ≥ 8 lignes sans recherche statique = FAIL ; KPI morts
+= avertissement, écart déclaré) + composant kpi-filter.js + fixture rouge — self-test skill
+**37/37**, 4 fixtures mises au standard, non-régression vérifiée sur 4 livrables réels
+(TODO.html re-généré : son sommaire vide à 0 actif a été attrapé par L6 — l''oracle a jugé
+la vue périmée, pas un faux positif). **R-28.1 mécanisé** : règle E8 d''oracle-ecosysteme
+(antériorité des 14 déclarée), self-test 7/7 ; R-29 : report maintenu, sa condition (« si un
+gap se constate en run réel ») n''est pas remplie. **Entrants instruits** : le dossier TikTok
+est un carrousel « Claude Code Web Design Genius » + 5 vidéos (illisibles par l''agent) →
+candidature de veille TF-0184 (candidat, décision humaine — jamais de veille partielle
+silencieuse) ; paquet `prompt-analyzer-l99 (5).skill` → old (la source forge-agents fait
+foi). Sources synchronisées (14 fichiers skill + copie D-12 forge-tests re-bannérisée),
+pytest forge-tests 154. Registre : **1 actif (TF-0184), 183 archivés**.
+
+## 14/08/2026 (suite) — « Supprime A2, puis fais C, D & E » : dettes d'intégration soldées ou arbitrées
+
+**Écart déclaré d'entrée** : D et E sont des triages EXÉCUTÉS avec verdicts documentés — pas
+la levée en code de chaque dette (une levée = une campagne) ; l'écart est dit ligne à ligne.
+**A2** : 9 captures Design supprimées (traitées par l'humain hors pilot). **C — resync doc** :
+deltas n°1-6 de BEST-PRACTICES-HTML tous constatés soldés dans la source (section réécrite
+« TOUS SOLDÉS », chaque item barré avec sa preuve) ; R-30 §J « contrôle exécutable » soldé
+(G1 vit dans check_html). **D — table §5 du CONTRAT** : 8 skills conception/design installés
+au poste (D-C3/D-D1 soldées) ; **runner `run-oracles-conception.mjs` + `manifeste.json`
+créés** (D-C1 soldée, double sens prouvé : fixture verte PASS / rouge FAIL, jamais PASS par
+défaut) ; audits sur code : D-D4, D-T2, D-T3, D-T4 étaient déjà résolues (citations l.184
+`--sortie`, TimeoutExpired attrapé visuel.py l.110, stderr routé « stdout JSON PUR » l.260) ;
+D-T1 requalifiée assumée (contrat de sortie, pas un défaut) ; D-V3 **arbitrée sur mandat
+délégué** : Conception fait foi pour les exigences, gates BMAD = pré-commit, forge-tests =
+audit indépendant — recouvrement voulu ; D-V1/D-A1..A3 assumées ; D-D2 campagne à mandater ;
+D-D3 **bloquée par garde-fou** (aucune API tierce payante → décision humaine d'outillage).
+**E — registre de dette forge-tests instruit** : les 43 `todo` étaient des limites déclarées
+(NON_JUGE du code) ; 38 instruites en `assume` avec note datée par famille (limites
+constitutives : dérivation par la forme, contrôle statique, gardes telles qu'implémentées,
+G-1 du pan qualif…) ; **5 gardées en `todo`** comme vraies pistes : états a11y
+post-interaction, surface sous compte, webServer qui écrit dans l'arbre (tension G-1),
+générateur Front/Batch/Fichiers, routes post-action. Régénération `python -m
+forge_tests.dette` : 61 assume · 27 retiree · 5 todo, statuts et notes préservés par id ;
+recette S-01 rejouée. Publication : **v1.10.0** sur les 14 forges.
+
+## 14/08/2026 (après-midi) — Dashboard v3 : retours humains sur Produit-11 20260814a (TF-0185)
+
+Mandat direct (6 points + question boucle). **Écart déclaré d'entrée** : la boucle auto_ia
+est un mécanisme de RUN — la forge n'écrit jamais dans la suite du projet (G-1), c'est
+l'agent du run qui l'applique ; encodée en doctrine (noyau : boucle ≤ 5 cycles ; ETAPES-RUN
+§5 : extensible à 7 si chaque cycle réduit strictement le reste d'auto_ia — l'ancienne borne
+de 3 laissait des automatisables au rapport final), et le dashboard DIT désormais si elle a
+tourné et pourquoi il reste des auto_ia (sur Produit-11 : 19, toutes en « Suite de tests »,
+mesure one-shot). **Livré dans forge-tests** : `surface.py` — un élément qu'un finding nomme
+passe en état KO (le « Non joué » porteur de constat du 14a était illisible) ;
+`libelles.py` neuf — libellés + OBJECTIFS du test dérivés de la forme, partagés
+dashboard/cahiers ; `cahiers.py` — cas contextualisés (gestes par balise : soumettre le
+formulaire ≠ activer le bouton ; attendu/préconditions nomment écran et élément ; constat
+d'audit rappelé au cas nominal) ; `actions.py` — textes structurés, l'action configuration
+reformulée (quoi → pourquoi → obtenu, champs en fin) ; 12 adaptateurs — 33 chaînes
+accentuées (agent, pytest 154 verts) ; `dashboard.py` — synthèse de famille en tête des
+onglets 2/3, chapitres repliables (details.pli + ouvrir/fermer tout, dépliés à
+l'impression), KPIs d'état cliquables par chapitre, colonne « objectif du test », constat
+qui explique le POURQUOI du non-joué, onglet Non joués outillé quel que soit le volume,
+actions « à vous » regroupées et structurées Quoi/Pourquoi/Vous obtiendrez, 4 règles de
+pré-génération neuves. **Preuves** : Produit-11 `20260814b` régénéré — §2 bis PASS, check_html
+PASS, render_page PASS, 9 captures états ouverts RELUES (gate TF-0176) dont une itération
+attrapée en relecture (« Vos 8 actions » n'en montrait qu'une → regroupement annoncé
+« en 5 points », pour_couvrir des pans restitués) ; recette **S-01 TENU**. **Écart déclaré
+en sortie** : les messages du rapport Produit-11 du matin restent sans accents (donnée mesurée
+avant correctif — le dashboard rend le rapport, il ne le réécrit pas) ; visibles corrigés
+au prochain audit. Registre : TF-0185 créé→corrigé→archivé, oracle PASS, 0 actif.
+
+## 14/08/2026 (soir) — Mandat transverse : Pentest & OWASP dans l'écosystème (étude, verdict O2)
+
+Mandat humain cadré par `prompt-analyzer-l99` (appel de skill RV-6), exécuté en voie
+`RUN-MANDAT.md` — livrable = document, pas de conception/design/MEP. **Écart de voie déclaré**
+: le pilot n'a pas de `forge\` ni de ledger propre (les mandats internes se tracent ici et au
+registre TODO) — les pas 1-2 de RUN-MANDAT supposent un projet ; la preuve cadrée d'avance
+reste la même (`oracle-etude-opportunite`, E1-E7). Livrable :
+`output\03-etudes\2026-08\20260814-etude-opportunite-pentest-owasp.md`, **oracle PASS 7/7** (11 lignes
+de non-recouvrement toutes citées, 15 sources datées, jeu fermé O0-O4, verdict unique, plan de
+revue au 2026-11-14). **Constat central** : « Penetration Tests & OWASP » n'est pas un sujet
+mais six (exigences ASVS · méthode WSTG · surface IA · DAST · pentest manuel · gouvernance), et
+OWASP est **déjà entré** dans l'écosystème le 12/08 — ASVS 5.0.0 L1 curé chez websec, LLM Top
+10 cité au profil chatbot. L'intégration à faire est donc un branchement et quatre deltas, pas
+une création. **Trou réel mesuré** : WSTG à **0 occurrence** sur les 14 dépôts. **Verdict O2**
+(deltas ciblés) — O1 « forge-pentest dédiée » réfutée par la règle 31 : le recouvrement avec
+forge-websec est établi par citation (décision du 12/08), pas supposé ; O4 (service tiers)
+écartée par garde-fou d'écosystème. **Six garde-fous dual-use** posés en tête de l'étude
+(périmètre écrit, jamais de tiers, instance dédiée, pas d'évasion de détection, secrets
+cloisonnés, voie sur mandat) — le point 6 est une exception explicite et motivée à la loi
+transverse n°5. Cinq candidatures émises en `candidat`, **aucune décision prise** :
+TF-0186 (WSTG curé), TF-0187 (oracle DAST/ZAP, lève D-W1), TF-0188 (corpus d'injection LLM01),
+TF-0189 (règle 33 + branchement ASVS aux étapes — valeur 9,0, la plus haute), TF-0190 (mapping
+ADR↔ASVS). Décisions réservées à l'humain et posées comme telles : ordre des campagnes,
+verdict websec **bloquant** ou non au gate MEP, gabarit d'autorisation offensive.
+
+## 14/08/2026 (soir) — « Traite tout » : lot Produit-11 20260814a (RT-9…RT-13) intégralement soldé
+
+Lot déposé par le produit dans `input\00-retours\`, découvert parce qu'un `git add -A` l'avait
+happé dans le commit de l'étude OWASP (signalé à l'humain, rien de perdu). **Ingestion sous
+garde** : (1) l'ingesteur a **rejeté le sidecar en bloc** — rejet atomique, registre intact, 6
+motifs par ligne : le produit émet `{reference, gravite, preuve, proposition}` là où R10
+prescrit `{schema:1, contenu, demandeur, source, date_demande, forges_cibles_initiales}` ; le
+lot était aussi nommé sans préfixe projet. Normalisation faite côté pilot **sans toucher
+l'original reçu** (dérivé `.normalise.tf.jsonl`, l'original renommé au format R-4) ; la
+friction devient TF-0196 (candidat, deux voies à trancher). (2) **Garde anti-doublon exécutée**
+contre registre + archive : 3 correspondances instruites et levées — TF-0122 (route qui faisait
+TOMBER l'audit ≠ route jamais appariée), TF-0143 (qui déclarait l'adoption **hors** de son
+périmètre), TF-0185 (qui n'avait traité qu'un tiers de RT-12). **Les cinq soldés** :
+**RT-11** `front.motif_de_route()` templatise la route déclarée avant appariement (`:param` →
+un segment, `*` → le reste) — le faux négatif était garanti sur toute SPA ; **RT-9/RT-10**
+`output`, `old`, `Old`, `.oracles` sortent de l'inventaire du pan interface, qui auditait les
+dashboards produits par forge-tests elle-même (6 → 27 éléments sans qu'une ligne de gabarit
+change) ; **RT-12** vocabulaire (« Proposition (non adoptée) » pour un cas dérivé, « Non
+exercé » pour l'état d'élément — identifiants gelés, seule la couche d'affichage bouge) et
+**constat porteur** rattaché à la source (`surface._rattacher_porteurs`) : le 401 de l'écran
+s'affiche enfin sous le constat du formulaire qu'il explique ; **RT-13** module `adoption.py`
+— le projet déclare ses cas adoptés dans `forge/cas-adoptes.jsonl`, la déclaration est
+**vérifiée** (test introuvable → adoption refusée avec motif), et l'exhaustivité du cahier
+devient un solde qui descend. **Écart à la lettre déclaré** : RT-10 demandait l'exclusion pour
+« interface, securite, visuel » ; elle ne s'applique qu'à `interface` — exclure `output\` du
+scan de secrets créerait un angle mort (un secret commis dans un livrable est un vrai secret),
+et `visuel` ne parcourt aucun fichier. **Preuves** : 10 tests neufs (`tests/test_lot_produit11_
+20260814a.py`), pytest **164 verts**, livrable Produit-11 `20260814f` régénéré, check_html PASS,
+capture d'état ouvert relue. RT-9 et RT-11 ne sont **pas re-mesurés sur Produit-11** : l'inventaire
+se fait à l'audit, qui est un run du produit, pas une campagne de forge — dit, pas tu.
+
+**Confirmations positives du lot** (elles paient des campagnes antérieures) : l'axe de
+dérivation des cahiers a fait trouver un défaut que ni la mutation, ni 56 tests e2e, ni trois
+audits n'avaient vu (`ErrorBoundary` monté sans enfants, donc garde-fou mort) — c'est
+l'argument le plus fort en faveur des cahiers dérivés ; les identifiants de cas sont
+**déterministes** (74 éléments communs entre deux audits, 0 identifiant changé), ce qui est
+exactement la condition qui rend RT-13 réalisable ; **§4 ter (TF-0173, décidé la veille) tient
+à l'usage** — guetteur armé, six émissions de 3 minutes arrivées à l'humain, `avancement.jsonl`
+concordant ; le pan `data` est passé de 1/36 à 35/36 en deux campagnes du produit. Deux
+constats en passant consignés en candidats, jamais corrigés d'office : **TF-0196** (schéma des
+sidecars produits) et **TF-0197** (le gabarit d'étude prescrit un nommage que la règle R-4
+refuse — 5 études sur 5 en FAIL, dont 4 antérieures : contradiction dormante, pas régression).
+
+## 14/08/2026 (nuit) — Deux opportunités d'intégration instruites : taste-skill et pans « Prompts »
+
+Mandat humain « travailler les opportunités d'intégration », deux sujets sans rapport → **deux
+études** (un verdict par sujet — un verdict multiple n'est pas un verdict). Les deux passent
+`oracle-etude-opportunite` **7/7**.
+
+**1. Skill externe `taste-skill`** (`20260814-etude-opportunite-taste-skill.md`, verdict **O3**).
+Le dépôt a été **lu et décrit, jamais installé ni exécuté** (garde-fou « entrant = donnée »).
+Deux faits ont porté le verdict. (a) *Non-recouvrement* : son angle revendiqué « anti-slop »
+est **déjà tenu par un oracle exécuté** (cat-des-02, « oracles slop/tokens/a11y/rendu PASS »),
+là où le skill n'offre que des prescriptions ; direction artistique, tokens et maquette sont
+couverts par cat-des-01/02/03. (b) *Conflit dur* : son `SKILL.md` prescrit des ressources
+**chargées par le réseau** (`picsum.photos`, `cdn.simpleicons.org`) que la règle A1 du socle
+interdit et que `check_html.py` refuse en FAIL bloquant, plus une pile imposée
+(Next.js/Tailwind/GSAP) qui heurte la neutralité du socle — alors que son README annonce des
+règles « not a single framework API ». S'y ajoute un trou de lecture assumé : **12 des 13
+sous-skills n'ont pas pu être lus**, et on n'admet pas ce qu'on n'a pas lu (règle 31). L'état
+de l'art tranche le régime d'admission : audit Snyk de 2026-02 — **1 467 défauts sur 3 984
+skills publics, 76 charges malveillantes confirmées** ; la popularité n'est pas un critère.
+Retenu : inscrire le skill comme **barre** (la-barre importe un niveau, pas un gabarit) et
+extraire au socle les seules règles compatibles A1, **avec attribution**, en écartant
+nommément les autres. O1 (installer via `npx`) et O4 (fork) réfutées ; O2 (vendorer après scan)
+reste ouverte si la réserve A1 est levée — le scan existe déjà (`oracle-scan-agentdef.mjs`,
+CAP-1..4) mais **n'est branché sur aucun processus d'admission** : décision humaine posée.
+
+**2. Pans de tests « Prompts »** (`20260814-etude-opportunite-pans-tests-prompts.md`, verdict
+**O2**). Le sujet nommé par l'humain — prompts, modèles, questions/réponses, stabilité,
+régression, déclencheurs — se partitionne en six objets qui ne se testent ni au même coût ni à
+la même cadence : **P1-P3 se mesurent sans appeler un modèle** (donc gratuitement, à chaque
+audit), **P4-P5 exigent des appels** (donc un gate), **P6 est une décision**. Non-recouvrement
+instruit : `oracle-agent-evals` (cat-agt-05) recouvre le jugement sémantique et **déclare
+lui-même** que le coût et la latence sont hors de son périmètre ; `flaky.py` porte déjà le
+mécanisme de rejeu ; `--precedent` porte déjà la tendance multi-runs ; forge-observability
+porte déjà la dérive — mais son champ `cadence` est **« une annotation documentaire en v0 »**,
+et c'est là le seul trou franc. La Frontière R-28 du profil chatbot interdit la forge dédiée
+(O1) : « jamais anticipé sans produit à exercer ». Retenu : un **pan `prompts`** dans
+forge-tests, v0 bornée au gratuit (inventaire des prompts, **épinglage des modèles**, corpus
+Q/R, seuils), le coûteux opt-in sous gate budget G0, le sémantique délégué à agent-evals, la
+cadence à observability. **Premier corpus exerçable disponible aujourd'hui : les skills et
+gabarits de l'écosystème lui-même** — de quoi tenir le critère « v0 exercée » sans attendre un
+client. Faits fondateurs de l'état de l'art : à température 0, **1 000 complétions donnent 80
+sorties distinctes** (Thinking Machines, 2025-09-10) — un run unique ne mesure rien ;
+`claude-opus-4-1` a été **retiré le 2026-08-05**, 9 jours avant l'étude, et Google remappe
+ses alias `-latest` à dates fixes — un alias change le système sous test sans qu'un commit ne
+bouge. **Dette déclarée** : aucune source primaire ne chiffre la taille d'un corpus ni le
+nombre de rejeux — tout seuil posé sera un choix de l'écosystème, dit comme tel.
+
+**Cinq candidatures émises, aucune décision prise** : TF-0198 (barre taste-skill), TF-0199
+(extraction attribuée des règles compatibles), TF-0200 (pan prompts v0 gratuite), TF-0201
+(stabilité par rejeu, opt-in et gatée), TF-0202 (règle « un pan qui dépense est sur mandat » +
+sonde de cadence sur les dépréciations — valeur 9,0, la plus haute des deux études).
+
+## 14/08/2026 (nuit) — « Fais la TODO » : 13 items clos, 5 forges touchées
+
+**Précision humaine décisive en ouverture** : « pour les triggers, il s'agirait d'un produit
+trigger, l'enclenchement de batch à implémenter et/ou tester ». J'avais lu « cadence de rejeu
+des évaluations » ; le sujet est l'**enclenchement des lots du produit**. TF-0202 requalifié,
+**TF-0203** créé et traité en premier.
+
+**TF-0203 — les déclencheurs entrent dans le pan `batch`.** Le pan mesurait l'intérieur du
+traitement en supposant qu'il démarre ; un déclencheur est une **affordance** au sens de la loi
+transverse n°1 — déclaré en configuration mais pointant vers une cible inexistante, il est
+l'équivalent serveur du bouton sans gestionnaire. Découverte statique (cron de CI, crontab,
+timer systemd, décorateurs de planification, tâches de file, `__main__`), trois constats
+(`trigger-non-cable`, `cron-invalide`, `job-sans-declencheur`), jugeables **sans exécuter la
+suite**. Choix déclaré : les déclencheurs ne comptent pas dans la surface du pan — les y mettre
+ferait tomber le taux pour une raison qui n'est pas un trou de test.
+
+**Règles neuves.** **R-33** (§M) sécurité offensive : branchement de l'ASVS aux étapes +
+exécution active **sur mandat**, exception explicite et motivée à la loi transverse n°5, six
+garde-fous. **R-34** (§N) : un pan qui **dépense** n'entre jamais dans la voie par défaut —
+corollaire opposable, *un audit lancé sans option ne coûte rien*. R-34 a mordu le jour même :
+le volet exécuté de TF-0201 a été écarté sur son fondement.
+
+**Livré ailleurs** : WSTG curé (28 cas rattachés à l'ASVS) et **oracle DAST à 7 verrous
+fail-closed** chez websec (self-test 23→36) ; **corpus d'injection** de 34 charges + mapping
+LLM Top 10 chez agents-security (24→38, dont deux *voisins légitimes* qui ne déclenchent pas) ;
+**barre** taste-skill inscrite en `statut: todo` (une barre ne s'auto-valide pas) et
+**oracle-taste** chez design (52→56 règles) ; **mapping ADR↔ASVS** chez audit (28
+rattachements, deux trous déclarés) ; **pan `prompts`** v0 gratuite chez tests (pytest
+176→210).
+
+**Trois choses qui font la valeur de cette campagne, et qui sont des échecs assumés.**
+(1) *TA1/TA2 rétrogradées après mesure* : codées d'abord en règles dures, elles se sont avérées
+mensongères sur les artefacts réels — la borne de saturation condamnait toute palette OKLCH du
+corpus, et la source amont **se contredit** (son propre accent recommandé viole sa règle). La
+mesure était exacte, l'interprétation ne l'était pas. (2) *Ma propre régression* : le premier
+commit TF-0203 livrait le contrôle sans doter les bancs, le banc vert sortait bloquant —
+attrapée en chemin et corrigée **à la cause**, jamais par assouplissement d'assertion.
+(3) *H-16* : le défaut de déclencheur était détecté par le pan mais déclaré dans aucune entrée
+du corpus de recette — un défaut détecté hors contrat n'est pas un défaut couvert.
+
+**Preuves** : recette **S-01 TENU**, banc rouge **19/19 défauts détectés**, banc vert 0
+bloquant, 0 pan non couvert · pytest **210** · self-tests rejoués AU PILOT et non crus sur
+parole (websec 36, agents-security 38, design 13 oracles/56 règles) · garde-fou DAST rejoué en
+direct (refus fail-closed, « rien n'a été émis ») · catalogue PASS, 4 services neufs.
+
+**Quatre constats en passant, consignés en candidats et jamais corrigés d'office** : TF-0204
+(une étape de CI de forge-audit est rouge sur `main` depuis le 12/08 — dérive de fixture),
+TF-0205 (les citations « ASVS 5.0 » du corpus audit emploient la numérotation 4.0.x — 44
+fichiers, réserve de méthode inscrite), TF-0206 (l'exécution réelle du DAST reste à prouver sur
+poste équipé), TF-0207 (5 catégories du LLM Top 10 non couvertes, dont une à portée gratuite).
+Registre : 13 archivés, **4 actifs**.
+
+## 14/08/2026 (soir) — Règle NA + trois lots de retours + les TODOs : 9 items clos
+
+**Règle humaine neuve** : « les pans qui n'ont pas de périmètre dans un projet doivent
+ressortir en **Non Applicable (NA)**, puisqu'il n'y a rien à tester ». Elle corrige une
+conséquence que j'avais signalée le matin même (un projet sans prompt sortait PARTIEL).
+Implémentée **sans casser la garde historique contre l'absence silencieuse** : NA exige une
+**preuve positive** d'absence fournie par l'adaptateur, jamais déduite d'un inventaire vide —
+un inventaire vide sans preuve reste un SKIP, parce qu'il prouve seulement que l'adaptateur
+n'a rien su énumérer. Les pans NA sortent du calcul de couverture mais restent **nommés** au
+rapport (`pans_sans_objet`). Preuves câblées pour front, batch, fichiers et interface.
+
+**Trois lots ingérés** — et le normaliseur TF-0196, écrit l'après-midi, a payé le jour même :
+trois conversions à la main évitées, aucun rejet. Garde anti-doublon exécutée, 6 correspondances
+levées comme faux positifs.
+
+**Les six retours, dont cinq soldés.** **RT-14** (bloquant) : le pan `data` fabriquait une
+contrainte fantôme `IF` à partir de `DROP CONSTRAINT IF EXISTS` — **l'idiome que le pan
+`migrations` exige** ; conflit interne à la forge, un projet ne pouvait satisfaire les deux. Le
+correctif a révélé **3 défauts pour un** : contrainte fantôme, index fantôme, et surtout
+`CREATE TABLE IF NOT EXISTS` qui n'entrait aucune table — le pan était aveugle, pas seulement
+menteur. Le même fantôme existait dans `migrations.py` : mesuré `['IF']` avant, `['ck_montant',
+'factures', 'ix_factures']` après. **RT-16** (bloquant) : garde de précondition sur `qualif`,
+qui produisait 13 findings sur le produit (39 % du rapport) en photographiant 6 fois l'écran
+de connexion qu'il n'avait pas franchi. Critère strict — une seule route saine écarte la garde,
+et une route dont on ne sait rien l'écarte aussi : **l'ignorance ne se convertit jamais en
+constat**. **RT-18** : canal de déclaration projet→auditeur, avec **contre-preuve obligatoire**
+et sans jamais supprimer le finding (il sort du décompte opposable et reste rendu, refus et
+péremptions compris — sinon le canal serait un bouton « faire taire »). Un seul mécanisme
+couvre RT-18, **RT-15** et renvoie à `adoption.py` pour RT-13. **RT-9-bis** : soldé par la
+règle NA — après l'exclusion des artefacts du matin, l'inventaire du pan `interface` tombait à
+0 sur une SPA et sortait « surface non énumérable » ; il accusait là où il n'y a rien.
+**RV-9** : la règle R-30 était déjà juste depuis TF-0158 — c'est le **pattern** qui la
+contredisait, snippet S-G1 et **fixture VERTE de l'oracle G1** suivant encore
+`prefers-color-scheme`. La preuve de conformité démontrait le comportement interdit.
+
+**Non fait, et dit** : **RT-17** (regrouper les findings par cause racine) reste `candidat`.
+RT-16 dissout son cas motivant — les 13 findings disparaissent à la source —, et le faire
+proprement touche la structure du rapport et les attentes de recette : c'est une campagne, pas
+une fin de session. **TF-0206** reste candidat : l'exécution réelle du DAST exige un poste
+équipé de ZAP.
+
+**Les TODOs** : CI de forge-audit remise au vert (fixtures alignées sur `dimensions.yaml`, le
+vérificateur non touché — c'est lui qui avait raison) ; **constat ASVS CONFIRMÉ à la source**
+(4.0.3 a 14 chapitres, 5.0.0 en a 17, et le corpus ne cite que V1..V14) avec document de
+correspondance livré et **correction de masse délibérément non faite** — 3 classes
+distinctes, dont des citations fausses dans les *deux* versions ; LLM10 mesurée chez
+agents-security (TC-6/7/8), avec le bon pivot : *ce qui est dénoncé n'est pas le volume, c'est
+l'absence de borne*, et la borne déclarée est **vérifiée, jamais crue**.
+
+**Ma régression, attrapée par la recette** : j'avais inséré l'application des déclarations
+APRÈS le calcul du sceau — deux runs du même audit ne scellaient plus le même document, et le
+déterminisme des cahiers tombait. **S-01 NON TENU**, cause corrigée, S-01 repassé. Preuves :
+pytest **276**, recette **S-01 TENU** (banc rouge 19/19, banc vert 0 bloquant, 13 pans),
+self-tests rejoués au pilot (agents-security 48, audit 55/55 + 18 dimensions). Registre :
+9 archivés, **2 actifs**.
+
+## 14/08/2026 (nuit) — Mandat en 7 points : lot COMPTA, ZAP installé, gates paramétrables
+
+**Lot COMPTA** (produit FastAPI/Jinja2 à **racine plate**) — cinq retours, tous soldés. Le
+bloquant **RT-2** : l'ancre `backend\` était en dur dans trois modules, **7 pans perdus** sur
+une disposition répandue. La racine est désormais **découverte** — ordre figé, indices
+déclarés, et surtout la décision se **publie** : un choix implicite qui varie d'un projet à
+l'autre serait pire que l'ancre en dur. **RT-4** : `forge\` — le dossier de run du *pilot* —
+polluait l'inventaire du pan `interface` avec les livrables archivés du cycle précédent ;
+pollution mesurée et reproduite (2 éléments avec le correctif, 12 puis 22 sans, **croissante à
+chaque cycle**). **RT-1** : le garde-fou anti-fuite refusait la configuration que le README
+documente ; règle écrite, comparaison **par segments** — le faux positif « ora**CLE**s contient
+CLE » disparaît au passage. **RT-3** : a11y et visuel ne sont plus aveugles aux apps
+server-rendered, avec une troisième condition ajoutée exprès — *un dossier vide reste SKIP, il
+ne prouve pas qu'il n'y a rien à rendre, il prouve qu'on n'a rien regardé*.
+
+**Le résidu que j'ai dû fermer moi-même** : mon correctif de racine rendait `mutation.py`
+**pire qu'avant** — ancre divergente, `ValueError`, exit 2, **rapport entier perdu** là où il y
+avait un SKIP. Un correctif qui aggrave le cas qu'il vise n'en est pas un. Fermé, plus la même
+classe de défaut sur un interpréteur injouable.
+
+**ZAP installé et le DAST réellement exécuté** (TF-0206, **D-W1 close**). L'installation native
+a été refusée par une élévation impossible ; voie **Docker** ajoutée à l'oracle — c'est ainsi
+qu'il tourne en intégration. Scan réel : ZAP 2.17.0, passe passive sur instance de recette
+**autorisée par mandat écrit**, trois alertes *medium* authentiques, garde-fou rejoué dans le
+même souffle. **2 défauts trouvés en utilisant l'outil pour de vrai** : un BOM faisait
+rejeter le mandat (or Windows en met partout), et une variable déclarée-injouable se rabattait
+sur Docker — un poste où l'image traîne aurait scanné pour de vrai, self-test compris.
+
+**Gates paramétrables (décision humaine : traiter sans bloquer)** — **R-33 bis** : le verdict
+websec est **présent au gate MEP et non bloquant**, armable par `[gates] websec_bloquant`.
+**R-33 ter** : le scan d'admission d'un skill tiers, même schéma. Motif écrit dans les deux
+cas : *armer un gate que personne n'a exercé le ferait désarmer au premier faux positif*.
+S'ajoutent les **seuils du volet stabilité** (5 rejeux, 100 % — un choix de l'écosystème, dit
+comme tel), **O4 ouvert** sous trois conditions, **O2 fermé** (un objet qui prescrit ce que
+l'écosystème interdit ne s'admet pas), et la **barre taste-skill validée** avec son écart
+déclaré : le pas 5 s'est fait par mandat de liste, pas en tour dédié.
+
+**forge-audit** — et c'est le résultat le plus instructif : **la classe A n'était pas
+mécanique**. En 5.0.0, titres et contenus de chapitre ont bougé **indépendamment** ; renuméroter
+par identité de titre fabrique des citations *vraies par le titre, fausses par le contenu*. 3
+corrigées sur 22 sous double contrôle, **19 refusées avec leur preuve** — dont `CTL-D02-06`, où
+le libellé « Configuration » était exact mais où les en-têtes HTTP ont **quitté** ce chapitre.
+**TF-0212 écarté** (sa cause a été traitée, critère de réouverture écrit). **D-D2 périmée**,
+**D-D3 requalifiée**, fiche design remise au niveau.
+
+**Preuves** : recette **S-01 TENU** (19/19, banc vert 0 bloquant, 13 pans), pytest **365**,
+self-test websec 36, batterie audit verte. **Deux constats en passant** consignés : le pack EN
+de forge-audit ne peut plus être régénéré faute de D17 traduit (TF-0220), et la question
+normative « le corpus cite-t-il 4.0.3 ou 5.0.0 ? » commande les 19 citations restantes (TF-0221).
+
+## Campagne du 15/08/2026 — restitution lisible (TF-0235, mandat humain direct)
+
+**Origine** : constat humain du 15/08 sur les dashboards HTML des forges (rapport SEO
+Produit-02 20260809k en cas de référence : 491 Ko monopage, 0 graphique, KPIs sans
+lecture), instruit par analyse L99 du prompt puis mandat « committe et implémente tout ».
+Étude d'opportunité 20260815a (E1-E7 PASS, verdict O2) avant décision — le péage TF-0155
+a été payé, pas contourné.
+
+**forge-design (afa0439)** : `REFERENTIEL-RESTITUTION.md` — familles rapport/suivi/registre,
+7 lecteurs types, règles RL-1..RL-10 chacune avec son lecteur et son contrôle ;
+`gabarits\gabarit-restitution.html` (13 PASS profil factory) ; `oracle-restitution.mjs`
+(RL-1/3/4/9/10, fixtures double sens, self-test 14 oracles / 61 règles vert) ; dimension
+**D8 « Lecture de données »** dans critique-le-design v1.2.0. Injection au registre global
+quality-oracles **v2.11.0** — périmètre déclaratif `data-restitution`, SKIP motivé sinon.
+
+**forge-seo (e80e078)** : doctrine portée dans le GÉNÉRATEUR (D-11 respectée — jamais le
+fichier), agent dédié routé **Opus** (escalade : construction complexe, 2 700 lignes Python
+sous tests). 6 vues naviguées avec carte de migration en dur (un chapitre sans vue de
+destination fait échouer la génération), KPI complets, 2 figures interrogatives, chemins
+par lecteur, manifeste d'écarts calculé. Rapport Produit-02 régénéré (72636cd,
+produit) : verifier 11/11, oracle-restitution PASS rejoué par le pilot, check_html PASS,
+**iso-contenu prouvé mécaniquement** (11 chapitres, 8 tableaux à lignes identiques,
+10 actions, 42 nœuds, 56 dépliants). Dette de charte levée au passage : 149 espacements
+4pt, couleurs littérales éliminées, contraste corrigé. Ancien 20260809k intact (sha256),
+archivé en `Old\` par D-02.
+
+**Leçon de campagne** : le socle portait déjà L6/L7/L10 (annonces de sommaire, chapeaux,
+exemples de lecture) — la doctrine ne les a pas dupliqués, elle les cite. Le seul conflit
+inter-référentiels rencontré : interstice dataviz 2 px contre échelle 4pt — tranché à 4 px.
+
+**Constats en passant** (consignés, jamais corrigés spontanément) : TF-0239 (budget 120 s
+du runner tué par oracle-claims sur 506 Ko — PASS en 7 min hors runner), TF-0240 (aucune
+voie de migration d'une mission auditée vers une grille renumérotée — la régénération a
+exigé un worktree épinglé à 84d05c2). En cours de campagne, l'agent a aussi trouvé la
+boîte d'entrée non vide et ingéré par la voie régulière la candidature
+`qualite-graphique-par-defaut` (TF-0236..TF-0238, sidecar rangé en `old\`).
+
+**Reste ouvert (décisions humaines)** : gouvernance de la règle opposable (REGLES-PROJET
+vs contrat forge-design) ; ordre de migration des autres forges productrices (P4 : tests,
+audit, data, observability) ; TF-0236..TF-0240 à décider ; push des dépôts (tout est en
+commits locaux).
+## Campagne du 15/08/2026 (2e vague) — « fais tout » : lot qualité graphique, migrations P4, outillage
+
+**Mandat global humain** (« vas y, fais tout ») sur les restes de la campagne restitution.
+
+**Lot qualité graphique (TF-0236..0238, candidature d'une autre session ingérée en cours de
+1re vague)** — étude d'opportunité 20260815b (E1-E7 PASS, verdict O3), puis les trois étages :
+**loi transverse n° 6** au noyau (« un rendu générique est un défaut, pas un goût »), financée
+par compression à sens constant (6 143 → 6 070 / 6 144 octets, oracle-claude-md PASS) ;
+**gates par défaut** aux étapes 3 et 5 bis d'`ETAPES-RUN.md` (DA dérivée de l'expérience
+client consignée dans DESIGN.md, oracle-taste, baseline) ; **lignes standard** dans les
+7 profils UI v1.1.0 (les 6 nommés + mobile, proposé d'office par la loi n° 3).
+
+**Gouvernance tranchée (mandat)** : la compétence restitution vit chez forge-design, la
+**règle opposable R-36** vit au pilot (`REGLES-PROJET.md` §P), appelant nommé (R-35) :
+registre quality-oracles + D8 en 5 bis.
+
+**TF-0239** — `timeout_ms` 600000 sur les oracles claims (le runner le supportait, l'entrée
+manquait) : le rapport SEO passe **CONFORME 13 PASS 0 échec**, claims compris. Leçon K2/K5
+au passage : l'injection faite côté copie installée a été silencieusement restaurée par le
+synchroniseur — reportée dans la **source versionnée** (agents@76d9e59), oracle-skills PASS.
+
+**TF-0240 (agent Opus)** — `migrer_mission.py` + 25 tests : renumérotation aux 4 emplacements
+structurés, table croisée contre le diff du manifeste (zéro écart), refus si perte, journal
+de migration, prose signalée jamais réécrite. Mission Produit-02 migrée grille 88,
+rapport **20260815b** régénéré depuis HEAD (seo@2f88af4, produit@f888c2a). Trouvé au passage :
+« nœud 87 » en dur désignait la Machine SEO devenue 88 — lu du manifeste désormais.
+
+**P4 (agents Opus, en parallèle)** — **forge-tests@fcf2e30** : dashboard famille « suivi »,
+KPI complets, figures conditionnées à la donnée réelle (pas de tendance sans `--precedent` :
+écart déclaré), preuve socle+restitution exit 0, pytest 430 passed (6 échecs pré-existants
+hors périmètre, inchangés), 0 jeton perdu. **forge-audit@8dceac3** : 7 vues, filtres vendorés
+composables, batterie 63/63, check_html passé de **53 défauts à 0**, verifier-rapport exit 0
+sur 3 rendus + kit standalone, 3 valeurs de fixture GAGNÉES (dont un constat orphelin
+désormais déclaré au manifeste). **data / observability : sans objet** — aucun producteur
+HTML ; la doctrine s'y appliquera à la naissance (écart déclaré ici, loi n° 3).
+
+**Constat en passant** : TF-0241 (socle : `lang="fr"` en dur, mur pour les livrables
+bilingues — vu sur le kit AuditCore en anglais).
+
+**Reste ouvert** : décisions humaines sur TF-0233, TF-0241 et le lot D-D ingéré ; nœud 44 de
+la mission SEO à réinstruire (journal de mission) ; 6 pytest pré-existants forge-tests ;
+unification du compteur `data-tf-count-for` vs script maison (forge-tests) ; revues D8
+(RL-2/6/7) au premier run.
+## Campagne du 15/08/2026 (3e vague) — « fais tout », second tour : socle, correctifs, réinstruction
+
+**Socle factory-page-html (agents@b0931bb)** — deux arbitrages rendus : **TF-0233** (un
+conteneur-valeur couvert par le descendant qui porte la légende — fini le double échec L3
+pour un chiffre) et **TF-0241** (la langue se déclare : non-fr assumé = avertissement,
+absent = échec). Self-test 43/43, non-régression maquette PASS, installé ≡ versionné.
+
+**TF-0242 (design@0cb55ab)** — cause racine : import hors du dossier du skill, invisible à
+la sync. La lib devient canonique DANS le skill, l'ancienne place n'est qu'un ré-export —
+zéro copie qui puisse diverger. **TF-0245 (ops@13aa2fc)** — `path.resolve()` une fois à
+l'entrée CLI ; self-test rouge sur le symptôme exact (45/3) puis vert (48/0).
+
+**Réinstruction nœud 44 (produit@07b9a8e, agent Opus)** — la donnée existait : 85 sessions
+IA sur 1 825 référentes (4,66 %, GA4 487 j), verdict conforme, réserves dites (liste
+d'hôtes non rafraîchie web ; constat descriptif préexistant FAUX sur l'office de tourisme —
+107 sessions, consigné, pas réécrit). 17 citations transposées, **12 laissées pour cause
+réelle** : écrites sur une grille à 82 nœuds, antérieure aux migrations connues — le +1 du
+journal aurait encodé des renvois faux ; valeurs commandées par le sens consignées.
+Rapport `20260815c`, tous contrôles verts. Constat : **TF-0247** (le manifeste porte 3
+citations périmées — et sa correction change l'empreinte de grille : à outiller, pas à
+improviser).
+
+**forge-tests (4 commits, 2551e66→0a7c78c) + organization@8aa948f** — la trouvaille de la
+vague : **les 6 pytest rouges depuis des jours étaient TF-0243** (le `.env` du dépôt
+servait une instance vivante aux tests qui exigeaient le silence) — zéro test modifié, le
+correctif les rend verts. TF-0244 : `app.openapi()` fait foi, 11 cas dont les deux angles
+morts reproduits. TF-0246 : **admission** D-04 (Cahier/Dashboard/Jeu, registre v1.2.0) —
+renommer aurait rendu indiscernables deux artefacts distincts. G5 : marqueur posé, compteurs
+discrets par table (lacune réelle comblée), l'écrivain reste unique par construction.
+pytest **467 passed 0 échec**, ruff clean, preuve socle exit 0, S-01 13/13.
+
+**Revue D8 exécutée** (`output\01-revues-et-propositions\…Revue D8…20260815c.md`) :
+4/5 × 3 artefacts, aucun red flag, tous les écarts déclarés — et les trois manifestes
+d'écarts sont CALCULÉS, pas rédigés.
+
+**Interruption réelle** : l'agent forge-tests est tombé sur la limite de session en plein
+chantier 4 — repris par message avec son contexte, travail sur disque intact, aucun
+re-travail. **Registre** : 14 items clos archivés sur la journée, 1 actif restant
+(TF-0247, candidat — décision humaine).
+## Campagne du 15/08/2026 (4e vague) — TF-0247, micro-restes, scellage v1.16.0
+
+**TF-0247 (seo@6d19641, produit@0bb711c, agent Opus)** — trouvaille structurelle : l'empreinte
+de grille hache `grille-noeuds.md`, pas le manifeste dérivé — la correction est passée par
+la SOURCE puis régénération (`scaffold.py --force`). Trois renvois corrigés et vérifiés au
+sens, entrée de correspondances **a18e7e10aab6 → 0adef2177300** (0 renumérotation), mission
+migrée par l'outil TF-0240, 9/12 citations de fiches appliquées, snapshots d'époque intacts.
+La fiche 44 gagne deux corrections de plus (rang du référent touristique VÉRIFIÉ : 4e du
+canal ; « aucun annuaire » corrigé — TripAdvisor 5 sessions) et la réserve d'hôtes IA tombe
+par **vérification web datée du 15/08** (fait notable consigné : le canal GA4 natif
+« AI Assistant » du 13/05/2026 ne capte ni Perplexity ni Copilot — ce qui explique la
+répartition Referral/AI de l'export). Rapport `20260815d` : « nœud 74 » = 0 occurrence
+(grep rejoué), tous contrôles verts. Résidu : **TF-0248** (la plage machine-seo cite un
+membre « Mesure » sans contrepartie — arbitrage de CONTENU de grille, pas de transposition).
+
+**Micro-restes** — tests@13000f0 : fastapi au groupe dev (**467 passed, 0 skipped** — les
+preuves FastAPI tournent partout) et `verifier_corpus` : un ruff introuvable est un ÉCHEC
+nommé avec origine et remède, plus jamais « aucune sortie » (prouvé sur 3 contextes).
+audit@a8a07bd : convention sidecars TF-0065 alignée.
+
+**Scellage** : tags **v1.16.0** synchronisés sur l'écosystème (convention constatée : v1.15.0
+partout), poussés avec les branches. Registre en fin de journée : **1 actif** (TF-0248,
+candidat), 247 archivés.
+## Campagne du 15/08/2026 (5e vague) — « traite les todo et retours » : 14 items, 3 campagnes, l'avancement en service
+
+**Première vague sous le §Avancement (TF-0252)** : les trois agents ont émis 12 relais
+d'avancement en ~20 minutes — plans, frontières de chantier, cadences mesurées, glissements
+dits — tous relayés à l'humain en direct. La convention TF-0094 a enfin un chemin vivant.
+
+**Lot BdL (TF-0253..0259, décision directe sous seuil)** — pilot@682d283/2974faf/d909cad :
+CRLF normalisé avant hachage (boîte), `--purger` en quarantaine datée (skills), R-25 cite
+les types admis et suggère le plus proche. conception@bf27bd6 : la cause réelle de TF-0255
+était dans l'APPELANT (le runner passait EXIGENCES.json aux oracles qui jugent des voisins).
+ops@dc60643 + agents@055d952 : les 4 pièges Railway au plan O-5 et au corpus de la fiche
+experte (structure d'admission intacte). tests@78eebcc/11878d9/4e1ad86 : racine plate vue
+par migrations/data (7 rouges→11 verts), Larsen du pan prompts coupé par SIGNATURE (10
+rouges→13 verts, convergence en assertion), refus G-1 bruyant — cause racine inattendue :
+le motif EXISTAIT, le buffering stdout l'enfouissait ligne 24/69. pytest **502 passed**.
+
+**Lot leçons d'audit réel (TF-0260..0266, étude 20260815c PASS, verdict O2)** —
+seo@bd23a9e→7bb3671 (+84989c8) : balisage par paires avec témoin naïf conservé en fixture,
+crawl tronqué ⇒ **refus au lieu de chiffre** (le mode d'échec 89/10 devient impossible),
+écart sitemap/liens en PREMIÈRE clé de synthèse, nœud Performance requalifié non-mesure
+sans relevé CrUX (bloqué à l'écriture ET à l'oracle, facteur 55 du cas fondateur),
+agents_ia dégrade en verdict motivé tracé ; cat-seo-06 dit ses dépendances (catalogue
+v1.6.2). 138 cas verts, grille hachée intacte. Pilot : RUN-MANDAT amendé (TF-0266 — socle
+du RUN vs conformité du projet entier, écarts antérieurs déclarés au ledger, contradiction
+avec le garde-fou d'autonomie levée).
+
+**Défaut trouvé et corrigé en vol** : le complément TF-0253 — la normalisation a créé le
+faux positif INVERSE sur une ingestion d'hier (sha consigné sur octets bruts CRLF, fichier
+identique bit à bit à son commit) ; l'oracle accepte désormais l'une ou l'autre forme,
+fixtures héritage vert/rouge, banc 9/9.
+
+**Consignés en candidats (jamais corrigés spontanément)** : TF-0270 (code mort
+_repli_textuel), TF-0271 (ETAPES-RUN prescrit un --livrables DANS le projet — source
+probable des deux exécutions perdues), TF-0272 (dette NON_JUGE à requalifier assume),
+TF-0273 (trace crux.py), TF-0274 (tests forge-seo invisibles de pytest). Lots BdL-b
+(TF-0267..0269) ingérés par la voie régulière.
+
+**Registre en fin de vague : 8 candidats actifs, 266 archivés.**
+## Campagne du 15/08/2026 (6e vague) — « fais toute la todo avec le a » : 21 items, 4 campagnes, le circuit de l'insatisfaction
+
+**Deux études de lot avant décision** (TF-0155 payé) : 20260815e *le coût du faux positif*
+(TF-0275..0282, verdict O2 — périmètre corrigé, **sévérité jamais touchée**, fixture rouge
+exigée pour chacune) et 20260815f *ce que personne ne juge* (TF-0283..0286, verdict O3).
+Les deux PASS 7/7.
+
+**Le circuit de l'insatisfaction (TF-0287, option (a))** — construit en 3 pas : registre
+`insatisfactions\REGISTRE.jsonl` + `oracle-insatisfactions` (I1-I4) qui **juge ET publie
+la mesure** ; **B4** à la boîte d'entrée, avec la précaution qui compte — **B3 se tait** sur
+ces dépôts, l'absence de sidecar y étant voulue (le circuit ne naît pas avec son propre faux
+positif, maladie que l'étude du soir documente) ; gabarits de dépôt (une phrase, l'humain
+n'écrit **jamais** le protocole) et d'instruction (six blocs) ; appelants nommés.
+**INS-0001 instruit en lecture seule a trouvé ce que le signalement ne disait pas** : le menu
+anglais complet EXISTE dans la source (`HeaderEn.tsx`, 8 entrées, 36 liens, utilisé par
+36/36 pages EN) — l'écart vit au **déploiement**. Sans le bloc (b), le correctif aurait porté
+sur du code déjà correct, et un troisième « toujours pas » aurait suivi. La compression
+française, elle, a sa cause datée : `LangSwitch` posé en zone CTA (`Header.tsx:169-171`).
+Le produit n'a **ni git, ni CLAUDE.md, ni forge/** — le gate n'a pas été retiré, il n'a jamais
+été posé : c'est exactement ce que **R-37** encode (`REGLES-PROJET` §Q), avec sa commande
+citée (`rendu-comparatif.mjs`, TF-0286).
+
+**Quatre campagnes en parallèle, toutes rendues en 26 à 36 min** — et, pour la première fois,
+**visibles** : 20+ émissions d'avancement relayées en direct (TF-0252 en service).
+· **design@ed58292→5679119** : banc 14 oracles/61 règles → **19/67**. La preuve la plus
+parlante de la journée : sur la fixture verte de T5, l'oracle non corrigé sortait 3 FAIL
+fantômes **et ne voyait pas la vraie paire** — un faux positif ne se contente pas de crier au
+loup, il cache le loup. · **tests (2 campagnes, 8 commits)** : pytest 502 → **568 verts**,
+S-01 TENU ; le pan interface lit enfin les composants React (**les 4 liens fautifs réels
+attrapés 4 sur 4, et exactement 4**) ; le **pan i18n existe** — le multilingue passe de 0
+contrôle dans tout l'écosystème à 3. · **ops/agents/seo/pilot (7 commits)** : R-24 juge le
+suffixe (le défaut parti en livraison est désormais rouge), recette seo en une commande
+(10 vérifications / 147 cas), hook C7 cesse de juger les fragments Jinja.
+
+**Ce que les campagnes ont REFUSÉ de faire** — et qui vaut autant que ce qu'elles ont fait :
+preuve `oracle-skills` déclarée **non tenue avec diagnostic** plutôt que contournée ; exit 1
+de `crux.py` **conservé contre la lettre** du brief (« une clé gratuite en deux commandes
+n'est pas une donnée hors de portée ») ; constante `NON_JUGE` **non touchée** parce qu'une
+session parallèle éditait le registre dérivé ; et 2 règles **ajoutées** au pan React,
+déclarées en écart — parce que la lettre du mandat n'attrapait que 3 des 4 liens réels.
+
+**Vérifié par le pilot lui-même** : les 8 « divergences » d'`oracle-skills` sur
+`experts-forge` étaient **6 sidecars gitignorés** et 2 réelles (mon travail de l'après-midi,
+synchronisé depuis). D'où **TF-0289** (K2 compare du bruit et tronque son message à 4) et
+surtout **TF-0290** : *le hook C7 qui bloque toute écriture de livrable n'était versionné
+nulle part* — 15 dépôts balayés, zéro résultat ; le gate le plus joué de la journée n'avait
+ni source, ni self-test, ni contrôle d'intégrité, et `K1-K5` ne regarde que les skills.
+
+**Registre en fin de vague : 21 items archivés (287 au total), 8 candidats actifs**, tous nés
+des campagnes de ce soir.
+
+## Campagne du 17/08/2026 — « traite tous les retours et tous les todos » : 8 items, 3 campagnes, l'écart servi ↔ versionné fermé
+
+**Boîte d'entrée prouvée vide à l'ouverture** (B1-B3 PASS, 18 sidecars tous ingérés) ; la seule
+candidature en attente (`candidature-trous-detection-site-principal`) était un **doublon déjà
+traité** — ses 4 items sont TF-0283..0286, corrigés le 15/08 — partie en `old\` sans ingestion
+(la confrontation registre + archive AVANT ingestion, leçon du 13/08, a payé). À l'ouverture
+aussi : `oracle-skills` FAIL K2 — 2 skills design en retard sur leur source fraîchement
+tirée, synchronisés par `--appliquer` (K5 garantissant le sens), PASS rejoué.
+
+**Une étude avant décision** (TF-0155 payé) : 20260817a *écart servi ↔ versionné* (TF-0288,
+PASS 7/7, verdict **O3** — détection chez tests, prévention chez ops, chaque volet dans le
+domaine de sa forge). Les 7 autres items : sous le seuil, décision directe sur mandat global.
+
+**Trois campagnes en parallèle, une par dépôt** (leçon TF-0294 : jamais deux sur le même
+arbre), rendues en 6 à 46 min. · **tests@b701948→fda3a29 (6 commits)** : pytest 568 →
+**637 verts**, S-01 TENU 13/13 sur arbre stable, corpus 19 → **22** défauts (le pan i18n
+entre enfin dans la seule vérification qui prononce S-01), registre de dette 127 → 140.
+La recette **refuse désormais de conclure sur un arbre qui bouge** (TF-0294, exit 2) ; le
+pan sécurité cesse de s'auto-accuser (7 → 0 constats, contrepartie prouvée : un vrai secret
+reste détecté) ; les 4 limites du 15/08 levées — dont une **trouvaille** : sur le patron même
+d'INS-0001, l'ancien code accusait un logo CORRECT vers `/en`. · **ops@b431ffb→da8d375** :
+`deployer` scelle une empreinte sha256 par release, **O-7** la compare au déployé (self-test
+54 → 63). · **pilot@d973c7d** : K2 sans bruit de sidecars (50 % de faux positifs supprimés
+sur les mesures du 15/08), troncature corrigée, et **K6 : les hooks entrent sous contrôle
+d'intégrité** — fixtures prouvées par MUTATION (3 mutants tués : 34/37, 35/37, 32/37).
+
+**TF-0288 fermé en entier** : le cas fondateur d'INS-0001 rejoué en fixture — 8 entrées
+promises, 3 servies → FAIL nommant les 5 manquantes et prescrivant le REDÉPLOIEMENT, « ne
+PAS toucher au code » : exactement le diagnostic que l'instruction avait dû trouver à la main.
+
+**Ce que la vague a trouvé sans le chercher** : le gate C7 est versionné mais **ni installé
+ni câblé** sur ce poste (`~/.claude/hooks` absent, settings sans qo-gate) — K6 le déclare,
+la décision est humaine ; 13 sidecars d'oracles **committés** chez forge-agents (c'est
+pourquoi K2 était vert à tort) ; Docker arrêté = 10 [MANQUE] muets à la recette (TF-0299).
+
+**Registre en fin de vague : 8 items archivés (296 au total), 6 candidats actifs**
+(TF-0296..0301), tous nés des campagnes du jour.
+
+## Campagne du 17/08/2026 (2e vague) — « traite les TODOs à faire » : 8 items, 4 campagnes + doctrine, R-38 née d'un lot du matin
+
+**La boîte d'entrée a fait son travail en direct** : B1 FAIL à l'ouverture — le lot
+`Produit-01 - RETOURS - 20260817a` était arrivé PENDANT la première vague. Deux retours
+sérieux : **RG-07 bloquant** — un rapport d'écarts citant deux failles de sécurité
+exploitables publié sur un hébergement externe AVANT toute validation humaine, sans
+enfreindre aucune règle écrite (« c'est exactement le défaut ») ; RG-08 — le même chemin
+produit du HTML non autoportant (A1/A3/A4/R-30 violées, zéro contrôle joué). Ingéré
+(TF-0302/0303), étudié (20260817b PASS 7/7, verdict O3 : règle + mécanisation + appelant
+nommé), décidé sous mandat.
+
+**La doctrine, par le pilot lui-même** : **R-38** (§R) — aucun livrable de produit sur un
+service de publication hébergée sans GO humain préalable consigné ; le retrait d'une
+publication fautive est un geste humain consigné. Encodée au noyau, en §R et au gabarit
+produit — et en passant, **FAIL N1 préexistant réparé** : le noyau hérité du pull pesait
+6235 octets > 6144 ; dégraissé à 6133 sans perdre une règle (descripteurs seuls).
+
+**Quatre campagnes en parallèle, une par dépôt, rendues en 6 à 30 min** :
+· **tests@053141d (3 commits)** : pytest 637 → **656**, corpus 22 → **23** (H-20 : la
+branche qui ACCUSE l'écart servi↔versionné entre en recette), S-01 TENU 13/13 rejoué. Un
+préalable d'environnement absent se DIT désormais (10 [MANQUE] muets → [NON MESURABLE]
+motivés, S-01 NON PRONONCÉ exit 3 — jamais un faux NON TENU) ; un test trivialement vert
+prouvé tel PAR MUTATION puis rendu discriminant. · **agents@8ec054a (2 commits)** : les
+13 sidecars committés retirés du suivi (chacun tracé à son écrivain ; le dépôt versionnait
+ce que son propre outil de synchro refuse de copier), et `check_html.py` +5 contrôles —
+le fichier fautif d'Produit-01 déclencherait **11 échecs au lieu de 0** ; la règle a
+condamné la référence du socle elle-même (charset au 1613e octet du boilerplate, corrigé).
+· **ops@1c4387d** : la voie canary scelle son empreinte — plus de SKIP à vie sur O-7
+(self-test 63 → 68). · **pilot@945f102** : **K7** — le câblage des hooks devient visible
+sans jamais bloquer (déclaratif par construction, précédent R-33 bis) ; 4 mutations
+tuées ; K7 nomme l'état du poste : le câblage de qo-gate-write n'est décrit NULLE PART.
+
+**Registre en fin de vague : 8 items archivés (304 au total), 9 candidats actifs**
+(TF-0304..0312), tous nés des campagnes — dont le défaut latent du contrôle né la veille
+(TF-0312), trouvé par la campagne qui le mettait en recette : la boucle se mord la queue
+dans le bon sens.
+
+## Campagne du 17/08/2026 (3e vague) — « traite tous les retours » : le pan qualif cesse d'être aveugle aux SPA et muet sur les rôles
+
+**La question du mandat a d'abord reçu sa preuve** : cartographie exécutée lot par lot —
+les 14 lots de `input\00-retours` étaient TOUS ingérés et TOUS leurs items archivés, sauf
+les 4 nés des deux lots arrivés en fin de matinée (TF-0313..0316, tous pan qualif).
+Une étude avant décision (TF-0155 payé) : 20260817c *couverture par rôle* (PASS 7/7,
+verdict O3 — déclarer d'abord, mesurer ensuite, la déclaration restant vraie quel que
+soit N).
+
+**Une campagne, un dépôt, 58 minutes** — tests@053141d→26b6d96 (4 commits) : pytest 656 →
+**721**, dette 140 → 143, S-01 TENU 13/13 sur arbre stable (262 fichiers empreintés).
+· La mire d'une SPA est **attendue** (10 s/route), plus jamais déclarée absente avant
+d'exister — le cas Produit-11 passe de « 0 élément, compte valide accusé » à 91 éléments
+inventoriés. · La provenance de session se **constate** (cookie posé, mire qui rend la
+main) : la contradiction du 17/08 (« session ouverte » + « aucune mire » dans le même
+non_juge) est rejouée en test et rendue impossible. · « Pas de compte » et « compte
+fourni, connexion échouée » ne se confondent plus (3e état, motif = TENTÉ + ARRÊT).
+· Le pan **dit combien d'identités ont parcouru** et en accepte plusieurs : refus
+d'autorisation (401/403 ET redirections — la forme qui comptait pour un succès) en issue
+distincte HORS ratio, N storage states étiquetés, un contexte par rôle, couverture par
+rôle au rapport — le « 8/8 ratio 1,00 » d'Produit-01 ne peut plus se lire « tout est
+couvert ».
+
+**Clôture du circuit des lots** : les 14 paires (md + sidecar) sont en
+`input\00-retours\old\`, boîte d'entrée PASS — la racine ne porte plus que ce qui
+attend d'être pris, c'est-à-dire rien.
+
+**Registre en fin de vague : 4 items archivés (308 au total), 10 candidats actifs**
+(TF-0304..0312 + TF-0325, affinements du niveau rôle — patron TF-0295 ; d'abord frappé
+TF-0317, renuméroté au merge : une session parallèle du 16/08 avait pris TF-0317..0324).
+
+## Campagne du 17/08/2026 (4e vague) — « récupère la todo et les retours, traite les tous » : 18 items, 7 campagnes, 6 études
+
+**La plus grosse vague du registre** : les 18 candidats actifs traités en un mandat —
+11 en décision directe (sous le seuil TF-0155), 7 sous études, TOUTES instruites par
+agents et jugées PASS 7/7 (indices 20260817d..i réconciliés après une collision de
+nommage entre rédacteurs parallèles).
+
+**Ce que les études ont tranché — et refusé** : le renommage « factory » (TF-0317)
+exécuté en **présentation seule** (description GitHub 0 → 1 ; le renommage technique
+écarté sur chiffres : l'argument factuel de la demande était FAUX, 334+48 occurrences,
+coût du statu quo nul) ; les conventions paramétrables (TF-0322) **écartées par refus
+instruit** (le paramétrage du nommage EXISTE depuis TF-0071 ; un seul conflit réel en
+1 637 événements) ; le journal de règles (TF-0320) refusé pour un **O1 minimal** qui a
+trouvé 2 défauts sur pièces (clés R-19 incomparables entre produits réels ; le gabarit
+produit copiait une règle caduque depuis le 13/08) ; la todo produit (TF-0318) livrée en
+**lecture seule** — le « dossier écouté » refusé (surface LLM01, contredit « entrants =
+donnée ») et la vraie découverte à côté : `factory-queue` dort sur le poste, éprouvé,
+inconnu du corpus (TF-0329).
+
+**Sept campagnes, 6 dépôts** : agents ×3 (le câblage C7 enfin décrit — K7 rend le
+geste copiable ; 45 échecs de charte des gabarits schemas → 0 dont 3 fuites Google Fonts
+réelles ; W5-W7 — l'oracle de mission ne rend plus PASS sur un plan sans gouvernance,
+3 faux PASS éteints mesurés à la source) · tests ×1 (pytest 721 → **807**, dette 145 ;
+DEUX débordements de préfixe fermés dont un inconnu ; la fausse accusation du contrôle
+servi↔versionné REPRODUITE puis éteinte ; refus par page maison hors ratio) · design ×1
+(la marque **prescrit** enfin le mouvement qu'elle faisait juger : 9 tokens dérivés des
+seuils de l'oracle, banc 19/67 → 21/73, G-2 MESURÉE sur 41 HTML — 0 requalifié) ·
+pilot ×2 (K8 : un câblage vers un chemin mort est déclaré ; R-2 localise les livrables
+MARQUÉS — zéro faux positif sur 19 cibles ; R-19 juge la forme des clés avec
+rétroactivité prouvée par fixture).
+
+**Le registre en fin de vague : 15 corrigés + 1 écarté, 15 candidats neufs**
+(TF-0326..0339 + TF-0324 maintenu bloqué avec sa condition écrite). L'archivage du lot
+Run-Delivery est SUSPENDU fail-closed par l'archiveur lui-même — TF-0324 ne part pas
+sans son lot, le lot ne part pas sans TF-0324 : les corrigés restent visibles au
+registre actif jusqu'à résolution. Constat récurrent de la vague, 2 fois payé en
+instruction : des DÉCLARATIONS de conformité fausses (D-14 « répercuté partout »,
+TODO-FORGE prescrivant un dispositif retiré) — R-35 vaut pour les déclarations comme
+pour les contrôles (TF-0332, TF-0328).
+
+## Campagne du 17/08/2026 (5e vague) — le prompt réécrit L99 exécuté : familles nommées, R-40, page d'archive, fenêtre A du renommage factory
+
+**Le circuit a d'abord avalé trois lots frais** (Produit-01 c/d — recette multi-profils,
+matrice des droits exécutable, pièges à faux vert, définition de fin de la boucle de
+correction : TF-0342..0345, TF-0352/0353 — tous convergents avec le poste 4 du mandat).
+
+**Les cinq postes du prompt réécrit** (analyse L99, écarts validés poste par poste) :
+· **TF-0347/0348** — R-39 encodée + **D-16 cataloguée chez organization sous mandat**
+(les noms de familles `XX-audit`/`XX-tests` conventionnés, numéro local attribué à la
+création et JAMAIS renuméroté — leçon TF-0339) ; `docs\projet\` intact, l'analyse ayant
+chiffré que le numéroter mettait tous les produits en FAIL. · **TF-0349** — la voie
+« proposition de tests » est MORTE 3 fois : R-40 §T (trois états), le cahier porte
+son CONTRAT et son SOLDE (forge-tests, pytest 821, S-01 TENU), et l'oracle
+`oracle-adoption-tests` (12/12, agrégateur 11/11) — premier tir réel : **FAIL 1065/0 sur
+Produit-11**, le cas fondateur attrapé ; catalogue requalifié à la SOURCE pour que la
+régénération ne rouvre pas la voie. · **TF-0350** — les 307 TODO archivés ont leur page
+de recherche (check_html 0 échec, « renommage » retrouve TF-0062 avec ses 5 jalons ;
+self-test todo 19 → 32). · **TF-0346** — gate n°1 franchi par l'humain
+(**factory-pilot**, les 6 sites hors motif payés en connaissance de cause, étude de
+séquencement 20260817i PASS 7/7) ; **fenêtre A exécutée** : dette D-14 SOLDÉE (TF-0332 —
+le corpus ne porte plus d'affirmation de conformité fausse), mesure P0 figée (25/11),
+table §3 bis écrite (ids `pilot/*@1` GELÉS), liste blanche en phase expand. **Gate n°2
+armé : `gh repo rename` appartient à l'humain seul.**
+
+**Incident de la vague** : les 4 agents de la première salve sont tombés sur la limite
+de session (reset 18:40) — reprise sans perte : l'étude de séquencement était écrite (un
+seul défaut de forme), la page d'archive finie jusqu'à ses self-tests, les deux
+campagnes R-40 relancées et rendues vertes. 2 défauts réels tués par les fixtures
+rouges des campagnes elles-mêmes (nom vide, chapitre vide flatté).
+
+## 17/08/2026 (soir) — LE DÉPÔT S'APPELLE factory-pilot (D-17, TF-0346)
+
+Les deux gates humains francs le même soir : n°1 « factory-pilot » (les 6 sites hors
+motif payés en connaissance de cause — l'alternative factory-forge-factory coûtait 0),
+n°2 « a : renomme » (geste `gh repo rename` délégué explicitement). La séquence O1 de
+l'étude 20260817i exécutée entière en une soirée :
+
+**A** — la dette D-14 SOLDÉE d'abord (TF-0332 : « répercuté partout » était faux, le
+corpus le dit maintenant ; RUN-VERSION reformulé en fait daté ; doctrine « pas de
+jonction — un chemin périmé échoue fort ») ; mesure P0 figée (25 occurrences / 11
+fichiers) ; table §3 bis écrite AVANT tout geste (ids `pilot/*@1` gelés). **B** — GitHub
+renommé (redirections actives, l'ancien nom ne sera JAMAIS réutilisé), 19 sites de prose
+en un lot contigu, les 6 sites du motif payés (`RE_CLE_DEPOT` accepte l'exception nommée,
+raccourci du noyau réécrit sous plafond — 6130 octets), D-17 cataloguée chez organization.
+**C** — 14 dépôts frères en 22 minutes : 51 occurrences → 35 basculées, **16 justifiées
+une à une, 0 silence** ; l'arbitrage du soir : le CLAUDE.md d'organization reçoit une
+section datée JUMELLE (le fait d'époque du 09/08 intact, le nom courant dit — loi n°3
+dans les deux sens). 14 self-tests verts avant et après, 13 dépôts poussés.
+
+**Critères de fin, tous exécutés** : poste nu = « Poste prêt » exit 0 sur clone du
+nouveau nom · grep 0 hors classes · 8 oracles du pilot verts (le claim design-oracles a
+attrapé en chemin une vraie dérive d'INVENTAIRE, 9 → 11) · clôture TF-0346 AVEC gains —
+l'inverse exact de TF-0062, et c'était le but : un renommage qui se prouve au lieu de
+s'affirmer. Restes datés : dossier local à renommer hors session vivante, dénominateur
+« 14 frères » de l'étude à corriger à la revue du 24/08 (TF-0358).
+## 19/08/2026 — trois études d'opportunité exécutées, 3 GO : rétro-modèle, vues par profil, run de conseil
+
+Mandat humain du 19/08 (prompt réécrit L99, validé « vas » puis « fais les 3 ») : instruire
+rétro-engineering, rétro-documentation et « forge-consulting ». **Trois études au gabarit
+TF-0155, trois PASS oracle 7/7 en première passe** (`output\03-etudes\20260819-*.md`), et un
+résultat commun : **aucune 14e forge** — le nom « forge-consulting » n'a pas survécu à
+l'instruction (>80 % de délégation vers l'existant, preuve 1, profil type des projets
+agentiques annulés).
+
+**Construit sur les 3 GO (TF-0388/0389/0386, décidés le 19/08)** :
+
+*Note de renumérotation (collision de sessions, 19/08 soir)* : 2 sessions pilot ont
+frappé des ids en parallèle depuis la même base `fabf0cd` — celle-ci avait frappé
+TF-0384/0385 (rétro-modèle, vues) et TF-0383 (lot 20260818a), l'autre a publié d'abord
+TF-0383/0384/0385 (i18n, collecteur de dette, oracles_verdict). À la fusion, les ids de
+CETTE session ont été renumérotés : **TF-0383→0387, TF-0384→0388, TF-0385→0389** ;
+TF-0386 (run conseil) inchangé. Le commit `factory-forge-conception@cab6654`, poussé
+avant la fusion, cite les anciens numéros dans son message — la correspondance fait foi
+ici et au registre.
+
+**A — rétro-modèle** (forge-conception) : mode « modèle complet » du verbe 1 —
+`references\retro-modele.md` + gabarit, `oracle-retro-modele.mjs` (RM1-RM5 : 8 sections,
+ancre par affirmation, confrontation ≥ 5 rejouée, hors-de-portée non vide, lecture seule
+déclarée), fixtures double sens. **B — vues par profil** (forge-conception) : 2e famille de
+vues de `derive-les-vues` — jeu fermé po/csm/utilisateur, scellées SHA-256 (péremption),
+ancres `[RM-xxx]` résolues, `oracle-vues-profil.mjs` (VP1-VP4), fixtures double sens.
+Self-test conception rejoué : **10 oracles, 42 règles, VERT**. **C — run de conseil**
+(pilot) : 4e voie d'exécution `references\RUN-CONSEIL.md` (C1→C5, l'existant orchestré,
+chaque lot GO sort comme entrant de build), gabarits `DIAGNOSTIC-EXPLOITATION.md` et
+`DEMARCHE-ROI.md`, `oracle-livrable-conseil.mjs` (LC1-LC5, self-test 4/4 : diag et ROI,
+double sens), routage « conseil » ajouté à ACCUEIL.
+
+Catalogue v1.7.0 : cat-con-08 et cat-con-09, vues régénérées, `--check` PASS. Registre :
+oracle-todo PASS. Restes datés : premier run réel de chacun des trois verbes à consigner
+(plans de revue 2026-09-19 et 2026-10-01 — clause de retrait du run de conseil si aucune
+mission réelle) ; clôture `corrige` des trois TF au commit.
+
+## 19/08/2026 (soir) — forge-seo devient forge-seo-geo : le nom rejoint la grille (TF-0390)
+
+Mandat humain direct. Constat préalable, vérifié sur pièces : le volet **GEO existait
+déjà** — grille §11 « GEO — volet TRANSVERSAL » (nœuds 53-58), routage de veille
+« SEO/GEO → forge-seo », nœud 58 cité par `oracle-conformite-projet`. Seul le nom ne
+disait que la moitié du périmètre. Méthode D-17 rejouée : **mesure d'abord** (36 fichiers
+porteurs, classés vivant vs fait d'époque), GitHub renommé avec redirection, dossier et
+remote basculés, normatif bascule (README, CLAUDE, ACCUEIL, RUN-MANDAT, INVENTAIRE,
+bootstrap, oracle nœud 58, MODE-VEILLE, gabarits web, fiche renommée), **alias
+`forge-seo` conservé** dans `normaliser-lot.mjs` pour les lots antérieurs, catalogue
+**v1.8.0** (clé `seo`→`seo-geo`, **ids cat-seo-\* gelés** — §3 bis, `--check` PASS).
+Faits d'époque intacts : registre, études, D-08/D-09, archives de la forge
+(`prompts/PHASE-A`, sidecars d'oracles, snapshot d'audit du 08/08). Forge commitée
+(`factory-forge-seo-geo@55f76c8`), TF-0390 clos au registre.
+
+## 19/08/2026 (nuit) — les 4 constats de la revue mis en œuvre le jour même (TF-0391..0394 clos)
+
+GO humain « a puis b puis mets en œuvre ». **TF-0391** : propagation `--appliquer`
+exécutée (K2 : FAIL 10/17 → **PASS 8/8**) + gate encodé à `AGENT-CAMPAGNE.md` — toute
+campagne qui touche un skill versionné rejoue oracle-skills et propage dans la même
+session, sur décision humaine. **TF-0392** : `npm test` de forge-audit câblé sur les
+preuves réelles (`factory-forge-audit@2550e17`, exit 0 rejoué). **TF-0393** : les 3
+baselines orphelines versionnées (`factory-forge-design@096b5fa`, réserve déclarée :
+validation visuelle du propriétaire restante). **TF-0394** : préflight anti-collision
+dans `ingerer-lot.mjs` (fetch + refus motivé si le registre distant a avancé,
+`--sans-fetch` assumé) — prouvé 3 sens sur dépôts git éphémères par
+`preflight-collision.test.mjs`, harnais du pilot **18/18** (I2 l'a découvert seul).
+Limite déclarée : 2 sessions simultanées non poussées restent une course possible —
+le cas réellement payé le 19/08 est, lui, fermé.
+
+## 20/08/2026 (soir) — « Poste prêt » redevient une preuve : bootstrap v2 (TF-0416)
+
+Mandat humain : « assure-toi qu'un utilisateur récupère toujours toutes les forges, à la
+dernière version — j'ai l'impression que ça ne fonctionne pas bien ». L'impression était
+juste, et mesurable : poste vierge amorcé « prêt » SANS AUCUN skill exécutable (K1) ;
+poste réel K2 rouge à chaque `--pull` (le pull met à jour les dépôts, jamais la copie
+installée — TF-0391, TF-0414 l'avaient payé) ; pilot jamais mis à jour par bootstrap ;
+« mis à jour » = pull sans erreur, « déjà présent » = exit 0 à N commits de retard, sans
+version affichée ; renommage seo→seo-geo → doublon ; `gh` bloquant sur forges publiques.
+**bootstrap v2** : pilot d'abord (relance de soi si changé), mesure fetch + retard/avance
++ `describe --tags` par dépôt, alias renommés sur place, clone git https, skills propagés
+par `--pull` (la décision R-29 est le geste lui-même), défauts toujours avec remède,
+table des 14 versions. Recette `bootstrap.test.mjs` (13 bare éphémères, 7 contrôles,
+liste lue dans bootstrap.mjs). Docs AGENTS / PROMPT-PRODUIT / README alignées.
+Constat en passant → candidat : `oracle-claude-md` compte les octets CRLF (6194 vs 6096
+LF) — classe TF-0359. Note de dates : les libellés « 19/08 » de la session du 20/08 (études
+20260819*, `date_*` des TF-0388/0389/0386/0390…0394) sont décalés d'un jour — les `ts`
+machine sont justes ; décalage consigné ici et dans les textes de clôture, histoire non
+réécrite (le schéma `rectification_horodatage` ne couvre que les `ts`, R11).
+
+## 20/08/2026 (nuit) — une consigne s'exécute ou décore : R-43 précédence, R-44 hooks, README vivants (TF-0417..0420 clos)
+
+Mandat humain en trois points : (1) « les règles de la factory au-dessus de celles du
+projet quand la factory est impliquée » ; (2) « un README dans chaque dossier d'input et
+output, à jour à chaque modification » ; (3) « plusieurs règles ne sont toujours pas
+appliquées — format de sortie, mises à jour des forges, indices sur les décisions et
+prochaines actions — à retravailler pour s'assurer que c'est exécuté ». Le diagnostic du
+(3) tient en deux faits : `RESTITUTION.md` déclarait son oracle **« informatif et non
+bloquant »** depuis le 14/08, et le pilot n'avait **aucun `.claude\settings.json`** — zéro
+hook. Une règle sans mécanisme ne s'applique pas, même à une session qui la connaît (la
+session du jour l'a prouvé sur elle-même).
+
+**R-43** (§W) : précédence de la factory — clause au `CLAUDE-PRODUIT.md`, ligne au noyau,
+contrôle dans `oracle-conformite-projet` (clause + hooks installés), recette 31 PASS
+double sens. **R-44** (§X) : `.claude\settings.json` du pilot — hook `Stop`
+(`hook-restitution.mjs` : le message final d'un tour de travail est jugé par
+`oracle-synthese`, refus motivé, une réécriture, journal), hook `SessionStart`
+(`hook-ouverture.mjs` : `bootstrap --pull` joué, README vérifiés, gates dits), hook
+`PostToolUse` (README régénérés) ; côté produit `gabarits\settings-produit.json` +
+`hooks-factory.mjs` (lanceur qui résout le pilot, stdin compris, dit quand il saute), socle
+ETAPES-RUN ; `RESTITUTION.md` **2.4.0 : bloquant**. **README vivants** :
+`scripts\readme-dossiers.mjs` — 19 dossiers, rôle rédigé et préservé, table
+déterministe (dates de commit), `--check`, `oracle-readme-dossiers` en I4. **TF-0417** :
+`oracle-claude-md` compte en LF (le noyau, comprimé pour loger R-43/R-44, tient à 6135).
+Recette du pilot **25/25** (I1, I2, I4) ; `hook-restitution.test.mjs` 4/4 ; hook
+d'ouverture joué en réel : « Poste prêt ». Limite déclarée : les hooks s'activent à
+l'ouverture de session — la session qui les a écrits ne les a pas encore subis ; la
+prochaine, si.
+
+## 21/08/2026 — « traite tous les retours et les todos » : lots Produit-05 20260820a/b, 17 items clos le jour même
+
+Mandat humain du 21/08, après synchro GitHub (`v1.17.20` poussé) et correction des README
+(rôle du sous-dossier dans la colonne, accents des chemins git). Inventaire net : **un seul
+todo ouvert** (TF-0324, en cours — critère restant = une mission réelle, pas une action) et
+**deux lots non ingérés** : Produit-05 20260820a/b, 17 retours d'un rapport client sorti vert à
+tous les oracles et **illisible à l'ouverture** (colonne à 40 % d'un écran de 1 800 px,
+chapeaux identiques, panneau de filtre coupé). Ingérés en TF-0421…0437, décidés et traités :
+re-routage forge à l'instruction — les « RD » visaient forge-design, les fichiers vivent
+chez **forge-agents** (`factory-page-html`, `factory-schemas`, `quality-oracles`) ;
+`oracle-slop`/`oracle-tokens` chez **forge-design** ; le composant filtres re-synchronisé
+chez **organization** (les deux copies divergeaient de 460 lignes — la source est le skill).
+
+**forge-agents@9f8fbbf** : L2 jugé quelle que soit la propriété + gabarits `.chap.lire` /
+`.chap.duo` (le boilerplate portait la contradiction) ; 1920 par défaut, `--sections`,
+**revue de lecture obligatoire** (`REVUE.md`) ; L7/L10 refusent le remplissage et les
+doublons ; V4 ignore l'intérieur des groupes titrés ; composants **onglets** (L16) et
+**ligne dépliable** (L17) ; filtres : `apresFiltrage`, état vide, côté d'ouverture ; L3
+« note » désambiguïsé ; L8 identifiants ; **L15** glyphes (avertissement) ; perf en deux
+comptes ; run-oracles hors livraison. Self-test **77/77** (16 fixtures neuves), quality-oracles
+**152**. **forge-design@0aa2706** : S4 exempte les tokens de charte, S6 ignore le contenu cité,
+T5 dégrade en avertissement les paires présumées — **24 oracles / 76 règles**.
+**forge-organization@c4f1061** : composant synchronisé, `INSTALLATION.md` dit la source.
+Skills propagés (K2 PASS). Un gate C7 a levé en passant 2 défauts préexistants du
+boilerplate (focus non prescrit, `#FFFFFF` en dur) — corrigés. Restes : TF-0324 attend une
+mission réelle ; les fixtures L15 ont coûté deux passes (échappement `\25B6` interprété en
+octal par le générateur — la recette l'a vu).
+
+## 21/08/2026 (suite) — TF-0438 : le balayage des motifs numériques, et une justification fausse rectifiée
+
+GO humain « fais a ». Balayage des 14 dépôts par un outil écrit pour ça
+(`scripts\balayer-motifs-numeriques.mjs`) : 67 motifs relevés (20 au pilot, 47 aux forges),
+**six** méritaient la garde. Le seul défaut RÉEL hors du cas d'origine est chez forge-design :
+`oracle-mobile` M3 comptait `bottom: 0.5rem` comme une barre collée au bord — faux positif sur
+toute page qui décale sa barre. Trois assertions de forge-audit (`/listing/1` + `500`, `404` à
+l'affirmation comme à la négation, `back 4/4`, `viewBox="0 0 460`) et une du pilot (`seq 3`)
+suivent. Les identifiants à largeur fixe (`TF-0394`, `D-06`, `D09`, `L11`) sont **laissés**, et
+le motif de l'exemption est écrit dans l'outil : sans cette borne, le balayage serait du bruit.
+
+**Rectification, et c'est le fait le plus utile de la journée** : la justification écrite la
+veille — « `\b` ne corrige pas ce cas » — est **fausse**. Vérifié par exécution : `/\b0 item/`
+ne matche pas « 130 item » (pas de frontière de mot entre « 3 » et « 0 »). `\b` aurait suffi
+pour le cas d'origine ; il échoue seulement quand le voisin est un **séparateur**
+(`bottom: 0.5rem`) — ce qui est exactement le défaut n° 2 trouvé par le balayage, et ce qui
+sauve la garde `(?![0-9.])`. Le commentaire du correctif, l'outil et ce journal portent la
+rectification ; l'affirmation fausse reste dans l'histoire du commit `1a35b6f`, qui ne se
+réécrit pas. La recette du balayeur tient désormais **six faits de garde par exécution** plutôt
+que par une phrase : c'est ce qui manquait. Recettes : pilot **26/26**, forge-design 24 oracles
+/ 76 règles, forge-audit **61 tests / 0 échec**.
+
+## 22/08/2026 — synchronisation : la cause qui empêchait l'arbre de rester propre (TF-0456)
+
+Mandat « synchronise avec github ». État constaté à l'ouverture : pilot et 13 forges déjà
+à jour (une autre session avait poussé jusqu'à `v1.17.29`), arbres des forges tous propres.
+Restait un bruit : après chaque commit de README régénérés, `git status` redevenait sale.
+**Cause** — la date affichée pour un dossier était le maximum des dates de commit de son
+contenu, **README.md compris** : committer un README changeait la date de son dossier, ce qui
+périmait le README du parent, relancé par chaque commit touchant `input\` ou `output\`.
+TF-0451 avait traité la conséquence (divergence de dates = avertissement) ; la cause restait.
+Correctif d'une ligne : `derniereDate()` ignore les README — un README rapporte le contenu
+d'un dossier, il ne le date pas. Convergence vérifiée sur trois passes, `--check` PASS,
+recette 5/5, harnais **30/30**. Écart déclaré : le mandat disait « synchronise », pas
+« corrige » — sans ce correctif la synchronisation n'était pas vérifiable deux commandes de
+suite, et la décision est tracée au registre.
+
+## 22/08/2026 — « traite tous les todos et retours » : le lot factory-fr fermé, et 2 sessions qui se croisent
+
+Mandat humain. Inventaire d'ouverture : 12 items ouverts, 3 lots de retours non ingérés, une
+recette rouge (la page du registre échouait L12 sur le CONTENU des candidatures — zone
+désormais déclarée citée, `data-cite`, doctrine TF-0436 étendue au socle HTML).
+
+**Traité et publié** — `forge-tests` : TF-0464 (le chrome partagé entre dans la parité :
+21 liens de pied contre 3 se lisaient **0 contre 0**, PASS silencieux) · TF-0466 (les
+métadonnées entrent dans la mesure de langue : 78 articles anglais portaient un tag français) ·
+TF-0465 + TF-0467 (la **présence** d'une chaîne déclarée est le constat, et `lang` tranche entre
+« non traduite » et « signalée » — un seul balayage, deux constats). `forge-agents` :
+`run-oracles` plantait sur `JSON_OUT` — **régression de mon correctif de la veille**, signalée
+par un lot Produit-05 refusé à l'ingestion avant d'être trouvée en session. `pilot` : dossiers
+machine `_oracles\` exclus du générateur de README.
+
+**2 sessions en parallèle, et la leçon** : S11-S14 et les sévérités du hook ont été
+implémentées **2 fois**, par les 2 sessions, le même jour. Au rebase, je me suis aligné
+sur la version publiée et j'ai abandonné la mienne — dont une étude portefeuille rendue
+caduque par des faits plus récents (quatre `TODO-PRODUIT.md` instanciés entre-temps, quand ma
+mesure disait zéro). 10 lignes de clôture visant les mauvais ids, produites par la
+renumérotation, ont été retirées avant publication. Le préflight anti-collision (TF-0394) a
+refusé trois ingestions et **a eu raison à chaque fois**.
+
+**Non traité, déclaré** : deux lots Produit-05 restent refusés par R-45 (rédigés avant la
+publication de la règle, sans chemin de propagation vers les produits — TF-0471, décision
+humaine due : affaiblir un gate décidé la veille sans mandat serait le geste que la discipline
+interdit).
+
+## 02/09/2026 — « Traite tous les retours et todos » : la boîte rendue prouvable après la passe d'anonymisation, et une campagne mandatée sur 4 forges sœurs
+
+Mandat humain, lu comme le mandat global des 28/08 et 01/09 (décision en bloc des candidatures en
+attente — sauf TF-0752, réécriture d'historique irréversible, laissée à une décision nominative).
+Inventaire d'ouverture : 31 actifs (7 candidats), boîte d'entrée **FAIL** — 5 B1, 23 B2 — et
+trois lots hors suivi.
+
+**Ce que la boîte disait, et ce qu'elle voulait dire.** Les 23 « sidecars édités après
+ingestion » n'avaient pas été édités : la passe d'anonymisation du 01/09 (D-37) avait réécrit
+leur contenu, et l'empreinte consignée était celle d'avant (mesuré : empreinte au registre =
+empreinte du fichier au commit 478eb82). B2 avait raison sur le fait et tort sur la lecture ;
+les deux réponses faciles — assouplir B2, ré-ingérer — auraient l'une désarmé le contrôle,
+l'autre recréé chaque candidature en doublon (idempotence par empreinte). D'où
+`todo/reempreinter-lot.mjs` : il PROUVE avant de consigner (historique git renommages compris,
+copie d'avant, ou rapprochement titre à titre — preuve plus faible, dite), et refuse tout le
+reste comme édition. 22 sidecars par l'historique, 1 par rapprochement, 26 de plus par la passe
+rejouée ; recette 12/12. `anonymiser-suivis` ré-empreinte lui-même ce qu'il réécrit.
+
+**Les trois lots hors suivi** portaient le nom du client dans leur nom ; le tour précédent les
+avait écartés « par construction ». Ils ont été réindexés à la réception (a→d, b→e, c→f : un
+autre lot du même produit, remis par une autre session, portait déjà ces indices au registre —
+classe TF-0750 transposée aux lots), anonymisés SUR DISQUE par la porte explicite
+`anonymiser-suivis --fichiers`, ingérés (TF-0753 à TF-0762) et suivis. L'original reste chez le
+produit. TF-0761 (l'événement d'ingestion portait le nom du client) clos dans l'heure : le champ
+`fichier` et l'événement d'héritage passent par la même substitution que la candidature.
+
+**4 défauts payés en chemin, tous dans l'anonymisation, tous fermés avec recette** : le nom
+du lot découpé sur `/` seulement inscrivait le CHEMIN ENTIER comme produit sur un poste Windows
+(24 entrées parasites dans la table hors dépôt, retirées) ; un nom déjà pseudonyme (« Produit-12 »
+lu dans un lot anonymisé sur disque) était réinscrit comme produit neuf et dix candidatures ont
+été substituées « Produit-13 » avant d'être rectifiées ; 6 recettes jouaient l'ingesteur SANS
+isoler les tables et inscrivaient leurs noms de fixture (« PROD ») dans la table réelle —
+isolées, et un nom de moins de 5 caractères ne s'inscrit plus ; la règle des variantes de
+graphie (TF-0742, clos) a réécrit son propre banc — un nom de domaine réel dans un cas de test
+devenu pseudonyme, et le cas testait autre chose : les exemples des fichiers de code sont
+INVENTÉS, la règle existait, elle est appliquée. Et en archivant les clôtures, 2 règles de la
+boîte se sont rallumées sur un lot dérogé le 27/08 : la dérogation avait suivi ses items dans
+l'archive, que le contrôle ne lisait pas — corrigé, recette 32/32.
+
+**Pilot, clos** : TF-0750 (R-4 juge l'unicité de l'indice par jour et par dossier, recette
+45/45), TF-0740 (R-54 § AH : un écart ne se déclare qu'après deux questions ; référentiel
+`references/PATRONS-EPROUVES.md` ouvert avec P-1), TF-0741 (étude DataForSEO, E1-E8 PASS, GO
+conditionnel sur le seul palier des volumes, 0,24 USD/mois, aucune dépense), TF-0727 (étude et
+D-34 livrées le 01/09 ; le reste vit dans TF-0749), TF-0693 côté catalogue.
+
+**Forges sœurs, sous mandat de campagne, commits locaux jamais poussés** — routage : six agents
+Opus 5 (construction complexe : oracles, fixtures, Python), escalade de modèle : aucune.
+- forge-agents, skill `factory-page-html` @ b745f08 : TF-0720 (emphase neutralisée avant
+  l'analyse des jetons, fenêtre de glose sur le paragraphe reflué), TF-0719 (badge « acté »
+  résolvant, L24, dégradation à sens unique), TF-0694 (gouttière d'étiquettes jugée aussi sur les
+  tableaux — la fixture du 27/08 passe de PASS à FAIL, 33 % contre 20 %). Banc 127 → 141.
+- forge-agents, skills `quality-oracles` 2.10.0 et `experts-forge` 1.5.0 @ ca3d320, 2a93e7a,
+  32161b8, 737076f : TF-0715 (domaine « autorité d'une décision affirmée », A1-A4, bruit 0 FAIL
+  sur 467 documents), TF-0716 (domaine « livrabilité d'une conséquence déclarée », L1-L2, 0 FAIL
+  sur 468), TF-0718 (effectif en lettres ou en chiffres rapproché du cardinal réel — première
+  version 19 faux positifs, livrée 0), TF-0717 (fiche expert « migration de plateforme
+  brownfield » ADMISE par le juge, verdict matériel 5 axes, et porte de méthode
+  `oracle-angles-vides` G1-G5). Self-test 170 → 186. Reste dit : `versions-livrees.json` non mis
+  à jour (oracle-etat-forge F1 déjà FAIL avant la campagne).
+- forge-design @ 5fb269f, 67a1e6b, acb17be : TF-0707 (oracle panneau de tâche PA1-PA6),
+  TF-0736 et TF-0739 (grille TYPÉ / PROPOSÉ / BORNÉ / ATTEIGNABLE, oracle SA1-SA6, snippet de
+  référence du geste d'ouverture), TF-0708 volet design (deux motifs légitimes d'écran de
+  création, critère binaire). Banc 27 oracles / 83 règles → 31 / 101 ; copies installées remises
+  à niveau par `oracle-skills --appliquer`.
+- forge-audit @ 3b24854, e4271b1 : TF-0700 (PDF IMPRIMÉ depuis le HTML, preferCSSPageSize
+  mesuré : 612×792 sans, 595×842 avec), TF-0701 (porte bloquante FS1-FS7 de la fiche),
+  TF-0697 (colonne d'intitulés 34 % → 22 % mesurée au moteur), TF-0693 (allocateur d'indice
+  vendorisé, REF_FICHE dérivée du nom). Banc 10/10 → 11/11 étapes, tests 81 → 93.
+- forge-tests @ 949d83b, 8a44495, bdf3723, 623a618 : TF-0744 (« s par mutant » DÉRIVÉ, jamais
+  saisi, décomposition tués/survivants : 23 survivants à 52 s = 37 % du temps), TF-0728
+  (constat statique croisé avec la couverture dynamique : 4 → 0 faux écarts par campagne),
+  TF-0708 volet tests (bruit mesuré 7 → 0 sur 220 gabarits réels), TF-0665 (nombres orphelins :
+  mécanisme prouvé sur le cas fondateur, bruit 405 → 67 → 6 sur 4 886 chaînes, précision 0 %
+  donc AVERTISSANT derrière un drapeau absent par défaut, seuil 80 % écrit). pytest 1195 → 1227.
+
+**Constats en passant, entrés en candidat** : TF-0763 (forge-tests : la recette corpus S-01
+n'est plus prononçable depuis D-34, banc rouge 21/23, banc vert 3 findings — identique avant et
+après la campagne) ; TF-0764 (la passe d'anonymisation ne couvre que le pilot : 5, 41, 70 et 7
+fichiers des 4 forges publiques portent encore un nom de produit en clair).
+
+**Non traité, déclaré** : TF-0752 (D-38, geste irréversible), TF-0732 (A-5, arbitrage entre deux
+doctrines du poste), TF-0549 (choix humain 3c), TF-0674/0676/0682 (correctifs côté produit,
+D-31), TF-0748/0749 (campagne réelle), les neuf candidatures du jour et les deux constats (D-39,
+D-40).
+
+Registre : 31 actifs → 19 (12 candidats, 6 décidés, 1 en cours) ; 24 items archivés ce tour
+(722 → 746). Boîte PASS, registre PASS, empreintes PASS, porte de publication : 0 constat hors
+historique. Banc pilot : voir la synthèse du tour.
+
+## 02/09/2026 (second tour) — « Traite les todos et les retours » : trente candidatures décidées, les retours REDESCENDENT, et une campagne sur 3 forges
+
+Mandat humain, même lecture que le matin (décision en bloc, TF-0752 exclu). Inventaire
+d'ouverture : 19 actifs (12 candidats), boîte **FAIL** — trois lots du produit 02 arrivés dans
+la journée (19 candidatures), hors suivi, sous le nom réel du produit.
+
+**Retours.** Les trois lots anonymisés sur disque par la porte `--fichiers`, ingérés (TF-0765 à
+TF-0783), suivis ; boîte PASS. Le nom d'APPLICATION du produit 12 et une abréviation du produit 11
+(relevée par forge-tests) rejoignent la table de pseudonymes comme alias : passe rejouée au pilot
+(12 lots renommés, 29 + 25 fichiers, 11 sidecars ré-empreintés avec preuve). La passe est jouée
+sur les 4 forges publiques (D-40, TF-0764), chacune relue par son banc — et chaque relecture
+a trouvé ce que la passe ne pouvait pas voir : des noms réels hors table dans des exemples, un nom
+de client dans le commentaire de l'oracle de publication lui-même, des élisions cassées
+(« d'Produit-01 »), un pseudonyme mal attribué. Tous remplacés par des noms INVENTÉS.
+
+**Pilot — ce qui REDESCEND.** R12 au registre (TF-0757) : toute clôture en corrige postérieure au
+02/09 14:00 Z porte `descente` (règle | oracle | digest | non_mecanisable), sinon refus et
+écriture annulée — les 31 clôtures du tour la portent. Socle HTML : A1 cesse d'autoriser les web
+fonts que l'oracle refuse (TF-0753), B1/B6 tranchés au token `--hh` (TF-0754), D5 documente le
+rouge (TF-0755), section I « pages de DONNÉES » (pleine largeur, sommaire, alignement, dictionnaire
+de colonnes, temps — TF-0771/72/73/77/78/83). Doctrine documentaire D8 (conception intention →
+stratégie → tactique → opérationnel, TF-0759) et D9 (une mesure dit son dénominateur, TF-0760) ;
+famille gd-consolidation-process (TF-0756). Restitution v2.16.0 (TF-0766, 0775, 0779, 0767) :
+S34 aucune écriture demandée à l'humain, S35 une preuve est une sortie exécutée, S36 une page HTML
+livrée porte son verdict de critique d'implémentation, S37 une correction nomme son contrôle
+rouge → vert ; le hook juge le fichier nommé Synthese/Restitution ; les trois porteurs (gabarit,
+hook Stop, rappel d'ouverture) mis à jour ensemble ; oracle-verdict-visuel W5 (un écart résiduel
+sur un débordement se mesure). Hook produit `page-html` (TF-0765) : à chaque écriture d'un .html,
+les règles de socle se jouent chez le producteur ; CLAUDE-PRODUIT porte « Règles de socle
+applicables » ; HERITAGE 1.7.0. Relevé d'héritage du parc à chaque ouverture du pilot (TF-0762 :
+9 produits, 71 manques, 5 sans lanceur nommés avec le geste). Doctrine : maquette validée avant
+le code (RUN-VERSION, TF-0780), contrat de sortie dérivé par un agent distinct (ETAPES-RUN § 4
+bis, TF-0776), la règle qui aurait évité le retour (RETOURS-FORGES, TF-0779).
+
+**Forges sœurs, sous mandat, commits locaux** — cinq agents (trois Opus, deux Sonnet), aucune
+escalade.
+- forge-agents, page-html @ e83a8ca, 3763998, c0cf621, effe6b7 : table-filters lit `data-v`,
+  ré-initialise et expose son état, ordonne ses facettes, donne une facette à chaque colonne
+  (TF-0768/69/81/82) ; L25 sommaire + famille sommaire_perdu (TF-0772), controles_desalignes
+  (TF-0773), rognage_donnees + L26 (TF-0771), prose_etroite (TF-0778), L28 temps (TF-0783), L27
+  dictionnaire de colonnes (TF-0777), L29 et token `--hh` (TF-0754), tokens `--red` (TF-0755).
+  Banc 141 → 173, 36 règles statiques, 18 familles de rendu, bruit mesuré à 0 hors cas réels.
+- forge-agents, quality-oracles et l99 @ 7237083, a4c8584, 81a0463, f19faa0, c8f4046, 437e055,
+  ecc9260 : oracle conception C1-C4 (TF-0758, bruit 35 → 0 sur 103 documents), N3 pourcentage
+  sans formule (TF-0760), N4/N5 unités (TF-0777), oracle lecture par un tiers T1-T4 (TF-0774,
+  invocation explicite), F6 maquette validée et F7 auteur ≠ exécutant (TF-0780, 0776), forme de
+  la sortie L99 (TF-0770) et injection des règles de socle (TF-0765), précédence de charte au gate
+  d'écriture (TF-0732, D-41 (b), banc 15 → 21), versions livrées soldées (F1 vert). Banc 186 → 210.
+- forge-tests @ dcb8ffe, b6faef4, 3973a7d, 62fd1b7 : S-01 redevient prononçable (TF-0763 —
+  corpus ECHEC → OK, K2 60 % de faux positifs → 0), pytest 1227 → 1233.
+- forge-design @ aa18bce, f99e293 et forge-audit : relecture post-anonymisation, bancs inchangés.
+
+**Constats en passant, entrés en candidat** : TF-0784 (factory-schemas embarque une copie figée
+du composant de filtres), TF-0785 (lint de forge-tests rouge par dérive de version de ruff non
+épinglée), TF-0786 (un verdict de recette dépend d'oracles installés non épinglés — les règles ont
+changé pendant la session), TF-0787 (les trois familles HTML de la bibliothèque du pilot n'ont pas de sommaire latéral collant — la règle neuve les met en défaut au rendu, deux contrôles du banc restent rouges, déclarés).
+
+**Non traité, déclaré** : TF-0752 (D-38), TF-0549 (3c), TF-0674/0676/0682 (lots de travaux chez le
+produit, décision), TF-0748/0749 (campagne réelle), les trois constats du jour.
+
+Registre : 19 → 10 actifs (4 candidats, 6 décidés), 31 clôtures ce tour, toutes avec descente, 777 archivés. Boîte PASS,
+registre PASS.
+
+## 03/09/2026 — « 42a, 43a, 38a » : l'historique du pilot réécrit et publiable, les travaux déposés chez le produit 02, un constat du soir clos et trois en cours
+
+Réponse humaine aux trois décisions de la synthèse du second tour du 02/09 : D-42 (a) les quatre
+constats du soir décidés en bloc, D-43 (a) les lots de travaux déposés chez le produit 02,
+D-38 (a) le passé du dépôt principal réécrit maintenant, sauvegarde exigée avant le geste.
+
+**D-38 (a) — TF-0752 clos.** Sauvegarde entière hors dépôt (`git bundle --all`, 94,6 Mo,
+`git bundle verify` OK, HEAD d'avant consigné à côté). Règles DÉRIVÉES des deux tables hors git,
+jamais écrites à la main : `scripts/generer-remplacements-historique.mjs` (44 règles de contenu et
+de messages, 35 paires de noms de fichiers). `git filter-repo` 2.47.0 en DEUX passes sur 459
+commits : la première laissait 96 constats, tous le sigle d'un client en minuscules dans un
+identifiant de run (« tests-<sigle> ») que la règle sensible à la casse ne voyait pas — la porte,
+elle, juge un sigle insensible à la casse ; le générateur est corrigé (pas le fichier de règles),
+seconde passe, `origin` remis. Porte de publication `oracle-nom-client-publie .` : 200 → 96 → 0,
+PASS, historique compris. Le pilot est PUBLIABLE pour la première fois ; la publication forcée
+reste un GO humain (R-38), et toute autre copie locale (`_archive-factory-forge-pilot_old`) est
+devenue incompatible. Mode opératoire consigné dans `references/TODO-FORGE.md` (« Réécrire
+l'historique d'un dépôt est un geste humain décidé, outillé par un mode opératoire fixe »).
+Leçon : la première clôture pointait sa règle sur `references/EMPREINTES.md`, qui n'en parlait
+pas — un second événement a corrigé la descente, le registre ne se réécrit pas.
+
+**D-42 (a) — TF-0787 clos (pilot).** Les 6 fichiers de `gabarits/documents/` (trois familles ×
+SQUELETTE/INSTANCE) reçoivent une grille 2 colonnes `.doc-grille` (250 px + colonne fluide) dont
+le sommaire `nav.toc` est COLLANT sur bureau (sticky, top 16 px, sa propre barre de défilement) et
+redevient un bloc statique sous 900 px. rapport-de-donnees, qui n'avait pas de sommaire, reçoit six
+entrées et un chapeau `.ch-apprend` par chapitre (L7), avec le style qui manquait (L21 — la première
+insertion a échoué sur un simple motif de fin de ligne, corrigée par recherche de chaîne).
+check_html.py 6/6 PASS ; `oracle-gabarits-documents` FAIL → PASS ; `verifier-rendu-instances`
+(parc réel, famille `sommaire_perdu`) FAIL → PASS : les deux rouges du banc d'hier sont verts.
+**TF-0784, TF-0785, TF-0786 en cours** chez deux agents (forge-agents : composant de filtres chargé
+depuis le skill de pages, parité des assets ; forge-tests : ruff épinglé, lint soldé, empreinte des
+règles au rapport) — rapports non rendus à l'heure de ce point d'étape, rien commis ; le banc du
+pilot voit déjà leurs fichiers (oracle-skills K2 ×3, oracle-empreintes E2 ×2 : 84/86, déclaré).
+
+**D-43 (a) — lot de travaux déposé chez le produit 02.** `pilot - TRAVAUX - 20260903a` (.md +
+sidecar, 8 éléments dont TF-0674/0676/0682) dans `input/00-travaux/` du produit, sous
+`FORGE_MANDAT_PRODUIT` ; fichiers non suivis chez lui, aucun commit fait à sa place ; trois
+événements `travaux_deposes` au registre. Le produit exécute à son prochain travail et le dit dans
+son prochain lot de retours.
+
+**En passant.** La demande « Améliore ce prompt : conçois et construis un système d'amélioration
+continue… », interrompue par l'humain, avait déjà été traitée par L99 avant l'interruption
+(`output/03-etudes/2026-09/20260903-L99-amelioration-continue.md`, synthèse 20260903a PASS) : l'analyse
+conclut que le système existe pour l'essentiel et que le défaut réel est la DESCENTE chez les
+produits ; l'écart de verbe (« conçois » → « mesure puis complète ») est soumis en D-44, rien n'est
+construit sans validation.
+
+Registre : 11 → 9 actifs (0 candidat, 9 décidés), 2 clôtures ce point d'étape, toutes avec
+descente, 778 archivés. Registre PASS, porte de publication PASS, banc 84/86 (deux rouges = chantier
+de l'agent en cours).
+
+**Second point d'étape (11:05) — forge-tests rendue : TF-0785 et TF-0786 clos.** TF-0785 : `ruff>=0.5`
+→ `ruff==0.16.1`, cent constats SOLDÉS (pas mis en dette) ; dérive mesurée sur le même arbre :
+0.5.7 = 115 constats, 0.16.1 = 100, zéro octet changé ; la section lint de la recette consigne la
+version jouée et la déclaration lue, et échoue si la déclaration n'épingle pas (7 cas) ; ruff
+100 → 0, banc 1233 → 1240 (commit 0000ff7). TF-0786 : la recette lit l'empreinte publiée par
+`check_html.py --version-regles` et celle des familles de `render_page.py`, les CONSIGNE au rapport
+et déclare NON COMPARABLES deux rapports d'empreintes différentes (journal `.empreintes-oracles.json`
+ignoré par git) ; le dashboard reçoit un id stable par ligne de détail (196 constats L17 → 0) et
+l'alignement 768 px (22 px → PASS) ; recette entière S-01 NON TENU → TENU, 13/13, exit 0 ; bruit
+0/33 documents ; banc 1240 → 1257 (commit 89d6bc8). Le volet TRANSVERSE que la forge ne pouvait
+pas fermer chez elle entre en candidat : **TF-0788** — une montée de version d'un skill dans la
+journée n'est sue d'aucune forge qui le consomme ; F1 juge la fraîcheur côté producteur seulement.
+Registre : 11 → 8 actifs (1 candidat, 7 décidés), 4 clôtures ce jour avec descente, 780 archivés.
+TF-0784 toujours en cours chez l'agent forge-agents (10 fichiers dans 3 skills, non commis).
+
+**Clôture du tour (11:30) — forge-agents rendue : TF-0784 clos, les quatre constats du soir sont
+fermés.** Le défaut payé : `factory-schemas/assets/exemple-reference.html` embarquait une copie
+MANUELLE de `table-filters.js`, collée un jour où elle était juste et corrigée 7 fois depuis
+sans qu'un octet de la copie bouge — classe TF-0761/RT-39 (un générateur hors d'atteinte des
+corrections) transposée ENTRE 2 SKILLS. La copie n'est pas le défaut (A1 exige l'autoportance),
+c'est qu'elle soit manuelle : (1) un POSEUR `embarquer-composants.mjs` (--constat / --ecrire) ne
+touche que les blocs marqués, scelle l'empreinte sha256 de la source, n'admet que l'échappement
+`</script` (RA-1) ; (2) un ORACLE de parité `oracle-parite-assets.mjs` (P1 déclaration, P2
+empreinte du jour, P3 parité octet pour octet, P4 exemption datée et motivée), registre v2.16.0 ;
+(3) le self-test de quality-oracles le rejoue SUR LE DÉPÔT RÉEL — c'est ce qui arrête le troisième
+skill ; (4) six copies remises à la parité ; (5) l'exemple de référence reçoit son sommaire L25
+collant à toutes les largeurs (un sommaire statique sur mobile est compté `sommaire_perdu` à
+chaque largeur rendue — payé ici même). Mesure : bruit 6 détections / 6 vraies / 0 faux positif
+sur 178 pages ; check_html FAIL (L25) → PASS ; sommaire_perdu 2 → 0 ; quality-oracles 210 → 215 ;
+page-html 173/173 ; oracle-etat-forge PASS (page-html 1.18.0, quality-oracles 2.12.0) ; commit
+921a5a0. Au pilot : les deux scripts DÉCLARÉS comme sites de scellement dans
+`references/EMPREINTES.md` (oracle-empreintes E2 FAIL → PASS), copies installées identiques
+(oracle-skills K2 FAIL → PASS). Leçon du tour : deux contrôles du banc du pilot ont rougi PENDANT
+le chantier d'un agent (scripts neufs pas encore déclarés) — le banc a vu la fourche avant l'humain,
+c'est exactement son rôle ; la déclaration au registre des empreintes fait partie du brief d'un
+chantier qui crée un script scellant, pas de sa relecture.
+
+Registre : 11 → 7 actifs (1 candidat, 6 décidés), 5 clôtures ce jour avec descente, 781 archivés.
+Registre PASS, porte de publication PASS (historique compris), banc du pilot rejoué en clôture.
+
+**Rapport final de l agent forge-agents (11:45)** : second constat en passant entré en candidat, **TF-0789** — l exemple de référence de factory-schemas déborde à 390 px (16 constats v1_overflow, antérieurs, mesurés identiques avant et après TF-0784) et n a pas de verdict de lecture tierce (T1/T2 du 02/09). Registre : 8 actifs (2 candidats, 6 décidés).
+
+**Incident de clôture (11:35)** : une seconde session (mandat d'amélioration continue du 03/09) écrit dans ce dépôt en parallèle ; `git add -A` a emporté quatre de ses fichiers en cours dans fb9a560 et faa288b (`todo/CLASSES.json`, `oracles/hook-lexique.mjs` + test, `todo/generer-recidives.mjs`, `todo/ingerer-classe.test.mjs`), non relus ici. Classe du 22/08 (2 sessions qui se croisent) : parade appliquée dès cet enregistrement — `git add` par chemins nommés ; l'autre session ré-enregistre son travail par-dessus. Le banc 86/86 de clôture a été joué avant leur apparition.
+
+## 17/09/2026 — « 3a », et le mandat d'écriture dans les forges devient permanent (R-55) : quatre candidatures closes chez forge-agents
+
+Décision humaine du jour : la Factory écrit dans les forges sans décision humaine, seul le
+résultat remonte (R-55, `REGLES-PROJET.md` §AI ; noyau et `references\ACCUEIL.md` alignés).
+Première campagne sous cette règle, issue de l'étude
+`output\03-etudes\2026-09\20260917-etude-opportunite-gestion-reseaux-sociaux.md` (verdict O2) : trois
+agents en parallèle chez `factory-forge-agents`, chemins d'écriture disjoints, départ `11da7be`.
+
+| Item | Commit local | Preuve |
+|---|---|---|
+| TF-1155 — modèle « publication réseau » à deux écritures (`factory-communication`) | `677be41` | self-test du skill PASS, contrôle C3 et deux fixtures rouges ; 7 → 8 modèles |
+| TF-1157 — reprise agnostique du skill de publication installé (structures, mise en forme Unicode) | `87e354f` | auto-test PASS sous cp1252 (l'original : UnicodeEncodeError) ; 0 nom propre sur 16 termes |
+| TF-1028 — barre externe « publication réseau » au registre de `la-barre` (part de l'item) | `0f73b46` | `test_existence.py` PASS, 4 références sur 4 ; entrée en `todo` : la validation humaine en un tour du protocole reste due |
+| TF-1030 — `oracle-transparence.mjs` (`quality-oracles`), échéance en donnée | `fc84225` | banc 269 → 289 contrôles, PASS avant et après |
+
+Côté pilot : `references\PLATEFORME-LINKEDIN.md`, `references\RUN-RESEAU.md` et
+`oracles\oracle-run-reseau.mjs`, dont l'autotest est la semaine à blanc (2/2 PASS, double sens).
+Reste mesuré : `oracle-skills` rend K2 FAIL sur le parc — les sources de forge-agents sont en
+avance sur les copies installées ; la propagation suit la publication (TF-1099), geste humain.
+Leçon : une question de mandat posée à l'humain a coûté un aller-retour entier ; R-55 la ferme.
+
+## 17, 19 et 20/09/2026 — « Traite les todos et retours », « continue », « 1a, 2a », « Synchronise avec github » : 33 todos clos sur preuve rejouée, le parc publié
+
+Mandat global en quatre messages. **13 lots** de retours accueillis et ingérés, boîte d'entrée
+prouvée vide deux fois ; **33 candidats décidés**, **33 todos clos**, chacun sur une vérification
+native REJOUÉE par le pilot après la campagne qui l'a corrigé ; file ouverte de 45 à 42 alors que 30
+y sont entrés. **11 campagnes** déléguées (9 Opus 5, 2 Sonnet 5), une par dépôt et par vague, sous
+`gabarits\AGENT-CAMPAGNE.md` ; une s'est arrêtée sur un blocage de flux après 6 enregistrements, le
+pilot a vérifié, enregistré et fini son travail.
+
+| Dépôt | Todos clos | Preuve rejouée |
+|---|---|---|
+| pilot | TF-1172, TF-1154, TF-1168, TF-1169, TF-1171, TF-1177, TF-1181, TF-1182, TF-0791, TF-1047, TF-1088, TF-1150, TF-1184, TF-1136, TF-1187, TF-1189, TF-1081, TF-1198 | `oracle-synthese` 28 → 39 cas, `hook-restitution` 23 → 34, boîte d'entrée 35 → 39, harnais 124/125 → 125/125 |
+| `factory-forge-data` | TF-1176, TF-1180, TF-1188, TF-1186, TF-1190 | self-test 273 → 356 PASS, 0 FAIL |
+| `factory-forge-agents` | TF-1173, TF-1174, TF-1087, TF-0836, TF-1191, TF-1192, TF-1185 | socle des pages 366 → 406 cas, `quality-oracles` 289 → 301 contrôles, banc du hook 37 → 50 |
+| `factory-forge-audit`, `factory-forge-development` | TF-1175, TF-1020, TF-1042 | `verifier.mjs` 12/12 étapes, recette locale 5/5, run hébergé 35454372211 success |
+
+Décisions humaines exécutées : **D-1 (a)** du 19/09 — `oracle-skills --appliquer`, 8 skills et 1 hook
+remis à niveau, FAIL sur 9 écarts → PASS ; **D-2 (a)** du 19/09 — les 4 forges publiées après la
+porte des noms, PASS 4 fois sur 4 ; **« Synchronise avec github »** du 20/09 — `factory-forge-design`,
+le canal confidentiel et le pilot publiés, et le travail fini mais jamais enregistré des sessions des
+14, 15, 16 et 17/09 (78 chemins, dont R-55 et `todo\registre-dette.json`) enregistré puis publié.
+
+Leçons. (1) **Une correction du mandat a créé une régression** chez un produit (TF-1184 → TF-1187,
+un fichier relu du disque passait devant la synthèse écrite dans le tour) : elle a été fermée dans
+le mandat, par un cas de banc posé ROUGE avant le correctif et qui ne dépend pas des dates. (2) **Un
+vert lu trop vite** : le test Linux visé par TF-1020 était déjà vert trois jours avant le correctif ;
+la clôture tient sur une autre preuve, plus étroite (la police résolue est la police embarquée), et
+la restitution le dit. (3) **Le sas d'arrivée était hors de tout contrôle** : six lots y ont attendu
+deux jours sous un « boîte à jour » ; règle B9, lue par le relevé d'ouverture (TF-1198). (4) **Des
+heures écrites sans relever l'horloge**, quatre fois, toutes rattrapées avant l'affichage final.
+(5) **Du travail fini est resté quatre jours hors de l'histoire du dépôt** parce que chaque session
+enregistrait par chemins nommés sans que rien ne dise ce qui restait indexé derrière elle.
+
+## 20/09/2026 (soir) — « Traite tous les todos et retours » : 18 items décidés clos sur preuve rejouée, 8 constats en candidats, une régression d'agent trouvée au rejeu du pilot
+
+Mandat humain du 20/09/2026, périmètre choisi par l'humain à la question d'ouverture : les items
+décidés et en cours, pas les candidats. Boîte d'entrée vide de tout lot en attente (119 sidecars, tous
+ingérés). 36 items au départ (17 décidés, 19 en cours) : 20 traitables par l'IA, 16 en attente d'un
+geste humain ou d'un run chez un produit. 7 agents de campagne, un par dépôt et jamais deux en même
+temps dans un même dépôt, sur quatre vagues : forge-data (TF-1195, TF-1196), forge-audit (TF-1183),
+forge-agents (TF-1194, TF-1197, TF-1193, TF-1032), pilot (TF-1162, TF-1199, TF-0923, TF-1082, puis
+TF-1029, TF-1170, TF-1097, puis TF-1084, TF-0965, TF-1079), forge-agents et forge-tests (TF-1093).
+Restent ouverts : TF-0940 (deux choix de conception humains), TF-1094 (exige un run réel sur un second
+produit). Constats versés en candidats : TF-1244 à TF-1251 ; occurrences notées sur TF-1231 et TF-1224.
+Synthèse : `output\04-plans\`, campagne du 20260920.
+
+Leçons. (1) **Le rejeu du pilot a trouvé ce que l'agent n'avait pas vu** : un outil de recalage écrit
+par l'agent réécrivait les fichiers en fins de ligne Windows dans un dépôt déclaré en `eol=lf` ; `git
+status` restait muet, les blobs étaient justes, et seule la parité des copies embarquées du socle, jugée
+par le self-test d'un AUTRE skill, le disait. L'agent rejouait le self-test du skill qu'il modifiait,
+pas celui des skills consommateurs (TF-1224, nouvelle occurrence). (2) **L'inférence du pilot était
+fausse elle aussi** : « copies retouchées à la main » ; l'agent a établi la vraie cause par mesure
+(delta = lignes − 1). Une lecture transmise à un agent se marque comme inférence, et elle l'était.
+(3) **Quatre études citées dix fois par le registre n'existent nulle part** (TF-1248) : deux agents ont
+travaillé sur le texte des décisions. (4) **Des chiffres repris ont été contredits par la remesure**
+cinq fois (68 cas pour 84, 117 espacements pour 124, 43 couleurs pour 11, 6 classes sans contrôle pour
+31, 1430 tests pour 1379) : la consigne « remesurer plutôt que reprendre » du gabarit d'agent a payé.
+(5) **Le harnais du pilot est en défaut sur ce poste depuis avant la campagne** (2 recettes sur 130) :
+chaque agent l'a relevé à l'identique avant d'écrire, aucun n'en a ajouté.
+
+## 26 et 27/09/2026 — « 26a, 25a, 24b, 15b, 17a, 18a, 19a, 20a, 21b » : neuf décisions exécutées, trente items clos sur preuve, deux règles de restitution mesurées avant leur mise en service
+
+Neuf décisions reçues le 26/09 à 08:27 : accueillir le lot du sas (D-26), décider et traiter les sept
+candidatures du lot Google Ads d'un produit (D-25), construire le contrôle qu'il propose avant de créer
+sa classe (D-24 (b)), pseudonymiser trois noms de produits jusque dans l'archive du registre (D-15 (b)),
+trancher les résidus de la chaîne de traduction (D-17), brancher le juge de l'enclenchement (D-18),
+traiter les candidatures du 23/09 (D-19) et du 24/09 (D-21), rendre les index indépendants du poste
+(D-20). Sept agents de campagne, un par dépôt : six forges le 26/09 (agents, audit, conception, design,
+organization, tests), forge-agents de nouveau le 27/09 pour le journal de run et la parité des filtres.
+Au registre : 30 items clos en corrige avec leurs gains, TF-1360, TF-1364 et TF-1319 en cours, six
+candidatures neuves (TF-1373 à TF-1378). Publié : six forges, le canal et le pilot le 27/09 au matin,
+puis un second envoi en fin de tour ; skills propagés, consommateurs rejoués. Synthèse :
+`output\04-plans\`, mandat du 20260927.
+
+Leçons. (1) **La borne d'antériorité de la porte des noms a une conséquence de méthode** : un nom
+inscrit à la table un jour J rend bloquant tout arbre du jour J qui le porte encore. Deux
+enregistrements du matin même, antérieurs à la correction D-15, ont fait refuser l'envoi ; la
+correction a été réordonnée localement avant eux, contenu final identique octet pour octet. Corriger
+les occurrences AVANT tout enregistrement du jour d'inscription évite le détour. (2) **La mesure avant
+mise en service a changé le prédicat de S52** : « la plateforme est nommée » aurait accusé la moitié
+des 59 lignes qui en nomment une, toutes des décisions ou des commandes ; « une adresse d'écran, ou le
+nom hors code avec un marqueur d'écran » en accuse 17, toutes à raison. La reconnaissance d'une
+demande de procédure a de même perdu un mot, « descriptif », sur 130 messages réels. (3) **Le premier
+passage d'un contrôle neuf trouve un défaut ancien** : un skill à 1 048 caractères depuis le 08/09, une
+adresse nominative publiée depuis le 22/08, une copie vendorisée qui dérive depuis le 23/09. (4)
+**L'agent a trouvé ce que la consigne ne demandait pas** — un `seq` de payload qui écrasait le numéro
+calculé sous verrou, une parité qui confondait fins de ligne et contenu — et le rejeu du pilot a
+confirmé les deux avant de les corriger. (5) **Deux outils ont rendu un vert sans rien juger** : le
+contrôle d'avance sur un chemin mal échappé (« hors dépôt git : rien à juger », exit 0, TF-1373) et
+une porte des noms lancée sur un paquet inexistant (exit 2, lue à temps). Relire le verdict avant
+d'enchaîner a tenu les deux fois. (6) **Un compte écrit à la main a menti dans un message
+d'enregistrement du pilot** — « 25 clos, 3 en cours » pour 26 et 2 —, corrigé avant publication sur
+le fichier d'événements recompté : la classe de TF-1332 et de TF-1376 touche aussi le pilot.
+
+## 01/10/2026 (soir) — « Pour 42a » et une règle humaine : seules les décisions qui reviennent à l'humain lui sont posées (R-58)
+
+Question humaine sur la première revue hebdomadaire : « parmi les décisions proposées, il n'y a pas des décisions qui pourraient être prises automatiquement, par logique ? ». Réponse mesurée : 6 sur 7. 2 clôtures sur preuve (TF-1413, TF-1354), 2 corrections de forge que R-55 rendait déjà automatiques (TF-1348, TF-1416), 2 correctifs réversibles du pilot (TF-1414, TF-1464). La cause : le mode opératoire du registre appliqué à la lettre, « toute candidature passe par une décision humaine », sans le confronter à R-55 ni à la loi n° 5. La règle humaine qui suit devient R-58 : une décision n'est posée que si elle porte un motif `depense`, `publication`, `irreversible`, `doctrine`, `arbitrage` ou `produit` ; sinon la session l'exécute et la rend pour information. Porteur : le champ `ressort` de la fiche de décision, trié par `todo/revue-hebdo.mjs` (recette à double sens, rouge quand le tri est retiré). Rejouée sur les 7 fiches, la revue ne pose plus que D-42, au motif `doctrine`.
+
+D-42 (a), « 42a » : la classe `processus-du-commanditaire-reattribue` est créée, élargie aux étapes ajoutées (TF-1518, TF-1542) ; `gabarits/RESTITUTION.md` 2.33.0 écrit au bloc 3 qu'une voie se relit contre le processus du commanditaire étape par étape et acteur par acteur ; `oracles/hook-lexique.mjs` injecte la consigne sur le message humain qui décrit ou corrige un processus (3 messages réels reconnus, 3 phrases voisines épargnées). Les 4 correctifs sont faits sous recette rouge puis verte : `oracle-sca` lance npm sous Windows (419/419), le poseur de composants pose quand on l'appelle par une jonction, le relevé des livrables ignore le GIT_DIR d'un arbre lié, la règle de secret R-23 lit la constante partagée (124/124).
+
+**Ce que le tour a appris.** (1) Une règle écrite au mode opératoire peut contredire une règle de doctrine plus récente sans que rien ne le signale : R-55 (17/09) rendait automatiques des décisions que TODO-FORGE renvoyait encore à l'humain. (2) Un `self_test.py` sans `import os` aurait fait tomber le cas neuf, et toute la recette avec : le cas isolé, joué seul avant la recette complète, l'a montré en quelques secondes.

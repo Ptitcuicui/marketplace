@@ -1,0 +1,385 @@
+#!/usr/bin/env node
+/**
+ * recopier-heritage.test.mjs — le geste unique de remise à niveau (TF-0711), dans les deux sens.
+ *
+ * Ce que la recette verrouille : il copie TOUT ce que le contrat déclare en copie_conforme, il
+ * ne touche JAMAIS un mode personnalisé, il refuse un dépôt jamais instancié et le pilot
+ * lui-même, et `--essai` n'écrit rien. Joué par `oracles\self-tests.mjs` (I2).
+ */
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { spawnSync } from "node:child_process";
+
+const ICI = dirname(fileURLToPath(import.meta.url));
+const OUTIL = join(ICI, "recopier-heritage.mjs");
+const PILOT = join(ICI, "..");
+let pass = 0, fail = 0;
+const check = (nom, fn) => {
+  try { fn(); console.log(`  [PASS] ${nom}`); pass++; }
+  catch (e) { console.error(`  [FAIL] ${nom} — ${e.message}`); fail++; }
+};
+const att = (cond, message) => { if (!cond) throw new Error(message); };
+
+const T = mkdtempSync(join(tmpdir(), "recopier-"));
+const lancer = (cible, ...flags) => {
+  const r = spawnSync(process.execPath, [OUTIL, cible, ...flags], { encoding: "utf8" });
+  return { code: r.status, sortie: (r.stdout || "") + (r.stderr || "") };
+};
+
+try {
+  check("un produit instancié reçoit TOUTES les copies conformes du contrat, et R-47 les reconnaît", () => {
+    const produit = join(T, "produit");
+    mkdirSync(join(produit, "forge"), { recursive: true });
+    const r = lancer(produit);
+    att(r.code === 0, `exit ${r.code} : ${r.sortie.slice(0, 200)}`);
+    const contrat = JSON.parse(readFileSync(join(PILOT, "gabarits", "HERITAGE.json"), "utf8"));
+    for (const a of contrat.artefacts.filter((x) => x.mode === "copie_conforme")) {
+      const dst = join(produit, String(a.cible));
+      att(existsSync(dst), `${a.cible} non copié`);
+      const norm = (s) => String(s).split("\r\n").join("\n").trimEnd();
+      att(norm(readFileSync(dst, "utf8")) === norm(readFileSync(join(PILOT, a.source), "utf8")),
+        `${a.cible} copié mais différent de sa source`);
+    }
+  });
+
+  check("les modes PERSONNALISÉS ne sont jamais écrits — les écraser détruirait la personnalisation", () => {
+    const produit = join(T, "produit-perso");
+    mkdirSync(join(produit, "forge"), { recursive: true });
+    mkdirSync(join(produit, ".claude"), { recursive: true });
+    writeFileSync(join(produit, ".claude", "settings.json"), '{"perso":true}', "utf8");
+    writeFileSync(join(produit, "CLAUDE.md"), "# mes consignes\n", "utf8");
+    const r = lancer(produit);
+    att(r.code === 0, `exit ${r.code}`);
+    att(readFileSync(join(produit, ".claude", "settings.json"), "utf8") === '{"perso":true}',
+      "settings.json personnalisé a été écrasé");
+    att(readFileSync(join(produit, "CLAUDE.md"), "utf8") === "# mes consignes\n",
+      "CLAUDE.md personnalisé a été écrasé");
+    att(/LAISSÉ/.test(r.sortie), "les artefacts laissés au produit ne sont pas dits");
+  });
+
+  check("second passage : tout est CONFORME, rien n'est réécrit ni compté copié", () => {
+    const produit = join(T, "produit");
+    const r = lancer(produit);
+    att(r.code === 0, `exit ${r.code}`);
+    att(/^0 copié/m.test(r.sortie) || /\n0 copié/.test(r.sortie), `un second passage a recopié : ${r.sortie.slice(-200)}`);
+  });
+
+  check("--essai n'écrit RIEN", () => {
+    const produit = join(T, "produit-essai");
+    mkdirSync(join(produit, "forge"), { recursive: true });
+    const r = lancer(produit, "--essai");
+    att(r.code === 0, `exit ${r.code}`);
+    att(!existsSync(join(produit, "forge", "RESTITUTION.md")), "l'essai a écrit un artefact");
+    att(/ESSAI — rien écrit/.test(r.sortie), "l'essai ne se déclare pas");
+  });
+
+  check("garde — un dépôt SANS forge\\ est refusé : l'instanciation est un run, pas une recopie", () => {
+    const nu = join(T, "depot-nu");
+    mkdirSync(nu, { recursive: true });
+    const r = lancer(nu);
+    att(r.code === 2, `exit ${r.code} attendu 2`);
+    att(/jamais été instancié/.test(r.sortie), "le refus ne dit pas sa cause");
+  });
+
+  check("garde — le pilot lui-même est refusé", () => {
+    const r = lancer(PILOT);
+    att(r.code === 2, `exit ${r.code} attendu 2 — le pilot s'est recopié sur lui-même`);
+  });
+
+  // ── TF-0850 : un artefact PERSONNALISABLE **ABSENT** n'a rien à protéger ───────────────────
+  // Mesure du 06/09, identique chez TROIS produits : le geste unique laissait QUATRE artefacts
+  // absents et R-47 restait rouge — « remise à niveau EN UN GESTE » promettait la moitié du geste.
+  check("TF-0850 — un artefact personnalisable ABSENT est INSTANCIÉ depuis son gabarit, et R-47 cesse de le compter absent", () => {
+    const produit = join(T, "produit-absents");
+    mkdirSync(join(produit, "forge"), { recursive: true });
+    const r = lancer(produit);
+    att(r.code === 0, `exit ${r.code}`);
+    att(existsSync(join(produit, "CLAUDE.md")), "CLAUDE.md, mode personnalisé et ABSENT, n'a pas été instancié");
+    att(existsSync(join(produit, ".gitignore")), ".gitignore, mode personnalisé et ABSENT, n'a pas été instancié");
+    att(/INSTANCIÉ/.test(r.sortie), "l'instanciation n'est pas dite");
+  });
+
+  check("TF-0850 borne — un artefact personnalisable PRÉSENT n'est JAMAIS écrasé : c'est la garde qui donne sa valeur au script", () => {
+    const produit = join(T, "produit-absents");
+    writeFileSync(join(produit, "CLAUDE.md"), "# mes consignes a moi\n", "utf8");
+    const r = lancer(produit);
+    att(r.code === 0, `exit ${r.code}`);
+    att(readFileSync(join(produit, "CLAUDE.md"), "utf8") === "# mes consignes a moi\n",
+      "un fichier personnalisé PRÉSENT a été écrasé — la personnalisation est perdue sans recours");
+  });
+
+  check("TF-0850 — un `.gitignore` PRÉSENT auquel il manque des motifs est COMPLÉTÉ en fin de fichier, et l'ORDRE est signalé", () => {
+    const produit = join(T, "produit-motifs");
+    mkdirSync(join(produit, "forge"), { recursive: true });
+    writeFileSync(join(produit, ".gitignore"), "__pycache__/\n!forge/**\n", "utf8");
+    const r = lancer(produit);
+    const apres = readFileSync(join(produit, ".gitignore"), "utf8");
+    att(/^__pycache__\/$/m.test(apres), "le contenu d'origine a été perdu — les motifs doivent s'AJOUTER, pas écraser");
+    att(/node_modules\//.test(apres), "les motifs manquants du socle n'ont pas été ajoutés");
+    att(/COMPLÉTÉ/.test(r.sortie), "la complétion n'est pas dite");
+    att(/l'ORDRE décide du résultat/.test(r.sortie),
+      "l'avertissement sur l'ordre manque — chez un produit, insérer une exclusion APRÈS `!forge/**` a re-ignoré onze fichiers");
+  });
+
+  // ── TF-0852 (b) : la garde git, qui vivait dans la PROSE d'un mandat humain ────────────────
+  check("TF-0852 — une cible MODIFIÉE et non commise fait basculer le geste en essai, et demande --forcer", () => {
+    const produit = join(T, "produit-git");
+    mkdirSync(join(produit, "forge"), { recursive: true });
+    const g = (...a) => spawnSync("git", ["-C", produit, "-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false", ...a], { encoding: "utf8" });
+    g("init", "-q", "-b", "main");
+    lancer(produit);                                   // premier passage : tout est écrit
+    g("add", "-A"); g("commit", "-q", "-m", "socle");
+    writeFileSync(join(produit, "forge", "travaux", "TRAVAUX-PILOT.md"), "# travail local non commis\n", "utf8");
+    const r = lancer(produit);
+    att(r.code === 0, `exit ${r.code}`);
+    att(/\[GARDE\]/.test(r.sortie), "aucune garde n'a joué : le travail local a été écrasé en silence");
+    att(/--forcer/.test(r.sortie), "la garde ne dit pas comment passer outre");
+    att(readFileSync(join(produit, "forge", "travaux", "TRAVAUX-PILOT.md"), "utf8") === "# travail local non commis\n",
+      "le fichier modifié a été écrasé malgré la garde");
+  });
+
+  check("TF-0852 borne — `--forcer` écrase, et c'est le SEUL moyen : le cas nominal n'est pas ralenti", () => {
+    const produit = join(T, "produit-git");
+    const r = lancer(produit, "--forcer");
+    att(r.code === 0, `exit ${r.code}`);
+    att(readFileSync(join(produit, "forge", "travaux", "TRAVAUX-PILOT.md"), "utf8") !== "# travail local non commis\n",
+      "--forcer n'écrase pas — la porte de sortie n'existe pas");
+  });
+
+  // ── TF-1393 (26/09/2026) : le risque ne se calcule que sur ce que le geste écrit réellement ──
+  // Mesuré chez Produit-68 : un CLAUDE.md en mode `presence_et_motif`, modifié et non commis,
+  // faisait basculer le geste entier en essai — alors que ce mode n'écrase JAMAIS un fichier
+  // présent (`laisses`, ligne [LAISSÉ]). Les deux cas ne diffèrent que par le MODE de la cible
+  // modifiée : personnalisé (rien à perdre, le geste ne l'écrit pas) ou copie_conforme (le geste
+  // l'écraserait, et c'est ce que la garde protège).
+  check("TF-1393 — un CLAUDE.md (presence_et_motif) MODIFIÉ et non commis ne fait PLUS basculer le geste en essai", () => {
+    const produit = join(T, "produit-presence-motif");
+    mkdirSync(join(produit, "forge"), { recursive: true });
+    const g = (...a) => spawnSync("git", ["-C", produit, "-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false", ...a], { encoding: "utf8" });
+    g("init", "-q", "-b", "main");
+    lancer(produit);
+    g("add", "-A"); g("commit", "-q", "-m", "socle");
+    writeFileSync(join(produit, "CLAUDE.md"), "# consignes du produit, non commises\n", "utf8");
+    const r = lancer(produit);
+    att(r.code === 0, `exit ${r.code} : ${r.sortie.slice(0, 200)}`);
+    att(!/\[GARDE\]/.test(r.sortie),
+      `la garde bloque encore sur un mode qu'elle n'écrit jamais : ${r.sortie.slice(0, 300)}`);
+    att(readFileSync(join(produit, "CLAUDE.md"), "utf8") === "# consignes du produit, non commises\n",
+      "CLAUDE.md a été touché — ce mode ne devait rien écrire");
+  });
+
+  check("TF-1393 borne — une cible copie_conforme MODIFIÉE et non commise reste protégée : le geste bascule toujours en essai", () => {
+    const produit = join(T, "produit-presence-motif");
+    writeFileSync(join(produit, "forge", "travaux", "TRAVAUX-PILOT.md"), "# travail local non commis\n", "utf8");
+    const r = lancer(produit);
+    att(/\[GARDE\]/.test(r.sortie), "une cible copie_conforme réellement à risque n'est plus protégée");
+    att(readFileSync(join(produit, "forge", "travaux", "TRAVAUX-PILOT.md"), "utf8") === "# travail local non commis\n",
+      "le fichier copie_conforme modifié a été écrasé malgré la garde");
+  });
+
+  // ── TF-1171 : la garde protégeait la sortie du pilot contre le pilot ───────────────────────
+  // Le fait du 16/09 : R-47 FAIL prescrit ce script « EN UN GESTE » ; joué, il rend GARDE, exit 2,
+  // à cause de trois cibles que le hook d'ouverture de la MÊME session venait de recopier depuis le
+  // pilot. Les deux cas ci-dessous ne diffèrent que par le CONTENU de la cible modifiée : identique
+  // à la source du pilot, ou porteur d'un travail local.
+  check("TF-1171 — une cible modifiée-non-commise IDENTIQUE à la source du pilot ne bloque plus le geste", () => {
+    const produit = join(T, "produit-heritage-identique");
+    mkdirSync(join(produit, "forge"), { recursive: true });
+    const g = (...a) => spawnSync("git", ["-C", produit, "-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false", ...a], { encoding: "utf8" });
+    g("init", "-q", "-b", "main");
+    lancer(produit);
+    g("add", "-A"); g("commit", "-q", "-m", "socle");
+    // Le geste du hook d'ouverture, reproduit : la cible est remise à la source du pilot et laissée
+    // NON COMMISE. Le fichier est bien « modifié » pour git — son contenu ne porte aucun travail.
+    const cible = join(produit, "forge", "RESTITUTION.md");
+    writeFileSync(cible, "# vieille version héritée\n", "utf8");
+    g("add", "-A"); g("commit", "-q", "-m", "version perimee");
+    writeFileSync(cible, readFileSync(join(PILOT, "gabarits", "RESTITUTION.md"), "utf8"), "utf8");
+    const r = lancer(produit);
+    att(r.code === 0, `exit ${r.code} : ${r.sortie.slice(0, 200)}`);
+    att(!/\[GARDE\]/.test(r.sortie),
+      `la garde bloque encore sur une cible dont le contenu EST la source du pilot — le script interdit son propre remède : ${r.sortie.slice(0, 300)}`);
+  });
+
+  check("TF-1171 borne — une VRAIE modification locale fait toujours refuser, et c'est ce que la garde existe pour protéger", () => {
+    const produit = join(T, "produit-heritage-identique");
+    writeFileSync(join(produit, "forge", "RESTITUTION.md"), "# ma version a moi, non commise\n", "utf8");
+    const r = lancer(produit);
+    att(/\[GARDE\]/.test(r.sortie), "une cible réellement modifiée n'est plus protégée — le travail local s'écrase en silence");
+    att(/--forcer/.test(r.sortie), "la garde ne dit plus comment passer outre");
+    att(readFileSync(join(produit, "forge", "RESTITUTION.md"), "utf8") === "# ma version a moi, non commise\n",
+      "le fichier modifié a été écrasé malgré la garde");
+  });
+
+  // ── TF-1202 : une cible alternative déclarée fait SAUTER l'artefact racine ─────────────────
+  // Un produit qui sert `robots.txt` et `llms.txt` depuis `site/` (généré par son propre build)
+  // recevait quand même la racine au placeholder du gabarit : deux fichiers du même nom, un seul
+  // servi. Le contrat déclare `cible_alternative` ; si elle existe déjà, la racine n'est pas créée.
+  check("TF-1202 — robots.txt racine n'est pas instancié quand site/robots.txt (cible_alternative) existe déjà", () => {
+    const produit = join(T, "produit-site");
+    mkdirSync(join(produit, "forge"), { recursive: true });
+    mkdirSync(join(produit, "site"), { recursive: true });
+    writeFileSync(join(produit, "site", "robots.txt"), "User-agent: *\nAllow: /\n", "utf8");
+    writeFileSync(join(produit, "site", "llms.txt"), "# llms du produit\n", "utf8");
+    const r = lancer(produit);
+    att(r.code === 0, `exit ${r.code} : ${r.sortie.slice(0, 200)}`);
+    att(!existsSync(join(produit, "robots.txt")),
+      "robots.txt a été instancié à la racine alors que site/robots.txt (cible alternative) existait déjà");
+    att(!existsSync(join(produit, "llms.txt")),
+      "llms.txt a été instancié à la racine alors que site/llms.txt (cible alternative) existait déjà");
+    att(/\[SAUTÉ\s*\] robots\.txt/.test(r.sortie), "le saut n'est pas dit pour robots.txt");
+    att(/\[SAUTÉ\s*\] llms\.txt/.test(r.sortie), "le saut n'est pas dit pour llms.txt");
+  });
+
+  check("TF-1202 borne — sans cible alternative sur le disque, robots.txt est instancié à la racine comme avant", () => {
+    const produit = join(T, "produit-sans-site");
+    mkdirSync(join(produit, "forge"), { recursive: true });
+    const r = lancer(produit);
+    att(r.code === 0, `exit ${r.code}`);
+    att(existsSync(join(produit, "robots.txt")), "robots.txt n'a pas été instancié alors qu'aucune cible alternative n'existe");
+    att(existsSync(join(produit, "llms.txt")), "llms.txt n'a pas été instancié alors qu'aucune cible alternative n'existe");
+  });
+
+  // ── TF-0851 (2) : le geste rend compte de ce qu'il laisse au dépôt ─────────────────────────
+  // ── TF-1459 : un antislash suivi de « r » écrit dans le gabarit, devenu un retour à la ligne ──
+  // le 18/08 (commit 5ab0cd4) — le chemin de `resoudre-pilot.mjs` arrivait coupé en deux lignes
+  // chez chaque produit qui recopiait CLAUDE-PRODUIT.md en CLAUDE.md.
+  check("TF-1459 — le chemin de resoudre-pilot.mjs n'arrive pas coupé dans le CLAUDE.md recopié", () => {
+    const produit = join(T, "produit-chemin-pilot");
+    mkdirSync(join(produit, "forge"), { recursive: true });
+    const r = lancer(produit);
+    att(r.code === 0, `exit ${r.code}`);
+    const claude = readFileSync(join(produit, "CLAUDE.md"), "utf8");
+    att(/oracles\\resoudre-pilot\.mjs/.test(claude),
+      "le chemin `oracles\\resoudre-pilot.mjs` n'apparaît pas intact dans CLAUDE.md — il est coupé par un retour à la ligne");
+  });
+
+  // ── TF-1563 : la cascade de l'intention et la fiche de conception amont descendent au produit ─
+  // Avant le 02/10/2026, gabarits\HERITAGE.json ne portait ni INTENTION.md ni FICHE-CONCEPTION.md
+  // (0 occurrence, releve du 01/10) : aucun produit ne les recevait, et un produit a reproduit la
+  // meme reprise de forme sur 4 pages sans jamais avoir la fiche sous la main (TF-1563, RS-25).
+  check("TF-1563 — forge/INTENTION.md et forge/documents/FICHE-CONCEPTION.md sont desormais herites en copie conforme", () => {
+    const produit = join(T, "produit-intention-fiche");
+    mkdirSync(join(produit, "forge"), { recursive: true });
+    const r = lancer(produit);
+    att(r.code === 0, `exit ${r.code}`);
+    att(existsSync(join(produit, "forge", "INTENTION.md")), "forge/INTENTION.md n'a pas ete copie — la cascade de l'intention ne descend toujours pas au produit");
+    att(existsSync(join(produit, "forge", "documents", "FICHE-CONCEPTION.md")), "forge/documents/FICHE-CONCEPTION.md n'a pas ete copie — la fiche de conception amont ne descend toujours pas au produit");
+    const normE = (s) => String(s).split("\r\n").join("\n").trimEnd();
+    att(normE(readFileSync(join(produit, "forge", "INTENTION.md"), "utf8")) === normE(readFileSync(join(PILOT, "references", "INTENTION.md"), "utf8")),
+      "forge/INTENTION.md copie mais different de sa source");
+    att(normE(readFileSync(join(produit, "forge", "documents", "FICHE-CONCEPTION.md"), "utf8")) === normE(readFileSync(join(PILOT, "gabarits", "documents", "FICHE-CONCEPTION.md"), "utf8")),
+      "forge/documents/FICHE-CONCEPTION.md copie mais different de sa source");
+  });
+
+  // ── T4 (TF-1949, 26/10/2026, D-69 (a) et D-79 (c)) : L'HÉRITAGE RÉDUIT ─────────────────────────────────────────────────────
+  // Le gabarit hérité par chaque produit pesait 27 762 octets en fins de ligne LF (28 040 sur un disque en CRLF), 4,5 fois le plafond
+  // du fichier hérité que la règle anti-inflation fixe à 6 Ko (diagnostic 20261026a, section f) ; la mesure se fait en LF, comme N1. Réduit, il porte la règle « Je mobilise », la carte et le renvoi au détail, sans
+  // perdre ce que R-11, R-43, R-47 et R-11 bis exigent ni les règles de sécurité, de secrets et de protection des noms ; le texte
+  // d'origine vit, mot pour mot, dans `references/CLAUDE-PRODUIT-DETAIL.md`.
+  check("TF-1949 — le CLAUDE.md recopié depuis le gabarit réduit tient en 6 144 octets et garde ses motifs exigés et ses règles de sécurité", () => {
+    const produit = join(T, "produit-heritage-reduit");
+    mkdirSync(join(produit, "forge"), { recursive: true });
+    const r = lancer(produit);
+    att(r.code === 0, `exit ${r.code}`);
+    const claude = readFileSync(join(produit, "CLAUDE.md"), "utf8").split("\r\n").join("\n");
+    const octets = Buffer.byteLength(claude, "utf8");
+    att(octets <= 6144, `CLAUDE.md hérité : ${octets} octets pour un plafond de 6 144`);
+    const absents = ["## Routage forge", "forge_tests", "init-audit-workspace", "run de version", "MEP", "R-43", "R-64", "## Référentiels",
+      "exigences", "anomalies", "contrat_interface", "Je mobilise", "CARTE-FORGES.json", "mobiliser.mjs", "CLAUDE-PRODUIT-DETAIL.md",
+      "Gestes destructifs distants", "gestes-distants --poser", ".env", "R-38", "R-62", "_arrivee", "visibility", "TF-1046", "<commande>",
+      "<autre type de ce produit>", "oracles\\resoudre-pilot.mjs"].filter((m) => !claude.includes(m));
+    att(!absents.length, `le CLAUDE.md hérité ne porte plus : ${absents.join(", ")}`);
+  });
+
+  // TF-2666 (16/11/2026) : le CLAUDE.md d'un produit nommait la voie de RANGEMENT d'un secret (ranger-secret.mjs), pas celle de LECTURE des
+  // clés d'un `.env` ; le 16/11, une session a listé les clés par grep, le hook fichiers-env l'a refusé (D-106 (b)) et lui a indiqué le script.
+  // Le script reste au pilot (aucune copie chez le produit, héritage 1.64.0) : la phrase le nomme par `<pilot>\scripts\env-masque.mjs`.
+  const nommeLaVoieMasquee = (texte) => /ranger-secret\.mjs[^)]*env-masque\.mjs <fichier> --cles/.test(texte);
+  check("TF-2666 — le CLAUDE.md recopié chez un produit nomme, à côté de ranger-secret.mjs, la voie masquée qui liste les clés d'un `.env`", () => {
+    const produit = join(T, "produit-voie-masquee");
+    mkdirSync(join(produit, "forge"), { recursive: true });
+    const r = lancer(produit);
+    att(r.code === 0, `exit ${r.code}`);
+    const claude = readFileSync(join(produit, "CLAUDE.md"), "utf8");
+    att(nommeLaVoieMasquee(claude), "le CLAUDE.md recopié ne nomme pas `node <pilot>\\scripts\\env-masque.mjs <fichier> --cles` à côté de ranger-secret.mjs");
+    att(existsSync(join(PILOT, "scripts", "env-masque.mjs")), "le script nommé n'existe pas au pilot : la phrase pointerait dans le vide");
+  });
+  check("TF-2666 rouge — le prédicat distingue : le même texte sans la phrase est refusé", () => {
+    const sans = readFileSync(join(PILOT, "gabarits", "CLAUDE-PRODUIT.md"), "utf8").replace(/ ; clés d'un `\.env` : `node <pilot>[^`]*`/, "");
+    att(sans.length > 0 && !nommeLaVoieMasquee(sans), "le prédicat accepte un texte sans la phrase, ou la phrase n'a pas été retirée du témoin");
+  });
+
+  // TF-2722 (RP-50, 15/11/2026) : le registre des sessions d'un produit (D-218 (b)) était construit, câblé et documenté au pilot, et le CLAUDE.md
+  // d'un produit neuf n'en disait rien : la session qui y arrive ne savait ni où voir qui travaille ni comment réserver un indice de livrable.
+  const nommeLesSessions = (texte) => /Sessions multiples \(D-218 \(b\)\)[\s\S]{0,600}sessions-actives\.mjs --produit[\s\S]{0,300}allouer-indice\.mjs --reserver[\s\S]{0,200}SESSIONS-MULTIPLES\.md/.test(texte);
+  check("TF-2722 — le CLAUDE.md recopié chez un produit neuf nomme le registre des sessions, la commande qui le lit et la réservation d'indice", () => {
+    const produit = join(T, "produit-sessions");
+    mkdirSync(join(produit, "forge"), { recursive: true });
+    const r = lancer(produit);
+    att(r.code === 0, `exit ${r.code}`);
+    const claude = readFileSync(join(produit, "CLAUDE.md"), "utf8");
+    att(nommeLesSessions(claude), "le CLAUDE.md recopié ne porte pas la section « Sessions multiples (D-218 (b)) » et ses trois renvois");
+    for (const f of ["scripts/sessions-actives.mjs", "scripts/allouer-indice.mjs", "references/SESSIONS-MULTIPLES.md"]) {
+      att(existsSync(join(PILOT, f)), `${f} n'existe pas au pilot : la phrase pointerait dans le vide`);
+    }
+  });
+  check("TF-2722 rouge — le prédicat distingue : le même gabarit sans la section est refusé, et le détail du pilot porte la section en entier", () => {
+    const gabarit = readFileSync(join(PILOT, "gabarits", "CLAUDE-PRODUIT.md"), "utf8");
+    const sans = gabarit.replace(/\*\*Sessions multiples \(D-218 \(b\)\)\.\*\*[\s\S]*?SESSIONS-MULTIPLES\.md` du pilot\./, "");
+    att(sans.length > 0 && sans.length < gabarit.length && !nommeLesSessions(sans), "le prédicat accepte un texte sans la section, ou la section n'a pas été retirée du témoin");
+    const detail = readFileSync(join(PILOT, "references", "CLAUDE-PRODUIT-DETAIL.md"), "utf8").split("\r\n").join("\n");
+    att(/Sessions multiples d'un même produit \(D-218 \(b\)/.test(detail) && detail.includes("forge\\sessions.jsonl"), "le détail du pilot ne porte pas la section sessions");
+  });
+
+  check("TF-1949 — sans perte : le détail du pilot garde, mot pour mot, chaque section sortie du gabarit", () => {
+    const detail = join(PILOT, "references", "CLAUDE-PRODUIT-DETAIL.md");
+    att(existsSync(detail), "references/CLAUDE-PRODUIT-DETAIL.md absent : le texte sorti du gabarit n'a plus de lieu");
+    const texte = readFileSync(detail, "utf8").split("\r\n").join("\n");
+    const absents = ["| Intention | Le chemin | Jamais |", "Remontée automatique vers le pilot", "Portée d'un retour (T1, TF-1946",
+      "Remettre sans nom réel (TF-1233", "Noms réels dans le dépôt du produit (règle humaine du 01/10/2026, TF-1676)", "Règles de socle applicables", "oracle-polices-embarquees",
+      "TF-1048", "TF-1424", "TF-1503", "R-62", "Lexique d'invocation (RV-6", "Pourquoi cette section existe", "process.exit(c.length?2:1)",
+      "Reprise sur un autre poste (R-64)"].filter((m) => !texte.includes(m));
+    att(!absents.length, `le détail ne porte pas : ${absents.join(", ")}`);
+  });
+
+  check("TF-0851 — le geste imprime la ligne `git add` des fichiers qu'il vient d'écrire", () => {
+    const produit = join(T, "produit-add");
+    mkdirSync(join(produit, "forge"), { recursive: true });
+    const r = lancer(produit);
+    att(/git add /.test(r.sortie), "le geste n'a pas proposé le commit de ce qu'il a écrit");
+    att(/n'est TENUE qu'une fois commise/i.test(r.sortie),
+      "le geste ne dit pas qu'une recopie hors de l'histoire ne tient rien — un clone neuf repartirait sans elle");
+  });
+
+  // ---- TF-2697 : le socle fixe les fins de ligne. `.gitattributes` est un artefact en mode `presence_et_motifs` : absent il naît du gabarit, présent mais
+  // sans la ligne du socle il se COMPLÈTE en fin de fichier (ses lignes propres gardées), présent avec la ligne il est LAISSÉ.
+  check("TF-2697 — `.gitattributes` absent : INSTANCIÉ depuis le gabarit, avec la ligne du socle `* text=auto eol=lf`", () => {
+    const produit = join(T, "produit-attr-absent");
+    mkdirSync(join(produit, "forge"), { recursive: true });
+    const r = lancer(produit);
+    att(r.code === 0, `exit ${r.code}`);
+    att(/\[INSTANCIÉ\] \.gitattributes/.test(r.sortie), "l'artefact absent n'est pas instancié : " + r.sortie.slice(0, 200));
+    const texte = readFileSync(join(produit, ".gitattributes"), "utf8");
+    att(texte.split(/\r?\n/).includes("* text=auto eol=lf"), "la ligne du socle manque");
+    att(texte.split(/\r?\n/).includes("*.png binary"), "les binaires du gabarit manquent");
+  });
+  check("TF-2697 — `.gitattributes` présent sans la ligne du socle : COMPLÉTÉ en fin de fichier, les lignes du produit gardées ; deuxième passage : LAISSÉ", () => {
+    const produit = join(T, "produit-attr-incomplet");
+    mkdirSync(join(produit, "forge"), { recursive: true });
+    writeFileSync(join(produit, ".gitattributes"), "*.svg -text\n", "utf8");
+    const r = lancer(produit);
+    att(r.code === 0 && /\[COMPLÉTÉ\] \.gitattributes/.test(r.sortie), "l'artefact incomplet n'est pas complété : " + r.sortie.slice(0, 200));
+    const lignes = readFileSync(join(produit, ".gitattributes"), "utf8").split(/\r?\n/);
+    att(lignes[0] === "*.svg -text" && lignes.includes("* text=auto eol=lf"), "les lignes du produit ou celle du socle manquent : " + lignes.join(" | "));
+    const encore = lancer(produit);
+    att(/\[LAISSÉ \] \.gitattributes/.test(encore.sortie), "le second passage réécrit l'artefact : " + encore.sortie.slice(0, 200));
+  });
+} finally {
+  try { rmSync(T, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); } catch { /* verrou toléré */ }
+}
+
+console.log(`\nrecopier-heritage (TF-0711) : ${pass} PASS, ${fail} FAIL`);
+process.exit(fail ? 1 : 0);

@@ -1,0 +1,118 @@
+#!/usr/bin/env node
+/**
+ * lib-parc.mjs — LES DÉPÔTS DÉCLARÉS DU PARC, en une seule source (TF-1327, D-19 (a) du 26/09/2026).
+ *
+ * Ces déclarations vivaient dans `bootstrap.mjs`, sans être partagées : les balayages du parc
+ * (`oracle-empreintes`, `oracle-pieges-regex`, `hook-produits-intacts`…) décidaient donc qu'un
+ * dossier est une forge à la FORME de son nom (`/^factory/`). Le 22/09, le produit de marque
+ * `factory-marketing`, gardé sur ce poste par D-11 (a), y est entré : `oracle-empreintes` a compté
+ * son script comme un site de scellement NON DÉCLARÉ d'une forge, et la recette complète du pilot
+ * est restée rouge pour un fichier qu'aucune forge ne porte. Les produits DÉCLARÉS de l'écosystème
+ * sortent désormais de tout balayage de forges : `estDepotEcosysteme` est cette lecture, commune.
+ *
+ * Déplacé tel quel de `bootstrap.mjs` le 27/09/2026 (commentaires compris) ; `bootstrap.mjs` l'importe.
+ */
+
+// `depot` (25/11/2026) : le nom du dépôt DISTANT, sous SOURCE, quand il diffère du dossier local `nom`.
+// Le dossier local garde son nom (le code du parc le cite partout) ; seule l'adresse de clone change.
+// Lire l'un ou l'autre par `depotDe(...)`, jamais `nom` pour fabriquer une adresse.
+export const depotDe = (x) => (x && (x.depot || x.nom)) || x;
+
+export const FORGES = [
+  { nom: "factory-forge-conception", preuve: "oracles/self-test.mjs", depot: "forge-conception" },
+  { nom: "factory-forge-design", preuve: "oracles/run-oracles-design.mjs", depot: "design" },
+  // forge-development : ex `factory-saas-forge`, renommée sur GitHub — l'alias manquait, et c'est
+  // le SEUL renommage de forge qui n'était pas dans cette table. GitHub redirige l'ancienne URL,
+  // donc le clone resté dessus `fetch` sans broncher : rien ne le distinguait d'un produit
+  // autonome, et il était même exclu nommément du balayage §4 bis sous ce motif faux (retiré le
+  // 27/08). Mesure : `git ls-remote` sur les DEUX URL rend le même `refs/heads/main` (015a754) ;
+  // le clone dormait à la racine du parc depuis le 09/07, jamais déclaré par aucun contrôle.
+  { nom: "factory-forge-development", preuve: "factory-forge-development/pyproject.toml", alias: ["factory-saas-forge"], depot: "development" },
+  { nom: "factory-forge-tests", preuve: "forge_tests/__main__.py", depot: "tests" },
+  { nom: "factory-forge-agents", preuve: ".claude/skills/forge-agents/SKILL.md", depot: "agents" },
+  // forge-seo-geo : ex forge-seo, renommée le 20/08 (TF-0390) — le volet GEO entre au nom.
+  { nom: "factory-forge-seo-geo", preuve: "scripts/validate.py", alias: ["factory-forge-seo"], depot: "seo-geo" },
+  { nom: "factory-forge-organization", preuve: "output/02-composants/composant-filtres-tableau/oracle-filtres-tableau.mjs", depot: "organization" },
+  // forge-audit : le PRODUIT AuditCore (public, marque blanche — ex `factory-forge-auditcore`,
+  // renommé le 11/08). L'espace d'engagement client (`factory-forge-audit_<engagement>`, privé)
+  // est hors bootstrap — voir la convention de suffixe plus bas.
+  { nom: "factory-forge-audit", preuve: "core/invariants.json", alias: ["factory-forge-auditcore"], depot: "audit" },
+  // forge-ops : exploitation — outille l'étape MEP du pilot (TF-0040).
+  { nom: "factory-forge-ops", preuve: "oracles/self-test.mjs", depot: "ops" },
+  // forge-data : discipline de la donnée (TF-0083).
+  { nom: "factory-forge-data", preuve: "oracles/self-test.mjs", depot: "data" },
+  // forge-agents-security : sécurité agentique (TF-0111) — le juge ne vit pas chez le jugé.
+  { nom: "factory-forge-agents-security", preuve: "oracles/self-test.mjs", depot: "agents-security" },
+  // forge-observability : observabilité continue entre les runs (TF-0112).
+  { nom: "factory-forge-observability", preuve: "oracles/self-test.mjs", depot: "observability" },
+  // forge-websec : sécurité du produit web livré (TF-0123).
+  { nom: "factory-forge-websec", preuve: "oracles/self-test.mjs", depot: "websec" },
+  // factory-queue : la FILE DE TICKETS versionnée en git que des humains et des agents lisent et
+  // écrivent — entrée dans cette liste le 23/08/2026 sur décision humaine (TF-0535). Elle vivait
+  // dans le parc depuis un moment, avec son propre dépôt distant, et AUCUN contrôle ne la nommait :
+  // ni forge suivie, ni second clone, ni mise de côté, elle tombait entre toutes les branches du
+  // balayage. Y entrer, c'est gagner la fraîcheur, la preuve de point d'entrée et la ligne au
+  // ledger ; c'est aussi accepter qu'un retard fasse échouer l'ouverture de poste jusqu'au --pull.
+  // La preuve est le CONTRAT du protocole, pas un fichier de commodité : `protocole/` se veut
+  // autoportant et clonable seul, donc son README est ce qui doit exister pour que la file serve.
+  // `prive` (13/10/2026) : dépôt PRIVÉ du propriétaire du parc. Un poste dont le compte n'y a pas
+  // accès (autre développeur, 404 « Repository not found ») n'est pas un poste en défaut : le clone
+  // refusé et la preuve absente s'y disent en [avert], le reste du parc juge le poste.
+  { nom: "factory-queue", preuve: "protocole/README.md", prive: true, depot: "queue" },
+];
+
+// LES PRODUITS DE L'ÉCOSYSTÈME QUI PORTENT SON NOM (décision humaine D-5 (a) du 17/09/2026). Un dépôt
+// nommé `factory-…` n'est pas forcément une forge : `factory-marketing` est un PRODUIT — il porte
+// `forge\`, `PROMPT-PRODUIT.md`, remet des lots de retours — publié sous le compte de l'écosystème.
+// Il tombait dans la question « hors liste » du balayage, et la table des pseudonymes le tenait pour
+// un nom à cacher : la porte de publication a refusé le pilot sur 40 occurrences dans 11 fichiers.
+// Il n'entre PAS dans `FORGES` : un produit ne se clone ni ne se tire à l'ouverture du poste, le pilot
+// n'y intervient que sur run demandé. Il se DÉCLARE ici, et le balayage cesse de poser la question.
+// `factory-prospection` y entre le 01/10/2026 (D-36 (a), réponse « 36a ») : un dépôt de l'écosystème
+// sans dépôt distant, dont 2 lots de retours attendaient au sas. Règle humaine du même jour, mot pour
+// mot : « Les dépôts privés peuvent conserver des données de type nom. Ces 2 projets sont privés, donc
+// pas de problème. » Les noms de cette liste se citent donc en clair, pilot public compris, et
+// l'écrivain de la table des pseudonymes ne les y inscrit jamais (TF-1505, `todo/anonymiser-entrant.mjs`).
+// `factory-site` et `forge-site` y entrent le 14/11/2026 (D-214 (a), réponse « 214a », mot pour mot :
+// « Site web portant la présentation complète de la Factory et ses forges ») : les deux graphies d'un même dépôt,
+// le préfixe de ses lots et son dossier local, déjà citées en clair dans 21 fichiers suivis du pilot (TF-2556).
+// `factory.example` y entre le 16/11/2026 en application de la même décision : c'est le nom de domaine du site et
+// le vrai nom de son dossier local (R-47 le localise en C:\dev\factory.example). Absente de cette liste, cette
+// troisième graphie a été inscrite à la table des pseudonymes le 16/11 à 13:46, et la porte de publication a refusé
+// le pilot sur 3 fichiers déjà publiés.
+export const PRODUITS_DE_L_ECOSYSTEME = new Set(["factory-marketing", "factory-prospection", "factory-site", "forge-site", "factory.example"]);
+
+// LE PILOT ET SES NOMS D'HIER (TF-0525, mesuré le 25/08/2026). Le pilot n'est pas une forge et ne
+// figure pas dans `FORGES` : son nom s'écrivait donc en littéral à chaque endroit qui en avait
+// besoin, et ses anciens noms nulle part. Une source unique ici, parce qu'un troisième renommage
+// est déjà arrivé deux fois.
+export const PILOT = "factory-pilot";
+//: Nom du dépôt DISTANT du pilot, quand il diffère de son dossier local (voir `depot` plus haut).
+export const PILOT_DEPOT = "factory";
+//: Les noms de dépôt sous lesquels le pilot a vécu, du plus récent au plus ancien. GitHub redirige
+//: les anciens noms, ce qui rend un vieux clone indiscernable d'un dépôt vivant à l'usage : il
+//: `fetch` sans broncher. Seule cette table permet de le rapprocher du pilot.
+export const ALIAS_PILOT = ["factory-forge-pilot", "factory-forge-steering"];
+// LE CANAL CONFIDENTIEL (D-28 (a), 07/09/2026). Un dépôt PRIVÉ, cloné sous un nom de dossier qui ne
+// commence pas par « factory » pour qu'aucun balayage ne le prenne pour une forge : il porte les deux
+// tables de pseudonymisation (clients, produits) et les entrants confidentiels des produits et des
+// forges. Tiré à chaque ouverture comme les forges, il est un DÉFAUT s'il est absent ou en retard —
+// deux postes qui étendent chacun leur table finissent par donner un même numéro à deux produits.
+// Son oracle (`oracle-confidentiel.mjs`, dans le dépôt) vérifie qu'il est resté privé et sans secret.
+export const CANAL = { nom: "factory-confidentiel", dossier: "_confidentiel", preuve: "tables/produits-pseudonymes.json", prive: true, depot: "confidentiel" };
+
+// ACCÈS REFUSÉ À UN DÉPÔT PRIVÉ (13/10/2026). GitHub répond « Repository not found » (404) à un compte
+// qui n'a pas le droit de lire un dépôt privé, exactement comme s'il n'existait pas ; un dépôt local
+// absent rend « does not exist » ou « does not appear to be a git repository ». Ce motif distingue ce
+// refus d'une panne réseau, qui reste un défaut.
+export const ACCES_REFUSE = /repository not found|not found|error: 40[34]|permission denied|authentication failed|could not read username|does not exist|does not appear to be a git repository/i;
+
+/**
+ * Un dossier de la racine que les BALAYAGES du parc jugent comme un dépôt de l'écosystème : le préfixe
+ * d'entrée, MOINS les produits déclarés de l'écosystème (D-5 (a) du 17/09/2026). Un produit qui porte le
+ * préfixe n'est pas une forge (TF-1327) ; c'est la lecture que `bootstrap.mjs` applique déjà à son
+ * propre balayage, désormais partagée. Le préfixe reste le filtre d'ENTRÉE parce que les bancs de ces
+ * balayages jouent des parcs jetables aux forges fictives ; un dossier `factory…` que rien ne déclare
+ * est signalé à l'ouverture du poste, qui demande de le déclarer.
+ */
+export const estDepotEcosysteme = (nom) => /^factory/.test(String(nom)) && !PRODUITS_DE_L_ECOSYSTEME.has(String(nom));

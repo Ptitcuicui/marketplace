@@ -1,0 +1,146 @@
+#!/usr/bin/env node
+/**
+ * lib-vue-html.test.mjs — LE SOCLE DES PROJECTIONS TIENT LES RÈGLES QU'IL IMPOSE AUX PRODUITS
+ * (TF-0907, retour d'un produit du 07/09/2026, patch joint au lot).
+ *
+ * LE FAIT, mesuré au navigateur par le produit qui l'a subi : les vues HTML de `docs\projet\`
+ * générées par ce socle rendaient la colonne de lecture à **646 px** — 50 % de la fenêtre à
+ * 1280 px, 40 % à 1600, **34 % à 1920** — et le schéma SVG à largeur FIXE, soit 32 % à 1920.
+ * `check_html.py` rendait FAIL sur L3 pour MODELE-DONNEES et A4/L3/L4/L13/L18/L19 pour
+ * TODO-PRODUIT. *Les règles I1 et L26 sont imposées AUX PRODUITS par le pilot, et les
+ * générateurs du pilot ne les tenaient pas.* Le patch a été écrit par le produit, faute de
+ * l'être ici.
+ *
+ * CE QUE CETTE RECETTE FIGE, et pourquoi elle est à DOUBLE SENS : les quatre propriétés du
+ * remède sont vérifiées sur la page réellement produite (sens VERT), puis les mêmes assertions
+ * sont rejouées sur une page volontairement RAMENÉE à l'état d'avant (sens ROUGE). Sans le
+ * second sens, une assertion écrite de travers passerait sur n'importe quoi — c'est le défaut
+ * que tout le dépôt refuse ailleurs.
+ *
+ * CE QU'ELLE NE FAIT PAS, et c'est déclaré : elle n'exécute pas `check_html.py` ni
+ * `render_page.py`. Elle tient les propriétés de MARQUAGE du socle dans le HTML produit ; le
+ * verdict de rendu appartient aux oracles du socle, qui demandent python et un navigateur.
+ *
+ * DEPUIS LE 23/09/2026 (TF-1321, décision humaine D-13 (a)), la page jugée est celle de la coquille
+ * DÉRIVÉE DU SOCLE (`scripts\lib-socle-page.mjs`, `pageDeVue`) : la coquille écrite à la main a
+ * quitté `lib-vue-html.mjs`. Les quatre propriétés de TF-0907 restent jugées sur elle, et deux s'y
+ * ajoutent, chacune à double sens : la bascule de thème que le socle apporte (R-30), et le sceau de
+ * la source dans le pied, que R-26 bis relit pour juger la parité d'une vue. Sans socle trouvable,
+ * la recette se déclare SANS OBJET, chemins cherchés compris, et ne compte aucun cas.
+ *
+ * Joué par `oracles\self-tests.mjs` (I2 : tout `*.test.mjs` du dépôt est joué).
+ */
+import { mdVersHtml, svgBoites } from "./lib-vue-html.mjs";
+import { socleDePage, socleAbsent, lireAsset, chargerPoseur, pageDeVue } from "./lib-socle-page.mjs";
+
+const echecs = [];
+
+const socle = socleDePage();
+const gabarit = lireAsset("boilerplate.html", socle.assets);
+if (!gabarit) {
+  console.log(`lib-vue-html (TF-0907, TF-1321) : SANS OBJET — ${socleAbsent(socle)} ; aucun cas joué, aucun cas compté`);
+  process.exit(0);
+}
+
+const page = pageDeVue({
+  gabarit,
+  poseur: await chargerPoseur(socle.assets),
+  titre: "Modèle de données",
+  description: "vue de recette",
+  front: { role: "modèle", sources_de_verite: "schema.sql", verifie_le: "2026-09-08" },
+  svg: { label: "flux", corps: svgBoites([{ id: "A", sous: "amont" }, { id: "B", sous: "aval" }], [{ de: "A", vers: "B" }]), legende: "deux étapes" },
+  corpsHtml: mdVersHtml("| colonne | type |\n|---|---|\n| id | entier |\n"),
+  source: "# source\n",
+  lettre: "M",
+  surtitre: "Factory · Modèle de données",
+});
+
+// Les propriétés du remède, chacune avec la mesure qui l'a imposée. La largeur se lit désormais dans
+// le jeton du socle (`--w`, 75 à 92 % de la fenêtre) : la colonne de 75ch n'existe plus nulle part.
+const REGLES = [
+  ["I1/L26 — la colonne de lecture ne bride plus la page", (h) => /--w:\s*clamp\(75vw/.test(h) && !/max-width:\s*75ch/.test(h),
+    "la colonne restait à 75ch : 646 px, soit 34 % de la fenêtre à 1920 px"],
+  ["L26 — le schéma SVG suit la largeur disponible", (h) => /<svg[^>]*width="100%"/.test(h),
+    "le SVG sortait à largeur FIXE, 32 % de la fenêtre à 1920 px"],
+  ["nommage français — la classe de défilement s'appelle `defile`", (h) => /class="defile"/.test(h) && !/class="scroll"/.test(h),
+    "la classe s'appelait `scroll`, seul nom anglais du rendu"],
+  ["A4 — le titre porte son indice daté, dérivé de `verifie_le`", (h) => /<title>[^<]*20260908a<\/title>/.test(h),
+    "le titre sortait nu : deux révisions du même jour portaient le même nom à l'écran"],
+  ["R-30 — la bascule de thème du socle est câblée et persistée", (h) => /id="theme-toggle"/.test(h) && /localStorage\.setItem\(\s*'factory-theme'/.test(h),
+    "la coquille écrite à la main n'avait aucune bascule : les vues des produits restaient claires, sans choix du lecteur (TF-1321)"],
+  ["R-26 bis — le pied porte le sceau de la source", (h) => /Sceau source <code>[0-9a-f]{12}<\/code>/.test(h),
+    "sans sceau, une vue se lit « antérieure au mécanisme de sceau » et sa parité avec la source n'est plus jugeable"],
+];
+
+for (const [nom, tenue, cout] of REGLES) {
+  if (!tenue(page)) echecs.push(`VERT — ${nom} : non tenue par la page produite (coût constaté : ${cout})`);
+}
+
+// SENS ROUGE — la page ramenée à l'état d'avant le 07/09. Chaque assertion DOIT y échouer :
+// une assertion qui passe des deux côtés ne prouve rien.
+const avant = page
+  .replace(/--w:\s*clamp\([^)]*\)/, "--w: 75ch")
+  .replaceAll('class="defile"', 'class="scroll"')
+  .replace(/<svg([^>]*)width="100%" style="max-width:\d+px"/, '<svg$1width="820"')
+  .replace(/<title>[^<]*<\/title>/, "<title>Modèle de données</title>")
+  .replace(/<button id="theme-toggle"[\s\S]*?<\/button>/, "")
+  .replace(/Sceau source <code>[0-9a-f]{12}<\/code>/, "");
+for (const [nom, tenue] of REGLES) {
+  if (tenue(avant)) echecs.push(`ROUGE — ${nom} : l'assertion passe AUSSI sur la page d'avant le remède, elle ne prouve rien`);
+}
+
+// 16/09/2026 — LES LIENS MARKDOWN, ET LE PÉRIMÈTRE DES SCHÈMES ADMIS.
+//
+// Le rendu ne connaissait pas les liens : « [texte](url) » sortait EN CLAIR dans toutes les pages
+// générées du parc — le lecteur voyait la syntaxe, et l'URL, insécable, poussait la page au-delà
+// du viewport (V1 refusait une étude à 390 px, document mesuré à 419 px). Les deux moitiés du
+// défaut se corrigent d'un seul geste, et la seconde moitié est la plus importante : la source
+// d'une page générée est un Markdown que le pilot ingère, parfois issu d'un entrant. Un
+// « javascript: » y deviendrait un lien EXÉCUTABLE dans un livrable remis à un humain. La liste
+// des schèmes est donc FERMÉE, et ce qu'elle refuse reste du texte VISIBLE — jamais retiré en
+// silence : un lecteur qui voit la syntaxe brute sait qu'il manque quelque chose.
+for (const [libelle, source, attendu] of [
+  ["lien http rendu", "[doc](https://exemple.fr/a/b)", '<a href="https://exemple.fr/a/b">doc</a>'],
+  ["chemin relatif rendu", "[y](../autre.md)", '<a href="../autre.md">y</a>'],
+  ["mailto rendu", "[z](mailto:a@b.fr)", '<a href="mailto:a@b.fr">z</a>'],
+]) {
+  if (!mdVersHtml(source).includes(attendu)) echecs.push(`${libelle} : « ${source} » ne rend pas « ${attendu} »`);
+}
+for (const [libelle, source] of [
+  ["schème javascript refusé", "[x](javascript:alert(1))"],
+  ["schème data refusé", "[q](data:text/html;base64,AA)"],
+]) {
+  const rendu = mdVersHtml(source);
+  if (/<a /.test(rendu)) echecs.push(`${libelle} : un lien a été fabriqué sur un schème hors liste — « ${rendu} »`);
+  if (!rendu.includes("[")) echecs.push(`${libelle} : la syntaxe brute a DISPARU au lieu de rester visible — un refus silencieux ne s'apprend pas`);
+}
+
+// 28/09/2026 (TF-1436) — LA STRUCTURE DE LA SOURCE SURVIT AU RENDU.
+//
+// LE FAIT, retour Produit-78 (lot 20260928a, RP-2) : une liste numérotée de 8 éléments sortait en
+// UN SEUL <p>, la numérotation perdue avec les retours à la ligne — aucun cas du rendu ne
+// reconnaissait « 1. » en tête de ligne, et la garde du paragraphe générique ne s'arrêtait pas
+// dessus. Au même endroit, un « ## » du corps sortait en <h3> : la coquille pose déjà le <h1> du
+// document, donc le premier niveau du corps doit être <h2> — le décalage « + 1 » sautait ce
+// niveau, saut signalé par check_html (avertissement « Saut de hiérarchie ») et par oracle-a11y,
+// et il cassait aussi L25 (sommaire) qui ne compte que les <h2> (TF-1437, même run, même cause).
+for (const [libelle, source, attendu] of [
+  ["titre « ## » rendu h2, pas h3", "## Un titre", "<h2>Un titre</h2>"],
+  ["sous-titre « ### » rendu h3", "### Un sous-titre", "<h3>Un sous-titre</h3>"],
+  ["liste numérotée à point rendue <ol>", "1. un\n2. deux\n3. trois", "<ol><li>un</li><li>deux</li><li>trois</li></ol>"],
+  ["liste numérotée à parenthèse rendue <ol>", "1) un\n2) deux", "<ol><li>un</li><li>deux</li></ol>"],
+]) {
+  const rendu = mdVersHtml(source);
+  if (rendu !== attendu) echecs.push(`${libelle} : « ${source.replace(/\n/g, "\\n")} » rend « ${rendu} », attendu « ${attendu} »`);
+}
+// Sens ROUGE local : une liste numérotée directement suivie d'un paragraphe, ou l'inverse, ne doit
+// PAS fusionner les deux blocs — c'était la seconde moitié du défaut mesuré (les items « avalaient »
+// la phrase suivante faute de garde dans le paragraphe générique).
+if (mdVersHtml("1. un\n2. deux\n\nSuite.") !== "<ol><li>un</li><li>deux</li></ol>\n<p>Suite.</p>")
+  echecs.push("une liste numérotée suivie d'un paragraphe fusionne les deux blocs");
+if (mdVersHtml("Avant.\n\n1. un\n2. deux") !== "<p>Avant.</p>\n<ol><li>un</li><li>deux</li></ol>")
+  echecs.push("un paragraphe suivi d'une liste numérotée fusionne les deux blocs");
+
+const N = REGLES.length * 2 + 5 + 6;
+if (echecs.length) { console.error("lib-vue-html : FAIL\n  - " + echecs.join("\n  - ")); process.exit(1); }
+console.log(`lib-vue-html (TF-0907, TF-1321, TF-1436) : ${N}/${N} — sur la coquille dérivée du socle : colonne pleine largeur, SVG à 100 %, classe defile, titre daté, bascule de thème câblée, sceau de la source au pied ; chaque règle prouvée dans ses DEUX sens (page produite / page d'avant le remède) ; liens markdown rendus pour http, chemin relatif et mailto, et REFUSÉS — syntaxe laissée visible — pour javascript: et data: ; un « ## » rend <h2> (plus de saut de hiérarchie sous le <h1>) et une liste numérotée (point ou parenthèse) rend <ol><li>, sans fusionner avec le bloc voisin`);

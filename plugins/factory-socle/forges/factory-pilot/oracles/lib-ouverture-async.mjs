@@ -1,0 +1,182 @@
+/**
+ * lib-ouverture-async — passe en `async` le hook d'ouverture de la factory déclaré dans le
+ * `.claude/settings.json` d'un produit (TF-1635, 13/10/2026).
+ *
+ * LE FAIT : l'extension VS Code abandonne une session dont l'initialisation dépasse 60 s, et le CLI
+ * n'annonce sa disponibilité qu'APRÈS la fin des hooks SessionStart synchrones. Le pilot est passé
+ * en `async` le 13/10 (commit 9bfc8153), mais `.claude/settings.json` d'un produit est en mode
+ * `presence_et_motif` : jamais recopié. Mesuré le 13/10 sur le poste : 19 produits sur 19 portaient
+ * encore le hook synchrone à 240 s, donc 19 ouvertures vouées au même échec.
+ *
+ * LA RÉPARATION EST CHIRURGICALE : seule l'entrée SessionStart qui appelle
+ * `forge/hooks/factory.mjs ouverture` est touchée (ajout de `async: true` et de `--contexte-json`).
+ * Permissions, serveurs MCP et autres hooks, que le produit personnalise, restent intacts ;
+ * l'indentation et les fins de ligne du fichier sont gardées. C'est le produit qui se met à jour
+ * lui-même : la fonction est appelée par le hook d'ouverture qui tourne DANS le produit.
+ *
+ * Retour : { etat: "absent" | "illisible" | "sans_hook" | "deja" | "corrige", detail? }.
+ */
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+
+// TF-1903 (21/10/2026) : le chemin du lanceur peut être ancré et entre guillemets
+// (`node "${CLAUDE_PROJECT_DIR}/forge/hooks/factory.mjs" ouverture`) ; le guillemet fermant est admis.
+export const MOTIF_HOOK_OUVERTURE = /forge\/hooks\/factory\.mjs"?\s+ouverture\b/;
+
+/**
+ * TF-1755 (15/10/2026) — UN HOOK AJOUTÉ AU GABARIT APRÈS L'INSTALLATION D'UN PRODUIT L'ATTEINT À SON OUVERTURE.
+ *
+ * LE FAIT, mesuré le 15/10 sur 21 produits du poste : publication-hebergee câblé chez 2, droits-accordes
+ * chez 2, ecriture chez 8. `.claude/settings.json` est en `presence_et_motif`, jamais recopié : chaque
+ * entrée neuve du gabarit attendait un geste du produit, qui ne venait pas.
+ *
+ * LA FUSION EST CHIRURGICALE ET N'AJOUTE QUE CE QUI MANQUE. Une entrée du gabarit se reconnaît à sa
+ * commande `forge/hooks/factory.mjs <nom>` ; elle est absente si AUCUNE commande du produit, sous le même
+ * événement, n'appelle ce nom. Elle s'ajoute au groupe du produit qui porte le même `matcher`, sinon en
+ * groupe neuf portant le `matcher` du gabarit. Rien n'est retiré, rien n'est modifié : permissions,
+ * serveurs MCP, hooks du produit, délais qu'il a réglés restent intacts ; indentation, BOM et fins de
+ * ligne sont gardés.
+ *
+ * LES EXCLUSIONS SE DÉCLARENT DANS LE FICHIER MÊME, sous `_hooks_factory_exclus` : une liste d'objets
+ * `{ "commande": "forge/hooks/factory.mjs <nom>", "motif": "…" }` (ou de chaînes). Un nom exclu n'est
+ * jamais ajouté. Comme la commande y est écrite en toutes lettres, le motif exigé par le contrat
+ * d'héritage (`gabarits/HERITAGE.json`) est tenu : un écart DÉCLARÉ n'est pas un oubli.
+ *
+ * TF-2185 (05/11/2026) — UNE ENTRÉE PRÉSENTE DONT LE GABARIT A ÉLARGI LE `matcher` S'ÉLARGIT AUSSI. Mesuré
+ * le 05/11 : `lecons` passé à `…|Agent|Task` au gabarit (TF-1947) restait sur l'ancien matcher chez le seul
+ * produit du poste qui le portait, et sa leçon L-006 n'y était jamais servie. Seul un élargissement est
+ * joué : chaque alternative du produit figure au gabarit et il en manque au moins une. Un matcher que le
+ * produit a rendu plus large ou différent est le sien, intact. Le groupe prend le matcher du gabarit s'il
+ * ne porte que cette entrée ; sinon l'entrée seule passe au groupe du matcher du gabarit, et les hooks du
+ * produit gardent leur matcher.
+ *
+ * Retour : { etat: "absent" | "illisible" | "gabarit_illisible" | "deja" | "corrige", ajoutes: [noms], elargis: [noms], exclus: [noms] }.
+ */
+export const MOTIF_COMMANDE_FACTORY = /forge\/hooks\/factory\.mjs"?\s+([\w-]+)/;
+
+/**
+ * TF-1903 (21/10/2026) — LE LANCEUR S'APPELLE PAR UN CHEMIN ANCRÉ SUR LA RACINE DU PROJET.
+ *
+ * LE FAIT : `node forge/hooks/factory.mjs <nom>` se résout depuis le répertoire courant du hook, qui
+ * suit celui de la session (un `cd` dans un sous-dossier, un arbre de travail). Rejoué le 21/10/2026
+ * dans une session réelle (Claude Code 2.1.299 et 2.1.107) : après `cd sub`, une écriture ne déclenche
+ * plus la commande relative (MODULE_NOT_FOUND), et déclenche `node "${CLAUDE_PROJECT_DIR}/forge/hooks/
+ * factory.mjs" <nom>`, sous Git Bash comme sous PowerShell. La forme dite « exec » (`args`) est ignorée
+ * par la 2.1.107 : elle n'est pas retenue.
+ *
+ * L'ANCRAGE EST CHIRURGICAL : seule une commande qui commence par `node forge/hooks/factory.mjs` est
+ * réécrite, en place, avec le même nom et les mêmes options ; aucune entrée n'est ajoutée ni retirée,
+ * donc un produit qui portait l'ancienne commande n'en porte pas deux. Permissions, autres hooks,
+ * délais, indentation, BOM et fins de ligne sont gardés.
+ *
+ * Retour : { etat: "absent" | "illisible" | "deja" | "corrige", ancres: [noms] }.
+ */
+export const COMMANDE_RELATIVE_FACTORY = /^(\s*node\s+)(?:\.[\\/])?forge[\\/]hooks[\\/]factory\.mjs(?=\s|$)/;
+export const LANCEUR_ANCRE = 'node "${CLAUDE_PROJECT_DIR}/forge/hooks/factory.mjs"';
+
+export function ancrerCommandesFactory(chemin) {
+  if (!existsSync(chemin)) return { etat: "absent", ancres: [] };
+  const brut = readFileSync(chemin, "utf8");
+  let j;
+  try { j = JSON.parse(brut.replace(/^﻿/, "")); } catch (e) { return { etat: "illisible", detail: e.message, ancres: [] }; }
+  const ancres = [];
+  for (const groupes of Object.values(j?.hooks && typeof j.hooks === "object" ? j.hooks : {})) {
+    for (const g of Array.isArray(groupes) ? groupes : []) for (const h of (g?.hooks || [])) {
+      if (typeof h?.command !== "string" || !COMMANDE_RELATIVE_FACTORY.test(h.command)) continue;
+      h.command = h.command.replace(COMMANDE_RELATIVE_FACTORY, () => LANCEUR_ANCRE);
+      ancres.push((h.command.match(MOTIF_COMMANDE_FACTORY) || [])[1] || "?");
+    }
+  }
+  if (!ancres.length) return { etat: "deja", ancres };
+  const eol = brut.includes("\r\n") ? "\r\n" : "\n";
+  const indent = (brut.match(/\n([ \t]+)"/) || [, "  "])[1];
+  let sortie = JSON.stringify(j, null, indent).replace(/\n/g, eol);
+  if (/\r?\n$/.test(brut)) sortie += eol;
+  writeFileSync(chemin, (brut.startsWith("﻿") ? "﻿" : "") + sortie);
+  return { etat: "corrige", ancres };
+}
+
+export function nomsExclus(j) {
+  return [].concat(j?._hooks_factory_exclus || [])
+    .map((x) => (String(typeof x === "string" ? x : x?.commande || "").match(MOTIF_COMMANDE_FACTORY) || [])[1])
+    .filter(Boolean);
+}
+
+const alternatives = (m) => (typeof m === "string" ? m.split("|").map((x) => x.trim()).filter(Boolean) : []);
+const nomFactory = (h) => (String(h?.command || "").match(MOTIF_COMMANDE_FACTORY) || [])[1];
+
+// Vrai si le matcher du gabarit élargit strictement celui du produit (TF-2185).
+export function matcherElargi(matcherProduit, matcherGabarit) {
+  const p = alternatives(matcherProduit), g = alternatives(matcherGabarit);
+  return p.length > 0 && p.every((x) => g.includes(x)) && g.some((x) => !p.includes(x));
+}
+
+export function fusionnerHooksDuGabarit(chemin, cheminGabarit) {
+  if (!existsSync(chemin)) return { etat: "absent", ajoutes: [], elargis: [], exclus: [] };
+  let gabarit;
+  try { gabarit = JSON.parse(readFileSync(cheminGabarit, "utf8").replace(/^﻿/, "")); } catch (e) { return { etat: "gabarit_illisible", detail: e.message, ajoutes: [], elargis: [], exclus: [] }; }
+  const brut = readFileSync(chemin, "utf8");
+  let j;
+  try { j = JSON.parse(brut.replace(/^﻿/, "")); } catch (e) { return { etat: "illisible", detail: e.message, ajoutes: [], elargis: [], exclus: [] }; }
+  if (!j || typeof j !== "object" || Array.isArray(j)) return { etat: "illisible", detail: "racine non objet", ajoutes: [], elargis: [], exclus: [] };
+  const exclus = nomsExclus(j);
+  const ajoutes = [], elargis = [];
+  for (const [evenement, groupesG] of Object.entries(gabarit.hooks || {})) {
+    for (const gG of groupesG || []) {
+      for (const hG of gG.hooks || []) {
+        const nom = (String(hG.command || "").match(MOTIF_COMMANDE_FACTORY) || [])[1];
+        if (!nom || exclus.includes(nom)) continue;
+        j.hooks = j.hooks && typeof j.hooks === "object" ? j.hooks : {};
+        const groupesP = Array.isArray(j.hooks[evenement]) ? j.hooks[evenement] : (j.hooks[evenement] = []);
+        const porteur = groupesP.find((g) => (g?.hooks || []).some((h) => nomFactory(h) === nom));
+        if (porteur) {
+          if (!matcherElargi(porteur.matcher, gG.matcher)) continue;
+          if (porteur.hooks.every((h) => nomFactory(h) === nom)) porteur.matcher = gG.matcher;
+          else {
+            const i = porteur.hooks.findIndex((h) => nomFactory(h) === nom);
+            const [entree] = porteur.hooks.splice(i, 1);
+            let cible = groupesP.find((g) => g !== porteur && (g?.matcher ?? null) === gG.matcher && Array.isArray(g?.hooks));
+            if (!cible) { cible = { matcher: gG.matcher, hooks: [] }; groupesP.push(cible); }
+            cible.hooks.push(entree);
+          }
+          elargis.push(nom);
+          continue;
+        }
+        let cible = groupesP.find((g) => (g?.matcher ?? null) === (gG.matcher ?? null) && Array.isArray(g?.hooks));
+        if (!cible) { cible = { ...(gG.matcher !== undefined ? { matcher: gG.matcher } : {}), hooks: [] }; groupesP.push(cible); }
+        cible.hooks.push({ ...hG });
+        ajoutes.push(nom);
+      }
+    }
+  }
+  if (!ajoutes.length && !elargis.length) return { etat: "deja", ajoutes, elargis, exclus };
+  const eol = brut.includes("\r\n") ? "\r\n" : "\n";
+  const indent = (brut.match(/\n([ \t]+)"/) || [, "  "])[1];
+  let sortie = JSON.stringify(j, null, indent).replace(/\n/g, eol);
+  if (/\r?\n$/.test(brut)) sortie += eol;
+  writeFileSync(chemin, (brut.startsWith("﻿") ? "﻿" : "") + sortie);
+  return { etat: "corrige", ajoutes, elargis, exclus };
+}
+
+export function passerOuvertureEnAsync(chemin) {
+  if (!existsSync(chemin)) return { etat: "absent" };
+  const brut = readFileSync(chemin, "utf8");
+  let j;
+  try { j = JSON.parse(brut.replace(/^﻿/, "")); } catch (e) { return { etat: "illisible", detail: e.message }; }
+  const groupes = j?.hooks?.SessionStart;
+  if (!Array.isArray(groupes)) return { etat: "sans_hook" };
+  let trouve = false, change = false;
+  for (const g of groupes) for (const h of (g?.hooks || [])) {
+    if (typeof h?.command !== "string" || !MOTIF_HOOK_OUVERTURE.test(h.command)) continue;
+    trouve = true;
+    if (!/--contexte-json\b/.test(h.command)) { h.command = `${h.command} --contexte-json`; change = true; }
+    if (h.async !== true) { h.async = true; change = true; }
+  }
+  if (!trouve) return { etat: "sans_hook" };
+  if (!change) return { etat: "deja" };
+  const eol = brut.includes("\r\n") ? "\r\n" : "\n";
+  const indent = (brut.match(/\n([ \t]+)"/) || [, "  "])[1];
+  let sortie = JSON.stringify(j, null, indent).replace(/\n/g, eol);
+  if (/\r?\n$/.test(brut)) sortie += eol;
+  writeFileSync(chemin, (brut.startsWith("﻿") ? "﻿" : "") + sortie);
+  return { etat: "corrige" };
+}

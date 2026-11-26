@@ -1,0 +1,609 @@
+#!/usr/bin/env node
+/**
+ * self-tests.mjs — joue TOUS les self-tests d'oracles du pilot, en un pas.
+ *
+ * Pourquoi. Chaque oracle du pilot porte sa recette à double sens (fixtures rouges qui
+ * prouvent que la règle sait échouer), et **rien ne les appelait** : il fallait y penser,
+ * oracle par oracle. Un contrôle qu'on n'exécute que lorsqu'on y pense n'est pas un
+ * garde-fou — c'est le défaut qu'on a corrigé le 14/08 sur la consigne RESTITUTION (écrite,
+ * citée par aucun run) puis le 15/08 sur `ruff` dans forge-tests (configuré, joué par aucun
+ * pas de recette). Le troisième cas était ici, chez nous.
+ *
+ * Deux formes cohabitent et c'est voulu : les oracles récents portent `--self-test` en
+ * interne, les deux plus anciens ont un fichier `self-test*.mjs` dédié. L'agrégateur prend
+ * les deux plutôt que d'imposer une réécriture qui n'apporterait rien.
+ *
+ * INVARIANT (I1) : tout `oracle-*.mjs` doit être couvert — par `--self-test` ou par un
+ * fichier dédié. Un oracle sans recette est signalé comme un échec, pas passé sous silence :
+ * sans quoi ajouter un oracle non testé serait la façon la plus simple de faire baisser le
+ * compte d'échecs.
+ *
+ * INVARIANT (I2, TF-0351 du 18/08) : tout `*.test.mjs` du dépôt est JOUÉ ici. I1 ne regardait
+ * que `oracles\` — les tests de `outillage-tests-e2e\` étaient donc verts et joués par
+ * personne, exactement la dette R-35 que l'agrégateur existe pour éteindre. Le trou n'était pas
+ * dans la règle mais dans son périmètre : un fichier de test qu'aucun pas ne lance est du même
+ * ordre qu'un oracle sans recette, et se signale de la même façon.
+ *
+ * INVARIANT (I4, TF-0414 du 20/08) : les oracles d'ÉTAT sont joués sur le PARC RÉEL, pas
+ * seulement sur leurs fixtures. `oracle-skills` avait un `--self-test` vert à 68/68 pendant
+ * que l'oracle lui-même échouait sur 9 skills : la copie INSTALLÉE divergeait de sa source
+ * versionnée, et c'est la copie qui s'exécute. Une recette prouve qu'une règle SAIT échouer ;
+ * elle ne dit rien de l'état du monde. Troisième occurrence de cette famille en trois semaines
+ * (item d'origine archivé, TF-0391 le 19/08, TF-0414 le 20/08), dont deux APRÈS le gate écrit
+ * en gabarit — un paragraphe de doctrine ne s'exécute pas, un pas de recette si.
+ * SKIP (exit 2) vaut succès : sur un poste sans les dépôts frères, il n'y a rien à juger.
+ *
+ * CRITÈRE « PARC ABSENT » (TF-1133, 15/09/2026). Un oracle d'état se déclare SANS OBJET — exit 2,
+ * ou un constat SANS_OBJET dans un verdict PASS s'il juge le reste — quand la matière qu'il juge
+ * n'est ni dans le dépôt cloné ni sous `FORGE_ROOT`, et SEULEMENT alors. Il écrit son motif, que ce
+ * harnais affiche. Trois matières sont concernées : un dépôt frère non cloné sous la racine
+ * (oracle-empreintes, site déclaré par site déclaré) ; le canal confidentiel absent, donc les tables
+ * de pseudonymisation introuvables (oracle-readme-dossiers) ; aucune source de skill sous la racine
+ * (oracle-skills). Un oracle dont la matière EST le dépôt (oracle-caracteres-controle) n'a jamais
+ * de parc absent : un clone porte ce qu'il juge, et son rouge sur un clone est un vrai rouge. Sur ce
+ * poste, où le parc et le canal sont là, rien n'est déclaré sans objet et tout est jugé. Le fait :
+ * sur un clone frais, quatre de ces oracles jugeaient un parc absent et le circuit hébergé aurait
+ * été rouge à sa première exécution.
+ *
+ * INVARIANT (I7, TF-1690 du 14/10/2026) : aucune recette n'écrit dans un fichier SUIVI du dépôt. Chaque
+ * recette se joue sous une garde (`lib-garde-arbre-suivi.mjs`) qui compare les fichiers suivis avant et
+ * après elle et nomme celle qui a écrit. Deux recettes le faisaient à chaque passage, sans le dire.
+ *
+ * Usage : node oracles\self-tests.mjs        → exit 0 si tout passe, 1 sinon.
+ *         `--appliquer` accepte une baisse ou une disparition du cliquet ; `--ecrire-baseline` inscrit les hausses dans un arbre de
+ *         campagne (worktree git lié), où elles ne s'inscrivent pas seules (TF-2480).
+ */
+import { execFileSync, spawnSync } from "node:child_process";
+import { readdirSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import {
+  confronter as confronterBaseline, ecrire as ecrireBaseline, lire as lireBaseline, decisionInscription, arbreDeCampagne,
+} from "./lib-baseline-recettes.mjs";
+import { confronterSensRouge, verdictSensRouge, SEUIL_I6_BLOQUANT } from "./lib-sens-rouge.mjs";
+import { creerGarde } from "./lib-garde-arbre-suivi.mjs";
+import { jugerForgeRoot, remedeForgeRoot } from "./lib-racine-parc.mjs";
+
+const ICI = dirname(fileURLToPath(import.meta.url));
+// TF-2256 (06/11/2026) : les recettes qui filtrent leurs cas par une variable `FORGE_CAS_*` (lib-filtre-cas.mjs) se jouent ICI en entier. Une variable
+// restée dans l'environnement de la session rendrait chacune PARTIELLE sans que ce total le dise : le total d'un dépôt ne se mesure jamais sur une sélection.
+for (const k of Object.keys(process.env)) if (k.startsWith("FORGE_CAS_")) delete process.env[k];
+// TF-2720 (22/11/2026) — UN `FORGE_ROOT` HÉRITÉ SANS PILOT FAIT REFUSER LA RECETTE, il ne la fait pas rougir par morceaux. Le 15/11/2026, la variable
+// valait `…\factory-pilot\.claude\worktrees` (le parent d'un arbre lié) : `oracle-lot-retours.test` rendait 89 PASS et 6 FAIL, 95 et 0 sous
+// `FORGE_ROOT=C:\dev`, et il avait fallu rejouer la recette entière sous une autre valeur pour conclure. Variable absente : rien à refuser, les
+// chemins se déduisent du dépôt. Exit 3 : prérequis absent, jamais un verdict (même code que la recette de forge-tests).
+{
+  const racineJugee = jugerForgeRoot(process.env);
+  if (racineJugee.etat === "sans-pilot") {
+    console.error(`PRÉREQUIS ABSENT (TF-2720) — ${racineJugee.motif}. La recette ne se joue pas sous une racine sans pilot : elle rendrait des faux rouges.\nRemède : ${remedeForgeRoot(join(ICI, ".."))}.`);
+    process.exit(3);
+  }
+}
+// I7 (TF-1690, 14/10/2026) — UNE RECETTE N'ÉCRIT PAS DANS L'ARBRE SUIVI. Chaque recette se joue sous
+// une garde qui relève les fichiers suivis avant et après elle ; un écart nomme la recette et les
+// chemins (motif et limites : `lib-garde-arbre-suivi.mjs`). Le cas : deux recettes réécrivaient à chaque
+// passage une étude HTML d'`output\03-etudes\` et `references\EXTENSIONS-JUGEES.json`, sans le dire.
+const garde = creerGarde(join(ICI, ".."));
+// TF-1465 (02/10/2026) : l'interpréteur Python du poste, cherché UNE fois — même ordre que
+// `scripts\verifier-ooxml.test.mjs`. `null` si absent : les recettes `.py` se déclarent alors
+// « [NON JOUÉ] » plutôt que d'être tues ou de faire échouer le pas sur un poste sans Python.
+const PYTHON = ["python", "python3", "py"].find((bin) => {
+  const r = spawnSync(bin, ["--version"], { encoding: "utf8" });
+  return !r.error && r.status === 0;
+}) || null;
+
+// Oracles couverts par un fichier de recette dédié plutôt que par `--self-test`.
+// La table des recettes dediees vit dans `lib-recettes-dediees.mjs` depuis le 22/09/2026 :
+// `oracle-banc-double-sens.mjs` en a besoin pour ne pas accuser un controle d'etre sans banc la
+// ou le harnais sait ou est le sien, et deux tables auraient diverge au premier ajout.
+import { DEDIES } from "./lib-recettes-dediees.mjs";
+
+// Un fichier de RECETTE n'est pas un oracle : le motif `oracle-*.mjs` attrapait
+// `oracle-parite-configuration.test.mjs` et exigeait de lui sa propre recette — une regression
+// infinie. Ecarte nommement plutot que par un motif plus fin, pour que l'exclusion se lise (N-13).
+const EST_UNE_RECETTE = (f) => f.endsWith(".test.mjs");
+
+// I1 bis (23/08, decision humaine « ne touche pas les produits ») : les HOOKS portant leur propre
+// recette entrent dans le meme invariant. Le motif `oracle-*` les laissait dehors — un hook
+// BLOQUANT non couvert est plus dangereux qu'un oracle non couvert, puisqu'il decide de la
+// poursuite d'un tour. Ceux qui n'ont pas de `--self-test` gardent leur fichier `.test.mjs`, joue
+// par I2.
+const oracles = readdirSync(ICI)
+  .filter((f) => (f.startsWith("oracle-") || f.startsWith("hook-")) && f.endsWith(".mjs")
+    && readFileSync(join(ICI, f), "utf8").includes('"--self-test"'))
+  .concat(readdirSync(ICI).filter((f) => f.startsWith("oracle-") && f.endsWith(".mjs")))
+  .filter((f) => !EST_UNE_RECETTE(f))
+  .filter((f, i, t) => t.indexOf(f) === i).sort();
+const resultats = [];
+
+for (const nom of oracles) {
+  const source = readFileSync(join(ICI, nom), "utf8");
+  const interne = source.includes('"--self-test"');
+  const dedie = DEDIES[nom];
+
+  if (!interne && !dedie) {
+    // I1 : un oracle sans recette à double sens ne prouve pas qu'il sait échouer.
+    resultats.push({ nom, statut: "SANS RECETTE", detail: "ni --self-test ni fichier dédié (I1)" });
+    continue;
+  }
+
+  const [cmd, args] = interne
+    ? [join(ICI, nom), ["--self-test"]]
+    : [join(ICI, dedie), []];
+  const r = garde.jouer(nom, () => spawnSync(process.execPath, [cmd, ...args], { encoding: "utf8" }));
+  const lignes = (r.stdout || "").split("\n").filter((l) => l.trim());
+  // `detail` est tronqué pour l'affichage ; `resume` garde la ligne ENTIÈRE. Lire un compte de
+  // cas dans une chaîne coupée à 72 caractères reviendrait à mesurer la mise en page.
+  const resume = lignes[lignes.length - 1] || r.stderr?.split("\n")[0] || "aucune sortie";
+  resultats.push({
+    nom,
+    statut: r.status === 0 ? "OK" : "ECHEC",
+    detail: resume.slice(0, 72),
+    resume,
+    sortie: r.stdout,
+    via: interne ? "--self-test" : dedie,
+  });
+}
+
+// I2 — les fichiers de test hors `oracles\`, joues ici plutot que par personne. La
+// decouverte est faite sur le DISQUE et non sur une liste : une liste ecrite a la main aurait
+// laisse invisible le prochain fichier ajoute, ce qui est precisement le defaut d origine.
+const RACINE = join(ICI, "..");
+
+// TF-0367 (18/08) — la découverte était sur le disque DANS la zone, mais la LISTE DES ZONES
+// était écrite à la main. Le commentaire ci-dessus dit exactement pourquoi c'est un défaut
+// (« une liste écrite à la main aurait laissé invisible le prochain fichier ajouté ») — et il
+// le disait en étant une liste, un cran plus haut. Constaté en ajoutant
+// `oracles/resoudre-pilot.test.mjs` : vert, et joué par personne. Même classe que TF-0362
+// (F1 qui n'itère que sur le manifeste) et TF-0333 (la boucle qui n'itère que sur le servi) :
+// un contrôle qui parcourt une liste ne voit jamais ce qui n'y est pas.
+//
+// Les zones sont donc DÉCOUVERTES : tout dossier de premier niveau du dépôt, plus la racine
+// elle-même. `node_modules` et les artefacts d'atelier sont exclus nommément — pas devinés.
+// I2 QUATER (TF-1073, 16/09/2026) — LA DÉCOUVERTE S'ARRÊTAIT AU PREMIER NIVEAU, et c'est la
+// TROISIÈME fois que cet agrégateur se fait prendre par la même cause sous une autre forme : la
+// liste des zones était écrite à la main (TF-0367), le motif de fichier était trop étroit
+// (TF-0413), le critère ignorait les outils portant leur propre drapeau (TF-1135). Ici c'est la
+// PROFONDEUR : `readdirSync` ne descend pas, donc un banc rangé dans son propre dossier était
+// invisible. Le cas : `oracles\banc-defauts-echappes\banc.test.mjs` — la recette du banc des
+// défauts échappés, gardé sur décision humaine du 14/09 (TF-1073) pour mesurer tout mécanisme de
+// relecture avant son adoption — verte, et jouée par PERSONNE. *Un contrôle qui parcourt une liste
+// ne voit jamais ce qui n'y est pas*, et une liste a autant de bords qu'on lui en laisse.
+//
+// CINQ NIVEAUX depuis le 02/10/2026 (TF-1465) — DEUX ne suffisaient plus. Le cas : le générateur
+// de la famille gd-guide-de-reference, `gabarits\documents\guide-de-reference\generateur\
+// construire-guide.py --self-test` (6 cas), rangé à QUATRE niveaux sous la racine — invisible à
+// l'ancienne borne, verte et jouée par PERSONNE, exactement la classe que I2 quater fermait déjà
+// pour `oracles\banc-defauts-echappes\`. `.claude` est exclu nommément : les copies INSTALLÉES de
+// skills y vivent, et ce sont les dépôts qui les VERSIONNENT (forge-agents et les autres) qui
+// jouent leurs propres recettes — en rejouer la copie ici doublerait un verdict déjà rendu
+// ailleurs, sur un fichier que ce dépôt ne possède pas.
+const HORS_ZONE = new Set([".git", "node_modules", ".venv", "__pycache__", ".oracles", "old", "input", "output", ".claude"]);
+const PROFONDEUR_ZONES = 5;
+const zonesTests = ["."];
+(function descendre(dossier, prefixe, reste) {
+  if (reste <= 0) return;
+  let entrees = [];
+  try { entrees = readdirSync(dossier, { withFileTypes: true }); } catch { return; }
+  for (const d of entrees) {
+    if (!d.isDirectory() || HORS_ZONE.has(d.name)) continue;
+    const zone = prefixe ? `${prefixe}/${d.name}` : d.name;
+    zonesTests.push(zone);
+    descendre(join(dossier, d.name), zone, reste - 1);
+  }
+})(RACINE, "", PROFONDEUR_ZONES);
+for (const zone of zonesTests) {
+  let fichiers = [];
+  try {
+    // I2 bis (TF-0413, 20/08) : le MOTIF était aussi étroit que la liste des zones l'avait
+    // été (TF-0367). `todo\self-test.mjs` — 38 contrôles verts sur le registre — n'était joué
+    // par PERSONNE : il ne finit pas en `.test.mjs`, donc I2 ne le voyait pas, et il ne vit
+    // pas sous `oracles\`, donc I1 non plus. Un fichier de recette invisible aux deux
+    // invariants est exactement ce que cet agrégateur existe pour éteindre. Les self-tests DE
+    // `oracles\` restent hors de ce motif : ils sont déjà joués par I1 (via `DEDIES`), et
+    // `self-tests.mjs` s'y appellerait lui-même.
+    const motif = (f) => f.endsWith(".test.mjs") || (!zone.startsWith("oracles") && /^self-test.*\.mjs$/.test(f));
+    fichiers = readdirSync(join(RACINE, zone)).filter(motif).sort().map((nom) => ({ nom, args: [] }));
+    // I2 ter (TF-1135, 15/09) : un OUTIL hors `oracles\` qui porte son propre `--self-test` était
+    // invisible aux deux motifs — `todo\accueillir-lot.mjs`, qui pseudonymise chaque lot entrant,
+    // en était, avec trois autres. Le critère lit le CODE (le test de `process.argv`), jamais une
+    // simple mention du drapeau : un outil qui en lance un autre avec `--self-test` n'est pas joué.
+    if (!zone.startsWith("oracles")) {
+      for (const nom of readdirSync(join(RACINE, zone)).filter((f) => f.endsWith(".mjs") && !motif(f)).sort()) {
+        let source = "";
+        try { source = readFileSync(join(RACINE, zone, nom), "utf8"); } catch { continue; }
+        if (/\b(?:process\.argv|argv|args)(?:\.slice\(\d+\))?\.includes\(\s*["']--self-test["']\s*\)/.test(source)) fichiers.push({ nom, args: ["--self-test"] });
+      }
+      // TF-1465 (02/10/2026) — UNE RECETTE EN PYTHON PORTE `--self-test` DE LA MÊME FAÇON, ET
+      // CE HARNAIS NE JOUAIT QU'UN SEUL LANGAGE. Le cas : `construire-guide.py` (générateur de la
+      // famille gd-guide-de-reference), recette à double sens (6 cas) jamais appelée par ce pas.
+      // Même lecture du CODE que pour les `.mjs` ci-dessus (le drapeau analysé, jamais seulement
+      // cité), adaptée au vocabulaire Python (`argparse`, `sys.argv`).
+      for (const nom of readdirSync(join(RACINE, zone)).filter((f) => f.endsWith(".py")).sort()) {
+        let source = "";
+        try { source = readFileSync(join(RACINE, zone, nom), "utf8"); } catch { continue; }
+        if (/["']--self-test["']/.test(source)) fichiers.push({ nom, args: ["--self-test"], python: true });
+      }
+    }
+  } catch { continue; }
+  for (const { nom, args, python: estPython } of fichiers) {
+    if (estPython && !PYTHON) {
+      // Déclaré, jamais tu (même forme que TF-1434, « [NON JOUÉ] <n> cas ») : sans interpréteur
+      // sur ce poste, la recette ne peut pas être jouée, et ce n'est pas un défaut du dépôt.
+      resultats.push({
+        nom: `${zone}/${nom}`, statut: "OK",
+        detail: "[NON JOUÉ] 1 cas — aucun interpréteur python sur ce poste", resume: "[NON JOUÉ] 1 cas — aucun interpréteur python sur ce poste",
+        sortie: "", via: "I2 (recette Python du dépôt)",
+      });
+      continue;
+    }
+    // TF-1018 (12/10/2026) : une recette Python écrit en UTF-8 ou le harnais ne lit rien de juste. Sous
+    // Windows, python imprime en cp1252 quand sa sortie est redirigée : « [NON JOUÉ] » devenait « JOU\ufffd »,
+    // la déclaration de TF-1434 n'était plus lue, et le cliquet comptait « 8 → 4 cas perdus » au lieu de
+    // « 4 joués + 4 non joués » (simulation du circuit hébergé sur un clone sans socle, 12/10/2026).
+    const r = garde.jouer(`${zone}/${nom}`, () => spawnSync(estPython ? PYTHON : process.execPath, [join(RACINE, zone, nom), ...args],
+      { encoding: "utf8", env: estPython ? { ...process.env, PYTHONUTF8: "1", PYTHONIOENCODING: "utf-8" } : process.env }));
+    const lignes = (r.stdout || "").trim().split("\n").filter((l) => l.trim());
+    const resume = lignes[lignes.length - 1] || r.stderr?.split("\n")[0] || "aucune sortie";
+    resultats.push({
+      nom: `${zone}/${nom}`,
+      statut: r.status === 0 ? "OK" : "ECHEC",
+      detail: resume.slice(0, 72),
+      resume,
+      sortie: r.stdout,
+      via: "I2 (fichier de test du dépôt)",
+    });
+  }
+}
+
+// I4 — oracles d'ÉTAT, joués sur le parc réel. La liste est COURTE et écrite : elle ne se
+// devine pas, puisque la plupart des oracles du pilot jugent un artefact qu'on leur passe et
+// non un état permanent. Chaque entrée dit son motif et le geste de remise en état — un
+// verdict rouge qui n'indique pas quoi faire se contourne au lieu de se corriger.
+const ETAT_DU_PARC = [
+  {
+    // TF-1304 (A-31, 22/09/2026) : ce controle existait depuis le 23/08 et AUCUNE etape ne le
+    // jouait sur le depot du pilot. Resultat mesure le 22/09 : 30 livrables ont change apres
+    // avoir ete scelles, a indice inchange, sans qu aucun verdict ne le dise — c est-a-dire
+    // exactement la classe qu il existe pour fermer, appliquee a lui-meme. Il est joue ici sur
+    // `output\`, le seul dossier du pilot qui porte des livrables a indice date.
+    nom: "../scripts/verifier-jugement.mjs",
+    args: ["output"],
+    motif: "livrable modifie apres avoir ete juge, a indice INCHANGE — le meme nom designe deux contenus",
+    remede: "trancher par lot d origine : re-sceller ce qui a ete modifie a dessein et non diffuse (`--sceller --en-masse`, geste humain), corriger le reste par un nouvel indice date (regle 5)",
+  },
+  {
+    nom: "oracle-skills.mjs",
+    motif: "dérive versionné↔installé des skills",
+    remede: "node oracles\\oracle-skills.mjs --appliquer (décision humaine, TF-0391)",
+  },
+  {
+    // TF-0530 / N-10 (23/08) : une mesure qui rend plusieurs familles est LUE en entier par la
+    // chaine de ses consommateurs. Le fait : trois familles bloquantes mesurees sur chaque route
+    // servie et JETEES, dont les debordements qui avaient vecu deux mois en production.
+    nom: "../scripts/verifier-familles-mesure.mjs",
+    motif: "famille de mesure produite et lue par personne, ou branche morte chez un consommateur",
+    remede: "lire la famille dans un consommateur, ajouter une branche par defaut, ou retirer la branche morte",
+  },
+  {
+    // TF-0324 (23/08) : la FORME des artefacts de cadence. Les gabarits vierges rendent SANS_OBJET
+    // — c'est voulu : la regle ne juge que ce qui est REMPLI. Le jour ou un artefact rempli entre
+    // dans le depot, il est juge sans que personne ait a y penser.
+    nom: "oracle-cadence.mjs",
+    motif: "artefact de cadence rempli sans proprietaire, sans date butoir ou sans consequence",
+    remede: "renseigner la cellule nommee par le verdict (proprietaire, date, relance, consequence)",
+    args: ["gabarits/cadence/RAID.md", "gabarits/cadence/COMPTE-RENDU.md",
+           "gabarits/cadence/REX.md", "gabarits/cadence/BENEFICES.md"],
+  },
+  {
+    // 23/08 : UN CONTROLE STATIQUE NE REND PAS LA PAGE. Deux instances de gabarit livrees le matin
+    // etaient vertes au marquage et rouges au rendu, sur TROIS causes distinctes — contraste,
+    // largeur de lecture, chevauchements. Aucune n'est visible sans rendre la page.
+    nom: "../scripts/verifier-rendu-instances.mjs",
+    motif: "instance de gabarit verte au marquage et fautive au RENDU",
+    remede: "corriger la cause nommee par le verdict (contraste, largeur, chevauchement), puis rejouer",
+  },
+  {
+    // TF-0474 (23/08) : la convention d'empreinte ne tient que si un site NON DECLARE se voit.
+    // Sept items du registre relevaient de cette classe, traites un par un, dont DEUX
+    // redecouvertes strictes du meme defaut. C'est un etat du PARC, pas un artefact : il se joue
+    // ici, a chaque recette.
+    nom: "oracle-empreintes.mjs",
+    motif: "site de scellement sha256 non declare au registre des empreintes",
+    remede: "declarer le site dans la table de references\EMPREINTES.md (depot, ce qui est scelle, format)",
+  },
+  {
+    // TF-0560 (24/08) : le POINT D'ENTRÉE cliquable des livrables. La règle de nommage impose un
+    // nom daté à espaces, et le résolveur de liens coupe au premier espace : mesuré, 22 livrables
+    // et 0 atteignable au clic sur un produit, pendant onze jours. Le seul fichier dont le nom n'a
+    // pas d'espace est donc la porte d'entrée du dossier — et un index qui a dérivé de son dossier
+    // ne sert plus qu'à donner confiance à tort. C'est un état du PARC : un livrable déposé sans
+    // régénérer l'index le fait mentir, et personne ne s'en aperçoit en le lisant.
+    nom: "../scripts/generer-lisezmoi-output.mjs",
+    motif: "index des livrables absent ou dérivé de son dossier",
+    remede: "node scripts\generer-lisezmoi-output.mjs (le régénère depuis le dossier)",
+    args: ["--verifier"],
+  },
+  {
+    // TF-0532 / N-11 (23/08) : une promesse écrite dans un commentaire de CODE est TENUE, sur les
+    // fichiers qui ont SIGNÉ. C'est un état du PARC et non un artefact : un fichier signataire peut
+    // devenir fautif par une suppression ailleurs, sans que personne ne relise son en-tête. La
+    // première vraie promesse trouvée était chez le socle lui-même — un attribut documenté dans son
+    // exemple d'usage et lu par personne.
+    nom: "oracle-promesses.mjs",
+    motif: "classe ou attribut promis dans un commentaire de code et posé nulle part, sur un fichier signataire",
+    remede: "poser l'élément promis, écrire la négation si le choix est de ne pas le faire, ou déclarer par « promesse-ok »",
+  },
+  {
+    // TF-0571 / R-52 (24/08) : une doctrine n'existe que là où son mécanisme est installé. Mesure :
+    // dix produits au registre, cinq instanciés, UN SEUL portant le hook, ZÉRO portant le texte.
+    // L'entrée est ici pour que l'état soit RELU à chaque recette — l'oracle NOMME et ne bloque
+    // pas (code de sortie 0 tant qu'aucun constat ne porte sur le pilot), parce que le remède
+    // appartient au produit et qu'un contrôle qui bloque sur ce qu'il ne peut pas faire réparer
+    // apprend à être contourné.
+    nom: "oracle-portee-doctrine.mjs",
+    motif: "produit instancié dont la doctrine de restitution n'est pas installée ou pas câblée",
+    remede: "un run demandé AU PRODUIT (le pilot n'écrit pas chez lui) ; l'héritage porte les pièces (gabarits\\HERITAGE.json, R-47)",
+  },
+  {
+    // TF-0616 (25/08, retour Produit-11). R-14 demande « ce `.env` est-il IGNORÉ ? » —
+    // question qui n'a de sens que DANS un dépôt. La question antérieure manquait : « est-il au
+    // BON ENDROIT ? ». Un `.env` créé au dossier PARENT d'un dépôt, portant une clé d'API RÉELLE,
+    // y a échappé entièrement : ni `.gitignore` pour le couvrir, ni `git status` pour le signaler,
+    // ni oracle pour le voir. C'est un état du PARC, donc relu à chaque recette. L'oracle NOMME et
+    // ne bloque que ce que le pilot peut réparer — la quasi-totalité des porteurs vit chez des
+    // produits, où le pilot n'écrit pas.
+    nom: "oracle-secrets-hors-perimetre.mjs",
+    motif: "porteur de secrets vivant hors de tout dépôt, ou non ignoré par le sien",
+    remede: "vérifier le contenu, déplacer dans le dépôt qui l'ignore, puis SUPPRIMER (geste humain, R-29) ; chez un produit, par un run demandé",
+  },
+  {
+    // TF-0565 (24/08) : UN SQUELETTE QUI N'A JAMAIS ÉTÉ INSTANCIÉ N'A JAMAIS ÉTÉ ÉPROUVÉ. Deux
+    // squelettes de dossier posaient une classe sur 8 et 11 paragraphes sans aucune règle CSS et
+    // rendaient FAIL à leur propre contrôle de marquage DEPUIS LEUR PRODUCTION : le chapeau se
+    // rendait comme un paragraphe ordinaire, et un oracle de rendu ne voit rien tant que rien ne
+    // déborde. C'est un état du PARC — le défaut naît d'une publication, jamais d'un artefact
+    // qu'on passe à un oracle.
+    nom: "oracle-gabarits-documents.mjs",
+    motif: "famille de gabarit sans instance, instance jamais remplie, ou pièce fautive au marquage",
+    remede: "remplir l'instance manquante, ou corriger la règle nommée par check_html (souvent L21, composant déclaré sans style)",
+  },
+  {
+    // TF-0922 (08/09) : un caractère de contrôle né d'un antislash de chemin Windows interprété
+    // (`scripts\v…` → 0x0B) est INVISIBLE à la lecture et rend le fichier binaire pour une
+    // recherche textuelle. Six fichiers suivis en portaient un, dont quatre pièces de doctrine de
+    // premier rang, présents depuis des commits antérieurs et vus par personne. C'est un état du
+    // PARC : le défaut naît d'une ÉCRITURE, jamais d'un artefact qu'on passerait à un oracle.
+    nom: "oracle-caracteres-controle.mjs",
+    motif: "caractère de contrôle dans un fichier texte versionné (antislash de chemin interprété)",
+    remede: "rétablir l'antislash littéral à la ligne nommée, et écrire les contenus accentués par un outil d'édition plutôt que par une redirection de shell",
+  },
+  {
+    // R-44 (20/08) : un README par dossier d'input\ et output\, présent, à jour, rédigé.
+    nom: "oracle-readme-dossiers.mjs",
+    motif: "README d'input\\ et output\\ absents, périmés ou non rédigés",
+    remede: "node scripts\\readme-dossiers.mjs, puis rédiger le bloc ROLE des README signalés",
+  },
+  {
+    // TF-2487 (13/11/2026) : 4 des 5 agents de la flotte échouaient à oracle-scan-agentdef et aucun pas ne les jouait. Un FAIL
+    // se retire (l'outil que le rôle n'emploie pas) ou se déclare dans la source de l'agent ; un FAIL non déclaré, un motif
+    // de moins de 60 caractères ou une déclaration périmée est rouge. SANS_OBJET (2) si forge-agents-security est absent.
+    nom: "../scripts/compiler-flotte.mjs",
+    args: ["--verifier", "--json"],
+    motif: "agent compilé de .claude/agents en échec à oracle-scan-agentdef sans déclaration motivée dans sa source gabarits/flotte/<id>.yaml",
+    remede: "retirer l'outil que le rôle n'emploie pas, ou ajouter à gabarits/flotte/<id>.yaml « # scan-agentdef CAP-n : <motif> », puis node scripts\\compiler-flotte.mjs",
+  },
+  {
+    // TF-2496 (13/11/2026) : l'oracle ne se jouait que sur ses fixtures (--self-test), et le parc réel lui rendait 30 FAIL que
+    // personne ne lisait : des expressions mortes (`\bà\b`, `\b(à`) dans le pilot et ses forges, qui rendent PASS en croyant juger.
+    // C'est un état du PARC : le défaut naît d'une écriture, jamais d'un artefact qu'on passerait à un oracle.
+    nom: "oracle-pieges-regex.mjs",
+    motif: "expression régulière morte : frontière de mot ASCII collée à une lettre accentuée, classe de majuscules sous drapeau i, octet de contrôle dans une source",
+    remede: "frontière Unicode `(?<![\\wà-ÿ])…(?![\\wà-ÿ])` ou forme non accentuée à la ligne nommée ; une expression juste se déclare `// piege-ok : <motif>` sur sa ligne",
+  },
+  {
+    // TF-2505 (14/11/2026) : l'oracle ne se jouait que sur ses fixtures, et le parc réel lui rendait BD1 (hook-controles-produit.mjs : « banc » dans l'en-tête,
+    // aucun banc trouvé) sans que personne le lise. C'est un état du PARC : un contrôle nouveau naît sans banc, ou avec un en-tête qui en affirme un.
+    nom: "oracle-banc-double-sens.mjs",
+    args: ["--json"],
+    motif: "contrôle en service dont l'en-tête affirme un banc qui n'existe pas (BD1), banc sans cas écrit pour échouer (BD2), `--self-test` annoncé et non lu (BD3)",
+    remede: "écrire le banc voisin `<contrôle>.test.mjs`, ou déclarer le banc existant dans oracles\\lib-recettes-dediees.mjs avec sa raison, ou retirer du texte d'en-tête l'affirmation d'un banc",
+  },
+  {
+    // TF-2505 (14/11/2026) : même constat pour CI2 — `scripts/verifier-etape-chaine.mjs:166` rendait FAIL sur le parc et personne ne le lisait.
+    nom: "oracle-controles-injoignables.mjs",
+    args: ["--json"],
+    motif: "contrôle que rien n'appelle (CI1), chemin d'outil externe codé en dur (CI2), codes de sortie non déclarés (CI3), contrôle sans recette (CI4) ou sans chemin d'échec (CI5)",
+    remede: "variable d'environnement d'abord, liste de repli ensuite, échec bruyant sinon ; un chemin volontairement littéral se marque `outil-en-dur-ok : <motif>` en fin de ligne",
+  },
+  {
+    // TF-2528 (14/11/2026) : l'oracle rendait FAIL sur le parc (gabarit 2.68.0, ligne des gates de hook-ouverture.mjs en 2.67.0) et
+    // aucun pas ne le jouait ; la ligne des gates, relue à chaque ouverture, annonçait une version périmée du gabarit.
+    nom: "oracle-coherence-restitution.mjs",
+    args: ["--json"],
+    motif: "les trois porteurs de la version de RESTITUTION.md (en-tête du gabarit, étiquette du rappel de hook-restitution.mjs, ligne des gates de hook-ouverture.mjs) divergent (RC1)",
+    remede: "mettre les deux porteurs en retard à la version du gabarit, qui fait foi (le message du verdict les nomme)",
+  },
+  {
+    // TF-2521 (16/11/2026) : 46 des 887 sidecars d'oracle suivis (`ETAPE-MEP.md.oracles.json` à la racine, `.oracles/…`) nommaient un arbre lié
+    // (`..\_wt-pilot-ph\…`, `.claude\worktrees\agent-…\…`) : le contrôle de lisibilité y inscrit le chemin de l'arbre où l'édition a eu lieu, et la fusion
+    // l'emporte. C'est un état du PARC : le défaut naît d'un commit, jamais d'un artefact qu'on passerait à un oracle.
+    nom: "oracle-sidecars-arbre-lie.mjs",
+    args: ["--json"],
+    motif: "sidecar d'oracle suivi dont un champ de chemin nomme un arbre lié (SL1) : le chemin cite un dossier qui n'existera plus, et la clé d'empreinte ne se résout plus depuis la racine",
+    remede: "node oracles\\oracle-sidecars-arbre-lie.mjs --corriger (le chemin redevient celui du dépôt principal), puis commiter les sidecars réécrits",
+  },
+];
+for (const { nom, remede, args: argsParc } of ETAT_DU_PARC) {
+  // Certains oracles d'etat jugent des ARTEFACTS nommes plutot qu'un parc entier : ils portent
+  // leur liste ici, une seule fois, au lieu de la deviner. Sans ce passage, l'oracle rendait
+  // SANS_OBJET faute de cible — un vert de complaisance, exactement ce que cet agregateur
+  // existe pour eteindre. Un chemin relatif se resout depuis la racine du pilot.
+  // Un argument d'option (`--verifier`) passe tel quel ; seul un chemin se résout depuis la racine.
+  const cibles = (argsParc || []).map((c) => (c.startsWith("--") ? c : join(ICI, "..", c)));
+  const r = garde.jouer(`${nom} (parc réel)`, () => spawnSync(process.execPath, [join(ICI, nom), ...cibles], { encoding: "utf8" }));
+  let verdict = null, sansObjet = null;
+  try {
+    const j = JSON.parse(r.stdout || "{}");
+    verdict = j.verdict;
+    // TF-1133 : un « sans objet » dit POURQUOI — le motif de l'oracle, ou ses constats SANS_OBJET.
+    const motifs = [j.motif, ...(j.findings || []).filter((f) => f.statut === "SANS_OBJET").map((f) => f.message)].filter(Boolean);
+    sansObjet = motifs.length ? motifs.join(" · ") : null;
+  } catch { /* sortie non JSON : le code de retour tranche */ }
+  // 0 PASS · 2 non jugeable (parc absent, critère ci-dessus) → succès. 1 FAIL → échec, avec le remède.
+  const ok = r.status === 0 || r.status === 2;
+  resultats.push({
+    nom: `${nom} (parc réel)`,
+    statut: ok ? "OK" : "ECHEC",
+    detail: ok
+      ? `I4 — ${verdict || "sans verdict lisible"} sur le parc${sansObjet ? ` · non jugé : ${sansObjet.slice(0, 220)}${sansObjet.length > 220 ? "…" : ""}` : ""}`
+      : `I4 — ${verdict || "FAIL"} sur le parc · remède : ${remede}`,
+    via: "I4 (oracle d'état)",
+  });
+}
+
+console.log("=".repeat(78));
+console.log("  Self-tests des oracles du pilot");
+console.log("=".repeat(78));
+for (const r of resultats) {
+  const marque = r.statut === "OK" ? "OK    " : r.statut === "ECHEC" ? "ECHEC " : "MANQUE";
+  console.log(`  [${marque}] ${r.nom.padEnd(32)} ${r.detail}`);
+}
+// ── I5 — LE CLIQUET DU NOMBRE DE CAS (TF-0681) ───────────────────────────────────────────────
+//
+// Le 26/08, un fichier de recette a été ÉCRASÉ et ONZE CAS ont disparu. Ce harnais a rendu tout
+// vert : il joue le fichier, lit sa ligne de résumé, compte un OK — et le compte est AUTO-DÉCLARÉ,
+// donc rien ne sait ce qu'il valait la veille. *Un dépôt qui se mesure par des recettes est
+// aveugle à la disparition de ses recettes.*
+//
+// Une HAUSSE inscrit la nouvelle valeur : c'est un cliquet, rien n'est perdu en montant, et
+// exiger un geste humain par cas ajouté produirait une friction dont on se débarrasse en
+// désactivant le contrôle. Une BAISSE échoue — retirer un cas devient un geste ÉCRIT.
+const jour = new Date().toISOString().slice(0, 10);
+const CHEMIN_BASELINE = join(ICI, "baseline-recettes.json");
+const bilan = confronterBaseline(resultats, lireBaseline(CHEMIN_BASELINE), jour);
+const APPLIQUER = process.argv.includes("--appliquer");
+
+if (bilan.nonLus.length) {
+  // Une recette dont le résumé ne porte aucun compte lisible sortirait du cliquet EN SILENCE.
+  // Elle est nommée : le silence d'une sonde n'est pas un verdict.
+  // UN AVEU TRONQUÉ EST UN AVEU PARTIEL. Le premier jet coupait la liste à QUATRE noms suivis
+  // de points de suspension : impossible de savoir lesquelles des quinze recettes étaient hors
+  // du cliquet, donc impossible d'agir dessus. Elles sont toutes nommées, une par ligne.
+  console.log(`  [NON JUGÉ] ${bilan.nonLus.length} recette(s) sans compte lisible et SANS exemption`
+    + " déclarée — les nommer est la seule façon d'en sortir :");
+  for (const n of bilan.nonLus) console.log(`             · ${n}`);
+}
+// TF-1434 — UN CAS NON JOUÉ SUR CE POSTE, POUR UN MOTIF QUE SA RECETTE DÉCLARE, N'EST PAS UN CAS
+// PERDU. Le cliquet le compte (la forme fermée « [NON JOUÉ] <n> cas — … » est lue par
+// `nonJouesDe`), et chaque déclaration est NOMMÉE ici, avec son motif, à chaque passage : un
+// non-jeu permanent se lit, il ne se cache pas. Le 28/09, le harnais accusait « 19 → 17 cas » sur
+// l'un des deux postes du porteur pour deux cas qu'aucun commit n'avait retirés.
+for (const nj of bilan.nonJoues) {
+  console.log(`  [NON JOUÉ] ${nj.nom} : ${nj.nonJoues} cas déclaré(s) non joué(s) sur ce poste, comptés au cliquet `
+    + `(${nj.joues} joué(s) + ${nj.nonJoues}) — ${nj.declarations.map((d) => d.motif || "motif non écrit").join(" · ")}`);
+}
+const dontNonJoues = (n) => (n ? ` (dont ${n} déclaré(s) NON JOUÉ(S) sur ce poste)` : "");
+for (const m of bilan.montees) {
+  console.log(`  [CLIQUET] ${m.nom} : ${m.avant === null ? "première mesure" : `${m.avant} →`} ${m.vu} cas${dontNonJoues(m.nonJoues)}`);
+}
+for (const b of bilan.baisses) {
+  console.error(`  [CAS PERDUS] ${b.nom} : ${b.avant} → ${b.vu} cas${dontNonJoues(b.nonJoues)}, ${b.perdus} DISPARU(S). `
+    + "Une recette qui perd des cas rend un harnais vert — retirer un cas est un geste ÉCRIT : "
+    + "rejouer avec `--appliquer` après avoir dit POURQUOI, ou restaurer les cas. Un cas que la recette ne "
+    + "joue pas sur ce poste se DÉCLARE par une ligne « [NON JOUÉ] <n> cas — <motif> » (TF-1434).");
+}
+// TF-1082 — une recette de la baseline ABSENTE du passage est nommée et fait échouer, exemption
+// comprise : le cliquet des cas ne voyait pas la disparition d'un fichier entier.
+for (const d of bilan.disparues) {
+  console.error(`  [RECETTE DISPARUE] ${d.nom}${d.exemption ? " (exemption déclarée)" : d.cas !== null ? ` (${d.cas} cas)` : ""} : `
+    + "présente à la baseline, jouée par PERSONNE à ce passage. Restaurer la recette, ou retirer l'entrée "
+    + "par `--appliquer` après avoir dit POURQUOI — une disparition est un geste écrit.");
+}
+// TF-2480 (13/11/2026) : dans un arbre de campagne (worktree git lié), les hausses ne s'inscrivent pas toutes seules : la référence de main se met à jour
+// par son écrivain, joué dans main (motif et limites : `lib-baseline-recettes.mjs`). `--ecrire-baseline` les inscrit sciemment.
+const inscription = decisionInscription(bilan, { campagne: arbreDeCampagne(join(ICI, "..")), forcer: process.argv.includes("--ecrire-baseline") });
+if (inscription.ecrire) ecrireBaseline(CHEMIN_BASELINE, bilan.baseline);
+if (inscription.campagne) {
+  console.log(`  [CLIQUET] arbre de campagne (worktree git lié) : ${bilan.montees.length} hausse(s) vue(s) et NON inscrite(s) dans ${CHEMIN_BASELINE} — `
+    + "la référence de main se met à jour par son écrivain, joué dans main ; `--ecrire-baseline` l'inscrit ici sciemment (TF-2480)");
+}
+if ((bilan.baisses.length || bilan.disparues.length) && APPLIQUER) {
+  const accepte = { ...bilan.baseline };
+  for (const b of bilan.baisses) accepte[b.nom] = { cas: b.vu, vu_le: jour, baisse_acceptee_le: jour };
+  for (const d of bilan.disparues) delete accepte[d.nom];
+  ecrireBaseline(CHEMIN_BASELINE, accepte);
+  console.log(`  [CLIQUET] ${bilan.baisses.length} baisse(s) et ${bilan.disparues.length} disparition(s) ACCEPTÉE(S) par --appliquer`);
+}
+
+// ── I6 — LE SENS ROUGE DES RECETTES (TF-1082, reste du 20/09/2026) ───────────────────────────
+//
+// I5 compte les CAS et refuse qu'ils disparaissent ; le cliquet nomme depuis 779e11f toute recette
+// de la baseline absente d'un passage. Aucun des deux ne pose la question suivante : *cette recette
+// a-t-elle seulement vu son contrôle REFUSER quelque chose ?* Une recette qui ne joue que des
+// fixtures conformes est verte pour toujours, y compris le jour où sa règle est neutralisée.
+//
+// La voie retenue est la LECTURE des cas déclarés rouges dans la sortie, et non la mutation des
+// contrôles — le motif est écrit en tête de `lib-sens-rouge.mjs`, avec ce qu'elle ne prouve pas.
+// La propriété qui la rend probante : une recette n'est lue que si elle a réussi EN ENTIER, donc
+// son cas rouge a été joué et il est vert, donc la fixture fautive a bien été REJETÉE.
+//
+// AVERTISSEMENT, ET PAS ENCORE UN VERDICT. Ce passage MESURE une couverture et la publie. Mettre
+// le harnais au rouge sur l'existant transformerait une mesure en dette du jour et ferait
+// contourner le contrôle avant qu'il soit compris (motif que R-33 bis donne pour le verdict websec) — le compte ci-dessous est
+// l'indicateur à faire monter, et le seuil de bascule une décision humaine.
+// Décision humaine D-4 (a) du 13/10/2026 : BLOQUANT à partir de SEUIL_I6_BLOQUANT (lib-sens-rouge.mjs),
+// après 195/195 recettes lisibles — avertissement d'ici là, et l'avertissement dit sa date de fin.
+const sensRouge = confronterSensRouge(resultats);
+const verdictI6 = verdictSensRouge(sensRouge, jour);
+if (sensRouge.sansRouge.length) {
+  console.log(`  [SENS ROUGE] ${sensRouge.avecRouge}/${sensRouge.mesurees} recette(s) verte(s) déclarent au moins `
+    + `un cas ROUGE joué ; ${sensRouge.sansRouge.length} n'en déclarent AUCUN de lisible — `
+    + (verdictI6.bloquant ? "ÉCHEC (I6 bloquant depuis le " + SEUIL_I6_BLOQUANT + ", décision D-4 (a) du 13/10/2026) : "
+      : "AVERTISSEMENT jusqu'au " + SEUIL_I6_BLOQUANT + ", ÉCHEC ensuite (décision D-4 (a) du 13/10/2026) : ")
+    + "le vocabulaire lu est fermé (cas « rouge », couverture « deux/double sens », "
+    + "« doit échouer », cas qui passe en annonçant un REFUS), donc un cas rouge nommé autrement compte ici comme absent. Les nommer est la "
+    + "seule façon d'en sortir :");
+  // UN AVEU TRONQUÉ EST UN AVEU PARTIEL (même leçon que le cliquet) : toutes nommées, une par ligne.
+  for (const { nom, via } of sensRouge.sansRouge) console.log(`               · ${nom} (${via})`);
+} else if (sensRouge.mesurees) {
+  console.log(`  [SENS ROUGE] ${sensRouge.mesurees}/${sensRouge.mesurees} recette(s) verte(s) déclarent au moins `
+    + "un cas ROUGE joué — le double sens est tenu sur tout le passage");
+}
+
+// ── I7 — L'ARBRE SUIVI (TF-1690) : une recette qui écrit dans un fichier suivi est nommée, avec ses
+// chemins, et fait échouer le passage. Une garde qui n'a pas pu jouer le DIT : son silence se lirait
+// comme un vert.
+if (!garde.jouee) {
+  console.log("  [NON JOUÉ] garde de l'arbre suivi (I7) : aucun dépôt git lisible à la racine — les écritures "
+    + "des recettes dans les fichiers suivis ne sont PAS vues à ce passage");
+}
+// TF-1878 : un écart que la recette, rejouée seule, ne réécrit pas vient d'un autre processus (une session
+// vivante sur le dépôt) — nommé, jamais tu, et ne fait pas échouer le passage.
+for (const { nom, chemins } of garde.concurrentes) {
+  console.log(`  [ÉCRITURE CONCURRENTE] pendant ${nom} : ${chemins.length} fichier(s) suivi(s) écrit(s) que la recette, `
+    + `rejouée seule, ne réécrit pas — imputés à un autre processus, non bloquant : ${chemins.join(", ")}`);
+}
+for (const { nom, chemins } of garde.ecritures) {
+  console.error(`  [ARBRE SUIVI] ${nom} a écrit dans ${chemins.length} fichier(s) suivi(s) : ${chemins.join(", ")}. `
+    + "Une recette travaille sur une copie sous le dossier temporaire, jamais dans l'arbre suivi (TF-1690) ; "
+    + "ces chemins sont ceux que la recette a réécrits AUSSI à un rejeu immédiat, seule (TF-1878) : ce n'est pas une autre session.");
+}
+
+const echecs = resultats.filter((r) => r.statut !== "OK");
+const perdus = APPLIQUER ? [] : [...bilan.baisses, ...bilan.disparues];
+const casNonJoues = bilan.nonJoues.reduce((n, x) => n + x.nonJoues, 0);
+const sansRougeBloquant = verdictI6.bloquant ? sensRouge.sansRouge.length : 0;
+const ecrivains = garde.ecritures.length;
+console.log("=".repeat(78));
+console.log(
+  echecs.length || perdus.length || sansRougeBloquant || ecrivains
+    ? `  ${echecs.length}/${resultats.length} oracle(s) en défaut${echecs.length ? ` : ${echecs.map((r) => r.nom).join(", ")}` : ""}`
+      + `${perdus.length ? ` · ${perdus.length} recette(s) ont PERDU des cas` : ""}`
+      + `${sansRougeBloquant ? ` · ${sansRougeBloquant} recette(s) sans cas rouge lisible (I6)` : ""}`
+      + `${ecrivains ? ` · ${ecrivains} recette(s) ont écrit dans l'arbre suivi (I7) : ${garde.ecritures.map((e) => e.nom).join(", ")}` : ""}`
+    : `  ${resultats.length}/${resultats.length} recettes jouées et vertes (oracles, fichiers de test du dépôt, état du parc — I1, I2 et I4) · cliquet des cas tenu (I5)`
+      + (casNonJoues ? `, dont ${casNonJoues} cas déclaré(s) NON JOUÉ(S) sur ce poste dans ${bilan.nonJoues.length} recette(s)` : "")
+      + (garde.jouee ? " · aucune écriture dans l'arbre suivi (I7)" : ""),
+);
+process.exit(echecs.length || perdus.length || sansRougeBloquant || ecrivains ? 1 : 0);

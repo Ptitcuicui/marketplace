@@ -1,0 +1,727 @@
+#!/usr/bin/env node
+/**
+ * emettre-travaux.mjs — le pilot confie un travail à un produit, par sa BOÎTE D'ENTRÉE.
+ *
+ * ============================================================================================
+ * POURQUOI (TF-0627, décision humaine du 25/08/2026 — voie « canal symétrique »)
+ * ============================================================================================
+ *
+ * LE FLUX ÉTAIT À SENS UNIQUE, et personne ne l'avait écrit. Le canal produit → pilot est complet
+ * et outillé depuis des semaines : lot de retours, sidecar machine, rejet atomique, dérogation
+ * tracée, juge de forme importé des deux côtés. Le canal pilot → produit n'existait pas. Tout ce
+ * que le pilot possédait autour du carnet de reste-à-faire d'un produit était en LECTURE (la
+ * projection HTML) ou en CONTRÔLE (R-20 qui juge sa présence et ses sections).
+ *
+ * CE QUE LA LACUNE COÛTAIT, mesuré et non supposé : 38 artefacts d'héritage absents chez sept
+ * produits, dont le gabarit de restitution et son hook chez cinq — et AUCUN des sept ne le savait,
+ * faute de voie pour le lui dire. *Un état mesuré qui n'atteint pas son destinataire ne devient
+ * pas un travail fait.*
+ *
+ * ============================================================================================
+ * LA FRONTIÈRE, ET POURQUOI ELLE EST LÀ
+ * ============================================================================================
+ *
+ * CE SCRIPT N'ÉCRIT QUE DANS `input\00-travaux\` DU PRODUIT. Pas dans son carnet, pas dans son
+ * code, pas dans son `.gitignore`. C'est ce qui rend le canal acceptable : le produit INGÈRE
+ * lui-même à son prochain travail, décide ce qu'il retient, et écarte le reste avec son motif aux
+ * « Écarts assumés » (R-20 bis). La règle « seuls les produits se modifient eux-mêmes » est tenue
+ * à la lettre — le pilot n'écrit rien que le produit n'ait choisi.
+ *
+ * IL NE COMMITE RIEN chez le produit : déposer un fichier dans une boîte d'entrée est un geste
+ * réversible qu'un `git clean` annule ; entrer dans l'historique d'un produit est un geste dont le
+ * produit est seul auteur (décision humaine du 25/08 sur un cas précédent).
+ *
+ * IL JOUE SON PROPRE JUGE AVANT D'ÉCRIRE. Le lot est vérifié par `gabarits\oracle-travaux-pilot.mjs`
+ * — le même module que le produit reçoit — et un lot en défaut n'est PAS déposé. C'est la leçon
+ * du canal inverse, où la forme était prescrite en prose chez l'émetteur et jugée en code chez le
+ * destinataire : six lots en une journée ont dû passer par dérogation. Ici l'émetteur est jugé.
+ *
+ * IL EST IDEMPOTENT PAR CONTENU : un lot dont le contenu est déjà déposé chez le produit n'est pas
+ * redéposé. Sans cela, deux exécutions du même relevé enseveliraient le produit sous des lots
+ * identiques, et le canal deviendrait la nuisance qu'il est censé éviter (motif que R-33 bis donne pour le verdict websec).
+ *
+ * Usage :
+ *   node todo\emettre-travaux.mjs --produit <nom> [--essai]
+ *   node todo\emettre-travaux.mjs --tous [--essai]
+ * `--essai` rend le lot sur la sortie standard et n'écrit RIEN, nulle part.
+ * `--registre <fichier>` lit les constats dans ce fichier plutôt que dans `todo\TODO.jsonl` (recette).
+ *
+ * UNE DEMANDE MODIFIÉE PART SEULE (TF-1920) : un constat déjà présent dans un lot encore `a_traiter`
+ * dont la demande (ou le fait, l'effort, la vérification) a changé depuis le dépôt part dans un lot
+ * COMPLÉMENTAIRE qui ne porte que lui — sans reconfier les autres éléments du lot précédent.
+ */
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from "node:fs";
+import { join, dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { cheminsTables, pseudoDe } from "../scripts/lib-confidentiel.mjs";
+import { PRODUITS_DE_L_ECOSYSTEME } from "../scripts/lib-parc.mjs";
+import { verifier } from "../gabarits/oracle-travaux-pilot.mjs";
+import { empreinteTexte } from "../scripts/lib-empreinte.mjs";
+import { relever } from "../scripts/relever-heritage.mjs";
+
+/**
+ * LA SECONDE SOURCE DU CANAL (TF-0673). Jusqu'ici cet émetteur ne savait confier qu'UNE classe :
+ * les artefacts d'héritage manquants. Tout autre constat destiné à un produit — un correctif que
+ * lui seul peut appliquer, un arbitrage qui lui appartient — n'avait AUCUNE VOIE, et retombait
+ * donc dans le défaut exact que ce script existe pour corriger : *un état mesuré qui n'atteint
+ * pas son destinataire ne devient pas un travail fait.*
+ *
+ * Un item du registre est confié quand il porte `destinataire_produit` et qu'il n'est pas clos.
+ * Le champ est EXPLICITE, jamais déduit d'une cible de forge : « ce constat concerne le produit
+ * X » est une décision humaine, pas une inférence — et une inférence déposerait chez un produit
+ * du travail que personne n'a voulu lui confier.
+ */
+/**
+ * « Produit-02 » et « Produit-02.com » désignent le même produit : le dépôt porte
+ * un suffixe de domaine que le registre n'écrit pas. On normalise les DEUX côtés — minuscules,
+ * tout ce qui suit le premier point retiré — puis on compare EXACTEMENT.
+ *
+ * JAMAIS PAR INCLUSION, et le motif vaut d'être écrit : « Foo » serait alors rapproché de
+ * « FooBar », et un constat partirait chez le mauvais produit. Une comparaison lâche qui se
+ * trompe dépose du travail chez quelqu'un qui n'en est pas le destinataire — c'est pire que
+ * de ne rien déposer, parce que le vrai destinataire n'apprend rien ET qu'un autre est dérangé.
+ */
+export const normaliserProduit = (n) => String(n || "").toLowerCase().split(".")[0].trim();
+export const memeProduit = (a, b) => normaliserProduit(a) === normaliserProduit(b)
+  && normaliserProduit(a) !== "";
+
+/**
+ * LE REGISTRE PARLE EN PSEUDONYMES, LE PARC EN NOMS RÉELS (mesure du 31/08/2026).
+ *
+ * Depuis que l'anonymisation est dans la chaîne d'ingestion (28/08), `destinataire_produit`
+ * porte un pseudonyme (« Produit-02 ») quand le parc, lui, porte le nom réel du dépôt. Le
+ * rendez-vous exact ne se faisait plus : les TROIS constats au plus haut score du mandat du
+ * 28/08 sortaient en [ORPHELINS] alors que leur produit était sur le poste, localisable, et
+ * venait de remettre un lot le matin même. C'est la rechute exacte du défaut fondateur de la
+ * seconde source (TF-0673) : un rendez-vous manqué qui perd des constats derrière un message
+ * normal — cette fois l'avertissement les nommait, mais il accusait le registre à tort.
+ *
+ * LA RÉSOLUTION EST EN LECTURE SEULE, et ce n'est pas un détail : `pseudoProduit()` de
+ * l'anonymiseur ÉTEND la table à l'inconnu. L'employer ici inscrirait chaque dossier scanné du
+ * parc — clones, archives, fixtures de recette — comme un produit pseudonymisé. Rapprocher
+ * n'est pas baptiser. Table absente ou illisible → `null`, et le rapprochement retombe sur la
+ * comparaison directe : un parc sans table n'a jamais rien anonymisé, il n'y a rien à résoudre.
+ */
+export function pseudonymeDe(nomReel, chemin = cheminsTables().produits) { // canal confidentiel (D-28 a), env, ou ancien fichier libre
+  if (!existsSync(chemin)) return null;
+  let d;
+  try { d = JSON.parse(readFileSync(chemin, "utf8")); } catch { return null; }
+  for (const [reel, pseudo] of Object.entries(d.produits || {}))
+    if (memeProduit(reel, nomReel)) return pseudoDe(pseudo); // forme objet : TF-2130
+  return null;
+}
+
+/**
+ * Le rendez-vous complet : nom réel d'abord, pseudonyme ensuite — EXACT dans les deux cas.
+ *
+ * Le parc nomme un produit rangé sous un dossier client par son CHEMIN relatif (« _Client/Produit »),
+ * la table et le registre par le nom du dépôt seul. Comparer le chemin entier manquait tout produit
+ * rangé : le 12/10/2026, 4 constats adressés à 2 produits présents sur le poste sortaient orphelins
+ * et notés « absent de ce poste ». Le dernier segment est un nom de dépôt, comparé EXACTEMENT.
+ */
+const dernierSegment = (p) => String(p || "").split(/[\\/]/).filter(Boolean).pop() || "";
+export const designeProduit = (destinataire, produit) =>
+  [produit, dernierSegment(produit)].some((p) =>
+    memeProduit(destinataire, p) || memeProduit(destinataire, pseudonymeDe(p)));
+
+/**
+ * LE RENDU D'UN CONSTAT, et sa seule règle : **les champs manquants ne sont pas inventés.**
+ *
+ * Un lot qui comblerait les trous du registre par de la prose plausible ferait croire au produit
+ * qu'on lui a écrit quelque chose de mesuré. « Non renseigné au registre » est laid à lire — et
+ * c'est exactement ce qu'il faut : il désigne le registre, pas le produit, et il se corrige là.
+ */
+const manque = (quoi) => `**non renseigné au registre** — ${quoi}`;
+
+export const blocConstat = (e) => `### ${e.id} — ${e.titre || "constat sans titre"} · gravité ${e.gravite || "mineur"}
+
+- **Le fait** : ${e.contenu ? String(e.contenu).slice(0, 1400) : manque("le constat n'a pas de contenu")}
+- **Pourquoi cela vous concerne** : ${e.pourquoi_produit || "ce constat a été relevé sur votre produit, et sa correction vous appartient — le pilot n'écrit pas dans votre code"}
+- **Ce qui est demandé** : ${e.demande_produit || manque("aucune demande explicite — à instruire avec le pilot avant d'agir")}
+- **Effort estimé** : ${e.effort || manque("non estimé")}
+- **Comment vous saurez que c'est fait** : ${e.verification || manque("aucune vérification déclarée — c'est un manque, pas une dispense")}
+- **Si ce n'est pas fait** : ${e.consequence || manque("conséquence non écrite")}`;
+
+/** Les constats destinés à un produit que le parc ne porte PAS. Voir l'avertissement de fin. */
+export function orphelins(lignes, chemin = join(PILOT, "todo", "TODO.jsonl")) {
+  const produits = lignes.map((l) => l.produit);
+  return constatsDestines(chemin)
+    .filter((e) => !produits.some((p) => designeProduit(e.destinataire_produit, p)));
+}
+
+/**
+ * ABSENT DE CE POSTE N'EST PAS ORPHELIN (15/10/2026). Le parc scanné est celui d'UN poste ; un produit
+ * dont le dépôt vit sur l'autre poste échappe au scan sans que le registre ait tort. La table des
+ * pseudonymes, elle, connaît tous les produits du parc entier : un destinataire qu'elle porte (comme
+ * pseudonyme ou comme nom réel) est « absent du poste », et seul un destinataire qu'elle ignore reste
+ * un orphelin, qui accuse le registre. Mesuré le 15/10 : 8 « orphelins » sur 9 étaient des produits de
+ * l'autre poste. Lecture seule de la table ; sans table, rien n'est dit absent — la répartition n'invente pas.
+ * Les produits de l'écosystème (`PRODUITS_DE_L_ECOSYSTEME` de `scripts/lib-parc.mjs`) ne sont jamais dans la
+ * table, parce qu'ils se citent en clair : déclarés, ils sont connus au même titre (le 9e « orphelin » du 15/10).
+ */
+export function repartirOrphelins(perdus, chemin = cheminsTables().produits) {
+  let table = {};
+  try { table = existsSync(chemin) ? JSON.parse(readFileSync(chemin, "utf8")).produits || {} : {}; } catch { table = {}; }
+  const connu = (d) => [...PRODUITS_DE_L_ECOSYSTEME].some((p) => memeProduit(d, p))
+    || Object.entries(table).some(([reel, pseudo]) => memeProduit(d, pseudoDe(pseudo)) || memeProduit(d, reel));
+  return { absents: perdus.filter((e) => connu(e.destinataire_produit)), inconnus: perdus.filter((e) => !connu(e.destinataire_produit)) };
+}
+
+export function constatsDuRegistre(produit, chemin = join(PILOT, "todo", "TODO.jsonl")) {
+  if (!existsSync(chemin)) return [];
+  const etat = new Map();
+  for (const brute of readFileSync(chemin, "utf8").split(/\r?\n/)) {
+    if (!brute.trim()) continue;
+    let e;
+    try { e = JSON.parse(brute); } catch { continue; }
+    if (!e.id) continue;
+    etat.set(e.id, { ...(etat.get(e.id) || {}), ...e });
+  }
+  const clos = new Set(["corrige", "ecarte"]);
+  return [...etat.values()]
+    .filter((e) => e.destinataire_produit && designeProduit(e.destinataire_produit, produit)
+      && !clos.has(e.statut))
+    .sort((a, b) => String(a.id).localeCompare(String(b.id)));
+}
+
+/** Tous les constats destinés à UN produit, quel qu'il soit — pour dénoncer les orphelins. */
+export function constatsDestines(chemin = join(PILOT, "todo", "TODO.jsonl")) {
+  if (!existsSync(chemin)) return [];
+  const etat = new Map();
+  for (const brute of readFileSync(chemin, "utf8").split(/\r?\n/)) {
+    if (!brute.trim()) continue;
+    let e;
+    try { e = JSON.parse(brute); } catch { continue; }
+    if (!e.id) continue;
+    etat.set(e.id, { ...(etat.get(e.id) || {}), ...e });
+  }
+  const clos = new Set(["corrige", "ecarte"]);
+  return [...etat.values()].filter((e) => e.destinataire_produit && !clos.has(e.statut));
+}
+
+const ICI = dirname(fileURLToPath(import.meta.url));
+const PILOT = join(ICI, "..");
+const args = process.argv.slice(2);
+const ESSAI = args.includes("--essai");
+// TF-1083 : une correction de RÉDACTION (même contenu confié, autre forme) ne part que sur demande.
+const CORRIGER_REDACTION = args.includes("--corriger-redaction");
+const valeur = (nom) => { const i = args.indexOf(nom); return i >= 0 ? args[i + 1] : null; };
+// TF-1920 : `--registre <fichier>` lit les constats dans une COPIE du registre — pour la recette, qui
+// joue des lots dans des dossiers temporaires sans jamais lire ni écrire le registre réel.
+const REGISTRE = valeur("--registre");
+
+/** La date du lot, au format des lots du parc. Passée en argument pour rester déterministe. */
+export const dateLot = (d) => `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`;
+
+/** L'indice du jour : la première lettre libre dans la boîte d'entrée du produit. */
+export function indiceLibre(boite, jour) {
+  const pris = existsSync(boite)
+    ? readdirSync(boite).filter((f) => f.includes(`TRAVAUX - ${jour}`)).map((f) => (f.match(new RegExp(`TRAVAUX - ${jour}([a-z])`)) || [])[1]).filter(Boolean)
+    : [];
+  for (const l of "abcdefghijklmnopqrstuvwxyz") if (!pris.includes(l)) return l;
+  return "z";
+}
+
+/**
+ * LE LOT D'HÉRITAGE MANQUANT, rendu pour un produit. C'est le premier — et pour l'instant le seul
+ * — genre de travail que le pilot confie : le relevé du 25/08 l'a mesuré, et le produit ne peut
+ * pas le connaître autrement.
+ */
+export function lotHeritage(ligne, jour, indice, cheminRegistre = undefined, seulementConstats = null) {
+  // TF-1920 (21/10/2026) — LE LOT COMPLÉMENTAIRE NE PORTE QUE LES CONSTATS NOMMÉS : aucun artefact
+  // d'héritage n'y est repris (ils sont déjà confiés par le lot encore à traiter), et seuls les
+  // constats dont la demande a changé depuis ce dépôt y figurent.
+  const artefacts = seulementConstats ? [] : ligne.artefacts;
+  const absents = artefacts.filter((a) => a.etat === "absent");
+  const perimes = artefacts.filter((a) => a.etat === "divergent");
+  // TF-0654 : un artefact TROUVE AILLEURS ne se recopie pas — il se DECLARE. Le confondre avec
+  // un absent ferait deposer un fichier mort a la racine du depot, et le relevé passerait au
+  // vert sur une question restee ouverte.
+  const horsRacine = artefacts.filter((a) => a.etat === "hors_racine");
+  // TF-1461 (28/09/2026, campagne D-32 (a)) — L'ALIAS PÉRIMÉ N'EST PAS UN ÉTAT, C'EST UN CHAMP
+  // SUR UN ARTEFACT par ailleurs CONFORME (la cible canonique existe, `etat` vaut "ok") : le
+  // relevé (scripts\relever-heritage.mjs, TF-0881) pose `alias_perime` et `geste_alias` à côté,
+  // il ne les remplace pas dans `etat`. Les trois filtres ci-dessus ne lisent que `etat` et ne le
+  // voient donc jamais — mesuré sur un parc jetable : le relevé nomme l'alias et son geste git rm,
+  // l'émetteur rend « RIEN À CONFIER ». Même défaut que TF-0654 pour le hors-racine : un
+  // TROISIÈME cas qui demande AUTRE CHOSE que recopier ou mettre à jour — ici, SUPPRIMER.
+  const aliasPerimes = artefacts.filter((a) => a.alias_perime);
+  // TF-1592 (13/10/2026) — L'INCOMPLET N'ÉTAIT JAMAIS CONFIÉ. Un fichier présent à qui manquent les
+  // motifs exigés (`.gitignore`, `.claude/settings.json`) est relevé `incomplet` (TF-0649) ; aucun
+  // des filtres ci-dessus ne le lisait, et le câblage du hook publication-hebergee exigé le 12/10
+  // n'aurait atteint aucun produit. Le geste est le quatrième : AJOUTER les motifs, sans recopier.
+  const incomplets = artefacts.filter((a) => a.etat === "incomplet");
+  // TF-0730 (01/09) — LES CONSTATS SE CALCULENT AVANT LE RETOUR ANTICIPÉ. L'ordre inverse
+  // faisait rendre [RIEN À CONFIER] à un produit dont l'héritage est conforme mais que des
+  // constats DÉCIDÉS attendaient au registre : le message « héritage conforme » était vrai, et
+  // répondait à une question plus étroite que celle posée — la même classe que TF-0680 et
+  // TF-0729, un constat perdu derrière un message normal. Le seul produit porteur de constats
+  // avait AUSSI des défauts d'héritage, ce qui a masqué la voie jusqu'à sa lecture.
+  const constatsDuProduit = cheminRegistre === undefined
+    ? constatsDuRegistre(ligne.produit) : constatsDuRegistre(ligne.produit, cheminRegistre);
+  const constats = seulementConstats
+    ? constatsDuProduit.filter((e) => seulementConstats.has(e.id)) : constatsDuProduit;
+  const aHeritage = absents.length || perimes.length || horsRacine.length || aliasPerimes.length || incomplets.length;
+  if (!aHeritage && !constats.length) return null;
+
+  // L'EMPREINTE D'IDEMPOTENCE PORTE CE QUI EST CONFIE, PAS L'ENVELOPPE QUI LE PORTE.
+  // Premier jet : le sceau etait calcule sur le lot ENTIER, titre compris — or le titre porte
+  // l'indice du jour, qui change a chaque passage (`a`, puis `b`). Deux executions du meme relevé
+  // deposaient donc deux lots identiques dans le fond et differents dans l'octet, et la boite du
+  // produit se remplissait — exactement la nuisance que ce canal doit eviter (motif que R-33 bis donne pour le verdict websec). Trouve
+  // par la recette d'idempotence, qui rendait 4 fichiers au lieu de 2.
+  const sceauConfie = empreinteTexte([
+    ...[...perimes, ...absents, ...horsRacine]
+      .map((a) => `${a.cible}|${a.etat}|${a.empreinte_pilot || ""}|${a.empreinte_produit || ""}`),
+    ...aliasPerimes.map((a) => `${a.cible}|alias_perime|${a.alias_perime}|${a.geste_alias || ""}`),
+    ...incomplets.map((a) => `${a.cible}|incomplet|${(a.motifs_absents || []).join(",")}`),
+    // LES CONSTATS ENTRENT DANS LE SCEAU, et leur CONTENU avec eux. Sceller le seul identifiant
+    // ferait qu'un constat reformulé garderait l'empreinte de l'ancien : le lot corrigé serait
+    // tenu pour déjà déposé et ne partirait jamais. C'est la classe de défaut de N-39 —
+    // une valeur qui ne varie que pour une partie de ce qu'elle prétend couvrir.
+    ...constats.map((e) => `${e.id}|constat|${empreinteTexte(String(e.contenu || "") + "|"
+      + String(e.demande_produit || ""), 12)}`),
+  ].sort().join("\n"), 12);
+
+  const glose = {
+    "forge/retours/GABARIT-LOT-RETOURS.md": "le gabarit qui décrit la forme d'un lot de retours — sans lui, vos retours sont refusés à la porte du pilot pour une forme que rien ne vous a dite (il voyageait sous RETOURS-FORGES.md avant le 01/09, l'ancien nom reste accepté — TF-0710)",
+    "forge/retours/RETOURS-FORGES.md": "le gabarit qui décrit la forme d'un lot de retours — sans lui, vos retours sont refusés à la porte du pilot pour une forme que rien ne vous a dite",
+    "forge/retours/oracle-lot.mjs": "l'outil qui vérifie un lot de retours AVANT de le remettre — sans lui, vous découvrez le refus après coup, ou jamais si une dérogation le masque",
+    "forge/hooks/factory.mjs": "les automatismes de fin de tour de travail — sans eux, aucun contrôle ne s'exécute à la clôture",
+    "forge/RESTITUTION.md": "le format de compte rendu prescrit — sans lui, vos messages de fin de traitement sont hors format et rien ne le refuse",
+    ".claude/settings.json": "la configuration d'agent du projet, qui câble les automatismes ci-dessus",
+    "CLAUDE.md": "les consignes du projet, lues à chaque ouverture de session",
+    "robots.txt": "l'ouverture aux robots d'indexation — légitimement absent si ce projet n'a aucune surface web, mais alors le DÉCLARER",
+    "llms.txt": "l'ouverture aux agents IA — même remarque : légitimement absent sans surface web, à déclarer",
+  };
+
+  // TF-0654 — LE TROISIEME CAS DEMANDE AUTRE CHOSE QUE LES DEUX AUTRES. Un artefact absent se
+  // recopie ; un artefact perime se met a jour ; un artefact TROUVE AILLEURS existe deja et
+  // fonctionne peut-etre tres bien. Ce qui manque n'est pas le fichier, c'est la DECLARATION de
+  // l'endroit d'ou il est servi. Lui demander de recopier creerait un doublon mort a la racine du
+  // depot, et le relevé passerait au vert sur une question ouverte — le pire des deux mondes.
+  const blocHorsRacine = (a, jour) => `### TF-0654 — artefact TROUVÉ HORS de la racine du dépôt : \`${a.cible}\` · gravité mineur
+
+- **Le fait**, mesuré le ${jour.slice(6, 8)}/${jour.slice(4, 6)}/${jour.slice(0, 4)} : \`${a.cible}\` n'est pas à la racine de votre dépôt, mais il EXISTE — trouvé à \`${a.trouve_a}\`. Le relevé ne le compte donc **ni absent, ni conforme**.
+- **Pourquoi cela vous concerne** : le pilot ne peut pas savoir si \`${a.trouve_a.split("/")[0]}\` est votre racine WEB — le répertoire réellement servi — ou un dossier quelconque. Sans cette déclaration, ce contrôle restera indécis à chaque relevé, et un contrôle indécis qui revient s'apprend à être ignoré.
+- **Ce qui est demandé** : DÉCLARER votre racine web dans \`docs/projet/PARAMETRAGE.md\`, sous une ligne \`racine_web:\` de son frontmatter. **Ne recopiez PAS le fichier à la racine du dépôt** : vous y créeriez un doublon qui n'est jamais servi, et le relevé passerait au vert sur un fichier mort.
+- **Effort estimé** : simple × court
+- **Comment vous saurez que c'est fait** : \`node c:\\\\dev\\\\factory-pilot\\\\scripts\\\\relever-heritage.mjs\` cesse de compter cet artefact « hors racine » pour votre projet.
+- **Si ce n'est pas fait** : le relevé continue de signaler un écart qui n'en est peut-être pas un, et personne ne peut trancher depuis le pilot.
+`;
+
+  // TF-0881 / TF-1461 — L'ALIAS DE TRANSITION PÉRIMÉ : la cible canonique existe ET l'ancien
+  // fichier aussi, lu à sa place avant l'arrivée de la cible. Rien ne le recopie ni ne le met à
+  // jour — il se SUPPRIME, c'est le troisième geste après « recopier » et « déclarer ».
+  const blocAliasPerime = (a, jour) => `### TF-0881 — ALIAS DE TRANSITION PÉRIMÉ à côté de la cible canonique : \`${a.alias_perime}\` · gravité mineur
+
+- **Le fait**, mesuré le ${jour.slice(6, 8)}/${jour.slice(4, 6)}/${jour.slice(0, 4)} : votre dépôt porte à la fois \`${a.cible}\` (la cible canonique, conforme) et \`${a.alias_perime}\` (l'ancien alias de transition) — le second survit à côté du premier.
+- **Pourquoi cela vous concerne** : un gabarit périmé qu'aucun contrôle ne regarde reste lu et cité — rien ne garantit qu'un humain ou un agent n'ouvre pas l'ancien fichier par habitude ou par un lien non mis à jour.
+- **Ce qui est demandé** : \`${a.geste_alias}\` — supprimer l'alias, jamais le réécrire : la cible canonique porte déjà la forme à jour.
+- **Effort estimé** : simple × court
+- **Comment vous saurez que c'est fait** : \`node c:\\dev\\factory-pilot\\scripts\\relever-heritage.mjs\` ne nomme plus cet alias pour votre projet.
+- **Si ce n'est pas fait** : l'ancien fichier reste lisible et citable à côté de la version à jour, et rien ne distingue les deux pour qui tombe dessus.
+`;
+
+  // TF-1735 (15/10/2026) — UN MOTIF EXIGÉ N'EST PAS UN MOT À COLLER. Pour un CLAUDE.md, « ajouter
+  // le motif » lu à la lettre ferait coller `init-audit-workspace` en fin de fichier, la route fautive
+  // restant en place au-dessus. Le geste attendu se dit donc en toutes lettres, motif par motif.
+  const gesteMotif = {
+    "init-audit-workspace": "dans le tableau « Routage forge », REMPLACER la ligne « Auditer la gouvernance, mesurer la maturité POC-to-Prod » (ou l'ajouter si elle manque) par la ligne « **Auditer le produit** » du gabarit, et dans la section Commandes, REMPLACER la ligne « Audit complet (verdict) : voir Routage forge » par les 2 lignes du gabarit (audit complet → forge-audit ; campagne de tests → forge_tests). Décision humaine D-1 (a) du 15/10/2026 (TF-1735) : « audit complet » ouvre forge-audit, la demande vaut mandat",
+  };
+  const blocIncomplet = (a, jour) => `### TF-0649 — artefact d'héritage INCOMPLET : \`${a.cible}\` · gravité majeur
+
+- **Le fait**, mesuré le ${jour.slice(6, 8)}/${jour.slice(4, 6)}/${jour.slice(0, 4)} : \`${a.cible}\` existe dans votre dépôt mais ne porte pas ${(a.motifs_absents || []).map((m) => `« \`${m}\` »`).join(", ")}. Contrat : \`gabarits\\HERITAGE.json\`, mode \`${a.mode}\`.
+- **Pourquoi cela vous concerne** : ${glose[a.cible] || "artefact du contrat d'héritage"} ; ce fichier vous est propre, seuls ces motifs sont exigés.
+- **Ce qui est demandé** : AJOUTER ${(a.motifs_absents || []).length > 1 ? "ces motifs" : "ce motif"} à \`${a.cible}\`, sans recopier le fichier${(a.motifs_absents || []).some((m) => gesteMotif[m]) ? "" : " ni toucher au reste"}${a.source ? ` — la forme attendue est dans \`${a.source}\` du pilot (\`c:\\dev\\factory-pilot\\\`)` : ""}.${(a.motifs_absents || []).filter((m) => gesteMotif[m]).map((m) => ` Pour « \`${m}\` » : ${gesteMotif[m]}.`).join("")}
+- **Effort estimé** : simple × court
+- **Comment vous saurez que c'est fait** : \`node c:\\dev\\factory-pilot\\scripts\\relever-heritage.mjs\` ne compte plus cet artefact « incomplet » pour votre projet.
+- **Si ce n'est pas fait** : l'automatisme que ce motif câble ne s'exécute pas chez vous, et le contrôle de conformité du pilot le rend à chaque lot que vous remettez.
+`;
+
+  const bloc = (a, gravite) => {
+    const g = glose[a.cible] || "artefact du contrat d'héritage";
+    return `### TF-0626 — ${a.etat === "absent" ? "artefact d'héritage ABSENT" : "artefact d'héritage PÉRIMÉ"} : \`${a.cible}\` · gravité ${gravite}
+
+- **Le fait**, mesuré le ${jour.slice(6, 8)}/${jour.slice(4, 6)}/${jour.slice(0, 4)} : \`${a.cible}\` ${a.etat === "absent"
+  ? "n'existe pas dans votre dépôt"
+  : `existe mais DIVERGE de la source du pilot (empreintes \`${a.empreinte_pilot}\` contre \`${a.empreinte_produit}\`)`}. Contrat : \`gabarits\\HERITAGE.json\`, mode \`${a.mode}\`.
+- **Pourquoi cela vous concerne** : ${g}.
+- **Ce qui est demandé** : recopier \`${a.source}\` depuis \`c:\\dev\\factory-pilot\\\` vers \`${a.cible}\` de votre dépôt — chemin source DÉCLARÉ par le contrat, jamais déduit de la cible (TF-0645).
+- **Effort estimé** : simple × court
+- **Comment vous saurez que c'est fait** : \`node c:\\dev\\factory-pilot\\scripts\\relever-heritage.mjs\` ne liste plus cet artefact pour votre projet.
+- **Si ce n'est pas fait** : ${a.cible.includes("RESTITUTION") || a.cible.includes("hooks")
+    ? "vos travaux continuent d'être rendus hors du format prescrit, et aucun contrôle ne le refuse"
+    : "l'écart reste, et le contrôle de conformité du pilot continue de le rendre à chaque lot que vous remettez"}`;
+  };
+
+  // (le rendu d'un constat vit au niveau module — voir `blocConstat`, jugé par la recette)
+
+  // Le lot cite TOUS les items qu'il porte, pas seulement le premier. Citer un seul identifiant
+  // quand le lot en confie quatre laisse le destinataire chercher d'où viennent les trois autres,
+  // et rend la remontée de son avancement impossible à rattacher.
+  const refsRegistre = [
+    ...(perimes.length || absents.length || horsRacine.length ? ["TF-0626"] : []),
+    ...(incomplets.length ? ["TF-0649"] : []),
+    ...(aliasPerimes.length ? ["TF-0881"] : []),
+    ...constats.map((e) => e.id),
+  ].map((i) => `\`${i}\``).join(", ") || "\`aucun\`";
+  const items = [...perimes.map((a) => bloc(a, "majeur")), ...absents.map((a) => bloc(a, absents.length > 4 ? "majeur" : "mineur")),
+                 ...incomplets.map((a) => blocIncomplet(a, jour)),
+                 ...horsRacine.map((a) => blocHorsRacine(a, jour)),
+                 ...aliasPerimes.map((a) => blocAliasPerime(a, jour)),
+                 ...constats.map(blocConstat)];
+
+  // TF-0730 : les sections de prose parlaient d'HÉRITAGE même quand le lot n'en portait pas —
+  // un lot à constats seuls doit garder les QUATRE sections (le juge les exige, et il a raison :
+  // une section absente est indiscernable d'une section oubliée) avec un contenu qui dit vrai.
+  const dejaFait = seulementConstats
+    ? `- Ce lot COMPLÈTE un lot encore \`a_traiter\` de votre boîte d'entrée : il ne porte que les constats
+  dont la demande a changé au registre depuis ce dépôt. Les autres éléments du lot précédent n'y sont
+  pas repris, ils restent à traiter là-bas — rien n'est confié deux fois.
+- Chaque constat a été instruit et DÉCIDÉ côté pilot avant d'être confié : le bloc cite son
+  identifiant \`TF-xxxx\`, la décision est humaine et tracée au registre.`
+    : aHeritage
+    ? `- Le contrôle qui devait mesurer cet écart ne savait pas localiser votre dépôt : il cherchait par
+  préfixe de nom, sans normalisation, sur deux niveaux de profondeur. Corrigé le 25/08 — un produit
+  est désormais reconnu à ses lots de retours, et non à sa profondeur de rangement. Preuve : recette
+  \`localiser-produit\` 11/11, et 4 produits localisés sur 6 dont 2 qui étaient impossibles avant.
+- Le message de refus d'un lot énumérait trois causes possibles au lieu de nommer celle qu'il
+  mesure ; il en nomme désormais une, avec le chemin absolu. Preuve : les 3 branches jouées en recette.
+- Le relevé qui a produit ce lot a été écrit, joué et publié le 25/08, sans aucune écriture chez
+  aucun produit — sa recette le vérifie par empreinte de l'arborescence avant et après.`
+    : `- Votre héritage du socle est CONFORME au relevé de ce jour — ce lot ne porte donc que des
+  constats du registre. Chacun a été instruit et DÉCIDÉ côté pilot avant d'être confié : le bloc
+  cite son identifiant \`TF-xxxx\`, la décision est humaine et tracée au registre.
+- Ce qui relevait du pilot dans ces constats a été fait chez lui — ce qui reste est précisément
+  la part que lui seul ne peut pas faire : elle se corrige dans VOTRE dépôt.`;
+  const ordre = aHeritage
+    ? `1. \`forge/RESTITUTION.md\` et \`forge/hooks/factory.mjs\` **d'abord**, parce que leur absence est
+   la seule du lot qui produise un effet à chaque travail que vous rendez : sans eux, un compte
+   rendu hors format n'est refusé par rien.
+2. \`forge/retours/oracle-lot.mjs\` et son gabarit **ensuite**, parce qu'ils vous évitent un refus
+   à la porte du pilot — un aller-retour par lot remis.
+3. Les fichiers d'ouverture web **en dernier**, ou déclarés hors sujet : leur impact est nul tant
+   que le projet n'expose pas de surface web.`
+    : `1. Les constats dans l'ordre où ils apparaissent — ils sont rendus du plus fort enjeu au plus
+   faible selon le registre, et chacun porte son effort estimé et sa vérification. Un constat
+   écarté rejoint vos « Écarts assumés » avec son motif : il ne disparaît pas.`;
+
+  // TF-1068 (14/09/2026) — LE CHEMIN DU JUGE SE CALCULE À L'ÉMISSION. L'encadré prescrivait le
+  // chemin d'un PRODUIT instancié (`forge\travaux\oracle-travaux.mjs`), qu'une forge destinataire
+  // n'a pas : la commande « obligatoire » échouait chez elle, et rien ne le disait. Le pilot
+  // regarde le destinataire comme il le fait déjà pour « Sort du lot reçu », et donne le bon.
+  const jugeHerite = existsSync(join(ligne.dossier, "forge", "travaux", "oracle-travaux.mjs"));
+  const commandeJuge = jugeHerite
+    ? 'node forge\\travaux\\oracle-travaux.mjs "<ce fichier>.md"'
+    : `node "${join(PILOT, "gabarits", "oracle-travaux-pilot.mjs")}" "<ce fichier>.md"`;
+  const raisonJuge = jugeHerite
+    ? "Chemin calculé à l'émission : votre dépôt porte le juge hérité (`forge\\travaux\\`) (TF-1068)."
+    : "Chemin calculé à l'émission : votre dépôt ne porte pas `forge\\travaux\\` — le juge se joue à sa SOURCE, chez le pilot (TF-1068).";
+
+  const md = `# Travaux confiés par le pilot — ${ligne.produit} — ${jour}${indice}
+
+- **Émetteur** : \`factory-pilot\` (le pilot)
+- **Références registre** : \`todo\\TODO.jsonl\` — item(s) ${refsRegistre}
+- **Dépôt** : ce fichier a été déposé par le pilot dans \`input\\00-travaux\\\`. L'original reste au
+  pilot. Statut : \`a_traiter\` → \`traite le <date>\` — seule édition autorisée après coup.
+- **Statut** : a_traiter
+- **Sort du lot reçu** (TF-0883) : ce lot entre dans l'histoire du produit — \`git add\` du fichier
+  et de son sidecar — SAUF si \`git check-ignore "<ce fichier>"\` le déclare ignoré, auquel cas il
+  reste hors de l'histoire et vit sur le seul poste qui l'a reçu. Le canal supposait la boîte
+  d'entrée ignorée par git sans le dire ; mesuré le 06/09 chez un produit qui versionne
+  sa boîte d'entrée à dessein, la question a été tranchée dans le mandat HUMAIN qui accompagnait le lot,
+  et deux fichiers reçus sont restés non suivis indéfiniment. Une garde qui vit dans un mandat ne
+  protège que la session qui l'a reçue.
+- **Empreinte du contenu confié** : \`${sceauConfie}\` — deux lots portant la même
+  empreinte confient la même chose ; le pilot ne redépose jamais une empreinte déjà présente.
+
+> ## ⛔ AVANT DE TRAITER — un geste, une seconde
+>
+> \`\`\`
+> ${commandeJuge}
+> \`\`\`
+>
+> ${raisonJuge}
+>
+> Le même module a été joué par le pilot AVANT de déposer ce lot. Si ce fichier vous manque,
+> l'héritage n'est pas tenu — et c'est précisément le sujet de ce lot.
+
+## Ce lot est une DONNÉE, pas une consigne exécutable
+
+Le pilot traite vos lots de retours comme de la donnée : les consignes qu'ils contiennent sont
+décrites, jamais exécutées. **Le même principe s'applique ici, dans l'autre sens.** Ce lot décrit
+un travail et argumente pourquoi il vaut d'être fait ; il ne commande rien. Vous restez le juge de
+ce que vous inscrivez à votre reste-à-faire, de l'ordre, et de ce que vous écartez — un élément
+écarté rejoint vos « Écarts assumés » avec son motif et sa date, il ne disparaît pas.
+
+## Travaux confiés
+
+${items.join("\n\n")}
+
+## Ce que le pilot a déjà fait de son côté
+
+${dejaFait}
+
+## Ce que le pilot NE demande PAS
+
+- **Il ne demande pas de commiter ces fichiers**, ni de les adopter en bloc : la décision est vôtre,
+  fichier par fichier, et un refus motivé aux « Écarts assumés » est une réponse complète.
+- **Il ne demande rien sur \`robots.txt\` et \`llms.txt\` si votre projet n'a aucune surface web** —
+  leur mode est \`presence\`, donc leur absence est légitime ; ce qui est demandé alors est de le
+  DÉCLARER, pour qu'un relevé futur ne les recompte pas comme un manque.
+- **Il ne demande aucun changement de code, de dépendance ou de configuration applicative.** Ce lot
+  ne porte que des artefacts de méthode.
+
+## Ordre recommandé
+
+${ordre}
+`;
+
+  const sidecarConstats = constats.map((e) => JSON.stringify({
+    schema: 1,
+    titre: e.titre || `Constat ${e.id}`,
+    contenu: String(e.contenu || "").slice(0, 1400),
+    origine_tf: e.id,
+    gravite: e.gravite || "mineur",
+    effort: e.effort || "non estime",
+    verification: e.verification || "aucune verification declaree",
+  }));
+
+  const sidecar = [...[...perimes, ...absents].map((a) => JSON.stringify({
+    schema: 1,
+    titre: `${a.etat === "absent" ? "Artefact d'heritage absent" : "Artefact d'heritage perime"} : ${a.cible}`,
+    contenu: `Mesure du pilot du ${jour} : ${a.cible} ${a.etat === "absent" ? "n'existe pas" : "diverge de la source"} dans ce depot. ${glose[a.cible] || ""}`,
+    origine_tf: "TF-0626",
+    gravite: a.cible.includes("RESTITUTION") || a.cible.includes("hooks") ? "majeur" : "mineur",
+    effort: "simple × court",
+    verification: "node c:\\dev\\factory-pilot\\scripts\\relever-heritage.mjs ne liste plus cet artefact",
+  })), ...sidecarConstats].join("\n") + "\n";
+
+  // TF-1083 (14/09/2026) — LA RÉDACTION A SON EMPREINTE, DISTINCTE DE CELLE DU CONTENU CONFIÉ.
+  // Le sceau couvre ce qui est confié, pas sa formulation : c'est voulu (ne pas rabâcher), et
+  // c'était un piège — une erreur de rédaction devenait indélébile, il a fallu effacer un lot à
+  // la main chez un produit (reste de TF-0645). L'empreinte de rédaction se calcule sur le texte
+  // hors date et indice du jour ; elle dit qu'une forme a changé, et `--corriger-redaction`
+  // livre la nouvelle forme sous l'indice suivant, sans jamais toucher au contenu ni à l'ancien lot.
+  const redaction = empreinteTexte(md.split(`${jour}${indice}`).join("<lot>").split(jour).join("<jour>"), 12);
+  const mdScelle = md.replace("- **Statut** : a_traiter\n",
+    `- **Statut** : a_traiter\n- **Empreinte de la rédaction** : \`${redaction}\` — elle change quand le pilot corrige la FORME d'un lot sans en changer le contenu (TF-1083)\n`);
+  return { md: mdScelle, sidecar, elements: items.length, sceauConfie, redaction, constats };
+}
+
+// ---- exécution ------------------------------------------------------------------------------
+const lanceEnDirect = process.argv[1]
+  && fileURLToPath(import.meta.url).toLowerCase().replaceAll("\\", "/")
+     === process.argv[1].toLowerCase().replaceAll("\\", "/");
+if (lanceEnDirect) {
+  const racine = process.env.FORGE_ROOT || join(PILOT, "..");
+  const contrat = JSON.parse(readFileSync(join(PILOT, "gabarits", "HERITAGE.json"), "utf8"));
+  const lignes = relever(racine, contrat, PILOT);
+  const cible = valeur("--produit");
+  const tous = args.includes("--tous");
+  if (!cible && !tous) {
+    console.error("usage : node todo\\emettre-travaux.mjs (--produit <nom> | --tous) [--essai]");
+    process.exit(2);
+  }
+  const jour = dateLot(new Date());
+  let deposes = 0, ignores = 0, refuses = 0;
+
+  for (const ligne of lignes) {
+    // Ce filtre-ci reste par INCLUSION, à dessein, et la différence avec `memeProduit` mérite
+    // d'être dite : `--produit` est un filtre d'AFFICHAGE tapé par un humain qui voit le résultat
+    // et peut recommencer ; le rapprochement d'un constat est une ROUTE automatique dont personne
+    // ne relit la cible. Le laxisme est acceptable là où une erreur se voit, jamais là où elle
+    // dépose du travail chez quelqu'un.
+    if (cible && !ligne.produit.toLowerCase().includes(cible.toLowerCase())) continue;
+    const boite = join(ligne.dossier, "input", "00-travaux");
+    const indice = indiceLibre(boite, jour);
+    let lot = lotHeritage(ligne, jour, indice, REGISTRE || undefined);
+    if (!lot) { console.log(`[RIEN À CONFIER] ${ligne.produit} — héritage conforme`); continue; }
+
+    // LE JUGE AVANT L'ÉCRITURE : un lot en défaut n'est pas déposé, et le défaut est dit.
+    const jugement = verifier(lot.md, `pilot - TRAVAUX - ${jour}${indice}.md`);
+    if (jugement.verdict === "FAIL") {
+      refuses += 1;
+      console.error(`[REFUSÉ AVANT DÉPÔT] ${ligne.produit} — le lot que je viens d'écrire ne tient pas sa propre forme :`);
+      for (const c of jugement.constats.filter((x) => x.statut === "FAIL")) console.error(`  - ${c.regle} : ${c.message}`);
+      continue;
+    }
+
+    // IDEMPOTENCE PAR CONTENU : le même lot ne s'empile pas dans la boîte du produit.
+    const sceau = lot.sceauConfie;
+    const lotsPresents = existsSync(boite)
+      ? readdirSync(boite).filter((f) => f.endsWith(".md"))
+        .map((f) => ({ nom: f, txt: readFileSync(join(boite, f), "utf8") }))
+      : [];
+    // Tous les lots de même sceau, pas le premier trouvé : après une correction, l'ancien lot et le
+    // correctif cohabitent, et c'est la présence de la rédaction du jour dans L'UN D'EUX qui dit
+    // que rien n'est à redéposer (sans quoi chaque passage relivrerait la correction).
+    const memeSceau = lotsPresents.filter((l) => l.txt.includes(sceau));
+    const dejaLa = memeSceau[memeSceau.length - 1];
+    let correction = null;
+    if (dejaLa) {
+      if (memeSceau.some((l) => l.txt.includes(lot.redaction))) { ignores += 1; console.log(`[DÉJÀ DÉPOSÉ] ${ligne.produit} — empreinte ${sceau}, rien de redéposé`); continue; }
+      if (!CORRIGER_REDACTION) {
+        ignores += 1;
+        console.log(`[DÉJÀ DÉPOSÉ] ${ligne.produit} — empreinte ${sceau}, rien de redéposé ; sa RÉDACTION diffère de celle d'aujourd'hui (« ${dejaLa.nom} ») — \`--corriger-redaction\` livre la nouvelle forme sous l'indice suivant, sans toucher au contenu (TF-1083)`);
+        continue;
+      }
+      correction = dejaLa.nom;
+      lot.md = lot.md.replace(/^(# [^\n]+\n)/, `$1\n> **Correction de RÉDACTION** de « ${dejaLa.nom} » : le contenu confié est identique (même empreinte \`${sceau}\`), seule la forme change. Ce lot le remplace pour la lecture ; l'ancien reste dans la boîte, et son statut vous appartient (TF-1083).\n`);
+      const rejuge = verifier(lot.md, `pilot - TRAVAUX - ${jour}${indice}.md`);
+      if (rejuge.verdict === "FAIL") {
+        refuses += 1;
+        console.error(`[REFUSÉ AVANT DÉPÔT] ${ligne.produit} — le lot correctif ne tient pas sa propre forme :`);
+        for (const c of rejuge.constats.filter((x) => x.statut === "FAIL")) console.error(`  - ${c.regle} : ${c.message}`);
+        continue;
+      }
+    }
+
+    // ---- INCLUSION, ET PAS SEULEMENT ÉGALITÉ (TF-0680, mesure du 26/08/2026) ---------------
+    //
+    // LE FAIT, pris dans l'heure : le produit avait installé UN des artefacts que le lot `c`
+    // demandait. L'empreinte du contenu confié a donc changé, et l'émetteur s'apprêtait à
+    // déposer un lot `d` de 5 éléments là où `c` en portait 6 — les 5 STRICTEMENT INCLUS dans
+    // les 6. Le produit aurait reçu deux lots quasi identiques en moins d'une heure, le second
+    // n'apportant RIEN de neuf.
+    //
+    // LE COMPORTEMENT ÉTAIT CORRECT AU SENS DE LA RÈGLE ÉCRITE — le contenu a bien changé — ET
+    // NUISIBLE AU SENS DE CE QU'ELLE PROTÈGE : « sans cela, deux exécutions du même relevé
+    // enseveliraient le produit sous des lots identiques, et le canal deviendrait la nuisance
+    // qu'il est censé éviter » (motif que R-33 bis donne pour le verdict websec). La règle mesurait l'ÉGALITÉ des contenus quand la
+    // propriété visée est l'ABSENCE DE NOUVEAUTÉ.
+    //
+    // LA BORNE COMPTE AUTANT QUE LA RÈGLE, et elle est dans le constat d'origine : un lot déjà
+    // TRAITÉ par le produit ne doit PAS bloquer un redépôt, sans quoi un constat rouvert
+    // n'atteindrait plus personne. On ne regarde donc que les lots encore `a_traiter`.
+    //
+    // L'inclusion se lit sur les ÉLÉMENTS, jamais sur le texte : deux formulations d'un même
+    // constat sont le même travail pour le produit.
+    // TF-1735 (15/10/2026) — UN INCOMPLET SE DÉFINIT PAR SES MOTIFS ABSENTS, pas par son titre. La
+    // clé par titre seul a tenu pour « déjà confié » le motif `init-audit-workspace` chez 4 produits
+    // dont le CLAUDE.md était déjà incomplet d'un AUTRE motif : leur lot en attente ne demandait que
+    // la précédence, et la route d'audit ne leur parvenait jamais. Les motifs nommés entrent donc
+    // dans la clé ; la formulation, elle, n'y entre toujours pas.
+    const elementsDe = (txt) => new Set(txt.split(/^(?=### )/m).filter((s) => s.startsWith("### ")).map((s) => {
+      const titre = s.slice(4).split(/\r?\n/)[0].trim();
+      if (!/INCOMPLET/.test(titre)) return titre;
+      const fait = (s.match(/^- \*\*Le fait\*\*.*$/m) || [""])[0];
+      return `${titre}|${[...fait.matchAll(/« `([^`]+)` »/g)].map((m) => m[1]).sort().join(",")}`;
+    }));
+    const estATraiter = (txt) => /^-\s+\*\*Statut\*\*\s*:\s*a_traiter\s*$/m.test(txt);
+    const mien = elementsDe(lot.md);
+    const englobant = correction ? null : lotsPresents.find((l) => {
+      if (!estATraiter(l.txt)) return false;             // un lot TRAITÉ ne bloque rien
+      const sien = elementsDe(l.txt);
+      return mien.size > 0 && [...mien].every((e) => sien.has(e));
+    });
+    // ---- UNE DEMANDE MODIFIÉE N'EST PAS UN DOUBLON (TF-1920, 19/10/2026) -------------------------
+    //
+    // LE FAIT : la `demande_produit` d'un constat a été complétée au registre 30 minutes après le
+    // dépôt du lot qui le portait. Le sceau du contenu confié avait changé, mais les TITRES des
+    // éléments étaient les mêmes : la règle d'inclusion ci-dessus rendait « INCLUS DANS UN LOT NON
+    // TRAITÉ » et ne déposait rien. La demande complétée n'atteignait jamais le produit ; le
+    // contournement joué (un élément distinct ajouté pour faire partir un lot) a reconfié 11
+    // éléments déjà confiés — le doublon que la règle voulait éviter.
+    //
+    // L'inclusion se lit sur les ÉLÉMENTS, et un constat dont le bloc rendu (fait, demande, effort,
+    // vérification) n'est dans AUCUN lot de la boîte, traité ou non, n'est pas « déjà confié » : il
+    // part seul dans un lot COMPLÉMENTAIRE, sans reprendre les autres éléments. « Aucun lot, traité ou
+    // non » : une demande déjà livrée par un lot complémentaire, même traité, ne repart pas. Un
+    // élément d'héritage garde la lecture par titre (ses blocs portent la date du jour).
+    const blocsDe = (txt) => new Map(txt.split(/^(?=### )/m).filter((s) => s.startsWith("### "))
+      .map((s) => [s.slice(4).split(/\r?\n/)[0].trim(), s.split(/^## /m)[0].replace(/\r\n/g, "\n").trim()]));
+    const blocsDeLaBoite = lotsPresents.map((l) => blocsDe(l.txt));
+    const modifies = englobant
+      ? (lot.constats || []).filter((e) => {
+        const cle = blocConstat(e).split("\n")[0].slice(4).trim();
+        const rendu = blocConstat(e).replace(/\r\n/g, "\n").trim();
+        return !blocsDeLaBoite.some((b) => b.get(cle) === rendu);
+      })
+      : [];
+    let complement = false;
+    if (englobant && modifies.length) {
+      const seul = lotHeritage(ligne, jour, indice, REGISTRE || undefined, new Set(modifies.map((e) => e.id)));
+      seul.md = seul.md.replace(/^(# [^\n]+\n)/, `$1\n> **Lot COMPLÉMENTAIRE** de « ${englobant.nom} », encore \`a_traiter\` : il ne porte que ${modifies.length === 1 ? "le constat dont la demande a changé" : "les constats dont la demande a changé"} depuis ce dépôt (${modifies.map((e) => e.id).join(", ")}). Les autres éléments de « ${englobant.nom} » n'y sont pas repris et restent à traiter là-bas (TF-1920).\n`);
+      const rejugeComplement = verifier(seul.md, `pilot - TRAVAUX - ${jour}${indice}.md`);
+      if (rejugeComplement.verdict === "FAIL") {
+        refuses += 1;
+        console.error(`[REFUSÉ AVANT DÉPÔT] ${ligne.produit} — le lot complémentaire ne tient pas sa propre forme :`);
+        for (const c of rejugeComplement.constats.filter((x) => x.statut === "FAIL")) console.error(`  - ${c.regle} : ${c.message}`);
+        continue;
+      }
+      lot = seul;
+      complement = true;
+    } else if (englobant) {
+      ignores += 1;
+      console.log(`[INCLUS DANS UN LOT NON TRAITÉ] ${ligne.produit} — les ${mien.size} élément(s) de ce lot ` +
+        `sont déjà tous dans « ${englobant.nom} », encore \`a_traiter\`. Rien de neuf à confier : ` +
+        "redéposer empilerait un doublon que le produit devrait trier lui-même.");
+      continue;
+    }
+
+    const nom = `pilot - TRAVAUX - ${jour}${indice}`;
+    const etiquette = complement ? "COMPLÉMENT" : "";
+    if (ESSAI) {
+      console.log(`\n===== ESSAI${etiquette ? ` ${etiquette}` : ""}, RIEN ÉCRIT : ${ligne.dossier}\\input\\00-travaux\\${nom}.md (${lot.elements} élément(s), sceau ${lot.sceauConfie})`);
+      console.log(lot.md.slice(0, 900) + "\n[…]");
+      continue;
+    }
+    mkdirSync(boite, { recursive: true });
+    writeFileSync(join(boite, `${nom}.md`), lot.md, "utf8");
+    writeFileSync(join(boite, `${nom}.tf.jsonl`), lot.sidecar, "utf8");
+    deposes += 1;
+    console.log(`[DÉPOSÉ${etiquette ? ` — ${etiquette}` : ""}] ${ligne.produit} → input\\00-travaux\\${nom}.md (${lot.elements} élément(s), sceau ${lot.sceauConfie})`);
+  }
+
+  console.log(`\n${deposes} lot(s) déposé(s), ${ignores} déjà présent(s), ${refuses} refusé(s) avant dépôt.`);
+
+  // L'AVERTISSEMENT DES ORPHELINS (TF-0673, second temps). Un constat qui désigne un produit que
+  // le parc ne porte pas — nom mal orthographié, produit retiré — n'atteint personne. Avant ce
+  // bloc, il disparaissait SANS UN MOT : l'émetteur ne le comptait nulle part.
+  //
+  // C'est la classe de défaut que cet émetteur venait de corriger, laissée ouverte sur sa face
+  // voisine — et le premier jet l'a lui-même payée : trois constats perdus derrière un message
+  // parfaitement normal, vus seulement parce qu'une empreinte n'avait pas bougé.
+  //
+  // IL SORT EN ÉCHEC, et ce n'est pas un excès de zèle : *un avertissement qui n'arrête rien est
+  // un avertissement qu'on apprend à lire sans le voir.* Le calcul se fait sur le parc ENTIER,
+  // indépendamment de `--produit` : un orphelin l'est vis-à-vis de tous les produits, pas du
+  // filtre d'affichage du moment.
+  // L'APPARIEMENT EST UNE CONDITION DE VALIDITÉ, pas une commodité. Ce contrôle confronte le
+  // registre DU PILOT au parc SCANNÉ. Quand `FORGE_ROOT` désigne un autre parc — une fixture de
+  // recette, un clone partiel —, les deux ne parlent pas des mêmes produits : tout constat réel
+  // y paraîtrait orphelin, et l'émetteur sortirait en échec sur un parc parfaitement sain.
+  //
+  // Le cas a été trouvé en RESTAURANT la recette de ce script : deux de ses cas, qui déposent
+  // dans un parc de fixture, sont passés au rouge dès que l'avertissement a été branché.
+  //
+  // Il est DÉCLARÉ non jugé, jamais tu : le silence d'une sonde n'est pas un verdict, et un
+  // contrôle silencieusement inactif est indiscernable d'un contrôle qui n'a rien trouvé.
+  const apparies = resolve(racine) === resolve(join(PILOT, ".."));
+  const perdus = apparies ? orphelins(lignes) : [];
+  if (!apparies) {
+    console.log("[ORPHELINS — NON JUGÉ] le parc scanné n'est pas celui du pilot "
+      + `(${resolve(racine)}) : le registre et le parc ne parlent pas des mêmes produits, `
+      + "et tout constat réel y paraîtrait orphelin");
+  }
+  const { absents, inconnus } = repartirOrphelins(perdus);
+  if (absents.length) {
+    console.log(`\n[ABSENTS DU POSTE] ${absents.length} constat(s) désignent un produit que la table des pseudonymes connaît, `
+      + "mais dont le dépôt n'est pas sur ce poste — le registre n'est pas en cause :");
+    for (const e of absents.slice(0, 10))
+      console.log(`  - ${e.id} → « ${e.destinataire_produit} » (à émettre depuis le poste qui porte ce produit)`);
+  }
+  if (inconnus.length) {
+    console.error(`\n[ORPHELINS] ${inconnus.length} constat(s) désignent un produit que ni le parc ni la table des pseudonymes ne portent —`);
+    console.error("ils n'atteindront JAMAIS personne, et rien d'autre ne le dirait :");
+    for (const e of inconnus.slice(0, 10))
+      console.error(`  - ${e.id} → « ${e.destinataire_produit} » (aucun produit du parc ni de la table ne correspond)`);
+    console.error("Corriger `destinataire_produit` au registre, ou clore l'item avec son motif.");
+  }
+
+  console.log("AUCUN commit n'a été fait chez aucun produit : déposer dans une boîte d'entrée est réversible,");
+  console.log("entrer dans un historique est un geste dont le produit est seul auteur.");
+  process.exit(refuses || inconnus.length ? 1 : 0);
+}

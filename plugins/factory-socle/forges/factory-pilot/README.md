@@ -1,0 +1,200 @@
+---
+verifie_le: 2026-08-20
+---
+
+# factory-pilot
+
+> **Agent IA** : suis [AGENTS.md](AGENTS.md) — lance l'installateur (`installer.ps1` sous
+> Windows, `installer.sh` ailleurs) **sans poser de question** : il pose lui-même git, node
+> et uv en portée utilisateur, installe ou met à jour la factory et les forges, installe le
+> projet, et finit sur « FACTORY OPÉRATIONNELLE ». Puis déroule
+> [references/ACCUEIL.md](references/ACCUEIL.md). N'improvise pas.
+
+La **factory** de l'écosystème forge Factory — son projet de pilotage. **Un seul point de démarrage** pour construire
+un produit en mobilisant les 13 forges bout en bout, et pour les améliorer par itérations
+bornées.
+
+**Les 13 forges** — pipeline : [forge-conception](https://github.com/Ptitcuicui/forge-conception) ·
+[forge-design](https://github.com/Ptitcuicui/design) ·
+[forge-development](https://github.com/Ptitcuicui/development) ·
+[forge-tests](https://github.com/Ptitcuicui/tests) — transverses :
+[forge-agents](https://github.com/Ptitcuicui/agents) (outils partagés) ·
+[forge-ops](https://github.com/Ptitcuicui/ops) (exploitation, outille la MEP) ·
+[forge-data](https://github.com/Ptitcuicui/data) (discipline de la donnée : lineage,
+qualité, restitution sourcée) ·
+[forge-observability](https://github.com/Ptitcuicui/observability) (surveillance
+continue entre les runs) — sur
+mandat humain : [forge-audit](https://github.com/Ptitcuicui/audit) (gouvernance
+POC-to-Prod) · [forge-seo-geo](https://github.com/Ptitcuicui/seo-geo) (post-MEP) ·
+[forge-organization](https://github.com/Ptitcuicui/organization) (conventions) ·
+[forge-agents-security](https://github.com/Ptitcuicui/agents-security) (sécurité
+agentique — le juge ne vit pas chez le jugé) ·
+[forge-websec](https://github.com/Ptitcuicui/websec) (sécurité du produit web
+livré — exposition, dépendances, contrat ASVS). Règle d'affichage de ce README : il ne promet
+rien que le ledger d'un run ne puisse prouver.
+
+## Démarrer un produit
+
+Créer un dossier vide pour le nouveau produit, ouvrir une session Claude Code **dans ce
+nouveau dossier** et coller la phrase d'usage, la même pour tous les cas
+([Utiliser la Factory](#utiliser-la-factory--une-seule-phrase)). Le brief se donne ensuite en
+session ; [PROMPT-PRODUIT.md](PROMPT-PRODUIT.md) reste la voie pour le préparer à l'avance.
+La phrase suffit à tout nouvel utilisateur : sa phase 0 joue l'installateur, qui pose sans question ce qui manque
+(git, node ≥ 18, uv, en portée utilisateur et sans droit administrateur ; `gh` n'est requis
+que pour les dépôts d'engagement privés), localise la forge ou **l'installe depuis GitHub**
+(`~/.factory-forge` par défaut), installe le projet et finit sur « FACTORY
+OPÉRATIONNELLE ». Le run entier — ledger, artefacts d'étapes, code — vit dans le projet produit.
+
+**Installation en une commande**, dans le dossier du projet :
+`powershell -NoProfile -ExecutionPolicy Bypass -Command "iwr https://raw.githubusercontent.com/Ptitcuicui/factory/main/installer.ps1 -UseBasicParsing -OutFile ([IO.Path]::GetTempPath()+'factory-installer.ps1'); & ([IO.Path]::GetTempPath()+'factory-installer.ps1')"`
+sous Windows, `curl -fsSL https://raw.githubusercontent.com/Ptitcuicui/factory/main/installer.sh | sh`
+ailleurs. Code de sortie 0 = opérationnelle, 1 = incomplète (chaque contrôle rouge porte son remède).
+
+**Amorçage manuel du poste seul** (sans projet) : cloner ce dépôt puis `node bootstrap.mjs --pull`
+— vérifie les prérequis (git, node ≥ 18 ; `gh` facultatif), met à jour **le pilot lui-même**,
+clone ou met à jour les 13 forges en dépôts frères (`core.longpaths` activé : les noms de
+fichiers des forges dépassent MAX_PATH sinon), renomme sur place un dossier hérité d'un ancien
+nom, **propage les skills versionnés vers `~/.claude/skills`**, contrôle les points d'entrée et
+**affiche la version de chaque dépôt** (tag, sha, date, retard sur origin). Il ne dit
+« Poste prêt » que si tout est présent, **à jour** et aligné ; sans `--pull` il mesure
+seulement, et chaque défaut porte son remède. Options : `--racine <dossier>` (+ `FORGE_ROOT`
+en session). Testé : amorçage réel d'un répertoire vierge (13 clones, 60 Mo, exit 0) et
+recette `bootstrap.test.mjs` sur dépôts factices (retard, renommage, preuve absente).
+
+L'orchestrateur (piloté par [CLAUDE.md](CLAUDE.md)) déroule cinq étapes :
+
+```
+conception ──► design ──► development ──► tests ──► MEP
+(EXIGENCES.json) (tokens.css,   (produit,        (audit         (staging autonome,
+ 4 oracles        maquette,      ruff+pytest,     forge_tests,    production sur
+ exécutés)        34 règles)     traçabilité)     exit 0/1/3)     GO humain)
+```
+
+Chaque étape est validée par des **oracles exécutés** — jamais par confiance. Chaque run vit sous
+`runs\<AAAAMMJJ>-<slug>\` avec son ledger JSONL (état, reprise idempotente, audit).
+
+## Catalogue de services
+
+<!-- CATALOGUE:DEBUT — section générée par catalogues/generer-vues.mjs, ne pas éditer -->
+
+Ce que chaque forge sait faire aujourd'hui — extrait de la source unique [catalogues/catalogue.jsonl](catalogues/catalogue.jsonl) (v1.12.0, 2026-11-25), détail complet : [catalogues/CATALOGUES.md](catalogues/CATALOGUES.md). **prouvé** = preuve exécutée (oracle, CLI, run réel) ; *déclaré* = méthode documentée seulement.
+
+- **forge-conception** (pipeline) : **Qualifier l'entrant** · **Énumérer la surface** · **Rédiger les exigences** · **Dériver les vues aval** · **Valider les exigences (oracles)** · **Constitution projet** · **Cycle delta (évolution d'un référentiel scellé)** · *Rétro-modèle d'un projet existant (reprise d'un existant) (déclaré)* · *Vues par profil (PO, CSM, utilisateur) (déclaré)*
+- **forge-design** (pipeline) : **Système de marque** · **Studio de direction** · **Améliorer le design (maquette)** · *Critiquer le design (amont et aval) (déclaré)* · **Valider le design (oracles)** · **Générer les visuels** · **Tokens DTCG (source → dérivé)** · **Baseline de régression visuelle** · **Contrôler la généricité d'une interface (règles importées)** · **Thème Power BI dérivé de la marque** · **Rendu comparatif d'un correctif** · **Clip de présentation (motion design)**
+- **forge-development** (pipeline) : **Construire le produit sous gates** · **Double gate code + design** · *Gate spec (under/over-build) (déclaré)* · *Conductor bout en bout (CLI) (déclaré)* · **Générer DESIGN.md linté** · **Gate anti-patterns IA** · **Gate de mutation (3e métrique)** · **Gate parité runtime (conteneur Python, Worker Cloudflare)** · **Gate Supabase côté serveur** · **Gate des erreurs de formulaire**
+- **forge-tests** (pipeline) : **Auditer une suite de tests** · **Générer des cas de tests à adopter et exécuter** · **Livrables de tests dérivés** · **Tendance et reprise ciblée** · *Inventaire sans exécution (déclaré)* · *Impact par diff, flaky, propriétés, mutation par risque (déclaré)* · **Rapport exhaustif test-par-test** · **Juger un catalogue de traductions** · **Fabrique de données chargée en base** · **Auditer un Worker Cloudflare ou une base Supabase** · **Prouver la 404 personnalisée par langue (M-9)** · **Une suite jouée par la chaîne, ou déclarée hors portée (TF-1043)**
+- **forge-agents** (transverse) : **Fabriquer des agents spécialisés** · **Ledger de run vérifiable** · **Atelier des skills qualité** · **Projection OTLP GenAI du ledger** · **Oracle agent-evals** · **Gate budget G0** · **Analyser un prompt (L99)** · *Améliorer un skill existant (déclaré)* · *Contre-expertise d'un livrable (déclaré)* · *Fiches expert du domaine (déclaré)* · **Fixer la barre d'un livrable** · *Construire un plan d'amélioration post-audit (déclaré)*
+- **forge-ops** (transverse) : **Déployer, restaurer, état** · **Verdicts d'exploitation O-1…O-4** · **Plans cloud plan-first** · **Canary local simulé** · **Drift O-6 et verdict rollback SLO** · **Plans plan-first d'un produit data** · *Préparer et relever des campagnes Google Ads (déclaré)* · **Remettre à zéro une base hors production** · **Garder les données d'un conteneur à état** · *Déployer en production par GitHub Actions sous GO humain (déclaré)* · *Plan Supabase à garde-fous de déploiement (déclaré)* · **Empreinte de déploiement O-7** · **Sauvegarde et restauration d'un actif de données (O-19)** · **Tâche planifiée « en service » prouvée par une exécution lue (O-22)** · **Inventaire des composants tenu à jour (O-27)** · **Réglages de plateforme comparés à l'attendu du registre (O-28)**
+- **forge-data** (transverse) : **Profiler (qualité en assertions)** · **Tracer (lineage exigible)** · **Restituer (chiffres sourcés)** · *Fonds de savoir data (déclaré)* · **Contractualiser (data contract)** · **Importer un schéma exporté** · **Traduire un lineage Unity Catalog** · **Mesurer une base connectée** · **Modéliser (couche Gold dimensionnelle)** · **Transformer (forme d'un projet Silver/Gold)** · **Réconcilier (Gold ↔ modèle sémantique)** · **Couvrir (mapping contre l'inventaire de sa source)** · **Traduire un modèle sémantique (TMDL → modèle dimensionnel)** · **Anonymiser un extrait de production** · *Profils-moteur et décisions hors inventaire (déclaré)* · **Jeu fictif (un jeu de données alimente chaque écran)** · **Délimiter (périmètre livré = ce que les visuels lisent)** · **Enchaîner (chaque étape d'une procédure nomme un porteur)** · **Qualifier (un rapport migré peut-il remplacer l'original)** · **Rapprocher (modèle ↔ extrait externe)** · **Reconstruire (mise en page d'un rapport fourni en entrée)** · **Rendre (liaisons et visuels vides)** · **Isoler les lignes qui ne sont pas des données** · **Vérifier les unités d'un fichier Parquet**
+- **forge-observability** (transverse) : **Observer (plans → snapshots)** · **Détecter la dérive** · *Veille citation IA (déclaré)*
+- **forge-audit** (sur mandat) : **Référentiel d'audit POC-to-Prod** · **Oracles d'audit** · **Engagement d'audit par tenant** · **Policy-as-code (démonstrateur OPA)** · **Modèle sémantique Power BI jugé sur fichiers (TMDL)** · *Profil GitHub jugé en lecture seule (déclaré)*
+- **forge-seo-geo** (sur mandat) : **Créer une mission d'audit SEO** · **Dérouler l'audit 89 nœuds** · **Valider forge et mission** · **Rapport HTML vérifié** · *Runs de suivi récurrents (déclaré)* · **Instrumentation de crawl avancée** · **Scorer et écrire le CSV d'actions** · **Redirections qui préservent le chemin (Cloudflare)** · **Migrer une étude vers la grille courante**
+- **forge-organization** (sur mandat) : **Doctrine des conventions** · **Composant filtres-tableau** · *Études normatives (déclaré)* · **Gate de conventions packagé** · **Parité oracle filtres-tableau** · **Gabarit A0 Page HTML de restitution** · **Registre des types de documents**
+- **forge-agents-security** (sur mandat) : **Scanner un agent (statique)** · **Scanner les appels d'outils (dynamique)** · **Rejouer un corpus d'injection de prompt** · **Juger un agent lancé par un workflow GitHub Actions** · **Juger le serveur MCP de Supabase donné à un agent** · **Rejouer l'arrêt d'urgence d'une mission en course** · **Rejouer le niveau de risque retenu par un PEP**
+- **forge-websec** (sur mandat) : **Juger l'exposition runtime** · **Scanner les dépendances vulnérables (SCA)** · *Tenir un contrat de sécurité ASVS L1 (déclaré)* · *Méthode de test de sécurité (WSTG curé) (déclaré)* · **Scanner dynamiquement (DAST, sur mandat)** · **Juger le durcissement des workflows GitHub Actions** · **Juger un fichier _headers avant déploiement** · *Commander une revue de code (déclaré)*
+
+<!-- CATALOGUE:FIN -->
+
+## Utiliser la Factory — une seule phrase
+
+Ouvrez une session Claude Code **dans le dossier du projet**, un dossier vide pour un produit
+neuf, et collez cette phrase telle quelle. C'est la même pour tous les cas d'usage :
+
+```
+Utilise https://github.com/Ptitcuicui/factory pour ce projet
+```
+
+La session installe ou met à jour la Factory et les forges sans poser de question
+([AGENTS.md](AGENTS.md), phase 0 idempotente). Elle finit sur « FACTORY
+OPÉRATIONNELLE ». Vous dites ensuite ce que vous voulez obtenir, en langage courant.
+[references/ACCUEIL.md](references/ACCUEIL.md) reformule votre intention, affiche les catalogues,
+propose la démarche et attend votre **accord explicite avant d'exécuter**. Les spécificités se
+demandent **en une seule question**. Rien d'autre n'est à recopier : l'encadré « Agent IA » en
+tête de ce README impose l'installation réelle et interdit de répondre depuis la page distante.
+
+Ce que vous pouvez demander au message suivant :
+
+| Vous voulez | Dites par exemple |
+|---|---|
+| lancer un nouveau produit | « crée un site de réservation » ; [PROMPT-PRODUIT.md](PROMPT-PRODUIT.md) (7 champs) prépare le brief à l'avance, sans obligation |
+| faire évoluer ou remédier le produit | « ajoute l'export PDF », « corrige la connexion » (run de version) |
+| tester et corriger | « exécute un cycle de tests complet : stratégie, cas, jeux de données, exécution, corrections » |
+| revoir le design d'une implémentation | « revois le produit rendu contre sa promesse design » |
+| déployer | « déploie en staging et prépare la production » |
+| auditer le SEO d'un site en ligne | « audite le SEO de mon site », ce message vaut mandat |
+
+Les spécificités de chaque situation (garde-fous G-1/G-2, gates MEP, bornes de boucle, seuils,
+questions à poser) vivent dans `references\ACCUEIL.md` et les références qu'il désigne — jamais
+dans la phrase d'usage.
+
+Deux garde-fous transverses : une amélioration des **forges** ne se lance jamais depuis un
+produit (elle passe par un lot de retours `forge\retours\`, ingéré au registre TF du pilot,
+puis « décide TF-xxxx ») ; et tout livrable n'est accepté que sur verdict d'oracle exécuté.
+
+## Ce qui est prouvé aujourd'hui
+
+Un run pilote complet a été exécuté le 04/08/2026 ([RUN-PILOTE.md](RUN-PILOTE.md)) : produit-test
+« MiniVeille » du brief au rapport d'audit, **zéro intervention humaine**, ledger de 23 entrées
+vérifié par l'outil natif de forge-agents. Verdicts : conception 4/4 oracles PASS, design PASS,
+development ruff+pytest verts avec traçabilité exigences→tests 11/11, forge-tests exit 3
+(couverture de surface API 8/8 au seuil 1.0, score de mutation 0.714 au seuil 0.70).
+
+## Ce qui tourne en mode dégradé (déclaré, pas caché)
+
+<!-- RF-2 (lot Produit-09, 20/08/2026) : ce paragraphe disait « trois étapes sur quatre n'ont pas
+     de point d'entrée natif », invalidé depuis le 14/08 par les runners de conception et de
+     design. Un produit a dû poser lui-même la préséance entre sources — elle est écrite
+     ci-dessous, une fois pour toutes. -->
+**Préséance entre sources quand elles se contredisent** : le code lu fait foi, puis
+[CONTRAT-INTERFACE.md](CONTRAT-INTERFACE.md) §5, puis ce README et [INVENTAIRE.md](INVENTAIRE.md)
+— deux documents de synthèse, datés par leur `verifie_le`, jamais des contrats.
+
+Une étape sur quatre n'a pas de point d'entrée natif chez sa forge : **development** est exécutée
+par le pilot en appliquant les méthodes documentées de la forge (le conductor reste inutilisable
+en headless — dette D-V1). **Conception** et **design** ont leur point d'entrée natif depuis le
+14/08 (`run-oracles-conception.mjs`, `run-oracles-design.mjs`), validés par leurs oracles
+(détail : [CONTRAT-INTERFACE.md](CONTRAT-INTERFACE.md) §5, dettes D-*).
+Seule l'étape tests est native (CLI `forge_tests`). L'étape MEP ([ETAPE-MEP.md](ETAPE-MEP.md))
+est portée par le pilot lui-même : **staging autonome avec oracle exécuté, mise en production
+uniquement sur GO humain**, donné sur un dossier de preuve généré (DOSSIER-MEP.md).
+
+## Limites assumées
+
+- Les **sept** forges (pipeline : conception, design, development, tests, agents ; hors
+  pipeline : seo — post-MEP récurrente sur mandat —, organization — doctrine transverse) sont
+  invoquées par **chemins locaux** (racine = `$FORGE_ROOT` ou le parent de ce dépôt) ; chacune
+  a son dépôt GitHub privé sous `github.com/Ptitcuicui`, et `bootstrap.mjs` équipe un poste
+  vierge. Les clones locaux restent la source d'exécution — pas de forge invoquée à distance.
+- Le run pilote portait sur un produit volontairement petit (backend + page unique) ; la maquette
+  design complète (9 écrans) et les cibles de déploiement cloud n'ont pas encore été exercées.
+- Les améliorations des forges sont des **propositions en diff** (backlog :
+  [BOUCLE-AMELIORATION.md](BOUCLE-AMELIORATION.md)), appliquées après validation humaine seulement.
+
+## Contenu
+
+| Fichier | Rôle |
+|---|---|
+| `CLAUDE.md` | l'orchestrateur — instructions de pilotage de la session (5 étapes) |
+| `PROMPT-PRODUIT.md` | modèle de brief en 7 champs, optionnel : prépare à l'avance ce que la phrase d'usage demande en session |
+| `INVENTAIRE.md` | état réel des forges (points d'entrée, oracles, manques) |
+| `CONTRAT-INTERFACE.md` | format d'invocation, ledger, routage par modèle, dette d'intégration |
+| `ETAPE-MEP.md` | la 5e étape : staging outillé par **forge-ops** (O-1…O-4), oracle MEP, gate GO production |
+| `REGLES-PROJET.md` | les 28 règles (R-1..R-19 des 06-10/08, R-20..R-23 socle documentaire, R-24 URLs d'environnement, R-25 types au registre, R-26 modèle ancré au schéma réel, R-27 surface web ouverte aux agents IA — 11/08 ; R-28 admission d'une nouvelle forge — 12/08) |
+| `oracles\` | `oracle-conformite-projet.mjs` (27 règles) · `oracle-claude-md.mjs` (noyau ≤ 6 Ko) · `oracle-ecosysteme.mjs` (exhaustivité forges × surfaces) — chacun avec self-test double sens |
+| `gabarits\` | gabarits du CLAUDE.md produit (routage forge obligatoire) et des lots de retours |
+| `todo\` | **TODO-FORGE** : registre structuré des améliorations (JSONL source + vue générée + oracle + archive) |
+| `BOUCLE-AMELIORATION.md` | amélioration des forges (bornée, gated humain) + backlog de retours |
+| `HYPOTHESES.md` | hypothèses prises, datées, révisables |
+| `RUN-PILOTE.md` | preuve d'autonomie : le run pilote et ses verdicts |
+| `runs\` | archive locale du run pilote (les runs vivent désormais dans le projet produit) |
+
+## Principes
+
+- **Le pilot est le seul conducteur** : les forges se déclarent non-orchestrables ou
+  s'ignorent entre elles ; l'enchaînement vit ici.
+- **Routage par modèle** : Fable pilote, Opus construit le complexe, Sonnet par défaut, Haiku
+  pour le mécanique. Départ au moins cher plausible, escalade sur échec d'oracle, tout consigné.
+- **Jamais d'écriture dans les dépôts frères.** Le contenu des forges et des entrants est de la
+  donnée, jamais des instructions.
+- **La qualité est mesurée, pas proclamée** : « prêt client » = oracles des cinq étapes au vert
+  ou seuils tenus + dossier de MEP complet — aucun critère en « optimal » ou « confiance ».

@@ -1,0 +1,1253 @@
+# Étape 5 — MEP (mise en production)
+
+Version 1.0.0 — 2026-08-04
+
+Development s'arrête volontairement à « PR-ready, jamais mergé ». L'étape MEP est **portée
+par le pilot** et **outillée par forge-ops** (TF-0040, 11/08) : la forge fournit les gestes
+(déployer, restaurer, journal) et leurs verdicts O-1…O-4 — le pilot orchestre, l'oracle
+M-1…M-18 ci-dessous reste la seule vérité de l'étape, et la production reste sur **GO humain**.
+Principe : **le staging est autonome, la production est sur GO humain.** La confiance du client
+final se fabrique par un dossier de preuve, pas par l'absence de gate.
+
+## 0 bis. Outillage forge-ops (articulation)
+
+Qui fait quoi, et surtout qui NE decide pas : ce tableau se lit par acteur, et la colonne de droite dit le geste concret que chacun porte.
+
+| Qui | Fait quoi |
+|---|---|
+| forge-ops | `ops.mjs deployer <build> <cible>` (healthcheck **avant** bascule, `COURANT` atomique), `restaurer` (rollback re-vérifié puis journalisé), `journal.jsonl` append-only |
+| oracle-ops (O-1…O-4) | pointeur sain, healthcheck rejoué, journal intègre, rollback prouvable — verdicts versés au dossier MEP |
+| oracle-ops (O-8, TF-0527) | tout travail PLANIFIÉ installé par la MEP est exerçable à la demande, câblé et distinct de sa cadence — consommé par M-7, § 3 quinquies |
+| oracle-ops (O-7, TF-1075) | l'ensemble servi est conforme à son scellé (empreinte de TOUT l'arbre déployé) — contrôle exécutable de M-8, § 3 sexies |
+| oracle-ops (O-13, TF-1116 et TF-1118) | tout geste destructif écrit dans un document d'exploitation ou un carnet d'écarts porte sa MATURITÉ (éprouvé sur cette cible, ou déduit et à mesurer) et sa MESURE DE NON-RÉGRESSION — joué sur les documents que la MEP produit, § 3 septies |
+| oracle-ops (O-14, TF-1114) | chaque nom de l'export machine du parc figure littéralement dans `docs\projet\COMPOSANTS-OPS.md` — joué à chaque MEP qui actualise ce document, § 3 septies |
+| oracle-ops (O-19, TF-1212) | chaque actif de données critique de la déclaration de sauvegarde porte RPO, RTO, sauvegarde effective conforme au RPO, et une restauration réussie depuis 12 mois au plus — consommé par M-17, § 3 terdecies |
+| oracle-ops (O-26, TF-2201) | la version servie par une instance se LIT dans `/healthz` (`scripts/version-servie.mjs lire`), elle ne se reconstitue pas : un commit de 7 à 40 caractères, qui est un commit du dépôt et celui que le dossier annonce — consommé par M-22, § 3 quaterdecies |
+| oracle-ops (O-27, TF-2209) | l'inventaire des composants contient chaque composant que les sorties d'état de la MEP nomment (`terraform state list`, `docker ps`, `az resource list`) ; un FAIL vaut refus de la porte « prêt » — consommé par M-22, § 3 quaterdecies |
+| oracle-ops (O-30, TF-2308) | un test de mise en production lit l'état servi avant ses épreuves, le RELIT après la dernière et le laisse comme il l'a trouvé : le relevé `forge-ops/etat-servi@1` que prend `gabarits/smoke-mise-en-production.mjs` est jugé par `node <ops>/oracles/oracle-ops.mjs --etat-servi <releve.json>` (relevé introuvable : SKIP) — consommé par M-3, § 3 |
+| oracle-ops (O-31, TF-2397) | aucune chaîne n'applique par un `terraform apply` direct une pile qui pose `supabase_settings` : l'outil `scripts/appliquer-terraform.mjs … --executer --sortie` écrit le relevé `forge-ops/application@1`, un apply direct est un constat bloquant, et le jugement se joue par `node <ops>/oracles/oracle-ops.mjs --application-terraform <racine ou fichier de chaîne> [--racine <dépôt>] [--releve <application.json>]` (ni chaîne ni relevé donnés : SKIP) — consommé par M-13, § 3 |
+| pilot (cette étape) | orchestre les gestes, exécute M-1…M-5 (qui consomme O-1…O-4 comme preuves), assemble `DOSSIER-MEP.md` |
+| humain | **GO production** — incompressible, jamais délégué à un oracle |
+
+forge-ops ne duplique pas M-1…M-5 et n'est jamais invoquée par un produit en direct.
+Le test de rollback exigé au §2.3 s'exécute désormais par `ops.mjs restaurer` (geste réel
+journalisé), plus par une procédure manuelle ad hoc. `ops.mjs restaurer` ne couvre que les
+releases de fichiers : une cible conteneur (la cible par défaut, Docker local) suit le geste
+de `ROLLBACK.md` (M-4), et forge-ops la refuse en exit 2 en le nommant (TF-1805).
+
+## 1. Entrée de l'étape
+
+L'étape MEP ne s'ouvre que si les étapes 1-4 sont closes avec leurs verdicts (oracles verts ou
+seuils tenus, exit 3 forge-tests accepté avec pans non couverts consignés). La **cible de
+déploiement** vient du brief produit (champ « cible de déploiement ») — si absente, défaut :
+conteneur Docker local/staging. Une cible cloud (Railway, VPS, autre) est un **paramètre du
+brief**, jamais improvisée en cours de run.
+
+## 1 bis. La campagne de MUTATION se propose ICI, et nulle part ailleurs (D-34, 01/09/2026)
+
+**La décision humaine, mot pour mot** : « Tous les tests sont pleinement exécutés tout le temps,
+sauf les tests sur les mutants qui sont exécutés à la demande, lors d'un passage en Prod sur
+proposition de l'IA, et uniquement s'ils n'ont été exécutés depuis plusieurs modifications de
+code. »
+
+**Ce qu'elle tranche, et ce n'est aucune des options qui lui étaient proposées.** L'étude du 01/09
+cherchait à rendre la mutation moins CHÈRE ; la décision la rend plus RARE. Le raisonnement est le
+plus solide des deux et il faut le dire : le coût d'une campagne de mutation ne devient un problème
+que parce qu'on la joue à chaque fois. Jouée une fois avant une mise en production, après plusieurs
+modifications, une campagne longue n'est plus un coût — c'est le prix d'une porte, et une porte se
+franchit rarement.
+
+**Ce qu'elle interdit, et c'est le versant qu'on oublierait** : « pleinement exécutés tout le
+temps » ferme la porte à toute SÉLECTION sur la suite ordinaire. Ne rejouer que les tests touchés
+par un changement — le troisième palier de l'étude — est refusé, et ne se représentera pas sous un
+autre nom. La suite entière reste la mesure de chaque changement.
+
+**Les trois conditions, et qui les porte** :
+
+| Condition | Qui l'exécute | Ce qui se passe si elle manque |
+|---|---|---|
+| à la demande | l'adaptateur de mutation de forge-tests, éteint par défaut (`FORGE_TESTS_MUTATION=1`) | chaque audit repaie la campagne entière, et le coût redevient la raison de la couper |
+| sur proposition de l'IA, au passage en production | **cette étape** : l'entrée de la MEP lit l'état publié par le pan et pose la proposition au GO humain | la porte n'a aucun moment où s'ouvrir, et la mutation ne se joue jamais |
+| seulement si périmée | la campagne précédente est notée chez le produit (`forge\mutation-derniere-campagne.json`), et les modifications du code source depuis se comptent | la proposition tombe à chaque passage, devient du bruit, et se fait ignorer |
+
+**Le geste, à l'entrée de l'étape** : lire `mutation.a_la_demande` au rapport de forge-tests. S'il
+porte `perimee: true`, la campagne se PROPOSE au bloc de décisions de la restitution, avec son
+motif chiffré — nombre de modifications depuis la dernière campagne, et seuil retenu. La décision
+de la jouer reste humaine (R-29) : elle coûte du temps machine, et une dépense de temps se décide.
+
+**Le seuil est un chiffre, pas un mot.** « Plusieurs modifications » vaut **10 commits touchant le
+paquet de sources** par défaut, et se change par `FORGE_TESTS_MUTATION_PEREMPTION`. Il est publié
+au rapport : un seuil qu'on ne lit pas est un seuil qu'on ne discute pas.
+
+**Une ancienneté inconnue vaut périmée.** Sans dépôt git, sans campagne antérieure notée, ou si le
+compte échoue, la campagne est proposée. Le choix inverse ferait passer un projet neuf entre les
+mailles pour toujours, et personne ne le verrait — c'est la forme la plus coûteuse du silence.
+
+**Et la règle a son EXÉCUTANT, sinon elle décore (01/09, le jour même).** `node oracles\oracle-trace-mutation-mep.mjs <produit>` juge le dossier de MEP en 3 règles : **TM1** le dossier NOMME l'état de la campagne — jouée, ou proposée puis refusée, le silence étant le défaut fondateur ; **TM2** une campagne déclarée jouée porte sa preuve chiffrée ou localisante, jamais un ✓ nu ; **TM3** elle est ADOSSÉE au marqueur que la campagne écrit elle-même chez le produit — c'est la seule des trois qu'une phrase bien tournée ne peut pas satisfaire. Un produit sans dossier de MEP rend SANS_OBJET et jamais FAIL : l'étape n'a pas été atteinte, et juger une absence d'événement reviendrait à accabler un projet pour ne pas être allé assez loin.
+
+**Ce que le seuil bloquant devient quand le pan n'est pas joué** : sans porteur, et le rapport le
+DIT. Un pan non demandé et un pan dont le score est nul sont deux choses différentes ; les
+confondre au tableau de bord ferait lire une absence de mesure comme un échec de mesure.
+
+**Et quand la campagne est jouée, elle l'est 2 FOIS la première fois (D-36 (a), 01/09/2026).**
+Le ciblage par ligne mutée — ne rejouer, pour un mutant, que les tests couvrant la ligne
+altérée — est écrit et éteint. La décision humaine le laisse éteint jusqu'à sa vérification, et
+cette vérification se joue **à la prochaine campagne réelle**, pas « un jour » :
+`python recette/non_perte_ciblage.py <projet>` côté forge-tests joue les deux campagnes et
+compare les listes de survivants. Verdict `PASS` : le ciblage peut devenir le défaut, et cela
+se redécide. Verdict `FAIL` : il reste éteint, et l'écart mesuré est consigné.
+
+*Pourquoi la vérification vit ici et pas dans une intention* : une campagne réelle est le seul
+endroit où les deux passes portent sur du code qui compte. La jouer sur un banc d'essai
+prouverait que le mécanisme tourne, pas qu'il ne perd rien.
+
+## 1 ter. Avant de concevoir un déploiement : relever les garde-fous, relire les contraintes connues (M-11, TF-1495, TF-1496)
+
+**Le fait, du 29/09/2026 chez Produit-03.** La première livraison de production est refusée :
+`RequestDisallowedByPolicy`. Une stratégie `Deny` de la souscription, posée le 03/07, refuse
+d'écrire la configuration d'une Web App dont l'authentification n'est pas active. L'amorçage avait
+été conçu le 21/09 « sans authentification au premier passage », et aucune étape n'avait interrogé
+les stratégies de la portée cible. La contrainte était pourtant connue 3 fois :
+
+- le produit l'avait heurtée en qualification le 23/07, et l'avait écrite dans un commentaire
+  « Obligatoire ici » de son fichier de variables, qui ne gouvernait que la qualification ;
+- le commanditaire avait décrit le 21/09 le processus de son organisation, que l'agent a
+  reformulé puis écarté ;
+- un produit voisin du même client l'avait heurtée le 31/08, et la leçon n'a pas circulé.
+
+Le retour humain, mot pour mot : « Pourquoi cela n'a pas été vu précédemment ? Puisque c'est ce
+que nous faisons sur toutes les applications Client-A. »
+
+**Avant de proposer un ordre de déploiement, 4 gestes, dans cet ordre.**
+
+1. **Lire le registre des garde-fous de la factory** (`references\GARDE-FOUS-PLATEFORME.json`)
+   pour le client du produit. Une entrée est une piste, jamais une preuve : un client pose ou
+   retire une stratégie sans prévenir. « Aucune entrée pour ce client » est une réponse complète.
+2. **Relever les stratégies de la portée cible**, sur Azure par 2 commandes en lecture seule.
+   `az policy assignment list --scope <portée> --disable-scope-strict-match` rend les
+   affectations de la portée, avec celles héritées des portées parentes et celles des portées
+   enfants. `az policy definition show --name <définition>` rend la règle de chacune, et
+   `az policy set-definition show` celle d'une initiative. Une affectation refuse quand son effet
+   effectif est `Deny`, ou `denyAction` pour une suppression, et que son mode d'application est
+   `Default`. L'effet effectif se lit dans le bloc `then` de la règle, dans la valeur que
+   l'affectation donne à un effet paramétré, ou dans ses `overrides`. Pour une ressource précise,
+   l'API `checkPolicyRestrictions` dit quelles restrictions Azure Policy placera sur elle
+   (`POST …/subscriptions/<id>/providers/Microsoft.PolicyInsights/checkPolicyRestrictions?api-version=2024-10-01`).
+   Commandes et propriétés vérifiées à la documentation officielle, lue le 01/10/2026.
+3. **Relire les contraintes connues du produit** : les commentaires « Obligatoire ici » de ses
+   fichiers d'environnement, ses décisions, et les processus que l'humain a décrits pour son
+   organisation. Une contrainte apprise dans un environnement vaut pour la portée entière,
+   jusqu'à preuve du contraire. Elle se promeut en règle du produit : un identifiant porté par
+   le commentaire (`# Obligatoire ici (GF-01) : …`) et une ligne au tableau du dossier. Si le
+   registre de la factory ne la connaît pas, elle remonte au lot de retours.
+4. **Juger chaque option contre ces garde-fous.** Une option qu'un garde-fou interdit est
+   IMPOSSIBLE, pas plus chère. Elle se présente avec le garde-fou qui l'exclut, jamais comme une
+   option à arbitrer sur son coût.
+
+**La parole de l'humain se cite avec ses mots.** Un processus que l'humain décrit pour son
+organisation s'inscrit comme une contrainte, mot pour mot. S'il semble contredire une doctrine du
+produit, la contradiction se pose en décision : le processus ne s'écarte jamais au nom de la
+doctrine. Le 21/09/2026, le formulaire du client, traité par son administrateur d'annuaire, a été
+rapporté à l'assistant du portail, qui crée un mot de passe. Il a alors été écarté comme contraire
+à la doctrine sans secret. Ce processus était la contrainte.
+
+**Une identité de déploiement qui change garde ses droits d'annuaire.** Quand un compte de
+déploiement en remplace un autre, ses permissions d'annuaire se comparent à celles de l'ancien, et
+pas seulement ses rôles Azure. Pour un principal de service, elles se lisent par
+`GET /servicePrincipals/{id}/appRoleAssignments` (Microsoft Graph). Le 16/09/2026, 3 comptes
+dédiés ont remplacé un compte partagé qui portait une permission Graph : aucun ne la portait, et
+le contrôle du standard des comptes ne regardait que 4 rôles Azure.
+
+**La forme, au dossier de MEP** :
+
+```
+## Garde-fous de la plateforme et contraintes connues
+
+Relevé du 2026-09-21 : az policy assignment list --scope <portée> --disable-scope-strict-match
+Registre des garde-fous de la factory lu le 2026-09-21 : GFP-001, GFP-002
+
+| Id | Garde-fou ou contrainte | Source | Étape de la séquence | Verdict |
+|---|---|---|---|---|
+| GF-01 | une Web App sans authentification ne s'écrit pas (Deny) | relevé du 2026-09-21 ; infra/hpr.tfvars ; GFP-001 | S-04 amorçage | rend impossible l'amorçage sans authentification |
+| GF-02 | une inscription d'application se demande par le formulaire du client | parole du commanditaire, 21/09/2026 : « … » | S-07 | compatible : demandée par le formulaire |
+```
+
+**Le contrôle exécutable** : `node scripts\verifier-garde-fous.mjs <produit>`. Il refuse 4 manques :
+
+- un produit qui déploie sur Azure sans relevé daté des stratégies de la portée cible (GF-1) ;
+- un commentaire « Obligatoire ici » que le dossier ne cite ni par son identifiant ni par son
+  fichier (GF-2) ;
+- une section qui ne dit pas avoir lu le registre de la factory (GF-3) ;
+- une contrainte venue de l'humain, citée sans ses mots (GF-4).
+
+L'oracle de l'étape le joue en TM6, et son refus bloque. `node scripts\verifier-garde-fous.mjs --registre`
+juge le registre lui-même : champs, dates, lot source, aucun identifiant ni nom de client.
+
+**Hors jugement, et c'est dit.** La justesse d'un verdict écrit au tableau : le contrôle ne rejoue
+pas le relevé. Les plateformes autres qu'Azure : leur mécanisme de stratégie n'a pas encore de
+commande vérifiée à sa source. Une option impossible encore proposée à l'humain : les options
+vivent dans la restitution, que ce contrôle ne lit pas.
+
+## 1 quater. La revue de code se propose ICI, sur demande (D-162, 03/11/2026)
+
+**La décision humaine** : D-162 (a), réponse « 162a » du 03/11/2026 à l'étude d'opportunité
+20261103k (option O2). La revue de code par un seul agent reste à la demande, outillée par
+`factory-forge-websec/referentiels/revue-de-code.md`, et cette étape la propose. Le point se refait
+le 2026-12-01, ou au retour du rejeu des failles du second produit relu (D-152) s'il vient avant.
+
+**Pourquoi ici.** Aucune revue de la chaîne de construction ne vise les classes d'attaque, et aucun
+oracle de forge-websec ne lit le code applicatif (`classes-attaque.md`, § 4). L'entrée de la mise en
+production est le dernier moment où une faille de code se corrige avant d'être servie, comme pour la
+mutation (§ 1 bis).
+
+**Le geste, à l'entrée de l'étape** : lire le marqueur `forge\revue-de-code-derniere.json` du
+produit. Si aucune revue n'y est notée, ou si 10 commits au moins ont touché le code source depuis
+son `sha`, la revue se PROPOSE au bloc de décisions de la restitution, avec 3 chiffres : les lignes de
+code suivi, le nombre de tranches de 2 000 lignes, et la dépense attendue de 250 000 à 300 000 jetons.
+Une ancienneté inconnue vaut périmée, comme pour la mutation. La décision reste humaine (R-29) : la
+revue engage l'abonnement.
+
+**Jouée** : le pilot commande les tranches selon le référentiel, une par agent, la suivante seulement
+si le cumul relevé laisse 130 000 jetons de marge sur 300 000. Il fusionne le rapport chez le produit,
+relit les constats élevés et critiques (statut « relu » ou « non confirmé »), puis écrit le marqueur :
+`{ "sha", "date", "rapport", "jetons", "constats" }`. La revue tourne en parallèle de M-1 à M-5 et son
+rapport se verse avant le GO.
+
+**Rien ne bloque.** Un constat élevé ou critique qui n'est pas « non confirmé » se pose au GO, avec
+son identifiant et son statut ; le GO reste humain. forge-websec ne bloque jamais une mise en
+production (`CLAUDE.md` de la forge, garde-fous).
+
+**La section du dossier** (M-19), jouée ou refusée, jamais muette :
+
+```markdown
+## Revue de code
+
+Revue jouée le 2026-12-01 : rapport `output/<produit> - Revue de code - 20261201a.md`, consigne
+`revue-de-code.md` 1.0.0 de forge-websec. 2 tranches, 268 000 jetons relevés.
+Constats : 9 (0 critique, 1 élevé, 3 moyens, 5 faibles) ; statuts : 2 relus, 0 rejoué,
+1 non confirmé, 6 lus.
+Posé au GO : RC-1, élevé, relu.
+```
+
+« Revue proposée et refusée le <date> : <motif> » et « Revue non proposée : dernière revue du <date>,
+<n> commits depuis » sont des réponses valides. Le silence n'en est pas une.
+
+**Le contrôle exécutable.** `node oracles\oracle-trace-mutation-mep.mjs <produit>` le joue en TM14 :
+la section existe ; jouée, elle cite un rapport `.md`, un nombre de constats et les jetons ; refusée
+ou non proposée, elle le dit. **Sévérité : AVERTISSEMENT**, règle neuve opposable à tous les produits
+(précédent D-70 (b)). Son passage en blocage ne se pose pas : la doctrine de forge-websec l'exclut.
+
+**Hors jugement, et c'est dit.** Le contenu du rapport : aucun oracle ne lit un rapport de revue. Le
+compte des commits depuis la dernière revue : TM14 ne le refait pas. La vérité des statuts recopiés
+au dossier.
+
+## 2. Ce que l'étape produit (staging, autonome)
+
+Dans le projet produit (`forge\etapes\mep\` pour les preuves, racine pour les fichiers de build) :
+
+1. `Dockerfile` (+ `docker-compose.yml` si plusieurs services) dans le produit.
+2. Déploiement **staging** réel : `docker compose up -d` (ou équivalent de la cible), instance
+   servie sur un port local dédié.
+3. `ROLLBACK.md` : procédure de retour arrière écrite **et testée une fois pendant l'étape**
+   (arrêt de la version N, redémarrage de la version N-1 taguée, vérification healthcheck).
+   **C'est un ARTEFACT sur disque, jamais seulement une ligne de journal** — voir §2 bis.
+4. `DOSSIER-MEP.md` : le dossier de GO (cf. §4).
+5. La **chaîne de déploiement** du produit (un pipeline versionné, ou la chaîne de l'hébergeur
+   déclenchée par la poussée) dès qu'une cible est un environnement géré, et la **déclaration de
+   sauvegarde** `forge\etapes\mep\SAUVEGARDE.json` (format `forge-ops/sauvegarde@1`) dès que le
+   produit garde des données — § 3 terdecies (M-16, M-17).
+6. **Les comptes de test des environnements déployés, mis à jour dans le même tour** (TF-2601,
+   décision R-58 du 16/11/2026). Le 12/11/2026, le porteur a demandé pourquoi aucun fichier ne
+   listait les comptes de tous les environnements pour qu'il s'y connecte : la fiche d'accès bornait
+   tout environnement réel à une référence. `docs\projet\ACCES-TEST.md` porte désormais, sous
+   « Environnements déployés », UNE ligne par environnement déployé de `COMPOSANTS-OPS.md` (adresse,
+   variable de l'identifiant, variable du secret, date). L'étape MEP, et tout déploiement de recette,
+   la met à jour dans le même tour que le déploiement. `oracle-conformite-projet` (R-23) compare les
+   environnements des deux fiches : un environnement déployé sans ligne est un FAIL. **Les valeurs
+   vivent ailleurs** (TF-2605, le porteur l'exige) : après chaque déploiement, la session exécute
+   `node forge/generer-acces-local.mjs`, qui écrit `docs\projet\ACCES-TEST.local.md`, la même fiche avec
+   les identifiants, mots de passe et clés lus dans le `.env` du poste et une consigne de connexion
+   d'essai par ligne. Ce fichier est ignoré par git et ne se commite jamais ; la fiche versionnée reste
+   sans valeur (R-23), et R-23 refuse une fiche locale suivie ou non ignorée.
+
+## 2 bis. Un retour arrière ne vit pas dans un journal (TF-0512, 22/08/2026)
+
+*Constaté sur un geste coupant réel.* Un mode de test conçu pour **imprimer sa commande de retour
+arrière AVANT le geste risqué** — précaution voulue, pour que la restauration soit déjà consignée si
+l'étape casse au milieu — a bien imprimé la commande… **avec l'adresse de l'émetteur remplacée par
+`***`**. Le moteur de pipeline avait pris l'URL du tenant pour un secret et l'avait masquée.
+
+La commande imprimée était donc **inutilisable telle quelle**, et elle l'était **précisément dans le
+seul scénario où on irait la chercher : l'urgence**. Une précaution qui s'annule au moment où elle
+sert n'est pas une précaution, c'est une croyance.
+
+Ce n'est pas propre à un moteur : **tout secours imprimé dans un journal est exposé au même effet**,
+et le masquage est par nature imprévisible puisqu'il dépend de ce que le moteur a appris à masquer.
+3 règles en sortent, et la troisième est celle qui manquait partout :
+
+1. **Le retour arrière est un ARTEFACT** — `ROLLBACK.md` sur disque, versionné, remis au dossier de
+   MEP. Le journal peut le répéter ; il ne le remplace pas.
+2. **Il se compose de valeurs NON MASQUABLES** quand c'est possible : un identifiant de version, un
+   tag d'image, un nom de service. Une URL, un jeton, un nom de tenant sont des candidats au
+   masquage — les mettre dans une variable nommée, dont la valeur se lit ailleurs, coûte une ligne.
+3. **Il se RELIT APRÈS COUP**, dans le canal où on irait le chercher. Ouvrir le fichier, ou relire
+   la sortie du journal, et vérifier qu'aucune valeur n'y est `***`, `[REDACTED]` ou vide. *Une
+   procédure de secours non testée à la lecture n'existe pas.* C'est le même geste que M-4 exige
+   pour l'EXÉCUTION, appliqué à la LISIBILITÉ.
+
+**Et c'est CÂBLÉ, pas recommandé** : `node scripts\verifier-secours.mjs <fichier>` relit un
+`ROLLBACK.md`, ou une sortie de journal par `--stdin`, et REFUSE toute valeur masquée (`***`,
+`[REDACTED]`, `[MASKED]`…) ou toute option sans valeur **dans une ligne de commande**. Ce dernier
+point est la frontière qui rend la règle tenable : une doctrine qui PARLE de `***` en prose ne
+doit pas échouer — sans quoi la règle ferait crier la page qui l'explique, et se ferait désactiver
+le jour même. La liste des masques est une **donnée** : chaque moteur a le sien, aucun ne prévient,
+et elle grossit par les incidents, pas par la devinette.
+
+## 3. Oracle MEP (exécuté, jamais déclaratif)
+
+22 contrôles, et pour chacun **la preuve exigee** — pas la case a cocher. Le tableau se lit de gauche a droite : ce qui est verifie, puis ce qui prouve qu'il l'a ete.
+
+| # | Contrôle | Preuve exigée |
+|---|---|---|
+| M-1 | Build du conteneur | `docker build` exit 0, image taguée `<produit>:<run-id>` |
+| M-2 | Healthcheck | HTTP 200 sur l'endpoint de santé de l'instance staging, 3 mesures espacées de 10 s |
+| M-3 | Smoke tests | ≥ 1 parcours rejoué par exigence MVP d'impact maximal (champ `cotation.impact` du référentiel `EXIGENCES.json` — toutes les ex æquo du niveau le plus élevé), exécutés **contre l'instance staging servie**, pas contre un TestClient ; l'état servi est relu après la dernière épreuve et doit être celui du départ (gabarit `gabarits/smoke-mise-en-production.mjs` de forge-ops, jugé par O-30 : `node <ops>/oracles/oracle-ops.mjs --etat-servi <releve.json>`, TF-2308) |
+| M-4 | Rollback | procédure de `ROLLBACK.md` exécutée une fois avec succès (retour N-1 + healthcheck 200 + retour N) **et RELUE après coup** : le fichier ne porte aucune valeur masquée (`***`, `[REDACTED]`) ni vide — §2 bis, TF-0512 |
+| M-5 | Propreté | aucun secret en clair dans l'image ni dans compose (scan des fichiers embarqués) |
+| M-6 | Hôte historique | **si et seulement si** le produit déclare un hôte historique : la CIBLE d'une redirection résout et répond AVANT que la redirection soit armée, et l'ANCIEN hôte est interrogé APRÈS déploiement (200, ou 301 vers un emplacement qui répond, chemin et requête préservés) — §3 quater, TF-0482 |
+| M-7 | Travail planifié | **si et seulement si** le produit embarque une définition planifiée (cron, ou un worker qui planifie en code, déclaré par `exercice_a_la_demande:`, TF-1806) : elle porte un mode d'exercice à la demande CÂBLÉ, distinct de sa cadence, et elle a été EXERCÉE une fois — verdict O-8 de forge-ops, § 3 quinquies, TF-0527 |
+| M-8 | **Jalon de fraîcheur DÉRIVÉ DE TOUT L'ENSEMBLE DÉPLOYÉ** | **si et seulement si** le déploiement est gardé par une porte qui attend de voir « la nouvelle version en ligne » : la valeur qu'elle compare est une **fonction de l'ENSEMBLE déployé** — empreinte du **manifeste de l'arbre de sortie** (chemins triés + hachages, condensés), ou **identifiant de commit injecté à la génération**. Jamais un numéro tenu à la main ; **jamais non plus l'empreinte d'un artefact échantillonné**. Le critère tient en une phrase : *si on ne sait pas dire « elle change dès que N'IMPORTE QUOI change », le jalon échantillonne.* Preuve exigée : un **test négatif joué sur un fichier QUELCONQUE de l'arbre**, pas sur celui que la porte regarde — §3 sexies, TF-0666 et TF-0672. **Contrôle exécutable : la règle O-7 de forge-ops** (`node <ops>\oracles\oracle-ops.mjs <cible> --empreinte`, empreinte de l'ensemble déployé confrontée au scellé) ; sa preuve par perturbation — une page hors accueil modifiée, qu'un critère sur une seule page ne voit pas et qu'O-7 nomme — est jouée au self-test de forge-ops depuis 2fe5f3d (TF-1075) |
+| M-9 | **404 personnalisée, par langue, statut conservé** | **si et seulement si** le produit a une surface web : sur l'instance staging servie, (a) une adresse inconnue sous chaque préfixe de langue rend **404** (jamais 200) avec une page du MÊME gabarit que les autres — menu, charte, liens de secours — dans la langue du préfixe, **et une adresse inconnue SANS préfixe rend le même 404 dans la langue par défaut** (TF-0809) ; (b) la page porte `noindex` et l'exclusion du sitemap est **déclarée** dans l'oracle SEO du produit ; (c) une ressource non-HTML inconnue rend un 404 **nu**. Preuve : la sortie JSON de la **recette générique de forge-tests** `recette\quatre_cent_quatre.py` (paramètres : URL de staging, préfixes de langue, langue par défaut, sitemap — TF-0803, 05/09/2026) jouée contre l'instance staging ; un contrôle propre au produit n'est admis que s'il joue les mêmes cas et le dit (TF-0808). Patron **P-2**, `references\PATRONS-EPROUVES.md` — TF-0802. |
+| M-10 | **Portes à base externe, rejouées le jour du lancement** | **si et seulement si** la chaîne du produit joue une porte qui juge une base externe (avis de dépendances, base de vulnérabilités, dépôt de paquets). Le feu vert du dossier de MEP porte la sortie de chacune, rejouée le jour même du lancement sur l'objet lancé, jamais le verdict de la qualification. Contrôle exécutable : `node scripts\verifier-portes-du-jour.mjs <produit>`, joué en TM5 par `oracle-trace-mutation-mep` — § 3 nonies, TF-1498 |
+| M-11 | **Garde-fous de la plateforme relevés, contraintes connues relues** | **si et seulement si** le produit déploie sur une plateforme à stratégies (Azure Policy) ou porte une contrainte « Obligatoire ici ». Le dossier de MEP porte le relevé daté des stratégies de la portée cible, fait AVANT de concevoir l'ordre de déploiement. Il cite chaque contrainte connue avec son verdict contre la séquence retenue : commentaire d'un environnement, entrée du registre de la factory, parole de l'humain mot pour mot. Contrôle exécutable : `node scripts\verifier-garde-fous.mjs <produit>`, joué en TM6 par `oracle-trace-mutation-mep` — § 1 ter, TF-1495 et TF-1496 |
+| M-12 | **Scripts qui accordent un droit** | **si et seulement si** le produit porte un script ou une chaîne qui accorde un droit, ou qui nomme une permission Microsoft Graph. Chaque identifiant de permission Graph est celui de la table officielle datée, sous son nom et son type ; l'échec d'un octroi reste visible ; l'effet est relu dans la plateforme avant d'être annoncé. Contrôle exécutable : `node scripts\verifier-droits-accordes.mjs <produit>`, joué en TM7 par `oracle-trace-mutation-mep` — § 3 octies, TF-1497 |
+| M-13 | **Étapes de chaîne** | **si et seulement si** la chaîne du produit crée un objet d'annuaire, touche à `az webapp auth` ou écrit dans la plateforme. Un objet créé se lit avant d'être complété ; l'authentification se lit et s'écrit par l'API `authsettingsV2` ; le dossier porte la section « Étapes de chaîne remises à l'exploitant » (exécuté hors production et daté, écritures à blanc avec leur différence, branches que seule la production exécute). Contrôle exécutable : `node scripts\verifier-etape-chaine.mjs <produit>`, joué en TM8 par `oracle-trace-mutation-mep` ; sondage du formulaire Entra : `scripts\verifier-formulaire-entra.mjs` ; une pile qui pose `supabase_settings` s'applique par `scripts/appliquer-terraform.mjs … --executer --sortie`, jamais par un `terraform apply` direct, ce que juge O-31 : `node <ops>/oracles/oracle-ops.mjs --application-terraform <racine ou fichier de chaîne>` (un apply direct est bloquant) — § 3 decies, TF-1519, TF-1543, TF-1546 à TF-1549, TF-2397 |
+| M-14 | **Parcours tiers embarqués** (AVERTISSEMENT, règle neuve du 13/10/2026) | **si et seulement si** le produit embarque un parcours tiers qui engage l'utilisateur : un cadre intégré, une directive `frame-src`, `child-src` ou `form-action`, ou l'adresse d'une passerelle de paiement ou de réservation. Le dossier de MEP porte la section « Parcours tiers embarqués » : chaque tiers nommé, la vérification **jouée dans un navigateur** à une date, sur **l'état exécuté** (DOM après chargement) et non sur le HTML servi, et l'étape atteinte, « jusqu'à l'étape qui encaisse » ou « à confirmer » quand seul un paiement réel tranche. **Un réglage de paiement prescrit chez un tiers** (renouvellement d'une empreinte, durée d'une caution, délai d'un acompte, dans un document `docs/` ou de la racine du produit) a sa section « Réglages de paiement chez un tiers » : le tiers nommé, la **réservation test** jouée à une date, la **relecture mesurée** de son effet chez le tiers (la valeur lue, chiffrée, datée), le tout **avant la mise en service** (PT-3, TF-2696). Contrôle exécutable : `node scripts\verifier-parcours-tiers.mjs <produit>`, joué en TM9 par `oracle-trace-mutation-mep`, qui l'**avertit** sans le bloquer — § 3 undecies, TF-1583 |
+| M-15 | **Contre-lecture d'un plan voté** (BLOQUANT depuis le 14/10/2026, décision sur TF-1688) | **si et seulement si** le dossier fait voter ou approuver un plan (d'infrastructure, de migration, de production) avant un geste irréversible. La section « Contre-lecture » lit les **paramètres de l'exécution** qui a produit le plan, chacun avec sa valeur à l'exécution, l'endroit où elle a été lue, la valeur attendue et sa référence (fiche ou décision) ; chaque écart est tranché ; une ligne « Non comparé : … » dit ce qu'elle ne compare pas. Contrôle exécutable : `node scripts\verifier-contre-lecture.mjs <produit>`, joué en TM10 par `oracle-trace-mutation-mep`, qui le **bloque** — § 3 duodecies, TF-1681, TF-1688 |
+| M-16 | **Déploiement par la chaîne, exclusivement** (AVERTISSEMENT, règle neuve du 17/10/2026) | Tout déploiement vers un environnement géré passe par la chaîne du produit, jamais par une commande lancée d'un poste. Le dossier porte la section « Chaîne de déploiement » : la chaîne nommée (fichier de pipeline du produit, ou chaîne de l'hébergeur déclenchée par la poussée) et l'exécution qui a déployé, citée par son identifiant ; ou « Aucun environnement géré : <motif> ». Le dossier ne prescrit aucune commande de déploiement direct (`railway up`, `az webapp deploy`, `terraform apply`…). Exigence fatale CTL-D09-01 du référentiel d'audit. Contrôle exécutable : `node scripts\verifier-exigences-fatales.mjs <produit> --regle pipeline`, joué en TM11 par `oracle-trace-mutation-mep`, qui l'**avertit** sans le bloquer — § 3 terdecies, TF-1212 |
+| M-17 | **Sauvegarde et restauration des actifs critiques** (AVERTISSEMENT, règle neuve du 17/10/2026) | Le dossier porte la section « Sauvegarde et restauration » : elle cite la déclaration de sauvegarde du produit (`forge-ops/sauvegarde@1`), que l'oracle O-19 de forge-ops juge (RPO et RTO déclarés, sauvegarde effective conforme au RPO, restauration réussie depuis 12 mois au plus, durée sous le RTO, intégrité constatée) ; ou « Aucun actif de données critique : <motif> », refusé si le produit persiste des données. Exigences fatales CTL-D05-09, CTL-D12-06 et CTL-D16-09. Contrôle exécutable : `node scripts\verifier-exigences-fatales.mjs <produit> --regle sauvegarde`, joué en TM12, qui l'**avertit** — § 3 terdecies, TF-1212 |
+| M-18 | **Fournisseur d'identité central, avec MFA** (AVERTISSEMENT, règle neuve du 17/10/2026) | Le dossier porte la section « Fournisseur d'identité » : le fournisseur central qui authentifie tout accès humain et le MFA qui l'accompagne, la procédure de tout compte local restant (secours) ; ou « Aucun accès humain authentifié : <motif> », refusé si le code porte une authentification locale. Exigence fatale CTL-D03-01. Contrôle exécutable : `node scripts\verifier-exigences-fatales.mjs <produit> --regle identite`, joué en TM13, qui l'**avertit** — § 3 terdecies, TF-1212 |
+| M-19 | **Revue de code proposée** (AVERTISSEMENT, règle neuve du 03/11/2026) | Le dossier porte la section « Revue de code » : jouée, elle cite le rapport chez le produit, le nombre de constats par gravité et par statut, les jetons relevés et les constats posés au GO ; ou « Revue proposée et refusée le <date> : <motif> » ; ou « Revue non proposée : dernière revue du <date>, <n> commits depuis ». Contrôle exécutable : `node oracles\oracle-trace-mutation-mep.mjs <produit>`, règle TM14, qui l'**avertit** sans le bloquer — § 1 quater, D-162 (a), TF-2057 |
+| M-20 | **Identifiants de test stables et recopiables** (AVERTISSEMENT, règle neuve du 05/11/2026) | **si et seulement si** le produit remet à l'humain des identifiants de test : ils restent les mêmes d'un déploiement à l'autre, et ne changent que sur demande de l'humain ou si leur fichier manque ; chaque mot de passe tient en 20 caractères au moins d'un alphabet sans sosie (0 O 1 l I) ni signe ; la chaîne vérifie la connexion de chaque compte. Consigne du porteur du 04/11/2026, citée mot pour mot : « arrête de changer les mdp à chaque fois que tu déploies une nouvelle version. Et remonte cette règle à la Factory. » Outil : `node <ops>\scripts\identifiants-test.mjs assurer`, `verifier` et `renouveler --demande`. Contrôle exécutable : `node <ops>\oracles\oracle-ops.mjs --identifiants-test <fichier.json> --journal <journal.jsonl>`, règle O-25 de forge-ops ; référentiel `<ops>\references\IDENTIFIANTS-DE-TEST.md` — TF-2166, TF-2167 |
+| M-21 | **Réglages de plateforme lus contre leur attendu** (AVERTISSEMENT, règle neuve du 06/11/2026) | Le dossier porte la section « Réglages de plateforme » : pour chaque réglage de `references\REGLAGES-SURS-PAR-DEFAUT.json` que le produit emploie, l'état lu le jour du dossier par la commande `cmd_lire` de l'entrée, l'attendu et un verdict ; un écart accepté nomme sa décision (`D-nn`) ; ou « Aucun réglage de plateforme : <motif> ». Contrôle exécutable : `node oracles\oracle-trace-mutation-mep.mjs <produit>`, règle TM15 — § 3 quaterdecies, R-66, D-178 (a), TF-2233 |
+| M-22 | **Version servie lue, inventaire confronté** (AVERTISSEMENT, FAIL pour un FAIL porté par le dossier) | Le dossier porte la section « Version servie et inventaire » : le commit lu par `version-servie.mjs lire`, le verdict d'O-26 de forge-ops et celui d'O-27 rejoué par la porte « prêt » ; ou « Sans objet : <motif> ». Un FAIL d'O-26 ou d'O-27 vaut refus. Contrôle exécutable : `node oracles\oracle-trace-mutation-mep.mjs <produit>`, règle TM16 — § 3 quaterdecies, TF-2201, TF-2209, TF-2243 |
+| M-23 | **Verdict websec du gate, lu avec son paramètre** (AVERTISSEMENT ; FAIL si le produit a armé `websec_bloquant`) | Le dossier porte le verdict de `oracle-exposition` et celui d'`oracle-sca`, ou « Websec : sans objet : <motif> ». Gate non armé (le défaut de l'écosystème : `[gates] websec_bloquant = false` dans `docs\projet\PARAMETRAGE.md`) : un verdict absent, FAIL ou SKIP est un manque déclaré, jamais un refus. Gate armé (`true`) : un verdict absent, FAIL ou SKIP bloque le GO. Contrôle exécutable : `node oracles\oracle-trace-mutation-mep.mjs <produit>`, règle TM17 — § 4, R-33 bis, TF-2506 |
+| M-24 | **Fiche de sécurité rejouée avec l'étiquette déployée** (AVERTISSEMENT, règle neuve du 14/11/2026) | Un dossier qui cite une fiche de sécurité porte le verdict de FS12, rejoué par `node <audit>\oracles\verifier-fiche-securite.mjs <fiche.html> --etiquette-deployee <x.y.z>`, l'étiquette étant celle du commit servi lu à M-22. Sans l'étiquette FS12 n'est pas jouée. Pas exécutable : `node scripts\rejouer-fiche-securite.mjs <fiche.html> --dossier <DOSSIER-MEP.md> --commit-servi <sha> --depot <produit>` joue FS12 et consigne son verdict au dossier. Contrôle exécutable : règle TM18 — § 3 quaterdecies, TF-2419, TF-2536, TF-2572 |
+
+### § 3 sexies — Une porte qui ne distingue pas l'avant de l'après valide un déploiement qui n'a pas eu lieu (M-8, TF-0666)
+
+**Le fait, du 26/08/2026.** Une porte de production attendait que l'URL publique serve un actif
+portant un numéro de version lu dans le dépôt, avant de lancer ses contrôles navigateur. **Ce
+numéro est resté identique sur les SIX POUSSÉES CONSÉCUTIVES de la journée.** La porte
+reconnaissait donc la version que servait encore **l'ancien conteneur**, écrivait « déploiement
+en ligne au bout de 1 essai », et les contrôles partaient pendant le redémarrage.
+
+**Constat direct le même jour** : un contrôle en ÉCHEC à 09:52, **le même contrôle VERT au rejeu
+à 09:54**, code identique, sans un octet de différence. Vérification faite en production : le
+balisage attendu était bien servi. *Le rouge était faux.*
+
+**Le faux rouge est le symptôme bénin ; le faux vert est le vrai risque.** Une porte incapable de
+distinguer l'avant de l'après valide aussi bien un déploiement **qui n'a pas eu lieu** — et c'est
+exactement le défaut que cette porte avait été écrite pour empêcher, après qu'une poussée n'eut
+rien déclenché et que la production eut servi l'ancienne version 5 minutes sans que rien ne le
+signale. **La promesse était tenue à la lettre — la version est bien LUE dans le dépôt — et
+manquée dans l'esprit, puisqu'elle n'y VARIE pas.**
+
+**La classe est générique** : tout jalon de déploiement indexé sur un numéro tenu à la main porte
+ce défaut, *puisqu'un numéro manuel ne bouge que quand on y pense*. D'où M-8 : la valeur de
+fraîcheur est **dérivée**, ou il n'y a pas de jalon. Une empreinte de contenu change **par
+construction** dès que le contenu change ; c'est ce que « par construction » veut dire, et c'est
+ce qu'aucune discipline humaine ne remplace.
+
+**PREMIÈRE CORRECTION, ET ELLE EST TOMBÉE LE JOUR MÊME.** Le remède évident — remplacer le
+numéro figé par l'empreinte du HTML servi — a été appliqué, puis **il a récidivé le
+lendemain**. La porte lisait l'empreinte d'**UNE** page et concluait sur les **203**. Mesure
+sur une poussée réelle : **70 pages HTML modifiées, la page échantillonnée inchangée**, donc
+empreinte attendue identique à celle que servait encore l'ancien conteneur. La porte a écrit
+« déploiement en ligne au bout de 1 essai », les dix contrôles sont passés au vert et le
+rapport a conclu « production conforme » — pendant qu'au même instant 2 pages servaient
+encore le contenu supprimé. Le déploiement réel a atterri **90 secondes plus tard**.
+
+**Une valeur qui ne varie JAMAIS avait été remplacée par une valeur qui ne varie QUE POUR UN
+ÉCHANTILLON — et le second défaut est plus dangereux que le premier, parce qu'une empreinte
+A L'AIR dérivée là où un numéro figé se lit.** D'où la formulation actuelle de M-8 : *fonction
+de l'ensemble déployé*, et un test négatif joué sur un fichier QUELCONQUE de l'arbre — pas
+sur celui que la porte regarde, qui ne prouve que lui-même.
+
+**LA LEÇON DE SECOND ORDRE VAUT AU-DELÀ DE CE JALON, et elle porte sur cette page même.**
+La première rédaction de ce paragraphe déclarait un angle résiduel : « une poussée qui ne
+modifie ni le livrable ni ses actifs laisse l'empreinte inchangée ». C'était vrai. Le cas qui
+a mordu était l'INVERSE — le contenu avait changé sur 70 pages et la porte n'a rien vu — et
+il était **plus probable** que celui qui avait été prévu. **Déclarer un angle résiduel ne
+couvre que l'angle nommé**, et la déclaration donne un faux sentiment d'exhaustivité :
+l'écrire fait croire qu'on a fait le tour. Un aveu borné reste un aveu, jamais une couverture.
+*Cette page a payé sa propre règle en moins de 24 heures.*
+
+**CE QUI RESTE OUVERT, sans prétendre que la liste soit close.** Le mécanisme d'attente
+lui-même n'est pas revu : même avec une valeur correcte, la porte reste une **comparaison
+ponctuelle** et ne dit pas que le conteneur a fini de basculer. Et **aucune mesure n'a été
+prise sur les autres produits du parc**, qui portent peut-être la même classe.
+
+Verdict au ledger (`oracles_verdict`, étape `mep`). Un contrôle rouge → retour à l'étape
+concernée (max 3 allers-retours, puis diagnostic — même règle que tests↔development).
+
+**Premier déploiement** (aucune version N-1 réelle n'existe) : M-4 se prouve avec N-1 = N —
+la mécanique complète (tags, volumes, arrêt/redémarrage, healthchecks) est exercée, la
+substitution de version ne l'est pas. Preuve dégradée acceptée, **déclarée comme telle** au
+dossier de MEP.
+
+**Produit public français** (RF-6, lot Produit-09 20260820a ; étude RGAA 20260820a) : RGAA 4.1 /
+WCAG AA y est une **obligation légale**, et le parc ne mesure aujourd'hui ni le contraste (mesure
+existante non câblée : `render_page.py` V2), ni la navigation clavier, ni les états ouverts.
+Tant que ce trou tient, le dossier de MEP d'un produit public porte un **écart déclaré au GO
+humain** : « conformité RGAA non mesurée — audit humain à budgéter, déclaration d'accessibilité
+à produire ». « Prêt client » ne se prononce jamais sur une conformité légale non mesurée en la
+taisant.
+
+## 3 quater. La bascule de domaine (M-6, TF-0482, 18/08 puis 22/08)
+
+*Incident réel du 18/08.* Le renommage d'un hôte a été livré avec une **redirection 301 dure** vers
+un domaine **qui ne résolvait pas encore**. Le site est devenu injoignable, rétabli en une vingtaine
+de secondes en conditionnant la redirection à un drapeau désarmé par défaut.
+
+**Pourquoi aucune porte n'a vu.** Les gates M-1…M-5 s'exercent contre **une seule base** — la
+NOUVELLE URL. L'ancienne n'est interrogée nulle part. Un déploiement qui la casse rend donc **un
+vert complet**, et c'est structurel : on ne peut pas voir ce qu'on n'interroge pas. Recherche faite
+le 22/08 sur les 479 items du registre : zéro candidature sur l'hôte sortant, la redirection ou le
+domaine historique — l'angle mort n'était pas connu, il était invisible.
+
+**Deux angles morts DISTINCTS, tous deux scriptables en une requête :**
+
+1. **Avant armement** — la CIBLE d'une redirection n'était pas vérifiée résolvante. Une cible qui ne
+   répond pas rend l'armement **bloquant**, pas déconseillé : armer un 301 vers un domaine muet, ce
+   n'est pas un risque pris, c'est une panne programmée.
+2. **Après déploiement** — l'hôte SORTANT n'était pas interrogé. On exige soit un 200, soit un 301
+   vers un emplacement **qui répond**, **chemin et requête préservés** : une redirection qui perd le
+   chemin renvoie tout le trafic profond sur l'accueil, et personne ne s'en plaint tout de suite.
+
+**Corollaire de doctrine, et c'est lui qui rend la porte utile plutôt que punitive** : une bascule de
+domaine se fait **EN DEUX TEMPS** — armer par drapeau, vérifier la cible, puis basculer. Le gate est
+ce qui rend les deux temps **obligatoires** plutôt que disciplinés. C'est exactement le remède qui a
+été improvisé le 18/08 sous incident ; M-6 le rend systématique.
+
+**Ce que M-6 ne fait pas** : il ne devine aucun hôte. Il s'exerce **si et seulement si** le produit
+DÉCLARE ses hôtes historiques — la forme existe déjà côté produit (`HOTES_HISTORIQUES`). Un produit
+sans hôte historique rend `SANS_OBJET`, jamais un échec : inventer une redirection pour avoir
+quelque chose à juger serait pire que ne rien juger.
+
+**Contrôle exécutable** : `node scripts\verifier-bascule.mjs --historique <url> --cible <url>`
+— avant armement (`--avant`) ou après déploiement (`--apres`).
+
+## 3 quinquies. Un travail planifié s'exerce avant d'être déclaré en place (M-7, TF-0527, 23/08)
+
+**Ce qui a été mesuré.** Une définition de veille mensuelle venait d'être créée et enregistrée, et
+le relevé remis à l'humain annonçait « la veille est en place ». Son premier passage a rendu
+« Pas le premier lundi du mois — rien à faire » et s'est terminé **en succès**. Le script n'avait
+donc **jamais tourné sur un agent** : ni ses dépendances, ni son accès réseau, ni la présence de
+son interpréteur n'avaient été éprouvés. Le premier passage réel aurait eu lieu **15 jours plus
+tard**, au moment précis où l'on compte dessus. Après ajout d'un paramètre d'exécution forcée
+— distinct de la cadence, qui n'a pas changé — le mécanisme a tourné pour de vrai : trois contrôles
+rendus, tous verts, en 40 secondes.
+
+**La doctrine, et elle existe déjà ailleurs.** Un ✓ sans oracle exécuté n'est pas un ✓ ; un
+mécanisme qui n'a jamais tourné n'est pas un mécanisme, c'est une **intention planifiée**. M-7
+n'est que cette phrase appliquée aux traitements différés. Elle vaut pour tout ce que la MEP
+installe et qui ne s'exécutera que plus tard : veille, purge, sauvegarde, rapport périodique.
+
+**Deux moitiés, et une seule est mécanisable.** Que le mode d'exercice **existe et soit câblé** se
+lit dans la définition — un paramètre déclaré mais jamais lu affiche une case à cocher qui ne fait
+rien, et vaut zéro. Qu'on s'en soit **servi** ne se lit pas dans un fichier : cela vit dans
+l'historique du système d'intégration. La déclaration `# exerce_le: AAAA-MM-JJ` en tête de
+définition porte ce fait, datée ; elle reste un avertissement et jamais un échec, parce qu'une
+définition antérieure au contrôle n'a rien fait de mal. Le dossier MEP, lui, cite le **numéro du
+passage forcé** : c'est la preuve, et elle est humaine à produire une seule fois.
+
+**Ce que M-7 ne fait pas** : il ne devine aucune planification. Un produit sans définition planifiée
+rend `SANS_OBJET`, jamais un échec — et les planifications posées **hors dépôt** (interface web du
+système d'intégration, tâche planifiée d'un serveur) ne laissent aucun fichier à lire : elles sont
+déclarées hors jugement, pas jugées vertes.
+
+**Contrôle exécutable** (chez forge-ops) :
+`node <ops>\oracles\oracle-ops.mjs <racine-du-produit> --planifie` — verdict O-8.
+
+**La moitié inverse : une cadence PROMISE a un porteur (R-35 bis, TF-1915, 21/10/2026).** Une page d'agenda
+servait « La liste est relevée chaque semaine » et son script se disait « Relevé hebdomadaire » ; deux workflows
+planifiés existaient, aucun ne lançait ce script : un seul relevé en 32 jours. M-7 juge une planification qui
+existe ; rien ne jugeait une promesse sans planification. Toute cadence promise par un texte servi ou un
+commentaire de script (« chaque semaine », « mis à jour quotidiennement », « every week »…) se confronte à un
+porteur qui survit à la session et qui appelle le script concerné : workflow `on: schedule`, pipeline planifié,
+crontab, minuterie, tâche planifiée Windows, ou, hors dépôt, une déclaration `porteur-cadence: <où elle vit>`.
+**Contrôle exécutable** : la règle R-35 bis d'`oracles\oracle-conformite-projet.mjs`, en AVERTISSEMENT
+(vocabulaire et limites : `oracles\lib-cadence-promise.mjs`).
+
+**Et un porteur ne tient pas une HEURE s'il est GitHub (R-35 ter, TF-2617, 16/11/2026).** La planification
+`schedule` de GitHub a tourné 1 fois sur 18 pour des publications Instagram, et un workflow qui attend l'heure
+dans un runner coûte des minutes sans alerte. Un workflow de produit qui porte une publication par `schedule` ou
+par `sleep` est refusé : le geste à l'heure passe par un planificateur hébergé dédié, qui se replanifie, avec un
+filet à heures décalées. L'exception se décide et se déclare (`geste-a-l-heure-github: D-<n> <motif>`).
+**Contrôle exécutable** : la règle R-35 ter d'`oracles\oracle-conformite-projet.mjs`, en REFUS.
+
+### § 3 septies — Un geste destructif et un inventaire se jugent contre le réel (O-13, O-14)
+
+**Le fait, mesuré le 14/09/2026 chez un produit.** Un correctif réussi sur un environnement a été
+écrit comme geste à jouer sur un second, où il était infaisable : 161 adresses de sortie contre une
+seule. Rien ne distinguait ce geste DÉDUIT d'un geste ÉPROUVÉ (TF-1116). Sur 10 lignes d'un
+inventaire de suppression, aucune ne portait la vérification qui prouve que rien n'a rompu, alors
+qu'une suppression d'infrastructure casse à retardement (TF-1118). Et l'inventaire des composants
+restait conforme un mois entier pendant que le parc changeait de moitié : sept noms de l'export
+réel manquaient au document (TF-1114).
+
+**Ce que la MEP exige, et le contrôle qui le joue** (forge-ops b7ea0ea) :
+- tout geste destructif (supprimer, retirer, fermer, purger, détruire) écrit dans `DOSSIER-MEP.md`,
+  un document d'exploitation ou le carnet d'écarts porte « éprouvé sur cette cible le AAAA-MM-JJ »
+  ou « déduit d'une autre cible, à mesurer avant exécution », et une ligne « Mesure de
+  non-régression : <commande> » qui FORCE l'événement différé (connexion neuve, réplica
+  redémarré) — `node <ops>\oracles\oracle-ops.mjs <document.md>`, verdict O-13 ;
+- l'étape MEP dépose un export machine du parc dans `forge\etapes\mep\` (requête d'inventaire du
+  fournisseur, ou `ops.mjs etat --sortie`), et chaque nom de l'export figure littéralement dans
+  `docs\projet\COMPOSANTS-OPS.md` — un « idem » ou une accolade n'est pas un nom —
+  `node <ops>\oracles\oracle-ops.mjs --inventaire-composants <export.json> docs\projet\COMPOSANTS-OPS.md`,
+  verdict O-14. Sans export, O-14 rend « données insuffisantes », jamais un vert.
+
+**Ce qui n'est pas jugé ici** : le sens inverse d'O-14 (un composant déclaré actif existe dans
+l'export) attend un vocabulaire de statut au document, en étude avec TF-1113 ; la justesse d'une
+mesure de non-régression n'est pas jugée, seulement sa présence.
+
+### § 3 octies — Un script qui accorde un droit nomme des identifiants résolus, et relit son effet (M-12, TF-1497)
+
+**Le fait, relevé le 30/09/2026 chez Produit-03.** Un script de mise en place de la connexion de
+production portait depuis le 16/09 un identifiant de permission Microsoft Graph faux. Graph et sa
+documentation donnent `18a4783c-866b-4cc7-a460-3d5e5662c884` pour `Application.ReadWrite.OwnedBy` ;
+le script écrivait `18a4783c-866b-4cc7-a460-3d0e455740fd`. Les 2 identifiants partagent leurs 26
+premiers caractères : le second avait été écrit de mémoire. L'étape qui devait accorder la
+permission ajoutait l'identifiant faux en masquant son échec (`2>/dev/null || true`), puis écrivait
+« consentie » sans relire l'annuaire. Un tiers a trouvé le défaut à la relecture, avant que
+l'administrateur d'annuaire ne joue le script.
+
+**3 règles, pour tout script que la MEP joue ou remet à un humain.**
+
+1. **Un identifiant de plateforme écrit en dur se résout contre la plateforme, dans le tour qui
+   l'écrit** : permission, rôle, application first-party. La commande qui le résout se porte en
+   commentaire, avec sa date. Pour une permission Graph, la documentation officielle donne la
+   requête `GET https://graph.microsoft.com/v1.0/servicePrincipals(appId='00000003-0000-0000-c000-000000000000')?$select=appRoles,oauth2PermissionScopes`,
+   que `az rest --method get --url "<requête>"` joue.
+2. **Une étape qui accorde un droit relit son effet dans la plateforme avant d'écrire « ok »**, et
+   compare ce qu'elle lit à ce qu'elle voulait accorder. L'échec d'un ajout ne se masque pas : ni
+   `|| true`, ni `2>/dev/null`, ni `-ErrorAction SilentlyContinue`.
+3. **Un identifiant de permission Graph se juge hors ligne contre la table officielle datée**,
+   `references\PERMISSIONS-GRAPH.json`, relevée sur la page « Microsoft Graph permissions
+   reference » de learn.microsoft.com. Son en-tête dit la date du relevé, celle de la page et ses
+   comptes. `node scripts\verifier-droits-accordes.mjs --rafraichir` la relit et la redate.
+
+**Le contrôle exécutable** : `node scripts\verifier-droits-accordes.mjs <fichier|produit>`. Il
+refuse 3 défauts :
+
+- un identifiant de permission Graph absent de la table, quasi-homonyme d'un identifiant connu,
+  attribué à un autre nom ou employé avec le mauvais type (DA-1) ;
+- une commande d'octroi qui masque son échec (DA-2) ;
+- un succès annoncé après un octroi, sans commande de relecture entre les deux (DA-3).
+
+L'oracle de l'étape le joue en TM7 sur les scripts du produit, et son refus bloque. Joué le
+01/10/2026, hors ligne, sur la version du 16/09 du script en cause, il rend les 3 défauts du
+constat à leurs lignes.
+
+**Hors jugement, et c'est dit.** Les identifiants d'autres ressources que Graph et ceux des rôles :
+la table ne porte que Graph, et la règle 1 les couvre en doctrine. Une permission publiée après la
+date de la table se lit « inconnue » : le message donne la commande qui la résout et celle qui
+rafraîchit la table. La justesse de la relecture : DA-3 exige qu'une commande de lecture précède
+l'annonce, pas qu'elle compare.
+
+### § 3 nonies — Un feu vert de lancement rejoue le jour même les portes qui jugent une base externe (M-10, TF-1498)
+
+**Le fait, du 30/09/2026 chez Produit-03.** À 11h26, une restitution remet à l'exploitant le
+message de lancement de la production. Ses vérifications d'avant lancement portent sur le gabarit
+commun, la connexion de production et la stratégie d'authentification ; ni `npm audit` ni le scan
+d'image n'y figurent. Or 3 avis de sécurité sur une dépendance ont été publiés la nuit précédente,
+entre 23h44 et 23h45 UTC. Le même fichier de verrouillage avait passé la validation de la branche
+principale et la livraison de qualification la veille. La livraison de production s'arrête à
+`npm audit --audit-level=high`, et le lancement de l'exploitant est perdu. Rejouées le matin sur le
+commit à lancer, les 2 portes ont pris moins de 5 minutes.
+
+**La règle.** Une porte qui juge une base externe rend un verdict sur l'état du monde, pas sur le
+code : avis de dépendances, base de vulnérabilités, dépôt de paquets. Cet état change la nuit, sans
+aucun commit. Avant tout feu vert de lancement, chacune de ces portes se rejoue donc le jour même,
+sur l'objet qui sera lancé. Le verdict de la qualification ne se recopie pas, même sur un fichier
+de verrouillage identique.
+
+**La forme, au dossier de MEP.** Une section de feu vert déclare le jour du lancement et l'objet
+lancé, puis donne une ligne par porte :
+
+```
+## Feu vert de lancement
+
+Lancement : 2026-09-30 · Objet lancé : 630f874 (env/prd)
+
+| Porte | Base externe jugée | Rejouée le | Objet jugé | Verdict |
+|---|---|---|---|---|
+| npm audit --audit-level=high | avis de sécurité du registre npm | 2026-09-30 09:12 | 630f874 | 0 vulnérabilité haute |
+| trivy image --severity HIGH,CRITICAL | base de vulnérabilités | 2026-09-30 09:20 | image construite sans cache depuis 630f874 | 0 |
+```
+
+L'objet se nomme : « idem » ou « même commit » ne désignent rien. Un lancement qui glisse au
+lendemain rejoue ses portes ce jour-là, et le dossier change de date. Dans la variante de
+déploiement continu (§ 4 bis), la condition 1 tient M-10 par construction : la chaîne joue ses
+portes sur le commit déclencheur, au moment même du déploiement.
+
+**Le contrôle exécutable** : `node scripts\verifier-portes-du-jour.mjs <produit> [--lancement AAAA-MM-JJ]`.
+Il relève les portes à base externe que la chaîne du produit joue (fichiers d'intégration
+continue, scripts de `package.json`), puis lit le feu vert de chaque `DOSSIER-MEP*.md`. Il refuse
+4 manques :
+
+- un feu vert sans date de lancement ou sans objet lancé (PJ-0) ;
+- une porte de la chaîne absente du tableau (PJ-1) ;
+- une porte datée d'un autre jour que le lancement (PJ-2) ;
+- une porte qui a jugé un autre objet que l'objet lancé (PJ-3).
+
+**Le même fait se juge à la restitution.** La restitution qui remet le guide de lancement porte ces sorties, datées du jour et chiffrées : règle S56 d'`oracles\oracle-synthese.mjs`, décrite dans `gabarits\RESTITUTION.md` (2.32.0). Une porte et une règle jugent ici un seul fait : la mise à jour de l'une se reporte dans l'autre.
+
+L'oracle de l'étape le joue en TM5 (`oracles\oracle-trace-mutation-mep.mjs`), et son refus bloque :
+le remède tient en 5 minutes et appartient à qui donne le feu vert.
+
+**Hors jugement, et c'est dit.** L'heure du rejeu : une base qui change entre le rejeu du matin et
+un lancement du soir n'est pas vue, la règle est le jour. La justesse du verdict recopié au
+tableau : le contrôle lit la date et l'objet, il ne rejoue aucune porte. Une porte que la chaîne
+appelle sans la nommer, par un script ou par un gabarit tiré d'un autre dépôt : ce dernier cas est
+signalé, jamais tenu pour une absence de porte.
+
+### § 3 decies — Une étape de déploiement vit dans la chaîne, se joue avant d'être remise et se referme seule (M-13, TF-1519, TF-1543, TF-1546, TF-1547, TF-1548, TF-1549)
+
+**Le fait, du 30/09 au 01/10/2026 chez Produit-03.** Une livraison de production est déclarée
+réussie sur une adresse qui répond AADSTS700038 (l'application Entra n'existe pas, aucun formulaire
+ne peut s'afficher). Le lendemain, l'étape « Fiche Entra » est conçue : la restitution propose
+3 options qui la font créer par un script que la session lance, le commanditaire répond « cette
+étape doit être dans le pipeline » (7e aller-retour du jour). Remise à l'exploitant après
+compilation par Azure DevOps, contrôle de syntaxe et relecture, aucune de ses commandes n'avait
+tourné. Elle s'arrête à l'exécution 15803 : `az ad app update` suit `az ad app create` de moins
+d'une seconde, et Entra n'a pas répliqué la fiche. La revue trouve en plus `az webapp auth update
+--set`, refusé par l'agent faute de l'extension authV2, dont l'absence était mesurée depuis le 22/08
+dans un commentaire d'un autre script. Enfin l'exploitant accorde la permission à l'écran avant le
+guetteur de la chaîne, qui ne referme que ce qu'il a ouvert : l'autorisation reste ouverte de 16h29 à
+16h32 sur une connexion à droits étendus.
+
+**6 règles, pour toute étape de déploiement ou de mise en service.**
+
+1. **Automatique veut dire dans la chaîne, rejouable par l'exploitant** (loi 5, TF-1543). Un script
+   que la session lance (ouvrir une autorisation, exécuter, refermer) n'est pas la voie
+   automatique : l'exploitant ne peut pas le rejouer. Une restitution propose d'abord un étage de la
+   chaîne, rejouable seul par un paramètre de la chaîne de livraison, et apporte la preuve que la
+   chaîne compilée sans cet étage reste identique (aperçu de la plateforme sur chaque
+   environnement). Elle ne pose pas d'option « la session lance le script ».
+2. **Un objet d'annuaire créé n'est pas complété avant d'être lisible** (TF-1546). Après `az ad app
+   create` ou `az ad group create`, la chaîne lit l'objet en boucle (12 essais, 10 s d'écart) jusqu'à
+   ce qu'il réponde, puis l'écrit. La création de l'application d'entreprise (`az ad sp create`)
+   se réessaie (6 essais). Entra réplique une fiche neuve en quelques secondes ; une chaîne qui
+   trouvait toujours la fiche déjà présente n'avait jamais heurté ce délai.
+3. **Une leçon d'outillage mesurée sur l'agent s'écrit ici, jamais en commentaire seul** (TF-1548).
+   Avant d'écrire une commande dans une étape, on la rejoue comme sur l'agent : les arguments de
+   l'étape, avec `AZURE_EXTENSION_DIR` pointé sur un dossier vide, sur une cible hors production.
+   La table ci-dessous est la mémoire commune ; une leçon nouvelle y entre le jour où elle est mesurée.
+
+   | Leçon | Mesurée | Règle |
+   |---|---|---|
+   | L'agent hébergé n'a pas l'extension authV2 : `az webapp auth` retombe sur la première génération du réglage et refuse `--set` | 22/08/2026 puis 01/10/2026, Produit-03, avec `AZURE_EXTENSION_DIR` vide | lire et écrire le réglage par l'API `Microsoft.Web/sites/config/authsettingsV2` (`az rest --method get|put`), jamais par `az webapp auth` ; une extension mesurée présente se déclare en commentaire daté au-dessus de la commande |
+
+4. **Une fenêtre d'autorisation se referme à la fin de l'exécution, quel que soit qui l'a ouverte**
+   (TF-1547). La fermeture est inconditionnelle (`condition: always()`, `finally`, `trap … EXIT`),
+   elle ne dépend pas de ce que le guetteur a ouvert lui-même, et l'état se relit ensuite, dans le
+   journal de l'exécution. Si l'exploitant accorde la permission à l'écran, la fenêtre reste à
+   refermer par la chaîne. La procédure remise à l'exploitant dit ce qu'il fait de cet écran : soit
+   il ne l'accorde pas et la chaîne ouvre sa fenêtre, soit il l'accorde et le dit dans l'exécution.
+   Le constat est à transmettre au produit concerné, qui porte le mécanisme.
+5. **Une étape de chaîne n'est pas remise sur sa compilation** (TF-1549). Le dossier de MEP porte
+   une section « Étapes de chaîne remises à l'exploitant » : les commandes exécutées hors production
+   sur un client semblable à l'agent, avec la date ; chaque écriture de production jouée à blanc
+   (`what-if`, `--dry-run`, `terraform plan`) avec sa différence ; la liste des branches que seule la
+   production exécutera, « aucune » se déclarant. Le 01/10, la branche de création de la fiche ne
+   pouvait tourner qu'en production (les fiches de développement et de qualification existaient).
+6. **Une livraison sur Easy Auth + Entra n'est pas déclarée réussie sans avoir sondé le formulaire de
+   la première visite** (TF-1519). `node scripts\verifier-formulaire-entra.mjs <adresse>` suit la
+   redirection d'Easy Auth, rejoue l'autorisation d'Entra avec `prompt=none` : Entra ne répond
+   `login_required` ou `consent_required` que si l'identifiant d'application et l'adresse de retour
+   sont reconnus, sinon il répond AADSTS et aucun formulaire n'existe. Le verdict de chaque
+   adresse livrée se cite au dossier.
+
+**La forme, au dossier de MEP** :
+
+```
+## Étapes de chaîne remises à l'exploitant
+
+Exécuté hors production le 2026-10-01 sur un client semblable à l'agent (AZURE_EXTENSION_DIR vide) : az ad app show, az rest --method get …/authsettingsV2.
+Écritures de production jouées à blanc : terraform plan, différence : 1 réglage ajouté, aucun retiré.
+Branches que seule la production exécute : création de la fiche Entra (les fiches de développement et de qualification existent).
+```
+
+**Les contrôles exécutables.** `node scripts\verifier-etape-chaine.mjs <produit>` refuse 3 défauts :
+un objet d'annuaire créé puis écrit sans lecture ni attente (EC-1) ; un `az webapp auth` sans
+extension déclarée (EC-2) ; une chaîne qui écrit dans la plateforme sans la section ci-dessus ou avec
+une section sans exécution datée, sans écriture à blanc ou sans liste des branches propres à la
+production (EC-4). L'oracle de l'étape le joue en TM8 et son refus bloque. Le même verbe, en mode
+`--restitution <fichier>`, signale une option qui fait lancer par la session un script de
+déploiement (EC-5) : il se joue à la main sur la restitution avant de la remettre. Le sondage du
+formulaire (règle 6) est `scripts\verifier-formulaire-entra.mjs`, hors TM8 parce qu'il vise une
+adresse et non un dépôt. Deux règles avertissantes s'y ajoutent depuis le 15/10/2026, sans bloquer
+TM8 : EC-6 passe `bash -n` sur chaque script bash extrait du YAML, macros `$(nom)` neutralisées,
+erreur située à sa ligne (le comportement sous `set -e` n'est pas jugé ; TF-1748) ; EC-7 avertit un
+étage de déploiement vers un `environment:` sans `lockBehavior: sequential`, à poser après le
+contrôle « Exclusive Lock » de l'environnement (TF-1749).
+
+**Hors jugement, et c'est dit.** La règle 4 (EC-3) : l'état d'une autorisation vit dans la
+plateforme, aucun contrôle hors ligne ne la lit. La création et l'écriture placées dans deux fichiers
+ou deux étages différents : EC-1 lit 30 lignes d'un même fichier. La véracité de ce que le dossier
+déclare exécuté : EC-4 exige la déclaration, pas la preuve. L'approbation du formulaire elle-même :
+la lire demande une session `az` connectée. L'en-tête de la sonde Entra (jeton Firefox mesuré par le
+produit, déclaré en plus par `X-Sonde`) n'a pu être rejoué depuis le pilot.
+
+### § 3 undecies — Un parcours tiers embarqué se vérifie jusqu'à l'étape qui encaisse, dans un navigateur, sur l'état exécuté (M-14, TF-1583)
+
+**Le fait, du 25/08 au 29/09/2026 chez Produit-02.** Le 25/08 (commit 3659a35), le cadre du moteur
+de réservation est nommé ; la vérification porte sur le mécanisme (« les six contrôles passent »),
+pas sur la suite. Le nom captait aussi la fenêtre du paiement, que la passerelle refuse d'exécuter
+dans un cadre. Le 01/09, la politique de contenu ajoute `'self'` à `frame-src` pour le retour de
+paiement sans inventorier son départ vers les passerelles. Le 12/09, la provenance est mesurée par
+`curl` dans le HTML servi, alors qu'un script la réécrit au chargement. L'exploitant le signale le
+29/09 : 35 jours sans paiement de l'acompte possible depuis le site. Le correctif du produit
+(`be7a376`, `build/ci/check-paiement.mjs`, banc `verifier:paiement`) joue un clic réel, atteint le
+formulaire des coordonnées sans le valider, rejoue la navigation vers la passerelle depuis son
+contexte de départ et écrit « à confirmer » quand seul un paiement réel tranche.
+
+**3 règles, pour tout produit qui embarque un parcours tiers qui engage l'utilisateur.**
+
+1. **On vérifie jusqu'à l'étape qui encaisse**, pas sur l'étape corrigée. Un correctif d'un parcours
+   de paiement ou de réservation est rejoué du premier clic à l'étape où le tiers prend l'argent ou
+   confirme la réservation. Quand seule une transaction réelle tranche et qu'on ne réserve pas pour
+   l'éprouver, le dossier le dit : « à confirmer », jamais « les contrôles passent ».
+2. **On vérifie dans un navigateur, sur l'état exécuté.** Le HTML servi n'est pas ce que voit
+   l'utilisateur dès qu'un script le réécrit au chargement ; une mesure par `curl` ne vaut que pour le
+   HTML servi. La navigation vers la passerelle se rejoue depuis son contexte de départ, pas depuis une
+   page neuve.
+3. **Une politique de contenu qui nomme un tiers inventorie son départ** : chaque hôte que le
+   parcours traverse (cadre, retour, passerelle) figure à `frame-src`, `child-src` ou `form-action`.
+   La vérification de la règle 1 est ce qui le prouve.
+
+**La forme, au dossier de MEP** :
+
+```
+## Parcours tiers embarqués
+
+Tiers : beds24 (réservation), stripe (paiement de l'acompte).
+Joué dans un navigateur le 2026-10-13 : banc verifier:paiement, sur l'état exécuté (DOM après chargement).
+Étape atteinte : jusqu'à l'étape qui encaisse (formulaire des coordonnées atteint sans validation, navigation vers la passerelle rejouée) ; l'encaissement est à confirmer par un paiement réel.
+```
+
+**Le contrôle exécutable.** `node scripts\verifier-parcours-tiers.mjs <produit>` relève, dans les
+fichiers du produit, un cadre intégré vers un hôte externe quand le parcours engage l'utilisateur,
+une directive `frame-src`, `child-src` ou `form-action` qui nomme un hôte externe, et l'adresse en
+clair d'une passerelle de `references\PASSERELLES-ENCAISSEMENT.json` (donnée datée, loi 4). Quand un
+parcours est relevé et qu'un dossier de MEP existe, il exige la section ci-dessus : chaque tiers
+nommé, « navigateur » avec une date, « état exécuté », l'étape atteinte. L'oracle de l'étape le joue
+en TM9 et le rend en **AVERTISSEMENT** : règle neuve, opposable à tous les produits, elle entre sans
+bloquer (précédent D-70 (b)) ; son passage en blocage est une décision humaine.
+
+**Un réglage de paiement chez un tiers se relit chez le tiers avant la mise en service (PT-3, TF-2696, 22/11/2026).**
+Le 14/10/2026, un guide a prescrit des empreintes de carte renouvelées à J+3, J+7 et J+11, sur une validité supposée de 7 jours. La
+mesure du 20/11 chez le tiers de paiement a lu 4 empreintes sur 6 valables 30 jours, aucune libération par le prestataire de
+réservation, des renouvellements après le départ : 2 600 EUR bloqués sur 3 cartes de voyageurs, une plainte de l'exploitant. Le
+réglage avait été prescrit d'après ce qu'on supposait du tiers, jamais relu chez lui. Quand un document du produit prescrit un tel
+réglage, le dossier de MEP porte, avant la mise en service, la section :
+
+```
+## Réglages de paiement chez un tiers
+
+Tiers : beds24 (empreintes de carte de la caution).
+Réservation test jouée le 2026-10-20 chez beds24 : trois nuits avec empreinte, annulées ensuite.
+Relecture mesurée le 2026-10-21 : l'empreinte lue chez le tiers est valable 30 jours (valeur supposée au guide : 7 jours).
+Les deux ont eu lieu avant mise en service ; le guide est corrigé en conséquence.
+```
+
+Le contrôle (PT-3, joué en TM9, **AVERTISSEMENT** comme M-14) relève la prescription dans un paragraphe qui réunit un tiers de
+`references\PASSERELLES-ENCAISSEMENT.json`, un verbe de réglage et un objet de paiement ; il exige la section, le tiers nommé, la
+réservation test datée, la relecture mesurée datée et chiffrée, et la porte « avant mise en service ». Il ne rejoue ni la réservation
+ni la relecture : la valeur lue chez le tiers est celle que le dossier déclare. Un paragraphe qui nie le réglage (« rien à régler »)
+n'est pas une prescription.
+
+**Hors jugement, et c'est dit.** Que le parcours déclaré ait réellement atteint l'étape qui encaisse :
+le contrôle exige la déclaration, sa date, son lieu et son objet, il ne rejoue pas le clic ; la preuve
+est le banc du produit. Un cadre dont l'adresse se construit à l'exécution. Une passerelle absente de
+la donnée datée, reconnue par le seul vocabulaire du parcours. La fraîcheur de la vérification par
+rapport au dernier changement du produit.
+
+### § 3 duodecies — Une contre-lecture qui autorise un geste irréversible compare les paramètres de lancement à la fiche (M-15, TF-1681)
+
+**Le fait, du 28 au 30/09/2026 chez Produit-03.** Le 28/09, la décision D-54 (a) fixe à 11 le seuil
+de créations de la chaîne d'infrastructure, pour que la chaîne refuse d'elle-même un plan fautif. Le
+29/09 à 10h02, la relance de production tourne avec `seuilCreations` à 12. Le plan comptait
+11 créations : sans effet ce jour-là. La contre-lecture de la session avait lu le plan seul, et rien
+dans la méthode ne lui demandait de comparer les paramètres saisis par l'exploitant à la fiche.
+Relus après coup dans l'API de la chaîne : 12 pour les exécutions du 28 et du 29/09, 1 et 0 pour les
+deux suivantes. Trois votes de production avaient été donnés sur cette contre-lecture (lot
+`Produit-03 - RETOURS - 20261002e`, RA-77). La règle S55 de la restitution exige qu'un feu vert dise
+ce qu'il ne vérifie pas ; elle ne dit pas que les paramètres de lancement font partie de ce qu'on
+vérifie.
+
+**La règle.** Toute contre-lecture qui autorise un geste irréversible lit, en plus de l'artefact
+jugé, les paramètres de l'exécution qui l'a produit. Elle les compare à la valeur écrite dans la
+fiche de mise en production ou dans la décision, tranche chaque écart, et publie ce qu'elle ne
+compare pas.
+
+**La forme, au dossier de MEP** :
+
+```
+## Contre-lecture du plan
+
+| Paramètre | Valeur à l'exécution | Lue où | Valeur attendue | Référence | Concorde |
+|---|---|---|---|---|---|
+| seuilCreations | 12 | API de la chaîne, exécution 15452 | 11 | décision D-54 (a) | non — exécution annulée, relancée à 11 |
+
+Non comparé : les variables de la bibliothèque de la chaîne, que l'exécution ne publie pas.
+```
+
+**Le contrôle exécutable.** `node scripts\verifier-contre-lecture.mjs <produit> [--document <fichier.md>]`
+lit chaque `DOSSIER-MEP*.md`. Un dossier qui fait voter ou approuver un plan porte la section (CL-0) ;
+chaque paramètre porte sa valeur à l'exécution, sa source et sa valeur attendue (CL-1) ; la
+concordance dit `oui`, ou `non` suivi de ce qui a été fait de l'écart (CL-2) ; la ligne « Non
+comparé » est remplie (CL-3). L'oracle de l'étape le joue en TM10 et le rend **BLOQUANT** : entrée
+en avertissement le 14/10/2026 (précédent D-70 (b)), elle bloque depuis le même jour sur décision
+humaine (TF-1688), prise sur son bruit mesuré. Mesuré le 14/10/2026 sur les 6 dossiers de MEP du
+poste : aucun ne fait voter un plan, 0 accusé. Ce zéro dit qu'aucun dossier n'est accusé à tort ; il
+ne dit pas que la règle a déjà jugé un plan voté réel. Joué par `--document` sur la procédure de
+mise en production de Produit-03, il rend CL-0 : la contre-lecture y est écrite en prose, sans
+tableau des paramètres.
+
+**Hors jugement, et c'est dit.** La vérité des valeurs recopiées : le contrôle ne relit pas l'API de
+la chaîne. La complétude de la liste des paramètres : un paramètre absent du tableau relève de la
+ligne « Non comparé ». Un vote de plan dit en d'autres mots que « vote », « voter », « approbation »
+ou « approuver » à côté de « plan ».
+
+### § 3 terdecies — La construction ne valide pas ce que l'audit de la maison refuse : chaîne exclusive, sauvegarde, fournisseur d'identité (M-16, M-17, M-18, TF-1212)
+
+**Le fait, du 09/09/2026 chez Produit-61.** Cinq étapes closes, oracles au vert, contrat de fin de
+construction tenu ; puis le référentiel d'audit de la même maison relève 125 écarts et 12 contrôles
+fatals non tenus sur 175. Trois venaient de la doctrine elle-même. Elle admettait une route de
+déploiement manuelle « à porte » : staging, GO humain, puis une commande lancée d'un poste. Son oracle
+de mise en production ne regardait aucune sauvegarde : M-4 prouve le retour à la version N-1, jamais
+la restauration des données. Et elle ne disait rien du fournisseur d'identité. Décision humaine D-3
+(a) du 17/10/2026 : la doctrine s'aligne sur le référentiel ; les produits déjà livrés ne sont pas
+touchés.
+
+**Les exigences, texte exact** (forge-audit, `core\controls\`, pack `controls-core` 1.0.0, criticité
+Fatal) :
+
+| Contrôle | Exigence |
+|---|---|
+| CTL-D09-01 | « Tout déploiement vers un environnement géré transite exclusivement par un pipeline CI/CD automatisé ; chaque exécution produit un journal immuable et horodaté (auteur, version, cible, résultat). » |
+| CTL-D05-09 | « Chaque actif de données critique est sauvegardé conformément à un objectif de perte de données (RPO) explicitement déclaré, et la restauration est testée périodiquement. » |
+| CTL-D12-06 | « Un objectif de perte de données tolérée (RPO) et de délai de restauration (RTO) est déclaré pour chaque actif critique, et la capacité de restauration est testée périodiquement avec preuve de conformité. » |
+| CTL-D16-09 | « La base de données fait l'objet de sauvegardes régulières conformes à un RPO déclaré, et la procédure de restauration est testée périodiquement avec preuve de conformité au RTO. » |
+| CTL-D03-01 | « L'authentification de tout accès humain est déléguée à un fournisseur d'identité central, avec MFA activé. » |
+
+La grille des trois contrôles de sauvegarde est commune : « conforme » exige les objectifs déclarés
+et une restauration testée avec succès dans les 12 derniers mois.
+
+**Ce qui change.**
+
+1. **La route manuelle à porte disparaît pour tout environnement géré.** Le GO humain reste
+   incompressible (§4) ; il change de place : c'est la **porte d'approbation de la chaîne** (un
+   environnement protégé qui attend l'approbation d'un humain nommé), ou la **poussée d'un commit
+   nommé** (§4 bis). La commande qui déploie s'exécute DANS la chaîne, avec un secret de la chaîne,
+   jamais depuis un poste. Le staging local du §2 (`docker compose up` sur le poste) n'est pas un
+   environnement géré et ne change pas. Une impossibilité réelle (hébergeur sans aucune intégration
+   de chaîne) se déclare en « Dérogation : <motif> » adossée à une décision humaine, et reste
+   « partiel » au référentiel, jamais « conforme ».
+2. **La sauvegarde entre à l'oracle de mise en production.** Le produit qui garde des données écrit
+   `forge\etapes\mep\SAUVEGARDE.json` (format `forge-ops/sauvegarde@1`, exemple :
+   `fixtures\o19-sauvegarde\verte.json` de forge-ops) : par actif critique, RPO, RTO, mécanisme,
+   fréquence et configuration de la sauvegarde, et le dernier exercice de restauration (date,
+   résultat, durée, intégrité). L'exercice se joue avant le GO, comme le rollback de M-4.
+   `node <ops>\oracles\oracle-ops.mjs --sauvegarde <declaration>` (O-19) le juge.
+3. **Le fournisseur d'identité a sa règle.** Tout accès humain authentifié (utilisateurs,
+   administrateurs, exploitants) passe par un fournisseur d'identité central (Entra ID, Google,
+   Okta, Auth0, Keycloak, OIDC ou SAML), avec MFA. Un compte local restant n'existe qu'avec sa
+   procédure écrite (compte de secours, bris de glace). Un produit sans aucun accès humain
+   authentifié le dit, avec son motif. La règle se connaît dès la conception : elle entre au
+   référentiel d'exigences du produit qui a des comptes.
+
+**La forme, au dossier de MEP** :
+
+```
+## Chaîne de déploiement
+
+Chaîne : `.github/workflows/deploiement.yml`, environnement `production` protégé par l'approbation de <humain>.
+Exécution 15452 du 2026-10-17 : auteur, version 6f78b88, cible production, résultat succès.
+
+## Sauvegarde et restauration
+
+Déclaration : `forge/etapes/mep/SAUVEGARDE.json`, jugée par O-19 (PASS).
+
+## Fournisseur d'identité
+
+Fournisseur : Entra ID (OIDC), MFA exigé par la stratégie d'accès conditionnel du locataire.
+Comptes locaux : un compte de secours, procédure de bris de glace au coffre de l'exploitant.
+```
+
+« Aucun environnement géré : <motif> », « Aucun actif de données critique : <motif> » et « Aucun
+accès humain authentifié : <motif> » sont des réponses valides. Le silence n'en est pas une.
+
+**Le contrôle exécutable.** `node scripts\verifier-exigences-fatales.mjs <produit> [--regle
+pipeline|sauvegarde|identite] [--document <fichier.md>]` lit chaque `DOSSIER-MEP*.md`. M-16 : la
+section existe (PE-1), nomme la chaîne et cite une exécution (PE-2), et le dossier ne prescrit aucune
+commande de déploiement direct (PE-3). M-17 : la section existe (SR-1), cite une déclaration présente
+ou dit « aucun actif » sans que le produit persiste de données (SR-2), et la déclaration passe O-19
+(SR-3). M-18 : la section existe (FI-1), nomme le fournisseur et le MFA ou dit « aucun accès humain »
+(FI-2), et toute authentification locale relevée dans le code est couverte par une procédure (FI-3).
+L'oracle de l'étape le joue en TM11, TM12 et TM13.
+
+**Sévérité : AVERTISSEMENT.** Ce sont des règles neuves, opposables à tous les produits : elles
+entrent en avertissement (précédent D-70 (b)), et leur passage en blocage est une décision humaine
+prise sur leur bruit mesuré. Le verbe rend son refus (exit 1), le câblage le lit en avertissement.
+O-19, lui, rend son verdict brut, comme O-18 : c'est une preuve, et M-17 en porte la sévérité.
+
+*Taux d'accusation mesuré le 17/10/2026* (lecture seule, verbe rejoué sur les 7 dépôts du poste qui
+portent un `DOSSIER-MEP*.md`, sous les pseudonymes de mesure A à G propres à cette ligne) :
+**7 dossiers sur 7 accusés** pour chacune des trois exigences, puisque aucun ne porte encore la
+section (PE-1, SR-1, FI-1 : 7/7). PE-3 accuse 2 dossiers sur 7 : A prescrit 2 fois `railway up` sous
+des titres non datés, B prescrit `docker compose up` sous son titre de mise en production. 7 autres
+commandes directes, dans 3 dossiers, sont sous un titre daté d'avant le 17/10/2026 : comptées en
+antériorité, non accusées. 2 dépôts sur 7 portent déjà une chaîne qui déploie (7 fichiers de pipeline
+chacun) et passeraient M-16 en écrivant la section. O-19 : 0 déclaration de sauvegarde sur le poste,
+0 accusée. Aucun verdict d'ensemble d'`oracle-trace-mutation-mep` ne change sur ces 7 dépôts : 2 PASS
+restent PASS, 5 FAIL restent FAIL par TM1 ou TM3.
+
+**Antériorité.** Une commande directe sous un titre (ou un titre parent) daté d'avant le 17/10/2026
+décrit un run passé : elle ne se réécrit pas, comme une entrée de ledger (R-42), et le verbe la compte
+sans l'accuser. Un dossier cumulatif aux titres non datés reste accusé jusqu'à ce que son prochain
+run écrive les sections.
+
+**Hors jugement, et c'est dit.** Que la chaîne citée ait réellement déployé la version servie : le
+verbe ne lit pas le journal du moteur de chaîne. Un déploiement manuel fait sans être écrit au dossier :
+l'inventaire des accès de déploiement direct sur chaque environnement reste un geste d'audit. La vérité
+de la déclaration de sauvegarde : O-19 juge ce qu'elle déclare, pas la plateforme. La configuration
+réelle du fournisseur d'identité : sa capture reste la preuve d'audit de CTL-D03-01.
+
+### § 3 quaterdecies — Ce que le dossier lit en vrai avant le GO : les réglages de plateforme, la version servie, l'inventaire (M-21, M-22, TF-2233, TF-2243)
+
+**Le fait des réglages, du 06/11/2026.** L'étude « Sécurité par défaut de bout en bout » (20261106a) n'a trouvé
+dans `ETAPE-MEP.md` aucun des 8 réglages de sécurité standard de Supabase, GitHub et Cloudflare : sa seule ligne
+voisine, M-18, vise le fournisseur d'identité des utilisateurs de l'application, pas les membres de l'organisation de
+la plateforme. Dans l'audit du cas témoin, 7 écarts sur 30 étaient une option gratuite laissée à sa valeur d'origine.
+La décision humaine D-178 (a) en fait la règle R-66 : un réglage admissible s'applique à la création, se vérifie à
+chaque livraison, et son exception se décide. Le dossier de MEP est la dernière livraison avant la production.
+
+**M-21 — l'état lu de chaque réglage de plateforme, contre son attendu.** Pour chaque réglage de
+`references\REGLAGES-SURS-PAR-DEFAUT.json` que le produit emploie, le dossier porte l'état **lu le jour du dossier**
+par la commande `cmd_lire` de l'entrée, l'attendu de l'entrée, et un verdict :
+
+- `conforme` : l'état lu est l'attendu ;
+- `écart` sur un réglage classé `decision` : le choix du porteur est nommé (`D-nn`), et l'écart accepté se vérifie tel
+  que décidé ;
+- `écart` sur un réglage classé `defaut` : corrigé avant le GO, ou nommé avec sa décision. Dans les deux cas un retour
+  s'ouvre vers la forge qui crée (R-66, point 5 : `node scripts\ouvrir-retour-reglage.mjs`) ;
+- `non lu` : le réglage n'est pas vérifié, et le dossier ne se présente pas comme complet.
+
+La comparaison de l'état lu à l'attendu est le contrôle bloquant que forge-ops pose avant la MEP (TF-2230, en
+construction à la date de cette section). Tant qu'il n'est pas livré, la session lit et recopie, et le dossier le dit.
+
+**M-22 — la version servie se lit, l'inventaire se confronte.** Le dossier de MEP cite la version servie par
+l'instance, lue dans `/healthz` : `node <ops>/scripts/version-servie.mjs lire https://<instance> --attendu <commit>
+--sortie version-servie.json`, puis le verdict d'O-26 : `node <ops>/oracles/oracle-ops.mjs --version-servie
+version-servie.json --depot <dépôt du produit> --attendu <commit>`. Il ne cite jamais un commit reconstitué. La porte
+« prêt » rejoue O-27 avec les sorties d'état de la MEP (`terraform state list`, `docker ps` filtré sur le produit,
+`az resource list`) : `node <ops>/oracles/oracle-ops.mjs --inventaire-a-jour docs\projet\COMPOSANTS-OPS.md --etat
+<genre>:<fichier>`. **Un FAIL d'O-26 ou d'O-27 vaut refus** : le dossier ne se présente pas au GO avant correction et
+rejeu. O-27 sans sortie d'état rend SKIP, et le dossier dit que l'inventaire n'a pas été comparé. Mesures de forge-ops
+qui fondent les deux verdicts, rapportées par sa documentation et non remesurées ici : une empreinte servie qui ne
+correspondait à aucun des 25 derniers commits (TF-2201), un inventaire resté au texte du premier commit pendant 3
+déploiements (TF-2209).
+
+**La forme, au dossier de MEP** (les exemples sont inventés) :
+
+```
+## Réglages de plateforme
+
+Registre des réglages sûrs lu le 2026-11-06 : references\REGLAGES-SURS-PAR-DEFAUT.json
+
+| Réglage | Classement | État lu | Lu le | Attendu | Verdict ou décision |
+|---|---|---|---|---|---|
+| Supabase, TLS imposé | defaut | true | 2026-11-06 | true | conforme |
+| Supabase, double vérification des membres | decision | 2 membres sur 3 | 2026-11-06 | true pour chaque membre | écart accepté, D-123 du 2026-11-02 |
+```
+
+```
+## Version servie et inventaire
+
+Version servie : commit 6f78b88 lu le 2026-11-06 par `version-servie.mjs lire` (instance de préproduction).
+O-26 : PASS
+O-27 : PASS (sorties d'état : terraform state list, docker ps filtré sur le produit)
+```
+
+« Aucun réglage de plateforme : <motif> » et « Sans objet : <motif> » (un produit statique sans point de santé) sont
+des réponses valides. Le silence n'en est pas une.
+
+**M-24 — la fiche de sécurité remise se juge contre l'étiquette déployée (TF-2419, TF-2536).** Le 10/11/2026, la fiche
+CDC-SEC-HPR-20261104a citait v1.10.0 alors que v1.13.0 était qualifiée et servie, et la session l'a jointe telle quelle au
+courriel du référent sécurité : 16 champs sur 29 ont changé à la réémission. `verifier-fiche-securite.mjs` de forge-audit
+porte la règle FS12, qui compare la version citée à l'étiquette que la chaîne lui donne, mais elle reste inerte sans
+l'option. La chaîne de qualification la donne donc : `node <audit>\oracles\verifier-fiche-securite.mjs <fiche.html>
+--etiquette-deployee <x.y.z>`, où `<x.y.z>` est la dernière étiquette déployée sur l'environnement, celle du commit servi
+lu à M-22 (`git describe --tags --abbrev=0 <commit servi>`). Le canevas de la fiche pose la ligne « Version déployée » que
+FS12 lit (forge-audit, gabarit 1.1.0). Le dossier de MEP qui cite une fiche de sécurité écrit le verdict ; un FAIL se
+corrige par la réémission de la fiche, puis un rejeu qui se lit au dernier verdict :
+
+```
+## Fiche de sécurité
+
+Fiche CDC-SEC-HPR-20261110a remise au référent sécurité, version citée v1.13.0.
+FS12 : PASS (version citée 1.13.0, étiquette déployée 1.13.0), rejoué le 2026-11-10.
+```
+
+**Le pas exécutable (TF-2572)** : `node scripts\rejouer-fiche-securite.mjs <fiche.html> --dossier <DOSSIER-MEP.md>
+--commit-servi <sha> --depot <produit>` lit l'étiquette déployée (`git describe --tags --abbrev=0 <commit servi>`, ou
+`--etiquette-deployee <x.y.z>` donnée telle quelle), joue `verifier-fiche-securite.mjs` de forge-audit avec elle, et écrit
+la ligne « FS12 : <verdict> … » à la section « Fiche de sécurité » du dossier, AJOUTÉE (un FAIL suivi d'un rejeu PASS se lit
+au dernier verdict) ; la section est créée si elle manque. Exit 0 pour PASS, 1 pour FAIL, 2 pour SKIP ou un pas non
+jouable (rien n'est alors écrit). La chaîne de qualification d'un produit le joue après la lecture de la version servie
+(M-22), sur la fiche qu'elle remet : le verdict que TM18 lit n'est plus recopié à la main.
+
+« Aucune fiche de sécurité » se passe de section : sans fiche citée au dossier, TM18 est sans objet. **Le contrôle
+exécutable** de cette forme est TM18, qui AVERTIT (règle neuve, précédent D-70 (b)) une fiche citée sans verdict de FS12,
+ou un FS12 en FAIL ou SKIP, et nomme la commande ; la vérité du verdict recopié n'est pas rejouée.
+
+**Le contrôle exécutable.** `node oracles\oracle-trace-mutation-mep.mjs <produit>` joue TM15 (la section des réglages
+existe, chaque ligne est datée et porte son verdict, un écart accepté nomme sa décision) et TM16 (la section de la
+version servie existe, porte le commit lu et les verdicts d'O-26 et d'O-27). **Sévérité.** TM15 AVERTIT : règle neuve,
+opposable à tous les produits, elle entre en avertissement (précédent D-70 (b)). TM16 AVERTIT une section absente ou
+incomplète et FAIL un dossier qui porte lui-même un FAIL d'O-26 ou d'O-27, parce que la décision de TF-2243 en fait un
+refus de la porte « prêt ». Un FAIL suivi d'un rejeu PASS se lit au dernier verdict.
+
+**Hors jugement, et c'est dit.** La vérité des états recopiés : le contrôle ne rejoue ni la commande de lecture du
+registre, ni `version-servie.mjs`, ni O-27. Que le dossier cite tous les réglages des plateformes que le produit
+emploie : il ne sait pas lesquelles. La comparaison à l'attendu elle-même : elle est celle de forge-ops (TF-2230).
+
+## 3 bis. Qualif populée (avant le GO — demande utilisateur RT-6/RS-7)
+
+Entre le staging technique et le GO, une **version de qualification populée de données** est
+déployée et auditée comme l'application réelle :
+
+1. Le produit expose un **endpoint de peuplement** gated par drapeau d'environnement (loi 2 —
+   absent en production) ; la qualif est peuplée par cet endpoint, jamais à la main.
+2. `forge_tests` tourne contre l'instance qualif servie (`FORGE_TESTS_BASE_URL`), bout en bout.
+3. Les éléments **non testables faute de configuration** (identifiants tiers, jetons, clés) ne
+   sont ni oubliés ni maquillés : ils sortent dans la section `non_testables[]` du rapport
+   {élément, champs_requis}, présentée à l'humain EN FIN d'audit avec la liste précise à saisir.
+4. Dès que l'humain fournit les éléments : `--reprendre <rapport>` rejoue **uniquement** les
+   éléments non exercés, jusqu'à couverture complète — sans rejouer ce qui a déjà passé.
+5. **Un compte peuplé NE SUFFIT PAS : la qualif porte aussi des comptes VIDES** (TF-0872). Le
+   peuplement montre le produit plein ; il ne montre jamais ce qu'un client voit à sa première
+   minute — états vides, onboarding, premier objet créé (loi transverse n° 3 : la surface
+   implicite se propose d'office). Le 06/09, la qualif livrée ne portait qu'un unique compte de
+   démonstration peuplé, et le commanditaire a dû demander lui-même **trois comptes : un peuplé,
+   deux vides**. Le drapeau de peuplement crée donc **un compte peuplé + N comptes vides**,
+   N ≥ 2 par défaut, et il se déclare même à 0 (« un seul compte, motif : … »), jamais par
+   silence.
+6. **Les identifiants de ces comptes ont une SOURCE nommée, et ce n'est jamais une page ni un
+   fichier versionné** (TF-0872, TF-0871) : ils sont pilotés par les variables
+   `DEMO_COMPTE_<N>_IDENTIFIANT` / `DEMO_COMPTE_<N>_MOTDEPASSE` / `DEMO_COMPTE_<N>_PEUPLE` du
+   `.env` local (déclarées en NOMS dans `.env.example`, R-13), et remis à l'humain **par le canal
+   de la mission**. Aucune page servie ne les affiche — une qualif est servie sur Internet comme
+   la production l'est. `docs\projet\ACCES-TEST.md` nomme ces variables, jamais leurs valeurs.
+7. **Les écrans se rejugent au volume réel** (TF-1654). Le compte peuplé l'est au volume que le
+   produit aura en service, jamais au seul jeu de démonstration ; la revue graphique
+   d'implémentation et le contrôle d'exploitabilité (`references\ETAPES-RUN.md`, étape 5 bis) se
+   rejouent sur lui. Le 12/10/2026, des écrans verts sur 2 projets de démonstration mesuraient
+   5 220 px et 20 630 px à la première alimentation réelle. Quand le volume réel n'est pas
+   disponible avant le GO, le dossier le dit : « écrans jugés sur démonstration, volume réel non
+   éprouvé ».
+
+Le résultat qualif (couverture, non-testables soldés, exploitabilité au volume réel) entre au
+dossier de MEP.
+
+## 3 ter. Ressources créées hors IaC, et l'écart de réglages servis (TF-0398, 20/08)
+
+*Le fait mesuré (cockpit-ia-d1, 19/08)* : EasyAuth actif côté plateforme, mais les app settings
+sans `COCKPIT_EASYAUTH` ni `AZURE_TENANT_ID` — le module Terraform ne les écrivait que si
+`client_id_entra` lui était fourni, et le pipeline qui avait créé l'App Registration ne lui
+avait jamais rendu cet identifiant. Conséquences : l'application tenait sur un REPLI prévu
+comme filet ; le contrôle de tenant du décodeur était INERTE alors qu'un parcours e2e
+l'affirmait actif — **un test vert attestait d'un contrôle absent de la cible** ; et un
+`terraform apply` lancé dans cet état aurait effacé deux réglages de production.
+
+Deux prescriptions, dès cette étape :
+
+1. **Tout pipeline qui crée une ressource dont l'IaC a besoin lui REND son identifiant**
+   (variable, tfvars, sortie consommée). Une ressource créée et non rendue laisse l'IaC décrire
+   un environnement qui n'existe pas — et l'écart ne se voit nulle part.
+2. **Vérification d'écart post-déploiement** : comparer les réglages SERVIS à ceux qu'exige le
+   mode déclaré, en échec si un réglage de sécurité manque. C'est le pendant exact du contrôle
+   « le processus a-t-il redémarré ? » déjà admis — le déploiement dit ce qu'il a fait, la
+   vérification dit ce qui est SERVI.
+
+*Mécanisation* : la liste des réglages exigés par mode est une donnée du PRODUIT (son IaC la
+porte) — le contrôle s'exécute donc au run du produit, l'étape MEP exige ici qu'il EXISTE et
+que son verdict soit au ledger (`oracles_verdict`). Un produit sans ce contrôle le déclare en
+écart au dossier de MEP, jamais en silence.
+
+## 4. Le gate — GO humain (incompressible)
+
+La mise en **production** exige un GO humain explicite, donné sur `DOSSIER-MEP.md`, qui contient :
+
+- les verdicts d'oracles des 5 étapes (avec références ledger `seq`) ; un verdict de forge-ops
+  ARCHIVÉ (`.ops-journal.jsonl`) ne se cite qu'après confrontation à l'état présent de sa cible —
+  `node scripts\verifier-verdict-archive.mjs <cible|journal>` : FRAIS se cite, PÉRIMÉ se rejoue
+  (TF-1084, reste de TF-0579) ;
+- le rapport forge-tests (couvertures, mutation, findings, pans non couverts), le **dashboard
+  de tests** (copie datée dans `output\`, déposée par `uv run python -m forge_tests <racine>
+  --livrables <dossier hors projet> --copie-output`, TF-1808) et la liste `actions[manuelle_utilisateur]` extraite
+  du rapport — chaque saisie attendue de l'utilisateur (champs, où, pourquoi) pour compléter
+  les tests restants ; à réception, `--reprendre` rejoue les seuls tests concernés et le
+  dashboard est régénéré ;
+- le verdict de la revue graphique d'implémentation (étape 5 bis, écarts soldés ou acceptés) ;
+- le résultat des smoke tests staging (M-3), du test de rollback (M-4) et de l'audit qualif
+  populée (§3 bis — non-testables soldés ou listés avec leur raison) ;
+- le feu vert de lancement : les portes qui jugent une base externe, rejouées le jour du
+  lancement sur l'objet lancé, avec leur sortie datée (M-10, § 3 nonies) ;
+- les garde-fous de la plateforme et les contraintes connues : le relevé daté des stratégies de
+  la portée cible, et chaque contrainte avec son verdict contre la séquence retenue (M-11, § 1 ter) ;
+- les trois sections des exigences fatales du référentiel d'audit : « Chaîne de déploiement »,
+  « Sauvegarde et restauration », « Fournisseur d'identité » (M-16 à M-18, § 3 terdecies) ;
+- le verdict websec du gate (R-33 bis) : l'exposition de l'origine déployée, par `node oracles\oracle-exposition.mjs <capture.json>`,
+  et les dépendances vulnérables, par `node oracles\oracle-sca.mjs <racine-produit>` (npm audit, pip-audit), tous deux
+  depuis `<racine>\factory-forge-websec` ; **présent et non bloquant** tant que `[gates] websec_bloquant = false`, un
+  verdict absent se déclare comme un manque. Un SKIP d'`oracle-sca` (outil ou manifeste absent, registre injoignable) se
+  consigne avec son motif : l'audit des dépendances n'a pas eu lieu, ce n'est pas un PASS (M-23, TM17, TF-2506, TF-2513) ;
+- la section « Revue de code » : jouée, avec les constats élevés et critiques posés au GO, ou
+  proposée puis refusée (M-19, § 1 quater) ;
+- les réglages de plateforme que le produit emploie, avec leur état lu le jour du dossier contre l'attendu du registre,
+  et la décision nommée de chaque écart accepté (M-21, § 3 quaterdecies, R-66) ;
+- la version servie lue par `version-servie.mjs lire` et les verdicts d'O-26 et d'O-27, un FAIL valant refus
+  (M-22, § 3 quaterdecies, TF-2243) ;
+- la fiche de sécurité remise au référent, quand il y en a une, avec le verdict de FS12 rejoué avec l'étiquette déployée
+  (M-24, § 3 quaterdecies, TF-2536) ;
+- les limites déclarées du run (modes dégradés, `non_juge`, hypothèses prises) ;
+- le geste exact qui déclenche la mise en production — l'approbation de la porte de la chaîne, ou la
+  poussée d'un commit nommé (§4 bis), jamais une commande de déploiement lancée d'un poste vers un
+  environnement géré (M-16) — et la procédure de rollback.
+
+Le GO est consigné au ledger (`reponse_humain`, portée : « GO production <produit> <version> »).
+Sans GO : le run se clôt en statut `pret_production_en_attente_GO` — c'est un état de succès,
+pas un échec. **Ce gate est incompressible.** Il change de FORME dans la variante « déploiement
+continu » (§4 bis) — la poussée sur un commit nommé y tient lieu de GO — mais il n'y disparaît
+pas : sans acte humain, rien ne part. Si une autonomie totale sans GO devait un jour
+être voulue, elle devrait être demandée explicitement et consignée comme décision assumée dans
+`HYPOTHESES.md` — elle est déconseillée : elle contredit les constitutions de forge-development
+(HITL non négociables) et la fabrique de confiance client.
+
+## 4 bis. La variante DÉPLOIEMENT CONTINU (TF-0651, décision humaine du 26/08/2026)
+
+*Ce que cette variante échange, et ce qu'elle ne relâche pas. Elle ne retire aucune preuve : elle
+change l'endroit où la preuve vit, et la forme que prend la porte humaine.*
+
+**Le fait qui l'ouvre.** Un produit du parc fait du déploiement continu, et le fait bien : la
+poussée sur la branche principale déclenche des contrôles, l'hébergeur n'installe qu'au vert, puis
+une vérification de production **se place sur le commit déclencheur** — pas sur la tête de branche —
+attend que l'URL publique serve **cette** version, et rejoue les contrôles décisifs dans un vrai
+navigateur. Ce dernier garde-fou existe parce qu'un incident du **15/08/2026** l'a exigé : une
+poussée réussie n'avait rien déployé, et la production a servi l'ancienne version **5 minutes**
+sans qu'aucun signal ne le dise.
+
+**La route standard fabriquait donc une non-conformité permanente pour un produit qui fait mieux
+qu'elle.** Un dispositif dont la porte est un dossier rédigé et relu ne prouve pas que la version
+poussée est servie ; celui-ci le prouve à chaque déploiement. *Une règle qui déclare non conforme
+ce qui la dépasse s'apprend à être contournée.*
+
+### Le GO devient la poussée d'un commit nommé, jamais une autonomie sans porte
+
+**Le GO humain reste incompressible — il change de forme, pas de nature.** Dans cette variante,
+c'est **la poussée sur un commit nommé** : un acte humain, délibéré, daté, attribué et
+irréversible sans un second acte. Ce n'est pas « aucune porte » ; c'est une porte dont l'artefact
+est un identifiant de commit plutôt qu'une signature au bas d'un dossier.
+
+Ce que §4 déconseille — « une autonomie totale sans GO » — reste déconseillé, et cette variante n'y
+touche pas : sans poussée humaine, rien ne part.
+
+### Les quatre conditions, toutes exigées ensemble
+
+Cette variante ne s'applique QUE si les quatre tiennent. Il en manque une, la route standard
+s'applique : **on ne panache pas.**
+
+1. **Les contrôles précèdent le déploiement, et le déploiement y est CONDITIONNÉ.** L'hébergeur
+   n'installe qu'au vert. Un déploiement qui part en parallèle des contrôles n'est pas couvert.
+2. **Une vérification de production se place sur le COMMIT DÉCLENCHEUR**, attend que l'URL
+   publique serve cette version, puis rejoue les contrôles décisifs contre l'instance servie.
+   C'est la condition qui remplace la relecture humaine du dossier — et la seule qui aurait vu
+   l'incident du 15/08.
+3. **Les preuves M-1 à M-7 restent dues, à l'identique.** Elles vivent dans le run plutôt que dans
+   un dossier rédigé, et le run doit les rendre **récupérables** : un journal effacé au bout de
+   30 jours n'est pas une preuve opposable. Le rollback (M-4) reste écrit ET exercé — §2 bis
+   ne bouge pas d'une ligne.
+4. **La variante est DÉCLARÉE au brief produit**, au même titre que la cible de déploiement, et
+   consignée au ledger à l'ouverture du run. Jamais improvisée en cours de route : un produit qui
+   choisirait sa route selon ce qu'il a réussi à faire ne serait pas audité, il serait raconté.
+
+### Ce qui reste écrit, et ce qui disparaît
+
+**Disparaît** : `DOSSIER-MEP.md` comme artefact de la porte — le run le remplace.
+
+**Reste dû, et ne se dilue pas dans un journal de CI** : les **limites déclarées** du run (modes
+dégradés, `non_juge`, hypothèses), l'**écart RGAA** d'un produit public français tant que le trou
+de §3 tient, et la **liste des saisies attendues de l'utilisateur** extraite du rapport de tests.
+Ces trois-là ne sont pas des verdicts de contrôle : ce sont des choses qu'un humain doit LIRE, et
+un humain ne lit pas un journal de CI. Elles vivent donc dans un artefact court, versionné avec le
+produit.
+
+### Ce qui n'est pas encore mécanisé, et c'est dit
+
+L'oracle MEP ne sait pas encore **lire un run de CI** : il vérifie des preuves posées sur disque.
+Tant que ce câblage n'existe pas, cette variante se prouve par les **traces du run citées au
+ledger**, exactement comme les verdicts d'oracles y sont cités par leur `seq`. C'est une preuve
+opposable — un identifiant de run est vérifiable par un tiers — mais elle n'est pas **rejouée**
+par le pilot, et le déclarer vaut mieux que de laisser croire l'inverse.
+
+## 4 ter. Piloter Railway — le mode d'emploi qui se reperdait à chaque session (TF-0704, 0705, 0706, 0735)
+
+Railway est la cible cloud la plus fréquente du parc, et son mode d'emploi a été payé QUATRE
+fois avant d'être écrit ici : un domaine anonyme laissé 11 jours en production, une campagne
+de tests qui a audité la mauvaise application, deux impasses de diagnostic en une session, et
+un déploiement déclaré « bloqué, geste humain requis » pendant qu'un jeton valide vivait sur le
+poste. Quatre faits, une cause : le principe vivait dans la mémoire des sessions.
+
+- **L'authentification est le JETON, jamais `railway login`** (TF-0735). Le CLI honore
+  `RAILWAY_API_TOKEN` en variable d'environnement SANS aucun login — `railway whoami` répond du
+  premier coup ; `railway login` ouvre un parcours OAuth navigateur hors de portée d'une session
+  agent, et ne se prescrit jamais. L'emplacement du jeton sur le poste se lit dans la fiche
+  `docs\projet\ACCES-TEST.md` du produit (ligne « déploiement », obligatoire depuis le 01/09).
+  **Une impossibilité d'accès ne se déclare qu'après avoir tenté ce repli** : le contrôle
+  d'entrée de l'étape échoue TÔT avec « jeton absent, attendu à `<emplacement>` » plutôt que de
+  laisser la session conclure au geste humain — l'épisode du 31/08 a coûté un aller-retour
+  humain complet et une entrée de ledger fausse pour un déploiement qui a réussi 30 minutes
+  plus tard avec le jeton du poste.
+- **Vers un environnement Railway, `railway up` s'exécute dans la chaîne, jamais depuis le poste**
+  (M-16, TF-1212, 17/10/2026). Le jeton y est un secret de la chaîne, et le GO humain la porte
+  d'approbation de l'environnement de production ou la poussée d'un commit nommé. Le repli sur le
+  jeton du poste décrit ci-dessus sert les lectures et le diagnostic, jamais un déploiement : un
+  environnement Railway, recette comprise, est un environnement géré.
+- **Le CLI ne sert qu'à téléverser** (TF-0704). `railway service` ne sait ni renommer un
+  service ni corriger un domaine ; tout le reste passe par l'API GraphQL —
+  `https://backboard.railway.com/graphql/v2`, en-tête `Authorization: Bearer <jeton>` :
+  renommage de domaine, lecture d'état, vérification de disponibilité.
+- **Le domaine se NOMME au premier déploiement** (TF-0705). Le domaine généré par défaut
+  (`app-production-<hash>`) ne nomme ni le produit ni son environnement — une campagne a
+  crawlé la mauvaise application à cause de lui. La MEP nomme le domaine à partir du nom de
+  projet et de l'environnement (`<produit>-production.up.railway.app`, R-24), et l'inscrit au
+  dossier de MEP et au ledger. La garde côté forge-tests reste une défense en profondeur, elle
+  cesse d'être la seule.
+- **Deux pièges de l'API, mesurés** (TF-0706) : toute requête SANS en-tête `User-Agent` reçoit
+  un 403 du WAF avant d'atteindre l'API — symptôme trompeur qui se lit comme un défaut de
+  jeton ; et un refus de schéma revient en HTTP 400 avec le seul message « Problem processing
+  request », sans nommer le champ fautif — introspecter le schéma
+  (`__type(name: …) { inputFields }`) AVANT d'écrire une mutation plutôt que la déduire de la
+  documentation (`ServiceDomainUpdateInput` exige quatre champs non nuls).
+
+## 5. Après la MEP
+
+Les retours de production (incidents, monitoring, remontées client) entrent au ledger avec
+`type: "retour"`, source `production`, et alimentent la boucle d'amélioration — même cycle borné,
+même gate humain que pour les forges.

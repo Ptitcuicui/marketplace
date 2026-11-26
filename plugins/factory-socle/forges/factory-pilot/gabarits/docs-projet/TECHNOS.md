@@ -1,0 +1,47 @@
+---
+role: technologies du produit — vue ancrée sur les lockfiles (R-20/R-21)
+destinataire: humain
+role_destinataire: développeur du produit
+sources_de_verite: [package-lock.json, pyproject.toml]
+verifie_le: {AAAA-MM-JJ}
+versions:
+  # nom: "version exacte du lockfile" — l'oracle R-21 vérifie la correspondance
+  {exemple}: "{1.0.0}"
+---
+
+# Technologies — {Produit}
+
+> Vue générée/actualisée depuis les lockfiles à chaque étape design/development.
+> Une version modifiée dans un lockfile sans mise à jour ici = FAIL R-21.
+
+## Langages & runtimes
+
+{Phrase de lecture : une ligne est un langage ou un runtime ; dire ce que vaut chaque colonne, comment la table est triée et ce que la table exclut.}
+
+| Techno | Version | Rôle | Lien |
+|---|---|---|---|
+| {Python} | {3.12} | {backend} | {https://www.python.org} |
+
+## Frameworks & librairies clés
+
+{Phrase de lecture : une ligne est un framework ou une librairie clé ; dire ce que vaut chaque colonne, comment la table est triée et ce que la table exclut.}
+
+| Techno | Version | Rôle | Lien |
+|---|---|---|---|
+| {exemple} | {1.0.0} | {…} | {https://…} |
+
+## Données & stockage
+
+{Phrase de lecture : une ligne est une technologie de données ou de stockage ; dire ce que vaut chaque colonne, comment la table est triée et ce que la table exclut.}
+
+| Techno | Version | Rôle | Lien |
+|---|---|---|---|
+| {PostgreSQL} | {16} | {BDD principale} | {https://www.postgresql.org} |
+
+## Outillage (build, tests, qualité)
+
+{Phrase de lecture : une ligne est un outil de build, de test ou de qualité ; dire ce que vaut chaque colonne, comment la table est triée et ce que la table exclut.}
+
+| Techno | Version | Rôle |
+|---|---|---|
+| {pytest} | {8.x} | {tests} |

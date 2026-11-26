@@ -1,0 +1,256 @@
+#!/usr/bin/env node
+/**
+ * oracle-etude-opportunite.mjs — juge une étude d'opportunité contre le gabarit
+ * gabarits\ETUDE-OPPORTUNITE.md (TF-0155, décidé le 13/08).
+ *
+ * Règles (E1-E7, chacune binaire) :
+ *   E1 sections du gabarit présentes (partition, non-recouvrement, état de l'art,
+ *      options, verdict) ;
+ *   E2 chaque ligne du tableau de non-recouvrement porte une CITATION non vide ;
+ *   E3 état de l'art : ≥ 5 sources datées (< 24 mois non jugeable hors ligne : la DATE
+ *      est exigée, sa fraîcheur relève de la revue) OU mention « non instruit » motivée ;
+ *   E4 jeu fermé O0-O4 : O0 présente et traitée (réfutée ou retenue), aucune option O5+ ;
+ *   E5 verdict UNIQUE (« Option retenue : » suivie d'une seule option) ;
+ *   E6 zéro terme subjectif nu (élégant, moderne, séduisant, prometteur sans mesure) ;
+ *   E7 plan de revue daté (AAAA-MM-JJ ou AAAAMMJJ) ;
+ *   E8 aucun effort chiffré en JOURS sur une ligne de coût/estimation (TF-0408, 20/08 :
+ *      avec l'IA un nombre de jours n'a pas de sens — complexité simple|moyen|complexe|
+ *      très complexe × durée court|moyen|long|très long, comme au rapport d'audit) ;
+ *   E9 section « Intention de l'utilisateur » présente et substantielle (loi n° 7,
+ *      TF-0791, 01/09 : une étude conforme à sa lettre a été refusée parce que l'intention
+ *      n'était écrite nulle part — references\INTENTION.md) ;
+ *   E10 test rétro présent (remontée Opérationnel → Intention jouée et écrite — le fond
+ *      de la remontée n'est pas mécanisable, déclaré non_juge).
+ *
+ * Usage : node oracle-etude-opportunite.mjs <etude.md>        → verdict JSON
+ *         node oracle-etude-opportunite.mjs --self-test       → fixtures double sens
+ * Exit : 0 PASS · 1 FAIL · 2 non jugeable.
+ */
+import { existsSync, readFileSync, writeFileSync, mkdtempSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+
+function juger(texte) {
+  const findings = [];
+  const ok = (regle, message) => findings.push({ regle, statut: "PASS", message });
+  const ko = (regle, message) => findings.push({ regle, statut: "FAIL", message });
+
+  // E1 — sections
+  const sections = [
+    [/partition du probl/i, "1. Partition du problème"],
+    [/non-recouvrement/i, "2. Non-recouvrement contre l'existant"],
+    [/état de l'art|etat de l'art/i, "3. État de l'art daté"],
+    [/options?\s*[—–-]\s*jeu fermé|## 4\.\s*options/i, "4. Options — jeu fermé O0-O4"],
+    [/## 5\.\s*verdict|^## verdict/im, "5. Verdict"],
+  ];
+  const absentes = sections.filter(([re]) => !re.test(texte)).map(([, nom]) => nom);
+  absentes.length
+    ? ko("E1", `section(s) absente(s) : ${absentes.join(" · ")}`)
+    : ok("E1", "les 5 sections du gabarit sont présentes");
+
+  // E2 — citations du non-recouvrement : lignes de tableau à 3 colonnes après l'en-tête
+  // TF-1435 (28/09/2026, retour Produit-78 20260928a RP-1) : découper sur CHAQUE occurrence du
+  // mot « non-recouvrement » coupait le bloc à la 2e mention — une phrase d'intro qui reprend le
+  // mot de section (« Ce non-recouvrement se vérifie… ») réduisait le bloc lu à quelques mots, et
+  // le tableau réel (après cette phrase) tombait dans la coupure suivante, invisible. On découpe
+  // désormais sur la LIGNE DE TITRE (`^##…`), comme E9 le fait déjà pour l'intention.
+  const blocNR = (texte.split(/^##[^\n]*non-recouvrement[^\n]*$/im)[1] || "").split(/\n## /)[0];
+  const lignesNR = blocNR.split("\n").filter((l) => /^\|/.test(l.trim()))
+    .filter((l) => !/^\|[\s:-]+\|/.test(l.trim())) // séparateur markdown
+    .slice(1); // en-tête
+  if (!lignesNR.length) ko("E2", "aucune ligne au tableau de non-recouvrement — le verdict n'est pas instruit");
+  else {
+    const sansCitation = lignesNR.filter((l) => {
+      const cellules = l.split("|").map((c) => c.trim());
+      return (cellules[2] || "").length < 5; // colonne « Citation »
+    });
+    sansCitation.length
+      ? ko("E2", `${sansCitation.length} ligne(s) de non-recouvrement SANS citation — « ne semble pas exister » n'est pas un verdict`)
+      : ok("E2", `${lignesNR.length} ligne(s) de non-recouvrement, toutes citées`);
+  }
+
+  // DATES RECONNUES (D-55 (a) du 03/10/2026, Produit-02 RT-125). LE FAIT : une étude datait ses 5
+  // sources « 13/03/2026 », « 23/09/2026 »… et son plan de revue « le 15/10/2026 », la convention
+  // de date française des livrables. E3 rendait « 0 source(s) datée(s) » et E7 « plan de revue
+  // absent ou non daté » : les deux motifs n'acceptaient que l'année EN TÊTE, et le produit a
+  // réécrit ses dates en AAAA-MM-JJ pour passer, contre sa propre convention. Les deux formes sont
+  // reconnues par une seule alternative : une date n'est comptée qu'une fois.
+  const DATE_SRC = String.raw`(?:\b20\d{2}[-/.]?\d{2}(?:[-/.]?\d{2})?\b|\b(?:0?[1-9]|[12]\d|3[01])/(?:0?[1-9]|1[0-2])/20\d{2}\b)`;
+  const RE_DATE_G = new RegExp(DATE_SRC, "g");
+  const RE_PLAN_DATE = new RegExp(String.raw`plan de revue[^\n]*` + DATE_SRC, "i");
+
+  // E3 — sources datées ou « non instruit » motivé
+  // TF-1435 (28/09/2026, retour Produit-78 20260928a RP-1) : LE FAIT MESURÉ. Une 2e mention de
+  // « état de l'art » dans la PHRASE D'INTRODUCTION de la section (« Cet état de l'art recense… »)
+  // faisait de cette phrase la fin du bloc lu — `.split()` coupe sur CHAQUE occurrence, et prendre
+  // `[1]` ne rend que ce qui vit ENTRE la 1re et la 2e. Sur l'étude qui a payé ce défaut, le bloc
+  // lu tombait à 2 mots et les 21 sources réelles, situées après la 2e mention, vivaient dans
+  // `[2]`, jamais lu : l'oracle rendait « 0 source(s) datée(s) » sur une étude qui en portait 21.
+  // Le remède, déjà tenu par E9 pour l'intention : découper sur la LIGNE DE TITRE (`^##…`), qui
+  // n'apparaît qu'une fois — une mention DANS la prose du corps ne commence jamais une ligne par
+  // `##` et ne peut donc plus se faire passer pour une 2e section.
+  const blocEA = (texte.split(/^##[^\n]*(?:état de l'art|etat de l'art)[^\n]*$/im)[1] || "").split(/\n## /)[0];
+  const nonInstruit = /non instruit/i.test(blocEA);
+  const datees = (blocEA.match(RE_DATE_G) || []).length;
+  if (nonInstruit && /non instruit[^\n]{6,}/i.test(blocEA))
+    ok("E3", "état de l'art déclaré « non instruit », motivé — jamais d'entre-deux");
+  else if (nonInstruit) ko("E3", "« non instruit » sans motif");
+  else if (datees >= 5) ok("E3", `${datees} source(s) datée(s)`);
+  else ko("E3", `${datees} source(s) datée(s) — ≥ 5 exigées, ou « non instruit » motivé`);
+
+  // E4 — jeu fermé, O0 traitée
+  const options = new Set((texte.match(/\bO([0-9])\b/g) || []).map((o) => o));
+  const horsJeu = [...options].filter((o) => Number(o.slice(1)) > 4);
+  if (!options.has("O0")) ko("E4", "O0 (ne rien faire) absente — le statu quo se réfute ou se retient, jamais par omission");
+  else if (horsJeu.length) ko("E4", `option(s) hors jeu fermé O0-O4 : ${horsJeu.join(", ")}`);
+  else ok("E4", `jeu fermé tenu (${[...options].sort().join(", ")}), O0 traitée`);
+
+  // E5 — verdict unique
+  const retenues = texte.match(/option retenue[^\n]*/gi) || [];
+  if (retenues.length !== 1) ko("E5", `${retenues.length} mention(s) « Option retenue » — il en faut exactement une`);
+  else if (/O\d.*\bet\b.*O\d/i.test(retenues[0])) ko("E5", "verdict multiple — un verdict désigne UNE option");
+  else ok("E5", `verdict unique : ${retenues[0].slice(0, 70)}`);
+
+  // E6 — termes subjectifs nus
+  // TF-0474 bis (23/08) : `\b` est ASCII, donc `\b(élégant` ne matchait JAMAIS « élégant » et
+  // `séduisant` était mort lui aussi — la règle cherchait deux mots qu'elle ne pouvait pas voir.
+  // Trouvé par `oracle-pieges-regex` sur le parc. La borne connaît désormais les accents.
+  const subjectifs = (texte.match(/(?<![0-9A-Za-zÀ-ÿ])(élégant|elegante?|moderne|séduisant|prometteur|intuitif)(?![0-9A-Za-zÀ-ÿ])/gi) || []);
+  subjectifs.length
+    ? ko("E6", `terme(s) subjectif(s) sans mesure : ${[...new Set(subjectifs.map((s) => s.toLowerCase()))].join(", ")}`)
+    : ok("E6", "aucun critère subjectif nu");
+
+  // E7 — plan de revue daté
+  RE_PLAN_DATE.test(texte)
+    ? ok("E7", "plan de revue daté")
+    : ko("E7", "plan de revue absent ou non daté — un verdict sans rendez-vous avec les faits ne se corrige jamais");
+
+  // E8 — l'effort ne se chiffre pas en jours (TF-0408) : sur toute ligne portant un
+  // marqueur de coût/estimation, une unité « j / jours / j-h » chiffrée est un défaut.
+  // Les FAITS datés (« trois jours de production », préavis 60 jours) vivent hors de ces
+  // lignes et ne sont pas jugés — la règle vise l'ESTIMATION, pas la mesure.
+  const lignesCout = texte.split("\n").filter((l) => /co[uû]t|estimation|effort estimé|charge estimée/i.test(l));
+  const enJours = lignesCout.filter((l) => /(?:\d+(?:[.,]\d+)?|½)\s*(?:à\s*\d+(?:[.,]\d+)?\s*)?j(?:ours?)?\b|jours?[- ]hommes?/i.test(l));
+  enJours.length
+    ? ko("E8", `${enJours.length} ligne(s) de coût chiffrée(s) en JOURS — avec l'IA un nombre de jours n'a pas de sens : complexité (simple|moyen|complexe|très complexe) × durée (court|moyen|long|très long). Ex. : ${enJours[0].trim().slice(0, 90)}`)
+    : ok("E8", "aucune estimation en jours — l effort parle en complexité × durée");
+
+  // E9 — intention de l'utilisateur (loi n° 7, TF-0791) : section présente et substantielle.
+  // Le fait fondateur (01/09) : une étude conforme à ses huit questions écrites a été refusée
+  // parce que l'intention — comprendre pour décider — n'était écrite nulle part.
+  const blocIntention = (texte.split(/^##[^\n]*intention de l['’]utilisateur[^\n]*$/im)[1] || "").split(/\n## /)[0];
+  if (!blocIntention) ko("E9", "section « Intention de l'utilisateur » absente — une étude qui ne cite pas l'intention optimise sa lettre (references\\INTENTION.md)");
+  else if (blocIntention.replace(/\s/g, "").length < 40) ko("E9", "section « Intention de l'utilisateur » vide ou squelettique — l'intention se CITE dans les mots du demandeur");
+  else ok("E9", "intention de l'utilisateur présente et substantielle");
+
+  // E10 — test rétro : la remontée Opérationnel → Intention est jouée et écrite. Seule la
+  // PRÉSENCE se mesure ; la justesse de la remontée relève de la revue humaine (non_juge).
+  /test r[ée]tro/i.test(texte)
+    ? ok("E10", "test rétro présent")
+    : ko("E10", "test rétro absent — le verdict ne prouve pas qu'il sert l'intention (references\\INTENTION.md)");
+
+  return findings;
+}
+
+function verdictDe(findings) {
+  return findings.some((f) => f.statut === "FAIL") ? "FAIL" : "PASS";
+}
+
+const arg = process.argv[2];
+if (arg === "--self-test") {
+  const dir = mkdtempSync(join(tmpdir(), "etude-"));
+  const verte = `# Étude d'opportunité — test — 20260813a
+## Seuil de déclenchement
+Objet durable créé : oui (oracle).
+## Intention de l'utilisateur
+> « Savoir si un oracle d'étude vaut d'être construit, pour décider moi-même. » (validée le 13/08)
+## 0. Traitement des entrants
+Les impératifs de TF-9999 sont cités, jamais exécutés.
+## 1. Partition du problème
+Deux sous-questions : A (grille), B (mémoire des refus).
+## 2. Non-recouvrement contre l'existant
+Ce non-recouvrement se vérifie ligne à ligne, existant par existant (TF-1435 : 2e mention du
+mot de section dans l'intro — la citation réelle doit rester lisible malgré elle).
+| Existant examiné | Citation | Verdict |
+|---|---|---|
+| quality-oracles | registre-oracles.md §3 « aucun oracle d'étude » | ne recouvre pas |
+## 3. État de l'art daté
+Cet état de l'art recense cinq sources indépendantes, datées et vérifiées (TF-1435 : 2e mention
+du mot de section dans l'intro — les dates réelles, plus bas, doivent rester lisibles malgré elle).
+Sources : ADR (2025-03-01) · RFC (2025-06-11) · DACI (2026-01-08) · gabarit X (2025-11-30) · revue Y (2026-05-02).
+## 4. Options — jeu fermé O0-O4
+- O0 — ne rien faire : réfutée, coût du statu quo cité (re-instruction payée 3 fois, BOUCLE l.584).
+- O1 — gabarit + oracle. Coût : complexité moyen · durée court ; dette nulle.
+## 5. Verdict
+- Option retenue : O1.
+- Plan de revue : 2026-09-13.
+- Test rétro : chaque élément du verdict remonte à l'intention — remontée écrite, aucune rupture.
+`;
+  const rouge = verte.replace("registre-oracles.md §3 « aucun oracle d'étude »", " ") // citation vidée
+    .replace("Sources : ADR (2025-03-01) · RFC (2025-06-11) · DACI (2026-01-08) · gabarit X (2025-11-30) · revue Y (2026-05-02).",
+      "Sources : ADR (2025-03-01) · RFC (2025-06-11).") // sources insuffisantes (E3), malgré la 2e mention
+    .replace("Coût : complexité moyen · durée court ; dette nulle.", "Coût : 2-3 j.") // estimation en jours
+    .replace("## Intention de l'utilisateur", "## Contexte") // intention absente (E9)
+    .replace("- Test rétro : chaque élément du verdict remonte à l'intention — remontée écrite, aucune rupture.\n", ""); // test rétro absent (E10)
+  // RT-125 : la même verte, dates écrites JJ/MM/AAAA ; E3 compte toujours 5 sources, E7 voit le plan.
+  const verteFr = verte
+    .replace("Sources : ADR (2025-03-01) · RFC (2025-06-11) · DACI (2026-01-08) · gabarit X (2025-11-30) · revue Y (2026-05-02).",
+      "Sources : ADR (01/03/2025) · RFC (11/06/2025) · DACI (08/01/2026) · gabarit X (30/11/2025) · revue Y (02/05/2026).")
+    .replace("- Plan de revue : 2026-09-13.", "- Plan de revue : le 13/09/2026.");
+  writeFileSync(join(dir, "verte-fr.md"), verteFr, "utf8");
+  writeFileSync(join(dir, "verte.md"), verte, "utf8");
+  writeFileSync(join(dir, "rouge.md"), rouge, "utf8");
+  const moi = fileURLToPath(import.meta.url);
+  const rv = spawnSync(process.execPath, [moi, join(dir, "verte.md")], { encoding: "utf8" });
+  const rr = spawnSync(process.execPath, [moi, join(dir, "rouge.md")], { encoding: "utf8" });
+  const casse = [];
+  if (rv.status !== 0) casse.push("la fixture VERTE ne passe pas : " + rv.stdout);
+  else {
+    // TF-1435 — LA VERTE PORTE DÉSORMAIS UNE 2e MENTION du mot de section dans l'intro de E2 et
+    // E3 (comme le défaut mesuré) : si le découpage retombait sur la coupure « chaque occurrence »,
+    // ces deux règles ne verraient plus ni la citation ni les 5 dates, et la verte FAILrait. Les
+    // voir PASS, avec le compte EXACT, est la preuve que le bloc lu est bien celui d'après le
+    // TITRE, pas celui d'entre les deux mentions.
+    if (!/"E3"[^}]*PASS[^}]*5 source\(s\) dat/.test(rv.stdout))
+      casse.push("la verte (état de l'art mentionné 2 fois) ne compte plus 5 sources datées sur E3 — la 2e mention (dans l'intro de section) recoupe encore le bloc lu");
+    if (!/"E2"[^}]*PASS[^}]*1 ligne\(s\) de non-recouvrement, toutes cit/.test(rv.stdout))
+      casse.push("la verte (non-recouvrement mentionné 2 fois) ne retrouve plus sa ligne citée sur E2 — la 2e mention (dans l'intro de section) recoupe encore le bloc lu");
+  }
+  const rf = spawnSync(process.execPath, [moi, join(dir, "verte-fr.md")], { encoding: "utf8" });
+  if (rf.status !== 0 || !/"E3"[^}]*PASS[^}]*5 source\(s\) dat/.test(rf.stdout) || !/"E7"[^}]*PASS/.test(rf.stdout))
+    casse.push("la verte aux dates JJ/MM/AAAA (RT-125) ne passe pas E3 à 5 sources et E7 : " + rf.stdout.slice(0, 300));
+  if (rr.status !== 1) casse.push("la fixture ROUGE (citation vidée, sources réduites) ne FAIL pas");
+  else {
+    if (!/"E2"[^}]*FAIL/.test(rr.stdout)) casse.push("la rouge échoue mais pas sur E2");
+    // Sources réduites à 2 dates (sur les 5 attendues), la 2e mention de « état de l'art » toujours
+    // dans l'intro : E3 doit rester capable de FAIL pour la BONNE raison (compte réel insuffisant),
+    // pas d'être rendue aveugle — dans un sens comme dans l'autre — par la 2e mention.
+    if (!/"E3"[^}]*FAIL[^}]*2 source\(s\) dat/.test(rr.stdout)) casse.push("la rouge (sources réduites à 2) échoue mais pas sur E3, ou avec un compte faux");
+    if (!/"E8"[^}]*FAIL/.test(rr.stdout)) casse.push("la rouge (coût en jours) échoue mais pas sur E8");
+    if (!/"E9"[^}]*FAIL/.test(rr.stdout)) casse.push("la rouge (intention retirée) échoue mais pas sur E9");
+    if (!/"E10"[^}]*FAIL/.test(rr.stdout)) casse.push("la rouge (test rétro retiré) échoue mais pas sur E10");
+  }
+  console.log(casse.length ? "SELF-TEST FAIL : " + casse.join(" · ") : "Self-test étude d'opportunité : 3/3 PASS (verte aux dates JJ/MM/AAAA PASS — RT-125 ; verte PASS malgré une 2e mention du mot de section dans l'intro de E2 et E3 — TF-1435 ; rouge FAIL sur E2, E3, E8, E9 et E10)");
+  process.exit(casse.length ? 1 : 0);
+}
+
+if (!arg || !existsSync(arg)) {
+  console.log(JSON.stringify({ oracle: "oracle-etude-opportunite", verdict: "ERREUR", message: "étude introuvable — usage : node oracle-etude-opportunite.mjs <etude.md> | --self-test" }));
+  process.exit(2);
+}
+const findings = juger(readFileSync(arg, "utf8"));
+const verdict = verdictDe(findings);
+console.log(JSON.stringify({
+  oracle: "oracle-etude-opportunite",
+  version: "1.2.0",
+  cible: arg,
+  verdict,
+  findings,
+  non_juge: [
+    "la fraîcheur réelle des sources (< 24 mois) et leur pertinence — revue humaine",
+    "la justesse du verdict — l'oracle tient la FORME opposable, pas le fond",
+  ],
+}, null, 1));
+process.exit(verdict === "PASS" ? 0 : 1);

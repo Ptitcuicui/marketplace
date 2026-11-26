@@ -1,0 +1,18 @@
+# Préférences du porteur
+
+Chargées à chaque ouverture, au pilot et chez les produits (T1, TF-1946, D-68 (a) du 26/10/2026). Plafond : 2 Ko. Une préférence nouvelle s'ajoute ici en une ligne, avec sa date ; elle ne devient pas une règle du pilot.
+
+- Statuts courts : une phrase qui répond, puis des puces d'une idée. La restitution complète sert la reprise de contexte entre sessions ; ne couper que le vide (01/10).
+- Ne poser une question que si la réponse change le livrable et ne se déduit ni de ces préférences ni des conventions du client (22/09, 14/10).
+- Une décision n'est posée que si elle relève de l'humain : dépense, publication, geste irréversible, doctrine, arbitrage, produit (R-58, 01/10).
+- Les exemples d'une demande illustrent, ils ne bornent pas le périmètre (20/10).
+- Tout livrable demandé s'écrit dans output\ et s'enregistre, jamais dans un dossier temporaire (16/10).
+- « Remonte à la Factory » se fait toujours, au format des lots de retours (26/10).
+- Un audit complet passe par forge-audit, jamais par forge-tests (15/10).
+- Une heure écrite se relève à l'horloge, jamais estimée (01/10).
+- Un message qui ne cite pas la lettre d'une décision ouverte (« 76c ») n'en vaut pas le choix : la session demande la lettre avant tout geste qui en dépend (26/10).
+- La réponse suit la langue de l'utilisateur : français pour un utilisateur francophone ; un écrit destiné à un tiers suit la langue de ce tiers quand elle est donnée (26/10).
+- Une consigne du porteur s'applique telle quelle, citée mot pour mot, sans être posée en options ; une reformulation ne se demande que si 2 lectures changent le livrable (D-176 b, 05/11).
+- Seul le compte du porteur publie pour la Factory et les forges (D-175, 05/11).
+- Aucune personne nommée dans une réponse : on la désigne par son rôle, et on dit où la retrouver (09/11).
+- Bloc 0 : le chemin complet entre parenthèses après chaque fichier affiché (17/11).

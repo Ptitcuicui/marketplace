@@ -1,0 +1,588 @@
+{
+  "format": "pilot/tics-redactionnels@1",
+  "version": "1.10.0",
+  "evolution_1_10_0": "Revue datée du 25/11/2026 (décision humaine C2) : les 9 familles relues contre le corpus des 237 livrables du 20/10 au 25/11/2026 (541 646 mots) et gardées telles quelles ; un faux positif apparent de clôture-résumante (« mise en sommeil ») venait du script de mesure, qui n'appliquait pas la frontière de mot que l'oracle pose déjà (cas de recette ajouté, dans les deux sens). Cadence décidée : une revue toutes les 6 semaines, prochaine le 06/01/2027.",
+  "evolution_1_9_0": "D-230 (b) du 22/11/2026 (étude output/03-etudes/Factory - Étude - Statuts courts et ASD-STE100 - 20261122a.md) : le plancher se resserre vers les seuils de l'ASD-STE100, l'anglais technique simplifié des manuels de maintenance aéronautique. Nouvelle clé `plancher_ste`, jouée par 3 règles en AVERTISSEMENT seulement : EC-19, une phrase de plus de 25 mots ; EC-20, un paragraphe de plus de 6 phrases ; EC-21, une consigne qui ne commence pas par un verbe (cellule d'une colonne « Action », élément numéroté sous un titre d'étapes). Le fait : sur les 10 dernières synthèses, 16 % des phrases (84 sur 524) dépassaient 25 mots ; sur 1 891 cellules « Action » d'output/, 240 (13 %) ne commençaient pas par un verbe.",
+  "evolution_1_8_0": "TF-2259 (06/11/2026, décision R-58 de la campagne « Traite les retours et TODOs ») : le jugement par défaut d'EC-14 sous output/ (1.7.0) ne vaut plus que pour les écrits NEUFS (nouvelle clé `ecrit_a_un_tiers.dossiers_juges_par_defaut_depuis`, AAAA-MM-JJ : 2026-11-06, jour de l'entrée de la règle). Le fait : 179 écrits sur 193 rendaient A_REJOUER (5 817 passages, 92,7 %) ; un contrôle qui accuse presque tout le corpus se fait désactiver (leçon N4), et la règle 5 interdit de réécrire l'existant. Un écrit dont le nom porte une date antérieure au seuil est écarté, le motif est dit au verdict et l'antériorité au non_juge ; un nom sans date reste jugé (rien ne prouve son antériorité). Les écrits à en-tête `destinataire:` tiers et ceux dont le type de nom désigne un tiers (courriel, proposition…) restent jugés à toute date. Le seuil est une donnée : le reculer rejuge le corpus, l'avancer l'exempte davantage.",
+  "evolution_1_7_0": "TF-2189 (RT-48 de Produit-84, 05/11/2026, décision du 06/11/2026) : EC-14 juge par défaut tout écrit sous output/, avec ou sans en-tête `destinataire:` (nouvelle clé `ecrit_a_un_tiers.dossiers_juges_par_defaut`). Le fait : une synthèse en un paragraphe de 5 phrases denses rendait PASS, EC-14 en SKIP faute d'en-tête ; avec l'en-tête, EC-14 relevait 1 énumération et 3 phrases trop longues. Un en-tête `destinataire:` interne (humain, orchestrateur…) reste l'exception déclarée, et les index régénérés (README, LISEZMOI) rejoignent `exclusions_de_nom`.",
+  "evolution_1_6_0": "TF-2020 et TF-1968 (29/10/2026) : (1) EC-8 retire la numérotation d'un titre (« 7. », « 2.1 », « 3 · ») avant de chercher la tournure refusée ; les 29 fichiers qui portaient déjà un tel titre sont nommés dans `anteriorite_titres_numerotes`, admis et dits au verdict, la liste étant figée au 29/10/2026 ; (2) l'oracle juge une page HTML sur son texte visible (`texteDeHtml`), le verdict citant les lignes de la page.",
+  "evolution_1_5_0": "TF-1976 (29/10/2026) : les types « Propale » (alias « Propal ») et « Proposition » du registre des types entrent aux types de nom d un écrit à un tiers. Le fait fondateur de EC-14 était une proposition à 94 défauts de concision rendue PASS ; sans en-tête destinataire, une proposition n était pas reconnue comme écrit à un tiers.",
+  "date": "2026-11-25",
+  "evolution_1_4_0": "Concision d'un écrit destiné à un tiers et langue du texte (TF-1960, décision humaine D-78 (c) amendée du 26/10/2026, citée mot pour mot : « 78 : c, mais plutôt que de bloquer, cela doit être rejoué pour répondre aux exigences. Attention, si l'utilisateur est anglophone, l'anglais ne doit pas être un critère de blocage. Il faut s'adapter à la langue de l'utilisateur. »). Deux clés nouvelles, jouées par EC-14 et EC-15 de oracles/oracle-ecriture.mjs : `ecrit_a_un_tiers` (qui est un tiers, et les bornes de concision) et `langue` (mots vides par langue, langue par défaut). Leurs règles n'échouent jamais : elles rendent le statut A_REJOUER, la liste des passages et une consigne de réécriture, et la session productrice réécrit puis rejoue, 3 passes au plus (references/ECRITURE.md, « La boucle de réécriture »). Le fait : 8 reprises en 7 jours sur la longueur et la forme de courriels et de fiches destinés à un tiers, une proposition à 94 défauts de concision rendue PASS, des réponses en anglais à un utilisateur francophone dans 3 sessions.",
+  "evolution_1_3_0": "Revue datée des listes (TF-1926, décision humaine D-48 (a) du 19/10/2026, étude output/03-etudes/20261019-etude-opportunite-style-ecriture.md, option O3). Chaque famille porte derniere_lecture (le jour où sa liste a été écrite ou relue contre ses sources : le plus récent `depuis` de ses motifs, sauf relecture ultérieure dite) et revue_prevue (le jour où elle doit être relue). Une revue_prevue dépassée ou absente fait avertir EC-13 de oracles/oracle-ecriture.mjs, sans jamais faire échouer un texte : une date que rien ne lit n'existe pas (loi n° 1). Relire une liste, c'est la confronter de nouveau à ses sources, puis écrire ici derniere_lecture et une nouvelle revue_prevue. Première revue faite le 2026-10-19, sur la seule famille ponctuation-de-cadence : le tiret d'incise reste compté, car E-8 repose sur la lisibilité (une phrase qui rebondit) et non sur la détection ; les 8 autres familles ne sont pas relues ce jour-là.",
+  "evolution_1_2_0": "Deux apports du 16/09/2026, écrits par deux sessions du pilot le même jour : (1) la famille `annonce-nominalisee` et ses positions bloquantes, jouées par EC-8 — retour humain « arrête d'utiliser le terme \"Ce que\" », TF-1137 ; (2) la clé `chiffres_en_lettres`, jouée par EC-9 — retour humain « utilise des chiffres plutôt que l'écriture en toutes lettres », E-14. S'y ajoute (3) la clé `blocs_de_code`, jouée par EC-10 — retour humain « les développeurs IA ne sont pas des codeurs », E-15 et TF-1138. Le numéro a porté 1.1.0 pour deux contenus différents pendant une heure, le temps que les deux sessions se coordonnent : c'est la fenêtre décrite par references/TODO-FORGE.md pour le registre, transposée à une donnée.",
+  "source": "Mandat humain du 12/09/2026 (décisions D-1 (a), D-3 (a) de la synthèse 20260911j) sur l'analyse L99 output/03-etudes/2026-09/20260911-L99-regles-d-ecriture-factory.md. Familles dérivées de deux catalogues de signes (Wikipédia FR « Aide:Identifier l'usage d'une IA générative », Wikipédia EN « Wikipedia:Signs of AI writing », lus le 11/09/2026), des règles de terrain RULE-A..I d'agent-style (2026) et de guides francophones de détection 2026 ; seuils CALIBRÉS sur le corpus du pilot le 12/09/2026 (voir « calibrage »).",
+  "pourquoi_une_donnee_et_pas_du_code": "Loi transverse n° 4 — une donnée volatile est une donnée, pas du code. Les tournures qui trahissent une écriture générée changent avec chaque génération de modèle (Wikipédia EN mesure la chute de « delve » en 2025) : une liste en dur dans l'oracle obligerait à publier une version de l'oracle pour ajouter ou retirer un mot. Chaque entrée est datée et sourcée ; chaque famille porte un seuil de densité explicite, recalibrable sans toucher au code.",
+  "pourquoi_par_famille_et_par_densite_et_jamais_un_mot_isole": "Un mot isolé n'est pas un défaut : « crucial » a sa place une fois par document, un tiret d'incise est la ponctuation normale du français. C'est la DENSITÉ (occurrences pour mille mots de prose) et l'accumulation de familles qui trahissent une cadence mécanique — Wikipédia EN : « one or two coincidental, many indicate AI ». Un oracle qui crie sur un mot se fait désactiver dans la semaine (leçon N4 du noyau, leçon JARGON-A-GLOSER) ; un oracle de densité, calibré pour que le corpus PASS reste PASS, survit.",
+  "regle": "Pour chaque famille, l'oracle compte les occurrences dans la PROSE du texte (hors blocs de code, spans de code, front matter, URL, lignes de séparation de tableau) et les rapporte à mille mots. Au-delà de `seuil_avertissement`, il avertit ; au-delà de `seuil_echec`, il échoue. Un texte de moins de `mots_minimum` mots n'est jugé sur aucune densité (un court texte à un seul tic n'est pas un texte à tics). Les motifs sont des expressions régulières insensibles à la casse, à frontière de mot Unicode.",
+  "mots_minimum": 150,
+  "calibrage": {
+    "corpus": "output/04-plans/*.md (118 synthèses et notes), output/03-etudes/*.md, references/*.md, gabarits/*.md du pilot au 12/09/2026",
+    "methode": "densités mesurées par famille ; seuil_avertissement posé au voisinage du 90e centile du corpus, seuil_echec au double ou au-delà du maximum observé sur les textes déjà jugés PASS, de sorte que le corpus reste PASS à 95 % ou plus (baseline de non-régression, contrat §4 du mandat)",
+    "mesure_du": "2026-09-12",
+    "resultat": "204 textes mesurés ; les sept familles lexicales sont quasi absentes du corpus (maximum observé : emphase-creuse 1,9 ‰, parallélisme 1,2 ‰, clôture 0,8 ‰, annonce 0,4 ‰, les trois autres 0) — leurs seuils sont posés d'après les catalogues, non d'après le corpus, et se vérifient sur la fixture rouge ; la ponctuation de cadence est la seule famille dense (voir sa note). Rejeu : node oracles/oracle-ecriture.mjs --baseline output/04-plans"
+  },
+  "familles": [
+    {
+      "cle": "annonce-vide",
+      "derniere_lecture": "2026-11-25",
+      "revue_prevue": "2027-01-06",
+      "libelle": "Annonce ou méta-commentaire qui dit qu'on va dire au lieu de dire",
+      "ce_que_le_lecteur_paie": "une phrase lue pour rien avant l'information ; en série, l'impression d'un texte qui se regarde écrire",
+      "remede": "supprimer l'annonce et commencer par le fait ; un chapitre ouvre par ce que le lecteur apprend (M7, L7)",
+      "seuil_avertissement": 2,
+      "seuil_echec": 5,
+      "motifs": [
+        {
+          "motif": "il est important de (noter|souligner|rappeler|préciser|mentionner)",
+          "langue": "fr",
+          "source": "guides FR 2026 ; Wikipédia FR « phrases creuses »",
+          "depuis": "2026-09-12"
+        },
+        {
+          "motif": "il (convient|est essentiel|est crucial|est primordial|est nécessaire) de (noter|souligner|rappeler|préciser|comprendre)",
+          "langue": "fr",
+          "source": "guides FR 2026 (cours-ndrc)",
+          "depuis": "2026-09-12"
+        },
+        {
+          "motif": "notons que|force est de constater|il va sans dire|comme (nous l'avons|on l'a) (vu|dit|mentionné)",
+          "langue": "fr",
+          "source": "agent-style RULE-04 (mots inutiles)",
+          "depuis": "2026-09-12"
+        },
+        {
+          "motif": "(dans|au cours de) (ce|cet) (chapitre|article|document|section)[^.\\n]{0,40}nous (allons|verrons)|nous allons (voir|aborder|examiner|explorer)",
+          "langue": "fr",
+          "source": "Wikipédia FR « plans répétitifs »",
+          "depuis": "2026-09-12"
+        },
+        {
+          "motif": "it('s| is) (important|worth|essential|crucial) to (note|mention|remember|understand)|note that|as (we|I) (mentioned|discussed|saw)",
+          "langue": "en",
+          "source": "Wikipédia EN « superficial analysis »",
+          "depuis": "2026-09-12"
+        }
+      ]
+    },
+    {
+      "cle": "cloture-resumante",
+      "derniere_lecture": "2026-11-25",
+      "revue_prevue": "2027-01-06",
+      "libelle": "Clôture qui résume ce que le bloc vient de dire",
+      "ce_que_le_lecteur_paie": "relire ce qu'il vient de lire ; le signal le plus constant des textes générés selon les deux catalogues Wikipédia",
+      "remede": "supprimer la phrase de synthèse en fin de bloc ; la synthèse vit une fois, en ouverture (bloc 0, M7)",
+      "seuil_avertissement": 1,
+      "seuil_echec": 3,
+      "motifs": [
+        {
+          "motif": "en (conclusion|résumé|somme|définitive)|pour (résumer|conclure|faire court)|au final|en fin de compte|tout compte fait",
+          "langue": "fr",
+          "source": "Wikipédia FR « sections Conclusion » ; agent-style RULE-E",
+          "depuis": "2026-09-12"
+        },
+        {
+          "motif": "in (conclusion|summary|short)|to (sum up|summarize|conclude)|overall,|all in all",
+          "langue": "en",
+          "source": "Wikipédia EN ; agent-style RULE-E",
+          "depuis": "2026-09-12"
+        }
+      ]
+    },
+    {
+      "cle": "emphase-creuse",
+      "derniere_lecture": "2026-11-25",
+      "revue_prevue": "2027-01-06",
+      "libelle": "Adjectif ou image qui amplifie sans fait",
+      "ce_que_le_lecteur_paie": "un ton promotionnel qui ne dit rien ; Wikipédia FR : « ton promotionnel », « emphase excessive » ; Wikipédia EN : « undue emphasis on significance », « promotional language »",
+      "remede": "remplacer par le fait (un chiffre, un nom, une date, une conséquence) ou supprimer",
+      "seuil_avertissement": 3,
+      "seuil_echec": 8,
+      "motifs": [
+        {
+          "motif": "crucial(e|es|s)?|primordial(e|es|s)?|incontournable(s)?|révolutionnaire(s)?|révolutionn(e|er|ent)|sans précédent|véritable (levier|atout|révolution|game changer)",
+          "langue": "fr",
+          "source": "guides FR 2026 (« crucial, significatif, robuste, substantiel ») ; Wikipédia FR « emphase »",
+          "depuis": "2026-09-12"
+        },
+        {
+          "motif": "à l'ère (de|du|des)|dans un monde (où|en)|en constante évolution|au cœur (de|du|des)|plongeons|plongée (dans|au)",
+          "langue": "fr",
+          "source": "guides FR 2026 (« À l'ère de… », « Plongeons dans… »)",
+          "depuis": "2026-09-12"
+        },
+        {
+          "motif": "delve|tapestry|testament to|pivotal|groundbreaking|cutting-edge|seamless(ly)?|game-?changer|vibrant|ever-evolving|landscape of|unlock(s|ing)? the|elevate(s|d)?|harness(es|ing)? the|robust and",
+          "langue": "en",
+          "source": "Wikipédia EN « AI vocabulary » (daté : liste GPT-4 / GPT-4o) ; impeccable marketing-buzzword",
+          "depuis": "2026-09-12"
+        }
+      ]
+    },
+    {
+      "cle": "parallelisme-mecanique",
+      "derniere_lecture": "2026-11-25",
+      "revue_prevue": "2027-01-06",
+      "libelle": "Symétrie de construction par réflexe : négation-affirmation, balancement",
+      "ce_que_le_lecteur_paie": "une phrase qui semble réfuter une objection que personne n'a faite ; Wikipédia EN : « negative parallelisms », « rule of three » ; agent-style RULE-07 (forme affirmative)",
+      "remede": "dire la chose affirmativement ; garder la symétrie quand les idées sont réellement coordonnées (RULE-09)",
+      "seuil_avertissement": 2,
+      "seuil_echec": 5,
+      "motifs": [
+        {
+          "motif": "non seulement[^.\\n]{0,80}mais (aussi|également|encore)|qu'il s'agisse de|que ce soit[^.\\n]{0,60} ou|ce n'est pas (un|une|seulement|simplement)[^.\\n]{0,60}(c'est|mais)",
+          "langue": "fr",
+          "source": "Wikipédia EN « negative parallelisms » transposé ; guides FR 2026",
+          "depuis": "2026-09-12"
+        },
+        {
+          "motif": "not (just|only|merely)[^.\\n]{0,80}but (also|rather)?|it's not (a|about)[^.\\n]{0,60}it's",
+          "langue": "en",
+          "source": "Wikipédia EN « negative parallelisms » ; impeccable aphoristic-cadence",
+          "depuis": "2026-09-12"
+        }
+      ]
+    },
+    {
+      "cle": "attribution-vague",
+      "derniere_lecture": "2026-11-25",
+      "revue_prevue": "2027-01-06",
+      "libelle": "Autorité floue à la place d'une source",
+      "ce_que_le_lecteur_paie": "une affirmation qu'il ne peut pas vérifier ; Wikipédia EN : « weasel wording » ; LC2 du pilot : un chiffre sans source ne vaut rien",
+      "remede": "nommer la source (fichier, ligne, URL, personne, date) ou marquer « à vérifier »",
+      "seuil_avertissement": 1,
+      "seuil_echec": 3,
+      "motifs": [
+        {
+          "motif": "les experts (s'accordent|estiment|considèrent|recommandent)|il est (généralement|communément|largement) (admis|reconnu|accepté)|de nombreuses (études|recherches|sources) (montrent|indiquent|démontrent)|on (considère|estime|sait) (généralement )?que|selon (certains|de nombreux|la plupart des) (experts|spécialistes|observateurs)",
+          "langue": "fr",
+          "source": "Wikipédia EN « vague attributions » transposé",
+          "depuis": "2026-09-12"
+        },
+        {
+          "motif": "experts (say|agree|argue|believe)|studies (show|suggest|indicate)|it is (widely|generally) (known|accepted|believed)|industry reports|some critics",
+          "langue": "en",
+          "source": "Wikipédia EN « vague attributions »",
+          "depuis": "2026-09-12"
+        }
+      ]
+    },
+    {
+      "cle": "formule-de-conversation",
+      "derniere_lecture": "2026-11-25",
+      "revue_prevue": "2027-01-06",
+      "libelle": "Reste de dialogue d'assistant dans un texte destiné à un lecteur",
+      "ce_que_le_lecteur_paie": "un texte qui s'adresse à un interlocuteur absent ; Wikipédia EN : « collaborative communication », « knowledge-cutoff disclaimers »",
+      "remede": "supprimer ; un livrable ne converse pas, il informe",
+      "seuil_avertissement": 0.5,
+      "seuil_echec": 2,
+      "motifs": [
+        {
+          "motif": "n'hésitez pas à|j'espère que (cela|ceci|ça) (vous )?(aide|aidera|sera utile)|excellente question|bien sûr !|absolument !|je (serais|suis) ravi(e)? de|à ma (dernière|date de) (mise à jour|connaissance)|en tant qu'(IA|intelligence artificielle|modèle de langage)",
+          "langue": "fr",
+          "source": "Wikipédia EN « communication patterns » transposé ; Wikipédia FR « commentaires d'édition »",
+          "depuis": "2026-09-12"
+        },
+        {
+          "motif": "i hope this helps|feel free to|let me know if|as an ai|as of my last (update|training)|great question|certainly!|absolutely!",
+          "langue": "en",
+          "source": "Wikipédia EN « collaborative communication », « knowledge-cutoff disclaimers »",
+          "depuis": "2026-09-12"
+        }
+      ]
+    },
+    {
+      "cle": "transition-de-remplissage",
+      "derniere_lecture": "2026-11-25",
+      "revue_prevue": "2027-01-06",
+      "libelle": "Connecteur d'addition en tête de phrase, par réflexe",
+      "ce_que_le_lecteur_paie": "une transition qui n'articule rien ; agent-style RULE-D ; Wikipédia EN : « Additionally » en tête de la liste du vocabulaire IA",
+      "remede": "supprimer le connecteur ou articuler réellement (cause, opposition, conséquence)",
+      "seuil_avertissement": 4,
+      "seuil_echec": 10,
+      "motifs": [
+        {
+          "motif": "^\\s*(de plus|en outre|par ailleurs|également|aussi|d'autre part|qui plus est)\\s*,",
+          "langue": "fr",
+          "source": "agent-style RULE-D",
+          "depuis": "2026-09-12",
+          "par_ligne": true
+        },
+        {
+          "motif": "^\\s*(additionally|furthermore|moreover|also)\\s*,",
+          "langue": "en",
+          "source": "agent-style RULE-D ; Wikipédia EN « AI vocabulary »",
+          "depuis": "2026-09-12",
+          "par_ligne": true
+        }
+      ]
+    },
+    {
+      "cle": "ponctuation-de-cadence",
+      "derniere_lecture": "2026-11-25",
+      "revue_prevue": "2027-01-06",
+      "revue_du_2026_10_19": "le tiret d'incise reste compté : E-8 repose sur la lisibilité (une phrase qui rebondit), non sur la détection d'un texte généré (étude 20261019, option O3, TF-1926)",
+      "libelle": "Tiret d'incise employé à la place de la virgule, du point ou des deux-points, en cascade",
+      "ce_que_le_lecteur_paie": "une phrase qui rebondit au lieu de finir ; le tiret d'incise est légitime en français, sa CASCADE (plusieurs par phrase, à chaque phrase) est une cadence mécanique — Wikipédia EN « overuse of em dashes », impeccable em-dash-overuse (advisory)",
+      "remede": "un tiret d'incise par phrase au plus ; sinon une virgule, un point, ou deux phrases",
+      "seuil_avertissement": 25,
+      "seuil_echec": 40,
+      "motifs": [
+        {
+          "motif": "\\s[—–]\\s",
+          "langue": "*",
+          "source": "Wikipédia EN ; agent-style RULE-B ; impeccable em-dash-overuse",
+          "depuis": "2026-09-12"
+        }
+      ],
+      "note_calibrage": "mesuré le 12/09/2026 sur 204 textes du pilot (≥ 150 mots) : médiane 18,6 tirets d'incise pour mille mots, 75e centile 24,3, 90e centile 31,6, 95e centile 35,7, maximum 60,2. Le corpus du pilot est écrit en style d'incise dense (doctrines, synthèses) : le seuil d'échec est posé au-dessus du 95e centile pour que ce corpus reste PASS et que seule une cascade nettement supérieure échoue ; l'avertissement au voisinage du 75e centile. À recalibrer à la baisse quand la règle E-8 aura fait baisser la densité des textes neufs."
+    },
+    {
+      "cle": "annonce-nominalisee",
+      "derniere_lecture": "2026-11-25",
+      "revue_prevue": "2027-01-06",
+      "libelle": "Annonce NOMINALISÉE : « Ce que ce document tient », « Ce qu'il ne porte pas »",
+      "ce_que_le_lecteur_paie": "un titre qui PROMET un contenu au lieu de le nommer : le lecteur doit ouvrir le chapitre pour savoir de quoi il parle, et une table des matières faite de ces titres ne se survole pas",
+      "remede": "nommer le contenu — « Ce que le guide couvre » devient « Périmètre du guide », « Ce qu'il ne tient pas » devient « Hors périmètre » ; en en-tête de colonne, le nom de la grandeur mesurée",
+      "pourquoi_cette_famille_existe": "la famille annonce-vide (E-5) ne reconnaît que des annonces VERBALES (« nous allons voir », « il est important de noter ») ; « Ce que X apprend » annonce sans employer aucun de ces verbes et passe sous le filet. Mesuré le 15/09/2026 : 84 occurrences dans un seul livrable de 11 pages, dont 6 en titre de chapitre et 20 en en-tête de colonne, pendant que l'oracle rendait PASS sur 15 228 mots de prose (TF-1137).",
+      "seuil_avertissement": 1,
+      "seuil_echec": 6.5,
+      "positions_bloquantes": [
+        "titre",
+        "en-tete-de-colonne"
+      ],
+      "motifs": [
+        {
+          "motif": "ce (?:que|qu'il|qu'elle|qu'ils|qu'elles|qu’il|qu’elle)\\s+(?:[^.\\n]{0,40}?\\s)?(?:ne\\s+)?(?:tient|contient|porte|couvre|recouvre|apprend|dit|embarque|emporte|renferme)(?:\\b|s\\b|nent\\b)",
+          "langue": "fr",
+          "source": "retour humain du 15/09/2026, mot pour mot : « Arrête d'utiliser le terme \"Ce que\" comme \"Ce que ce document tient...\" \"Ce qu'il ne tient pas\". Déjà demandé plusieurs fois et remonté à la Factory plusieurs fois. »",
+          "depuis": "2026-09-16"
+        }
+      ],
+      "note_calibrage": "mesuré le 16/09/2026 sur 472 textes Markdown du pilot (≥ 150 mots, hors old/) : 238 occurrences, 157 textes porteurs ; densités ‰ — 50e centile 0,00, 90e 0,96, 95e 1,85, maximum 6,37. Seuil d'avertissement posé à 1 ‰ (voisinage du 90e centile), seuil d'échec à 6,5 ‰ (au-delà du maximum observé) : la DENSITÉ avertit, elle ne condamne pas — le corpus reste PASS. Les dents de la famille sont dans EC-8, qui REFUSE la tournure en titre et en en-tête de colonne : c'est là que le retour humain l'a relevée, 6 titres et 20 en-têtes sur un seul livrable.",
+      "exemptions_levees": {
+        "le": "2026-09-16",
+        "par": "décision humaine D-2 (a) : « D2 : a »",
+        "quoi": "les 2 libellés que gabarits/RESTITUTION.md imposait au tableau d'options du bloc 3 — ils portaient la tournure même que le retour du 15/09 proscrit. Ils sont devenus « Coût » et « Exclusions » dans le gabarit, ses 3 juges, 2 fixtures et 1 recette ; l'exemption n'a donc plus d'objet, et EC-8 refuse désormais la tournure partout, sans exception."
+      },
+      "exemptions": [
+        {
+          "literal": "Ce que cette demande ne réclame pas",
+          "position": "titre",
+          "exact": true,
+          "depuis": "2026-10-21",
+          "motif": "titre que le gabarit de demande (gabarits/DEMANDE.md) et son juge de forme (gabarits/oracle-demande.mjs, règle DEM-3, regex ancrée sur ce titre exact) IMPOSENT : deux gardiens du même socle se contredisaient, corriger l'une des deux demandes d'un produit cassait l'autre. Exemption BORNÉE : ce titre exact (numérotation « 5. » admise), à la position titre seulement — le même libellé en en-tête de colonne, ou un titre voisin (« Ce que cette demande ne couvre pas »), reste refusé.",
+          "source": "TF-1901, lot Produit-79 - RETOURS - 20261018a (RP-17), décidé le 21/10/2026 au titre de R-58 ; précédents TF-1507 et TF-1453 (le remède y était de renommer, ici le titre est imposé par un juge et ne peut pas l'être)"
+        }
+      ],
+      "motifs_positions": [
+        {
+          "motif": "^\\s*ce (?:que|qu'il|qu'elle|qu'ils|qu'elles|qu’il|qu’elle)\\b",
+          "langue": "fr",
+          "source": "retour humain du 15/09/2026, et sa relecture le 16/09 : l'humain proscrit la FORME « Ce que X <verbe> », pas une liste de verbes. En TITRE et en EN-TÊTE DE COLONNE, la position lève toute ambiguïté — aucun titre n'a besoin de commencer par « Ce que » —, donc le motif y est LARGE. Dans le corps, il reste étroit : c'est la densité qui juge, et un motif large y crierait sur l'usage légitime.",
+          "depuis": "2026-09-16"
+        }
+      ],
+      "pourquoi_deux_motifs": "Mesuré le 16/09 : le motif de densité exige un verbe de contenance (tient, contient, porte, couvre…), et il ne voyait donc NI « Ce qu'elle coûte » NI « Ce qu'elle exclut » — les 2 libellés que le gabarit de restitution imposait, et que l'exemption prétendait protéger d'une règle qui ne les attrapait pas. L'erreur était d'avoir posé l'exemption sans mesurer qu'elle servait à quelque chose. EC-8 lit désormais `motifs_positions` quand il existe ; EC-1 continue de lire `motifs`."
+    }
+  ],
+  "blocs_de_code": {
+    "regle": "E-15 (TF-1138, 16/09/2026) — dans un texte T2, un bloc de code qu'on RECOPIE sert tout lecteur ; un bloc qu'on EXÉCUTE ne sert qu'un lecteur qui exécute. EC-10 lit le lecteur DÉCLARÉ du document (`role_destinataire` ou `lecteur` du front matter, règle D11 des gabarits) : si ce lecteur porte un marqueur d'exécutant, les commandes sont à leur place ; sinon elles sont nommées une à une. Aucun lecteur déclaré rend SKIP, dit à voix haute — jamais PASS par silence.",
+    "source": "retour humain du 15/09/2026, mot pour mot : « Les développeurs IA ne sont pas des codeurs, les lignes de code affichées doivent donc l'être uniquement si cela est strictement nécessaire. Pour voir les trigrammes déjà pris, pas la peine de code \"az repos list...\", un simple check sur l'URL du repo suffit. » Mesure du même jour : 18 blocs de code dans le livrable, 4 commandes de console, 14 blocs qui se recopient et qu'aucun retour n'a contestés.",
+    "pourquoi_le_lecteur_et_pas_le_bloc": "Juger le bloc seul rendrait la règle fausse dans les deux sens : un runbook d'exploitation DOIT porter ses commandes, un guide de conception n'en porte aucune. Ce qui change, c'est le lecteur — la règle se branche donc sur la déclaration que les gabarits portent déjà, au lieu d'inventer une heuristique sur le contenu.",
+    "invocations": [
+      {
+        "motif": "^\\s*(?:\\$|>|#)\\s+\\S",
+        "source": "invite de commande explicite",
+        "depuis": "2026-09-16"
+      },
+      {
+        "motif": "^\\s*(?:sudo\\s+)?(?:node|npm|npx|pnpm|yarn|git|python|python3|pip|az|aws|gcloud|docker|kubectl|terraform|curl|wget|ssh|scp|bash|sh|powershell|pwsh|dotnet|mvn|gradle|make|cargo|go|psql|mysql|sqlcmd)\\b",
+        "source": "invocation d'outil en ligne de commande",
+        "depuis": "2026-09-16"
+      }
+    ],
+    "lecteurs_executants": [
+      {
+        "motif": "exploitant|astreinte|run\\b|ops\\b|sre\\b|administrateur|devops|int[ée]grateur|d[ée]veloppeur(?!s? (?:ia|assist))",
+        "pourquoi": "un lecteur dont le métier EST d'exécuter : la commande lui épargne une traduction, elle ne lui en impose pas",
+        "depuis": "2026-09-16"
+      },
+      {
+        "motif": "session\\s+(?:de\\s+)?claude|claude\\s*code|sous-agents?|agents?\\s+(?:claude|ia\\b|de\\s+campagne|autonomes?)",
+        "pourquoi": "un prompt dont le lecteur est une SESSION ou un AGENT (Claude Code, sous-agent, agent de campagne) est exécuté par lui : le bloc de commande est l'instruction même, pas une compétence imposée à un humain (TF-1886, lot Produit-84 20261016c RT-5, 19/10/2026). « agent » seul n'en fait pas partie : un agent commercial ou immobilier est un humain qui n'exécute pas",
+        "depuis": "2026-10-19"
+      }
+    ],
+    "non_juge": [
+      "la NÉCESSITÉ d'une commande donnée : la règle dit à qui elle s'adresse, elle ne dit pas si celle-là valait la peine",
+      "un bloc de code qui se RECOPIE (arborescence, motif de nommage, en-tête, extrait de configuration) : il n'est jamais compté, quel que soit le lecteur",
+      "les documents sans lecteur déclaré : SKIP dit à voix haute — la règle ne devine pas un destinataire"
+    ]
+  },
+  "anteriorite": {
+    "regle": "Un fichier listé ici est un texte normatif interne antérieur à la doctrine d'écriture : l'oracle rend SKIP dessus (jamais FAIL) tant qu'il n'est pas réécrit ; il sera jugé à sa prochaine réécriture de fond, jamais rétroactivement (typologie §1 du mandat, chapitre 8 de l'analyse).",
+    "chemins": [
+      "REGLES-PROJET.md",
+      "CLAUDE.md",
+      "CONTRAT-INTERFACE.md",
+      "INVENTAIRE.md",
+      "gabarits/RESTITUTION.md",
+      "gabarits/AGENT-CAMPAGNE.md",
+      "gabarits/TRAVAUX-PILOT.md",
+      "gabarits/RETOURS-FORGES.md",
+      "gabarits/CLAUDE-PRODUIT.md",
+      "references/ACCUEIL.md",
+      "references/ETAPES-RUN.md",
+      "references/RUN-MANDAT.md",
+      "references/RUN-VERSION.md",
+      "references/RUN-CONSEIL.md",
+      "references/RUN-AO.md",
+      "references/TODO-FORGE.md",
+      "references/BEST-PRACTICES-HTML.md",
+      "references/INTENTION.md",
+      "references/PATRONS-EPROUVES.md"
+    ]
+  },
+  "anteriorite_titres_numerotes": {
+    "regle": "EC-8 retire la numérotation d'un titre (« 7. », « 2.1 », « 3 · ») avant de chercher la tournure refusée (TF-2020, 29/10/2026). Un fichier listé ici portait déjà, au jour dit, un titre numéroté que cette lecture refuse : EC-8 l'admet et le dit au verdict, sans le compter en échec. Les documents existants ne se réécrivent pas (R-4, R-5) ; ils sont jugés à leur prochaine réécriture de fond. Un fichier absent de la liste, ou un titre non numéroté, reste refusé : la liste est figée au jour dit, aucun document écrit après lui n'y entre.",
+    "avant": "2026-10-29",
+    "mesure": "29/10/2026, sur les 1179 Markdown suivis du pilot : 277 fichiers refusés par EC-8 avec la numérotation retirée, contre 265 avant la fermeture. 12 fichiers n'échouaient pas et échoueraient seulement par un titre numéroté ; 17 échouaient déjà et gagnent des constats (29 fichiers listés). Parmi eux, 8 sont des gabarits ou des instances de gabarit (gabarits/documents/*/GABARIT.md et INSTANCE.md), à renommer avec leurs jumeaux HTML.",
+    "chemins": [
+      "ETAPE-MEP.md",
+      "gabarits/documents/etude-de-cas-client/GABARIT.md",
+      "gabarits/documents/etude-de-cas-client/INSTANCE.md",
+      "gabarits/documents/kit-partenaire/GABARIT.md",
+      "gabarits/documents/kit-partenaire/INSTANCE.md",
+      "gabarits/documents/mode-emploi-livrable-dossier/GABARIT.md",
+      "gabarits/documents/mode-emploi-livrable-dossier/INSTANCE.md",
+      "gabarits/documents/note-de-synthese/GABARIT.md",
+      "gabarits/documents/rapport-de-donnees/GABARIT.md",
+      "input/00-retours/old/Produit-12/Produit-12 - RETOURS - 20261014a - PJ - Etude qualite du classement.md",
+      "input/00-retours/old/Produit-12/Produit-12 - RETOURS - 20261014a - PJ - Principe d'analyse critique.md",
+      "output/01-revues-et-propositions/Factory - Revue Forge - Écosystème - 20260819a.md",
+      "output/01-revues-et-propositions/Produit-02 - Proposition Refonte - Rapport SEO - 20260815b.md",
+      "output/03-etudes/2026-09/20260901-etude-dataforseo-cadrage-v2.md",
+      "output/03-etudes/2026-09/20260902-etude-opportunite-dataforseo-produit-02.md",
+      "output/03-etudes/2026-09/20260903-recidives-mesure.md",
+      "output/03-etudes/2026-09/20260907-etude-opportunite-mission-data-silver-gold-powerbi.md",
+      "output/03-etudes/2026-09/20260908-pourquoi-on-reecrit-l-histoire-et-comment-cesser.md",
+      "output/03-etudes/2026-09/20260911-etude-opportunite-communication-marketing-ao.md",
+      "output/03-etudes/2026-09/20260917-etude-opportunite-gestion-reseaux-sociaux.md",
+      "output/03-etudes/2026-09/20260917-releve-autres-reseaux-sociaux.md",
+      "output/03-etudes/2026-09/20260922-revue-des-candidatures-par-famille.md",
+      "output/03-etudes/Factory - Étude - Oeil critique global des process - 20261020a.md",
+      "output/04-plans/2026-08/20260813-plan-strategie-tests-e2e.md",
+      "output/04-plans/2026-09/Factory - Plan - Mise en oeuvre des huit rangs d opportunites - 20260922h.md",
+      "output/04-plans/Factory - Note - Oeil critique des process a travailler - 20261020l.md",
+      "references/PLATEFORME-LINKEDIN.md",
+      "runs/20260804-miniveille/etapes/conception/EXIGENCES.md",
+      "veille/ETUDE-EVERYTHING-CLAUDE-CODE.md"
+    ]
+  },
+  "non_juge": [
+    "la JUSTESSE d'une voix, la véracité d'un fait, la pertinence d'un choix : l'oracle compte des tournures, il ne lit pas",
+    "le jargon hors des référentiels existants (JARGON-A-GLOSER.json, jargon-a-gloser.json du socle) : couvert par S20, S23, M18, L30 (chapitre), jamais ici",
+    "les textes d'application (T4 : libellés, erreurs, états vides) : leurs chaînes vivent dans du code ou des fichiers de ressources que cet oracle ne lit pas — lot de travaux forge-design",
+    "un tic hors liste : un motif qui n'a encore coûté aucun aller-retour n'est pas détecté ; la liste grossit par les retours humains, jamais par la devinette"
+  ],
+  "chiffres_en_lettres": {
+    "source": "retour humain du 16/09/2026, mot pour mot : « Utilise des chiffres plutôt que l'écriture en toutes lettres pour les valeurs numériques, les heures et les dates. 7 septembre ou 7/09 plutôt que sept septembre, 8,8 Mo plutôt que huit virgule huit. » Le fait : une restitution écrite le matin même rendait ses mesures en toutes lettres — « huit virgule huit mégaoctets », « cent trente-deux révisions », « le sept septembre ».",
+    "regle": "E-14 du plancher d'écriture. Un nombre écrit en lettres est un défaut dès qu'il porte une VALEUR : suivi d'une unité ou d'un dénombrable, suivi d'un mois, ou composé avec « virgule » ou « pour cent ». Ailleurs — article, pronom, locution figée, nombre en tête de phrase — la lettre reste juste, et la règle se tait.",
+    "pourquoi_pas_une_densite": "Les neuf familles de ce fichier comptent des TICS, dont seule l'accumulation trahit. Une mesure écrite en lettres n'est pas un tic : elle coûte au lecteur dès la première, parce qu'il doit la reconstituer avant de la comparer à la suivante. Le seuil est donc à un, et la règle ne vit pas parmi les familles.",
+    "pourquoi_un_declencheur_et_pas_une_liste_de_nombres": "Chercher les mots-nombres seuls accuserait « un défaut », « une règle », « en deux temps », et un oracle qui crie sur l'usage légitime se fait désactiver dans la semaine (leçon N4). C'est le DÉCLENCHEUR À DROITE qui fait la valeur : l'unité, le dénombrable, le mois. « neuf » suivi de rien reste l'adjectif ; « neuf cas » est un nombre.",
+    "nombres": [
+      "deux",
+      "trois",
+      "quatre",
+      "cinq",
+      "six",
+      "sept",
+      "huit",
+      "neuf",
+      "dix",
+      "onze",
+      "douze",
+      "treize",
+      "quatorze",
+      "quinze",
+      "seize",
+      "vingt",
+      "trente",
+      "quarante",
+      "cinquante",
+      "soixante",
+      "cent",
+      "cents",
+      "mille",
+      "million",
+      "millions",
+      "milliard",
+      "milliards"
+    ],
+    "nombre_exclu": {
+      "un": "article indéfini et pronom : « un défaut », « l'un des deux » — l'accuser rendrait la règle inutilisable",
+      "une": "idem au féminin"
+    },
+    "unites": [
+      "Mo",
+      "Ko",
+      "Go",
+      "To",
+      "px",
+      "%",
+      "€",
+      "km",
+      "ms",
+      "Hz",
+      "mégaoctets",
+      "kilooctets",
+      "gigaoctets",
+      "caractères",
+      "pour cent"
+    ],
+    "denombrables": [
+      "révision",
+      "révisions",
+      "page",
+      "pages",
+      "ligne",
+      "lignes",
+      "fichier",
+      "fichiers",
+      "item",
+      "items",
+      "cas",
+      "test",
+      "tests",
+      "règle",
+      "règles",
+      "oracle",
+      "oracles",
+      "défaut",
+      "défauts",
+      "occurrence",
+      "occurrences",
+      "dépôt",
+      "dépôts",
+      "commit",
+      "commits",
+      "colonne",
+      "colonnes",
+      "mot",
+      "mots",
+      "jour",
+      "jours",
+      "heure",
+      "heures",
+      "minute",
+      "minutes",
+      "seconde",
+      "secondes",
+      "produit",
+      "produits",
+      "forge",
+      "forges",
+      "recette",
+      "recettes",
+      "session",
+      "sessions",
+      "mesure",
+      "mesures",
+      "fois",
+      "classe",
+      "classes",
+      "entrée",
+      "entrées",
+      "volet",
+      "volets",
+      "skill",
+      "skills"
+    ],
+    "mois": [
+      "janvier",
+      "février",
+      "mars",
+      "avril",
+      "mai",
+      "juin",
+      "juillet",
+      "août",
+      "septembre",
+      "octobre",
+      "novembre",
+      "décembre"
+    ],
+    "liaisons": [
+      "et",
+      "virgule"
+    ],
+    "non_juge": [
+      "la POSITION dans la phrase : un nombre en tête de phrase est jugé comme les autres. Un premier jet l'exemptait au nom de l'usage français ; l'exemption est retirée le 16/09/2026, la consigne humaine ne portant pas cette nuance et le juge ne l'ayant jamais implémentée — une règle que son juge ignore n'existe pas",
+      "une valeur écrite en lettres dont le dénombrable est absent de la liste — celle-ci est FERMÉE et se remplit à l'usage, comme le référentiel de jargon",
+      "les citations : un retour humain ou une sortie d'outil reproduits tels quels gardent leur forme, et la règle ne lit pas ce qui vit entre accents graves"
+    ]
+  },
+  "ecrit_a_un_tiers": {
+    "regle": "EC-14 (TF-1960, D-78 (c) du 26/10/2026) : un écrit destiné à un tiers est court. Est destiné à un tiers : (1) un en-tête `destinataire:` dont le premier mot n'est pas dans `destinataires_internes` (« humain (commanditaire du conseil) » est interne, comme « orchestrateur (pilot) et forges mobilisées » ou « méthode / factory », valeurs relevées le 26/10/2026 dans le dépôt : 360 « humain » et 4 autres, aucune ne nomme un tiers) ; sinon, sans en-tête `destinataire:`, (2) un nom de fichier dont le type, lu au champ Objet du nom R-4 « <Marque> - <Objet> - AAAAMMJJ<indice> » avec la même normalisation que `types_de_nom` du catalogue gabarits/documents/catalogue.jsonl, ouvre sur un des `types_de_nom` et sur aucune des `exclusions_de_nom`. Un en-tête `destinataire: humain` (ou une autre valeur interne) écarte la règle, même sur un nom de courriel : le porteur lit un document de travail. Depuis 1.7.0 (TF-2189), (3) sans en-tête `destinataire:` ni type de nom, tout écrit sous un des `dossiers_juges_par_defaut` (`output/`, premier segment du chemin relatif) est jugé : seul un en-tête interne le met à l'écart.",
+    "destinataires_internes": ["humain", "orchestrateur", "pilot", "agent", "agents", "session", "forge", "forges", "methode", "factory"],
+    "types_de_nom": ["courriel", "e mail", "email", "mail", "courrier", "lettre", "fiche", "propale", "propal", "proposition"],
+    "exclusions_de_nom": ["fiche conception", "fiche de conception", "readme", "lisezmoi"],
+    "dossiers_juges_par_defaut": ["output"],
+    "dossiers_juges_par_defaut_depuis": "2026-11-06",
+    "paragraphe_phrases_max": 3,
+    "paragraphe_mots_max": 60,
+    "phrase_mots_max": 25,
+    "enumeration_elements_max": 3,
+    "enumeration_mots_par_element_max": 4,
+    "enumeration_mots_introduction_max": 7,
+    "mots_de_proposition": ["qui", "que", "qu", "car", "dont", "où", "mais", "donc", "puisque", "lorsque", "quand", "si", "comme", "afin", "alors", "which", "that", "because", "but", "when", "while", "since", "although"],
+    "mots_de_liaison": ["et", "ou", "ni", "puis", "and", "or"],
+    "passes_max": 3,
+    "non_juge": [
+      "le destinataire réel : il se déduit de l'en-tête ou du nom du fichier, jamais du contenu",
+      "une série de compléments circonstanciels (« le 12 octobre, à 14 h, en salle A, au 3e étage ») : elle se repère comme une énumération, faute de distinguer une liste d'une suite de compléments"
+    ]
+  },
+  "langue": {
+    "regle": "EC-15 (TF-1960, D-78 (c) amendée du 26/10/2026) : la langue dominante de la prose est la langue attendue. Attendue = `--langue` de l'appel, sinon l'en-tête `langue:`, sinon `defaut` (la Factory est francophone par défaut, CLAUDE.md global règle 12). L'anglais n'est jamais un critère de blocage : un utilisateur ou un tiers anglophone se déclare (`--langue en` ou `langue: en`) et le même texte passe. La langue se reconnaît à la part de mots vides de chaque liste ; l'écart entre la dominante et la langue attendue doit atteindre `ecart_minimum` pour être signalé.",
+    "defaut": "fr",
+    "mots_minimum": 30,
+    "part_minimum": 0.08,
+    "ecart_minimum": 1.3,
+    "noms": {"fr": "français", "en": "anglais", "es": "espagnol", "de": "allemand", "it": "italien", "pt": "portugais", "nl": "néerlandais"},
+    "elisions_fr": ["l", "d", "j", "n", "m", "t", "s", "c", "qu", "jusqu", "lorsqu", "puisqu"],
+    "mots_vides": {
+      "fr": ["le", "la", "les", "un", "une", "des", "du", "de", "et", "est", "en", "que", "qui", "dans", "pour", "pas", "sur", "au", "aux", "ce", "cet", "cette", "ces", "il", "elle", "ils", "elles", "nous", "vous", "je", "se", "ses", "leur", "leurs", "avec", "par", "ne", "ou", "mais", "comme", "sont", "été", "être", "ont", "fait", "sans", "sous", "aussi", "cela", "ainsi", "votre", "vos", "notre", "nos"],
+      "en": ["the", "of", "and", "to", "in", "is", "that", "it", "for", "with", "as", "was", "are", "be", "this", "by", "an", "not", "or", "from", "at", "have", "has", "had", "you", "we", "they", "will", "can", "which", "their", "its", "our", "but", "if", "than", "then", "these", "those", "there", "been", "would", "should", "your", "please", "thank", "regards"],
+      "es": ["el", "los", "las", "una", "del", "y", "es", "por", "con", "para", "se", "su", "al", "lo", "como", "más", "pero", "sus", "ya", "este", "esta", "porque", "entre", "cuando", "muy", "sin", "sobre", "también", "hasta", "hay", "donde", "desde", "nos", "gracias"],
+      "de": ["der", "die", "das", "und", "ist", "nicht", "ein", "eine", "mit", "den", "dem", "des", "von", "zu", "im", "auf", "für", "sich", "auch", "dass", "wir", "sie", "ich", "er", "wie", "aber", "oder", "bei", "nach", "aus", "wird", "werden"],
+      "it": ["lo", "gli", "di", "della", "che", "è", "non", "per", "con", "sono", "come", "ma", "anche", "più", "si", "una", "nel", "alla", "delle", "degli", "questo", "questa", "grazie"],
+      "pt": ["os", "um", "uma", "do", "da", "dos", "das", "em", "não", "para", "com", "por", "mais", "como", "mas", "foi", "são", "ao", "você", "obrigado", "nos"],
+      "nl": ["het", "een", "van", "dat", "op", "te", "zijn", "voor", "met", "niet", "aan", "er", "maar", "om", "ook", "als", "bij", "wordt", "deze", "dit"]
+    },
+    "non_juge": [
+      "la qualité de la langue : seule la dominante est lue, jamais l'orthographe ni la grammaire",
+      "un texte mixte à parts proches (écart sous `ecart_minimum`) : non signalé, il reste à la relecture",
+      "une langue absente de `mots_vides` : le texte n'est pas jugé, et le dit, il n'est pas PASS"
+    ]
+  },
+  "plancher_ste": {
+    "regle": "D-230 (b) du 22/11/2026 : le plancher se resserre vers les seuils de l'ASD-STE100. EC-19 avertit sur toute phrase de plus de `phrase_mots_avertissement` mots ; EC-20 sur tout paragraphe de plus de `paragraphe_phrases_max` phrases ; EC-21 sur toute consigne qui ne commence pas par un verbe. Une consigne est une cellule d'une colonne dont l'en-tête est « Action », ou un élément de liste numérotée sous un titre qui répond à `titres_d_etapes`. Un verbe est un mot qui finit comme un infinitif ou un impératif de `terminaisons_verbe`, ou un impératif de `imperatifs_tu`. Un préfixe de négation (`negations`) ou un complément suivi d'une virgule (« Dans VS Code, ouvrir… ») avant le verbe est admis. Les trois règles avertissent sans jamais faire échouer un texte.",
+    "source": "ASD-STE100, édition 9 de janvier 2025 : 20 mots par phrase de procédure, 25 par phrase de description, 6 phrases par paragraphe, une consigne par phrase à l'impératif (résumé de Wikipédia, texte officiel non lu) ; étude du pilot du 22/11/2026.",
+    "phrase_mots_avertissement": 25,
+    "paragraphe_phrases_max": 6,
+    "terminaisons_verbe": ["er", "ir", "re", "oir", "ez", "ons"],
+    "imperatifs_tu": ["fais", "va", "mets", "ouvre", "lance", "relance", "copie", "colle", "relis", "lis", "choisis", "réponds", "garde", "coupe", "écris", "dis", "prends", "vérifie", "joue", "rejoue", "ajoute", "retire", "remplace", "clique", "tape", "saisis", "note", "passe", "utilise", "demande", "cherche", "relève", "mesure", "enregistre", "publie", "corrige", "supprime", "crée", "installe"],
+    "non_verbes": ["votre", "notre", "autre", "entre", "contre", "leur", "premier", "dernier", "dossier", "fichier", "registre", "ordre", "titre", "membre", "nombre", "lettre", "chiffre", "filtre", "centre", "cadre", "livre", "propre", "chaque", "hier", "cher", "nous", "vous", "plusieurs", "avoir", "devoir", "pouvoir", "savoir", "vouloir", "soir", "espoir", "miroir", "tiroir", "couloir", "trottoir", "loisir", "désir", "plaisir", "avenir", "souvenir", "elixir", "mer", "fer", "ver", "hiver", "enfer"],
+    "negations": ["ne", "n'", "ne pas", "ne plus", "ne jamais"],
+    "titres_d_etapes": "étapes?|comment faire|marche à suivre|mode opératoire|procédure",
+    "derniere_lecture": "2026-11-22",
+    "revue_prevue": "2027-02-22",
+    "non_juge": [
+      "la justesse d'une coupe : EC-19 et EC-20 comptent des mots et des phrases, ils ne disent pas où couper",
+      "un nom qui finit comme un infinitif (« registre », « ordre ») : EC-21 le prend pour un verbe et ne dit rien",
+      "une consigne hors d'une colonne « Action » ou d'une liste numérotée sous un titre d'étapes : elle n'est pas lue comme une consigne"
+    ]
+  }
+}

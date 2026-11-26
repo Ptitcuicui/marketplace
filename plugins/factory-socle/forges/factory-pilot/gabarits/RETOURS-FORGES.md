@@ -1,0 +1,329 @@
+# Retours forges — <produit> — <AAAAMMJJ><indice>
+
+<!-- Gabarit du pilot (gabarits\RETOURS-FORGES.md). Un fichier = UN lot de retours.
+     Emplacement : forge\retours\<projet> - RETOURS - <AAAAMMJJ><indice>.md dans le projet.
+     Le PRÉFIXE PROJET est obligatoire (décision humaine 13/08) : côté pilot, les lots de
+     tous les projets cohabitent dans input\00-retours\ — le nom dit qui retourne quoi.
+     Un fichier remis ne se modifie JAMAIS — le lot suivant est un nouveau fichier daté.
+     QUAND : DANS LE TOUR où le retour est écrit au ledger, pas à la clôture du run (D-191 (a), TF-2329). Le hook de fin de tour
+     du produit refuse un tour qui a écrit une entrée `type: retour` qu'aucun lot de `forge\retours\` ne cite par son seq. -->
+
+- **Contexte** : <clôture du run <run-id> | inspection production v<X> | incident | autre>
+- **Références ledger** : `forge\ledger.jsonl` seq <n, n…> (entrées `type: retour`)
+- **Références hors run** (si des retours ont été écrits sans run ouvert) : `forge/hors-run.jsonl` seq <n, n…> (entrées `type: retour`, TF-2260). Le seq du journal hors run repart de 1 : le segment nomme le journal et se termine par « ; » ou la fin de ligne, sinon l'ouverture du produit ne sait pas lequel des deux journaux le lot a compilé.
+- **Remise au pilot** : copier ce fichier (et son sidecar) dans le SAS
+  `<pilot>\input\00-retours\_arrivee\` (ignoré par git), jamais à la racine de `input\00-retours\` :
+  le pilot l'y dépose lui-même après pseudonymisation (`todo\accueillir-lot.mjs`, TF-0981) ; un lot
+  au nom réel posé à la racine est refusé (règle LOT-SAS de l'oracle, TF-1054) —
+  l'original reste ici (historique du produit). Statut : `a_remettre` → `remis le <date>`
+  (seule édition autorisée après coup : cette ligne de statut).
+- **Statut** : a_remettre
+
+> ## ⛔ AVANT DE REMETTRE — un geste, une seconde
+>
+> ```
+> node forge\retours\oracle-lot.mjs "<ce fichier>.md"
+> ```
+>
+> **Remettre = ce même geste avec `--remettre`** (TF-2314, 10/11/2026) :
+> `node forge\retours\oracle-lot.mjs "<ce fichier>.md" --remettre` joue le contrôle puis copie le lot et son sidecar
+> dans le sas du pilot, et **ne copie rien si le verdict est FAIL** (sortie 1). Ne copie jamais à la main un lot
+> dont le dernier verdict est FAIL : le 04/11 et le 09/11/2026, un lot en échec est parti au sas dans la même commande
+> que son contrôle.
+>
+> Il rend **0** si la forme du lot est tenue, **1** sinon — et il dit alors ce qui manque *et le
+> geste qui répare*. C'est **exactement le contrôle** que la porte du pilot joue à l'ingestion :
+> le même module, importé des deux côtés. Un lot qui passe ici passe là-bas.
+>
+> **Pourquoi ce paragraphe existe** (TF-0597, 24/08/2026). En une seule journée, **six** lots ont
+> dû être admis par dérogation, tous pour les mêmes deux sections absentes. La cause a été
+> cherchée jusqu'aux trois produits émetteurs et elle est **triple** : l'un n'avait jamais reçu ce
+> gabarit, l'autre n'avait jamais été instancié — et le troisième l'avait **à jour, recopié le
+> matin même**, et a écrit son lot huit heures plus tard sans les sections. Ce troisième cas est
+> le plus fréquent (quatre lots sur six) et le seul qu'aucune recopie ne répare : la règle était
+> écrite en **prose** ici, et jugée en **code** là-bas. *Une affordance non câblée n'existe pas.*
+>
+> Le fichier `forge\retours\oracle-lot.mjs` absent ? Alors l'héritage du produit n'est pas tenu —
+> `oracle-conformite-projet` (R-47) le dit — et il se recopie depuis `gabarits\oracle-lot-relais.mjs`
+> du pilot, avec ce gabarit. Depuis le 15/10/2026 (TF-1759), ce fichier est un RELAIS : il résout le pilot
+> (`FORGE_ROOT`, sinon le dossier voisin `factory-pilot`) et joue SON juge, `gabarits\oracle-lot-retours.mjs`.
+> Les règles du jour s'appliquent donc sans recopie ; pilot introuvable, le relais le dit et sort en 2.
+>
+> Un lot resté `a_remettre` plus de 24 h est nommé à l'ouverture de votre session (TF-1758) : la
+> remise est un geste, et rien d'autre ne le déclenche.
+
+Convention de gravité : **bloquant** (a bloqué ou failli bloquer) · **majeur** (a coûté un
+aller-retour ou une découverte par lecture de code) · **mineur** (confort/précision).
+Si un retour se rapporte à un item du registre TODO-FORGE du pilot, citer son id
+(`TF-xxxx`) — chaque retour intégré recevra le sien. **Les forges aussi** peuvent déposer un
+lot avec ce gabarit, ciblant n'importe quelle autre forge (remise : `input\00-retours\_arrivee\` du
+pilot, préfixé du nom de la forge émettrice).
+
+**Sidecar machine (obligatoire depuis le 08/08)** : à côté de ce lot, un fichier
+`<projet> - RETOURS - <AAAAMMJJ><indice>.tf.jsonl` (même nom que le `.md`) — une ligne JSON
+par élément visant une forge :
+`{"schema":1, "titre":…, "contenu":…, "demandeur":"<produit ou forge>", "source":"<lot +
+seq ledger>", "date_demande":…, "forges_cibles_initiales":[…], "score":{gain,preuve,effort}
+si estimable, "preuve_du_cout":…, "classe":"<clé de todo\CLASSES.json, au pilot>"}`. **JAMAIS
+d'id** : les ids TF sont frappés à l'ingestion par le pilot. Le sidecar est ce qui rend la
+remontée automatique — le `.md` reste la lecture humaine.
+
+**La classe est obligatoire depuis le 03/09/2026** (mandat d'amélioration continue) : chaque ligne
+du sidecar désigne UNE classe du référentiel du pilot, `todo\CLASSES.json`, lu au pilot à chaque
+lot (chez le produit, `forge\retours\CLASSES.json` en est le relais, TF-1821). Une classe est le défaut généralisé que ce retour illustre — la
+règle qui aurait évité le retour — jamais une famille. Lot sans classe, ou à classe inconnue :
+**refusé à l'ingestion**, avec les clés proches. **Aucune clé ne convient ?** C'est un défaut
+vraiment neuf, et il a sa sortie conforme (TF-1128, 15/09/2026) : la ligne porte la clé RÉSERVÉE
+`"classe": "classe-a-creer"` et `"classe_proposee": {"cle": "…", "famille": "…", "libelle": "…"}`
+(une famille existante, une clé qui n'existe pas encore), et le `.md` nomme la clé proposée, sa
+famille et son libellé dans la section « La règle qui aurait évité le retour ». Le lot entre ; le
+pilot crée la classe dans son référentiel et y rattache le retour. Une classe ne se crée jamais
+dans un sidecar, et une clé approchée choisie faute de mieux fausse le compte des récidives. Un retour dont la classe est déjà
+close chez le pilot entre quand même, **marqué récidive** — c'est précisément l'information
+que la factory cherche : une correction qui n'a pas redescendu jusqu'à vous.
+
+**Le sidecar se juge avant la remise (LOT-SIDECAR, TF-1591, 13/10/2026)** : `forge\retours\oracle-lot.mjs`
+(1.6.0) lit aussi le sidecar et rejoue les rejets de la porte qui se décident sur lui seul : JSON
+valide, `schema` 1, aucun `id`, les cinq champs obligatoires, aucun caractère de contrôle, la classe
+(présente, connue de `CLASSES.json`) et, pour `classe-a-creer`, une `classe_proposee` complète, d'une
+clé neuve, d'une famille connue, nommée dans le `.md`. Le 03/10, deux lots ont été refusés pour une
+`classe_proposee` absente alors que leur contrôle de remise rendait PASS : il ne regardait pas le
+sidecar. Depuis le 22/11/2026 (TF-2761), un motif que la porte refuse est un **échec** chez vous aussi
+(verdict FAIL, sortie 1, et `--remettre` ne copie rien au sas) : le 21/11, le contrôle rendait PASS en
+annonçant lui-même le refus, et 10 lots sur 11 sont partis ainsi. La règle LOT-OCTETS (TF-2777) refuse de
+même un caractère de contrôle dans le `.md` du lot, le plus souvent un NUL né d'un chemin Windows
+`\00-retours` écrit dans une chaîne non brute. Corriger le sidecar avant la remise ; ce qui exige le registre du pilot (rectification
+d'un id inconnu, doublon strict) ne se rejoue pas chez vous. Dans le `.md`, rappeler le numéro du
+retour (« **RT-xxx** : … clé proposée ») sur la ligne de chaque proposition de classe.
+
+**Une règle de forme neuve avertit d'abord (TF-1570, 13/10/2026)** : l'héritage qui porte une règle
+n'atteint un produit qu'à sa prochaine ouverture, et le 01/10 deux lots conformes à leur outillage ont
+été refusés par une règle entrée trois jours plus tôt. Depuis `oracle-lot.mjs` 1.7.0, une règle de
+section dont le seuil est postérieur au 13/10/2026 rend un avertissement, puis un refus, pour les lots
+datés de moins de sept jours après son seuil ; le message dit jusqu'à quel jour. Rafraîchir l'héritage à
+l'ouverture évite d'attendre la fin du délai.
+
+**L'indice est PRIS dès que le lot est remis (R-49, TF-0884, 08/09)** : avant d'écrire un lot,
+demander l'indice libre du jour — `node scripts\allouer-indice.mjs` — plutôt que de reprendre
+celui qu'un mandat nomme. Une autre session du même produit a pu remettre un lot du jour que ce
+dossier ne porte pas (RP-217, 12/11/2026 : le lot de l'une a été écrasé par celui de l'autre au sas) :
+l'indice d'un lot se lit donc dans `forge\retours\` ET dans le sas, juste avant l'écriture,
+`node scripts\allouer-indice.mjs --dossier forge\retours --prefixe "<projet> - RETOURS - " --extension .md --porte prefixe --aussi "<sas du pilot>"`. Le 06/09, un compte rendu a pris l'indice « a » que son mandat citait,
+déjà porté par un lot du même produit remis et **ingéré le matin même** ; une écriture ordinaire
+l'a remplacé, et *aucun contrôle ne s'y est opposé* — ni ce gabarit, qui l'écrit pourtant, ni
+l'oracle de forme, ni la boîte d'entrée, qui ne l'aurait vu qu'à l'ouverture suivante. L'histoire
+du registre aurait divergé du fichier : le registre porte les candidatures du texte d'origine, le
+disque un autre texte, et plus rien ne les rapproche. Depuis, **R-49** de `oracle-lot-retours`
+refuse un lot dont le chemin est déjà ingéré sous une AUTRE empreinte, et prescrit l'indice
+suivant. Le geste de réparation, s'il est déjà trop tard : restaurer le lot d'origine depuis git,
+puis remettre le nouveau texte sous l'indice suivant.
+
+**Chercher au registre avant de déclarer un retour neuf (TF-1757, 15/10/2026)** : un retour qui dit
+« aucun item » au registre du pilot porte, dans une section `## Rattachement`, la recherche qui le
+prouve : **la commande jouée, mot pour mot, et le nombre de lignes qu'elle a trouvées**, sortie
+complète. Une sortie bornée (`head`, `-n`, `--max-count`, `Select-Object -First`) n'est pas une
+recherche : le total se dit à côté, ou la borne se retire. Chaque item trouvé se cite par son id
+(`TF-xxxx`) ; le retour qui le recoupe s'y rattache au lieu d'entrer comme neuf. *Le fait* : le
+15/10/2026, un retour déclaré sans item doublonnait TF-1201, déjà corrigé la veille ; la recherche
+avait été tronquée à 5 lignes par `head -5`, et la ligne de TF-1201 était la sixième.
+
+```
+## Rattachement
+
+Registre interrogé le <JJ/MM/AAAA> : `<commande jouée, sans borne>` → <N> ligne(s) trouvée(s).
+Items recoupés : <TF-xxxx (ce qu'il porte) — ou « aucun »>.
+```
+
+**Rectifier un retour déjà remis (TF-0703, 31/08)** : un lot remis ne se modifie JAMAIS — et
+c'est cette immuabilité qui force à déclarer une erreur plutôt qu'à l'effacer. Le geste
+complémentaire passe par un NOUVEAU lot : une ligne de sidecar portant deux champs optionnels,
+`"rectifie":"TF-xxxx"` (l'id du registre pilot visé — il figure dans `TODO-PRODUIT.md` et dans
+les lots de travaux reçus) et `"nature_de_la_rectification"` parmi `fait_errone`,
+`cause_erronee`, `annule`. Le `contenu` dit ce qui était faux et ce qui est vrai, preuve à
+l'appui. À l'ingestion, cette ligne **marque l'item visé** (aucun id neuf) au lieu de créer un
+doublon sans lien ; un `rectifie` inconnu du registre est refusé en bloc — une rectification qui
+porte à côté ferait croire l'erreur corrigée.
+
+**Sidecar hors format (TF-0196, 14/08)** : `ingerer-lot.mjs` rejette le lot ENTIER, motif par
+motif, et le registre reste intact — c'est voulu, un rejet atomique vaut mieux qu'une
+candidature mal formée. Côté pilot, `todo\normaliser-lot.mjs <sidecar>` convertit la forme
+« lot de retours » (`reference`, `gravite`, `preuve`, `proposition`) vers ce contrat et écrit
+un **dérivé** `.normalise.tf.jsonl` — l'original reçu n'est jamais modifié. Il **refuse** deux
+choses plutôt que de les deviner : un titre où aucune forge n'est nommée (la cible ne se
+devine pas — écrire « `<forge>` : … » en tête du titre), et un retour sans preuve.
+**Ids uniques par produit** : préfixe par forge (RT/RC/RD/RV/RA/RS) + numéro **jamais
+réutilisé** — continuer la séquence des lots précédents du même produit. Jugé depuis le
+14/09/2026 (règle LOT-IDS de `forge\retours\oracle-lot.mjs`, TF-1039) : un identifiant déjà
+défini par un lot antérieur du même produit est refusé, et le premier libre est donné.
+
+**Pièce jointe d'un lot (TF-1215, 13/10/2026)** : une étude, un rapport d'audit ou toute pièce que
+le lot annonce se nomme d'après lui, `<projet> - RETOURS - AAAAMMJJ<indice> - PJ - <libellé>.<extension>`,
+et se remet avec lui dans le sas `_arrivee\`. Ainsi nommée, elle n'est ni un lot sans sidecar ni un
+lot sans sections R-45 et R-46 : la boîte d'entrée du pilot (règle B10) vérifie seulement que le lot
+dont elle porte le nom existe, dans la boîte ou dans `old\` s'il est ingéré. Un `.md` qui ne suit pas
+cette convention reste jugé comme un lot et demande son sidecar.
+
+---
+
+## <forge concernée> (`factory-forge-<nom>`)
+
+<Une phrase de contexte : ce que le run/l'usage a coûté ou révélé sur cette forge.>
+
+| id | Gravité | Portée | Retour (fait observé, avec preuve : fichier, message, mesure) | Proposition esquissée |
+|---|---|---|---|---|
+| <RX-n> | <gravité> | <générique | produit+générique> | <le fait, pas l'opinion> | <piste, jamais obligatoire> |
+
+**Portée** (R-45, 21/08) : *générique* — le défaut vaut pour tout projet employant la forge ;
+*produit+générique* — le produit l'a corrigé chez lui ET la classe vaut ailleurs. Une remarque
+de portée purement PRODUIT ne figure pas ici : elle va en section « Remarques restées au
+produit », avec son verdict de généralisation.
+
+<répéter la section par forge concernée — y compris `pilot` pour les auto-retours>
+
+## Remarques restées au produit
+
+<!-- SECTION OBLIGATOIRE depuis le 21/08/2026 (règle R-45, mandat humain). Elle est vérifiée
+     par `oracle-boite-entree` B6 et refusée à l'ingestion si elle manque. -->
+
+Ce que le produit a corrigé chez lui et **n'a pas remonté** — parce que le défaut lui semblait
+propre à son code, à ses données, à son client. Chacune porte un **verdict de généralisation** :
+*rien de généralisable, parce que…*, ou *généralisable → et le retour est alors REMONTÉ
+ci-dessus, pas seulement mentionné ici*.
+
+*Pourquoi cette section existe.* Un lot du 20/08 disait, mot pour mot : « Le lot ne remonte pas
+ces défauts, qui appartiennent au produit. » Le tri était honnête et le raisonnement juste ;
+il était surtout **invisible**. Les défauts de forme les plus coûteux de l'écosystème — largeur
+de lecture, tableaux illisibles au mobile, états vides absents — ont tous commencé leur vie
+comme « un défaut de ce livrable-là ». Ce qui se perd n'est pas le défaut : c'est la **classe**
+du défaut. Une remarque écartée sans verdict écrit est une leçon qu'aucune session ne
+retrouvera.
+
+| Remarque (chez le produit) | Corrigée comment | Généralisable ? | Verdict |
+|---|---|---|---|
+| <ce qui a été constaté> | <le correctif local> | <non \| oui> | <le motif, en une phrase — si oui, l'id de la remarque remontée ci-dessus> |
+
+**Si aucune remarque n'est restée au produit**, l'écrire : « Aucune remarque n'est restée au
+produit sur ce lot — vérifié par <qui>, le <date>. » Une section vide se lit comme un oubli,
+et l'omission ne vaut pas décision.
+
+## Retours sur les documents produits
+
+<!-- SECTION OBLIGATOIRE depuis le 22/08/2026 (règle R-46, mandat humain du 21/08). Vérifiée
+     par `oracle-boite-entree` B7 et refusée à l'ingestion si elle manque. -->
+
+Ce que la factory demande à chaque projet : **ce qui a manqué, gêné ou dû être ajouté à la main**
+dans les documents produits à partir d'un gabarit de `gabarits\documents\`. C'est le seul canal
+par lequel un gabarit s'améliore — un gabarit ne vieillit pas en s'usant, il vieillit parce que
+la réalité des projets le dépasse et que personne ne le dit.
+
+Reporter le couple **`gabarit` + `version_du_gabarit`** que le document porte dans son en-tête :
+sans lui, un retour dit « il manquait une section » et personne ne sait à quoi l'appliquer.
+
+**Le document vient d'un gabarit qui ne se marque pas** (TF-1752, 15/10/2026) : les familles de
+`gabarits\documents\` rendent leur couple en pied de page (règle G4 d'`oracle-gabarits-documents`),
+mais un gabarit venu d'ailleurs, comme ceux du kit d'audit de forge-audit, n'émet aucun `gd-…`. Ne
+pas écrire de mémoire ce que le document aurait dû déclarer, et ne pas employer la formule d'absence
+ci-dessous : elle serait fausse, puisque le document vient bien d'un gabarit. Écrire dans la colonne
+« Gabarit employé + version » : `gabarit non marqué : <chemin du gabarit à sa source> — aucune
+version du gabarit déclarée dans le document`, puis remonter le défaut au porteur du gabarit, dans
+la section de sa forge. Le 25/09/2026, `grep -io "gd-[a-z0-9-]*"` ne rendait rien sur un rapport
+d'audit et une fiche de sécurité issus du kit d'audit.
+
+| Document produit | Gabarit employé + version | Ce qui a manqué | Ce qui a GÊNÉ LE LECTEUR | Ajouté à la main | Portée |
+|---|---|---|---|---|---|
+| <nom du livrable remis> | <gd-xxx · 1.0.0> | <section absente, champ non prévu> | <ce que le destinataire a dit, pas ce qu'on suppose> | <ce qu'il a fallu écrire hors gabarit> | <générique \| ce projet seulement> |
+
+**Trois précisions qui font la valeur de ce retour** — sans elles, il n'est pas exploitable :
+
+- **« Ce qui a gêné le lecteur »** est un FAIT rapporté, pas une intuition d'auteur. Un
+  destinataire qui a demandé une information deux fois, qui a cherché une section ailleurs, ou
+  qui a refusé une mise en page : voilà de la matière. « On aurait pu mieux faire » n'en est pas.
+- **« Ajouté à la main »** est le signal le plus fort du lot. Ce qu'un projet a dû écrire hors
+  gabarit est, presque toujours, une section que le gabarit devrait porter — et c'est ainsi que
+  les quatre premières familles ont été extraites, en relevant ce que les projets refaisaient.
+- **La portée** se tranche ici comme partout (R-45) : ce qui est propre au projet reste chez lui,
+  ce qui vaut pour la famille remonte. Dans le doute, remonter — le tri se fait mieux au registre
+  qu'en silence.
+
+**Si aucun document n'a été produit depuis un gabarit de la bibliothèque**, l'écrire :
+« Aucun document produit depuis un gabarit de la bibliothèque sur ce lot. » Une section vide se
+lit comme un oubli, et l'omission ne vaut pas décision.
+
+## Documents mûrs
+
+<!-- SECTION OBLIGATOIRE depuis le 29/09/2026 (règle R-57, décision humaine du 24/09, entrée au
+     pilot le 28/09). Vérifiée par `oracle-lot-retours` (R-57 : la section et son verdict ; LOT-MURS : chez le produit, tout
+     document de `output\` repris cinq fois et plus est NOMMÉ) — et refusée à l'ingestion. -->
+
+Les documents du produit dont la **forme** a mûri : ceux que leur lecteur a jugés réussis
+(**mûr déclaré** — son verdict, cité mot pour mot et daté, vaut décision de remontée), et ceux que
+le produit a repris **cinq fois et plus** (**mûr mesuré** — `node forge\retours\oracle-lot.mjs --murs .`
+les liste). Chacun porte son **verdict de remontée** : *remonté* — sa forme devient une famille de
+`gabarits\documents\` ou des composants —, ou *reste au produit, parce que…*.
+
+*Pourquoi cette section existe.* Un gabarit barré et documenté par un projet est resté chez lui,
+invisible aux autres (13/08) ; les quatre premières familles de la bibliothèque n'ont été extraites
+que parce qu'on est allé chercher la matière, une fois, à la main. R-46 fait remonter ce qu'un
+gabarit a COÛTÉ ; rien ne faisait remonter un document qui en MÉRITAIT un. Le guide qui a fondé la
+règle comptait vingt-trois versions et un verdict de lecteur « vraiment tops » quand il est remonté.
+
+| Document (chemin CHEZ LE PRODUIT, jamais une copie) | Versions | Oracles du dernier indice | Verdict humain cité | Composants qu'il porte | Verdict de remontée |
+|---|---|---|---|---|---|
+| <`output\…\<Marque> - <Objet> - AAAAMMJJ<i>.html`> | <n> | <check_html · render_page · design> | <« … », le JJ/MM/AAAA — ou « aucun »> | <recherche, onglets…> | <remonté : gd-… — ou — reste au produit, parce que…> |
+
+**Forme, jamais matière.** La remontée hisse une structure et des composants, avec une instance
+FICTIVE : aucun livrable client n'entre dans le dépôt du pilot, qui est publié (note de provenance
+de `input\02-entrants-html\`, 27/08/2026). Le lot cite le document par son chemin chez le
+produit ; c'est le pilot qui extrait la forme, en lisant ce chemin comme une donnée.
+
+**Une déclaration vaut pour la suite** : un document nommé ici, avec son verdict, n'a pas à l'être
+de nouveau dans les lots suivants du même produit.
+
+**Si aucun document n'a mûri**, l'écrire : « Aucun document mûr sur ce lot. » Une section vide se
+lit comme un oubli, et l'omission ne vaut pas décision.
+
+## Garde-fou de plateforme relevé
+
+<!-- SECTION OBLIGATOIRE depuis le 02/10/2026 (règle GFP-LOT, TF-1526). Vérifiée par
+     `oracle-lot-retours` et refusée à l'ingestion si elle manque. -->
+
+Une contrainte de plateforme (stratégie Azure Policy, processus du client décrit par l'humain…)
+qui a REFUSÉ ou CONTRAINT un déploiement se remonte ici : c'est le seul canal par lequel un
+garde-fou heurté par ce produit peut servir au suivant (`references\GARDE-FOUS-PLATEFORME.json`,
+D-37 (a) du 01/10/2026).
+
+Deux cas :
+
+- **Garde-fou déjà au registre, confirmé par ce relevé** : citer son identifiant `GFP-nnn` et la
+  date du relevé qui le confirme.
+- **Garde-fou NOUVEAU**, absent du registre : décrire « nouveau garde-fou » suivi de ses champs —
+  plateforme, mécanisme, effet (Deny, process bloquant…), portée, ce qu'il VISE, ce qu'il REFUSE,
+  et la date à laquelle il a été heurté. Le pilot l'inscrit au registre après vérification
+  (`node scripts\verifier-garde-fous.mjs --registre`) ; cette section ne juge que la remontée, pas
+  la justesse du garde-fou décrit.
+
+**Si aucun garde-fou de plateforme n'a été relevé sur ce lot**, l'écrire : « Aucun garde-fou de
+plateforme relevé sur ce lot. » Une section vide se lit comme un oubli, et l'omission ne vaut pas
+décision.
+
+## Confirmations positives
+
+<Ce qui a TENU en conditions réelles — aussi précieux que les défauts : permet de clore les
+entrées du backlog comme « vérifiées ». Citer les correctifs concernés.>
+
+## Ordre recommandé
+
+1. <le retour au meilleur rapport gain/effort, et pourquoi>
+2. …
+
+## La règle qui aurait évité le retour (TF-0779 — 02/09/2026)
+
+Chaque retour de ce lot qui suit un RETOUR HUMAIN (une correction demandée par le destinataire,
+pas un défaut trouvé par un oracle) nomme, dans sa colonne « Proposition esquissée », **la règle
+qui aurait évité ce retour** — une règle existante du socle, d'un gabarit ou d'un oracle, citée
+par sa référence — ou déclare qu'aucune règle ne le couvre, ce qui déclenche la règle § 4 de
+quality-oracles (domaine sans oracle → en définir un). *Pourquoi* : une correction après retour
+humain traite le symptôme (la hauteur d'une ligne, la largeur d'un tableau) ; nommer la règle
+force à traiter la CLASSE, et un lot qui ne peut nommer aucune règle dit exactement où le socle
+a un trou. Contrôle côté restitution : une puce « corrigé » sans contrôle rouge → vert couvrant
+la classe est signalée (oracle-synthese, TF-0779).

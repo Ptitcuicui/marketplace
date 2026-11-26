@@ -1,0 +1,2463 @@
+#!/usr/bin/env node
+/**
+ * oracle-ecriture.mjs — LA FORME DES TEXTES DU PILOT EST JUGÉE À CHAQUE TOUR, LEUR STYLE NE
+ * L'ÉTAIT PAR RIEN.
+ *
+ * POURQUOI (mandat humain du 12/09/2026, décisions D-1 (a) et D-3 (a) de la synthèse 20260911j ;
+ * analyse L99 `output\03-etudes\2026-09\20260911-L99-regles-d-ecriture-factory.md`). Une restitution passe
+ * sous S1-S41, un document sous M7-M18, une page sous L1-L31 : la STRUCTURE d'un livrable est
+ * tenue par des oracles exécutés. Sa PROSE ne l'était par personne — un texte pouvait sortir
+ * conforme à son gabarit, ponctuellement juste, et écrit dans la cadence mécanique que les deux
+ * catalogues de signes (Wikipédia FR « Aide:Identifier l'usage d'une IA générative », Wikipédia EN
+ * « Signs of AI writing ») décrivent : annonces qui disent qu'on va dire, clôtures qui résument ce
+ * qu'on vient de lire, emphase sans fait, attributions à « de nombreuses études ».
+ *
+ * CE QUE CET ORACLE COMPTE, ET CE QU'IL NE COMPTE PAS. Il compte des tournures par DENSITÉ (pour
+ * mille mots de prose) et par FAMILLE, jamais un mot isolé. C'est la leçon N4, et elle est la
+ * raison d'être de la forme : « un oracle qui crie sur l'usage légitime se fait désactiver dans la
+ * semaine ». « Crucial » a sa place une fois dans un document ; un tiret d'incise est la
+ * ponctuation normale du français. Ce qui trahit, c'est l'accumulation — Wikipédia EN : « one or
+ * two coincidental, many indicate AI ». Les familles, leurs motifs et leurs seuils vivent DANS UNE
+ * DONNÉE (`references\tics-redactionnels.json`, loi transverse n° 4) : recalibrer ne demande pas de
+ * republier l'oracle.
+ *
+ * Règles : EC-1 densité par famille (PASS / AVERT / FAIL, non jugée sous `mots_minimum`) ·
+ * EC-2 phrases longues en série · EC-3 profondeur de puces (S7 étendu à tout Markdown) ·
+ * EC-4 emphase de structure (gras de paragraphe, puces emoji) · EC-5 attaques répétées (AVERT
+ * seulement) · EC-6 antériorité (un texte normatif antérieur à la doctrine rend SKIP, jamais FAIL).
+ * EC-7 terme proscrit par le LEXIQUE DU DESTINATAIRE, lu dans le socle du produit (TF-1045).
+ * EC-8 tournure d'annonce à une POSITION qui la refuse — titre, en-tête de colonne (TF-1137).
+ * EC-9 valeur, heure ou date écrite en toutes lettres (E-14, retour humain du 16/09/2026).
+ * EC-11 question de décision dont le paragraphe ne nomme rien, hors restitution (AVERT seulement,
+ * TF-1392, D-2 (a) du 13/10/2026).
+ * EC-12 énumération numérotée « 1) … 2) … 3) » sur une même ligne, hors restitution (E-11, AVERT seulement,
+ * TF-1847, 18/10/2026) ; les restitutions sont jugées par S80 d'oracle-synthese, bloquante chez elles.
+ * EC-17 une ligne qui compare deux montants sans rubrique « Compris, non compris » (E-18, AVERT, TF-1971, D-114 (a)).
+ * EC-18 texte corrompu : les séquences « Ã© », « Ã¨ », « â€ », « ðŸ » (UTF-8 relu en Windows-1252) hors bloc de code, code en ligne
+ * et guillemets français (FAIL, TF-2604, 16/11/2026).
+ * EC-16 une ligne qui porte deux « $ » non échappés hors code s'affiche en formule mathématique dans l'aperçu :
+ * devise en lettres ou signe échappé (AVERT seulement, TF-1977, 29/10/2026, restitution comprise).
+ * EC-13 la revue des listes de tournures est datée et n'est pas dépassée : chaque famille de la donnée porte une
+ * `revue_prevue` (AAAA-MM-JJ) ; une date absente ou dépassée avertit, sur tout texte jugé (AVERT seulement,
+ * TF-1926, décision D-48 (a) du 19/10/2026).
+ * EC-14 concision d'un écrit destiné à un tiers (en-tête `destinataire:` autre que « humain », ou type de nom courriel,
+ * courrier, lettre, fiche) : paragraphe de 3 phrases et 60 mots au plus, phrase de 25 mots au plus, aucune énumération de
+ * plus de 3 éléments en prose. EC-15 langue : la langue dominante du texte est la langue attendue (`--langue`, sinon l'en-tête
+ * `langue:`, sinon « fr »). Les deux rendent le statut A_REJOUER, jamais FAIL : le verdict reste PASS, la sortie porte
+ * `a_rejouer` (passages, consigne, passe n sur 3) et la session productrice réécrit puis rejoue, 3 passes au plus (TF-1960,
+ * D-78 (c) amendée du 26/10/2026 ; references\ECRITURE.md, « La boucle de réécriture »).
+ * EC-19 une phrase de plus de 25 mots · EC-20 un paragraphe de plus de 6 phrases · EC-21 une consigne (cellule d'une
+ * colonne « Action », élément numéroté sous un titre d'étapes) qui ne commence pas par un verbe. Les trois en
+ * AVERTISSEMENT seulement, seuils et listes dans la clé `plancher_ste` de la donnée (D-230 (b) du 22/11/2026 : le
+ * plancher se resserre vers l'ASD-STE100, l'anglais technique simplifié des manuels de maintenance aéronautique).
+ * Un AVERT n'échoue jamais : il nomme, et c'est ce qui permet à l'oracle de rester branché.
+ *
+ * Usage : node oracles\oracle-ecriture.mjs <fichier.md> [--donnee <tics.json>] [--chemin-relatif <x>] [--aujourd-hui AAAA-MM-JJ] [--langue <fr|en|…>] [--passe <1-9>] [--json]
+ *         node oracles\oracle-ecriture.mjs --baseline <dossier> [--donnee <tics.json>]
+ *         node oracles\oracle-ecriture.mjs --self-test
+ * Exit : 0 PASS ou SKIP · 1 FAIL · 2 erreur (fichier introuvable, donnée illisible).
+ */
+import { existsSync, readFileSync, writeFileSync, mkdtempSync, mkdirSync, rmSync, readdirSync } from "node:fs";
+import { chargerLexique, termesEmployes } from "./lib-lexique.mjs";
+import { enumerationsEnLigne } from "./lib-enumeration-liste.mjs";
+import { lecteurDeclare } from "./lib-lecteur-declare.mjs";
+import { join, dirname, resolve, relative, basename } from "node:path";
+import { tmpdir } from "node:os";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+
+const ICI = dirname(fileURLToPath(import.meta.url));
+const RACINE = join(ICI, "..");
+const DONNEE_PAR_DEFAUT = join(RACINE, "references", "tics-redactionnels.json");
+const VERSION = "1.2.0";
+const NOM = "oracle-ecriture";
+
+const NON_JUGE_ORACLE = [
+  "la justesse d'une glose (S20/S23/M18)",
+  "la structure imposée par un gabarit (S1-S41 pour les restitutions, M7/M10/M14/M18 pour les documents) — ces règles restent jugées par leurs oracles",
+  "EC-14 : le destinataire réel d'un écrit (déduit de l'en-tête ou du type de nom du fichier, jamais du contenu) ; une série de compléments circonstanciels se repère comme une énumération",
+  "EC-15 : la qualité de la langue (seule la dominante est lue), un texte mixte à parts proches, une langue sans liste de mots vides",
+];
+
+// ── LA PROSE ─────────────────────────────────────────────────────────────────────────────────
+//
+// Compter des tournures dans un Markdown brut reviendrait à compter dans du code : un bloc ```…```
+// qui montre une tournure interdite n'est pas une faute de style, c'est une CITATION. L'extraction
+// garde le nombre de lignes du fichier d'origine — un verdict qui ne sait pas dire « ligne 47 » ne
+// se corrige pas.
+
+const MOT = /[\p{L}\p{N}'’-]+/gu;
+
+/** Le compte de mots d'un texte, à l'Unicode (un mot accentué est un mot). */
+export function compterMots(texte) {
+  return (String(texte).match(MOT) || []).length;
+}
+
+/** Une ligne de séparation de tableau (`|---|---|`) : de la mise en page, pas de la prose. */
+const estSeparateurTableau = (l) => /\|/.test(l) && /-/.test(l) && /^[\s:|-]+$/.test(l);
+
+/**
+ * Découpe un Markdown en deux vues alignées ligne à ligne sur l'original :
+ *   · `proseLignes` — la PROSE seule (hors front matter, blocs et spans de code, URL, balises,
+ *     séparateurs de tableau ; chevrons de citation, dièses de titre et marqueurs de puce retirés) ;
+ *   · `horsCode` — les lignes brutes hors code, pour les règles de STRUCTURE (puces, gras) qui ont
+ *     besoin des marqueurs que la prose, elle, jette.
+ */
+function decouper(texte) {
+  const src = String(texte).replace(/\r\n?/g, "\n").split("\n");
+  const horsCode = new Array(src.length).fill("");
+  const proseLignes = new Array(src.length).fill("");
+  const cellules = src.map(() => []);
+  let dansCode = false;
+  let dansFrontMatter = false;
+  for (let i = 0; i < src.length; i++) {
+    const brut = src[i];
+    if (i === 0 && /^---\s*$/.test(brut)) { dansFrontMatter = true; continue; }
+    if (dansFrontMatter) { if (/^(---|\.\.\.)\s*$/.test(brut)) dansFrontMatter = false; continue; }
+    if (/^\s*(```|~~~)/.test(brut)) { dansCode = !dansCode; continue; }
+    if (dansCode) continue;
+    horsCode[i] = brut;
+    if (estSeparateurTableau(brut)) continue;
+    let l = brut;
+    l = l.replace(/^\s*(?:>\s?)+/, "");                    // citation
+    l = l.replace(/^\s*#{1,6}\s*/, "");                    // titre
+    l = l.replace(/^\s*(?:[-*+]|\d+[.)])\s+/, "");         // puce
+    l = l.replace(/`[^`]*`/g, " ");                        // spans de code
+    l = l.replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1 ");      // liens : le texte reste, la cible part
+    l = l.replace(/<[^>\n]{1,200}>/g, " ");                // balises HTML
+    l = l.replace(/https?:\/\/\S+|www\.\S+/g, " ");        // URL nues
+    // Les CELLULES d'un tableau : leur texte reste prose, mais la barre devient une frontière —
+    // une ligne de six cellules n'est pas une phrase de soixante-quinze mots. Le remplacement
+    // est d'égale longueur, donc les offsets relevés restent ceux de la ligne finale.
+    // TF-1784 (lot Produit-83 20261015b, RT-9) : un tiret SEUL dans une cellule est la marque d'une
+    // cellule vide (MODELE-DONNEES.md la prescrit pour une clé absente), pas un tiret d'incise. Il
+    // devient un blanc d'égale longueur ; un tiret entouré de texte dans la cellule reste compté.
+    if (/^\s*\|/.test(l)) l = l.replace(/(?<=\|[ \t]*)[—–-]{1,2}(?=[ \t]*(?:\||$))/g, (m) => " ".repeat(m.length));
+    l = l.replace(/\|/g, (m, offset) => { cellules[i].push(offset); return " "; });
+    proseLignes[i] = l;
+  }
+  return { src, horsCode, proseLignes, cellules };
+}
+
+/** La prose d'un Markdown, lignes alignées sur le fichier d'origine. */
+export function prose(texte) {
+  return decouper(texte).proseLignes.join("\n");
+}
+
+// ── LE TEXTE D'UNE PAGE HTML (TF-1968, 29/10/2026) ───────────────────────────────────────────
+//
+// LE FAIT (lot Produit-84 20261019e, RT-17). Le plancher d'écriture n'était joué que sur les `.md` : le hook
+// d'écriture écarte tout autre fichier, et ECRITURE.md notait « revue (HTML, PowerPoint) ». Une page de 807 phrases,
+// dont 15 de plus de 35 mots et 45 de plus de 25, n'a été jugée que parce que l'agent en a extrait le texte à la main.
+// `texteDeHtml` fait cette extraction : le texte VISIBLE de la page en Markdown, que l'oracle juge comme n'importe quel
+// texte. Les titres deviennent des titres, les éléments de liste des puces, les lignes de tableau des lignes à barres, les
+// blocs des paragraphes ; les scripts, styles, SVG, blocs et spans de code disparaissent, comme le code d'un Markdown.
+// `lignes[i]` donne la ligne de la page d'où vient la ligne i du texte : un verdict dit « ligne 214 » de la PAGE.
+const ENTITES_HTML = { amp: "&", lt: "<", gt: ">", quot: "\"", apos: "'", nbsp: " ", laquo: "«", raquo: "»", hellip: "…",
+  mdash: "—", ndash: "–", rsquo: "’", lsquo: "‘", eacute: "é", egrave: "è", ecirc: "ê", agrave: "à", ccedil: "ç", euro: "€" };
+const decoderEntites = (s) => String(s)
+  .replace(/&#x([0-9a-f]{1,6});/gi, (m, h) => { try { return String.fromCodePoint(parseInt(h, 16)); } catch { return " "; } })
+  .replace(/&#(\d{1,7});/g, (m, d) => { try { return String.fromCodePoint(Number(d)); } catch { return " "; } })
+  .replace(/&([a-z]+);/gi, (m, n) => ENTITES_HTML[n.toLowerCase()] ?? m);
+const BALISES_DE_BLOC = new Set(["p", "div", "section", "article", "header", "footer", "main", "aside", "nav", "blockquote",
+  "figure", "figcaption", "table", "thead", "tbody", "tfoot", "ul", "ol", "dl", "dt", "dd", "details", "summary", "form",
+  "fieldset", "hr", "address", "caption"]);
+
+/** Le texte visible d'une page HTML, en Markdown : `{ texte, lignes }` (`lignes[i]` : ligne de la page, 1-based). */
+export function texteDeHtml(html) {
+  const source = String(html).replace(/\r\n?/g, "\n");
+  const sorties = [];                                   // { t, l }
+  const nouvelleLigne = (l, t = "") => { sorties.push({ t, l }); };
+  // Un saut de bloc laisse une ligne VIDE entre deux blocs : c'est elle qui sépare deux paragraphes dans un Markdown.
+  const saut = (l) => {
+    let vides = 0;
+    for (let k = sorties.length - 1; k >= 0 && vides < 2 && sorties[k].t.trim() === ""; k--) vides++;
+    for (; vides < 2; vides++) nouvelleLigne(l);
+  };
+  const ajouter = (txt, l) => {
+    if (!sorties.length) nouvelleLigne(l);
+    const derniere = sorties[sorties.length - 1];
+    // Une ligne ouverte par un saut de bloc prend la ligne de la page de son PREMIER texte, pas celle de la balise qui l'a ouverte.
+    if (derniere.t.trim() === "" && txt.trim() !== "") derniere.l = l;
+    derniere.t += txt;
+  };
+  const re = /<!--[\s\S]*?-->|<![^>]*>|<\?[^>]*>|<(script|style|head|svg|noscript|template|pre|code|math|object|iframe)\b[^>]*>[\s\S]*?<\/\1\s*>|<(\/?)([a-zA-Z][\w:-]*)\b[^>]*>|[^<]+|</g;
+  let ligne = 1;
+  let m;
+  while ((m = re.exec(source))) {
+    const l = ligne;
+    ligne += (m[0].match(/\n/g) || []).length;
+    if (m[0].startsWith("<!") || m[0].startsWith("<?") || m[1]) { ajouter(" ", l); continue; }  // commentaire, doctype, code, script, style : une espace
+    if (m[3]) {
+      const nom = m[3].toLowerCase(), ferme = m[2] === "/";
+      if (/^h[1-6]$/.test(nom)) { saut(l); if (!ferme) ajouter("#".repeat(Number(nom[1])) + " ", l); else saut(l); }
+      else if (nom === "li") { nouvelleLigne(l, ferme ? "" : "- "); }
+      else if (nom === "tr") { nouvelleLigne(l, ferme ? "" : "| "); }
+      else if (nom === "td" || nom === "th") { if (ferme) ajouter(" | ", l); }
+      else if (nom === "br") { ajouter(" ", l); }
+      else if (BALISES_DE_BLOC.has(nom)) { saut(l); }
+      else { ajouter(" ", l); }                          // balise en ligne : le texte voisin se rejoint par une espace
+      continue;
+    }
+    if (m[0] === "<") { ajouter("<", l); continue; }
+    const txt = decoderEntites(m[0]).replace(/\s+/g, " ");
+    if (txt.trim()) ajouter(txt, l);
+    else ajouter(" ", l);
+  }
+  const net = sorties.map((s) => ({ t: s.t.replace(/[ \t]+/g, " ").trim(), l: s.l }));
+  return { texte: net.map((s) => s.t).join("\n") + "\n", lignes: net.map((s) => s.l) };
+}
+
+/** Rend une fonction offset → numéro de ligne (1-based, aligné sur le fichier d'origine). */
+function localisateur(texteProse) {
+  const debuts = [0];
+  for (let i = 0; i < texteProse.length; i++) if (texteProse[i] === "\n") debuts.push(i + 1);
+  return (offset) => {
+    let lo = 0, hi = debuts.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (debuts[mid] <= offset) lo = mid; else hi = mid - 1;
+    }
+    return lo + 1;
+  };
+}
+
+// TF-2345 : les balises d'un bloc de code dont le contenu se RECOPIE (un modèle de document), jamais une console.
+const BALISES_A_RECOPIER = new Set(["markdown", "md", "text"]);
+
+// Abréviations courantes : un point qui les suit ne clôt pas une phrase. La liste est COURTE et
+// écrite — deviner les abréviations par une heuristique produirait des phrases fantômes, donc des
+// verdicts EC-2 faux.
+const ABREVIATIONS = new Set([
+  "p", "ex", "cf", "etc", "n°", "no", "m", "mm", "mme", "mmes", "mlle", "dr", "pr", "al", "fig",
+  "vol", "art", "av", "env", "réf", "ref", "éd", "ed", "st", "ste", "jc", "ap", "min", "max", "sec", "chap",
+]);
+
+/**
+ * Les phrases de la prose : `{ texte, debut (offset), mots }`.
+ *
+ * `coupures` — les offsets où un BLOC commence (ligne vide, puce, titre, ligne de tableau,
+ * citation). Sans elles, une liste de douze puces sans point final ne fait qu'UNE phrase de
+ * deux cents mots, et EC-2 condamnerait une énumération correcte : mesuré sur la synthèse
+ * 20260911j, une « phrase » de 80 mots qui était en fait quatre puces. Un point n'est pas la
+ * seule fin de phrase d'un Markdown — un changement de bloc en est une aussi.
+ */
+export function phrases(texteProse, coupures = []) {
+  const out = [];
+  const pousser = (debut, fin) => {
+    const brut = texteProse.slice(debut, fin);
+    const gauche = brut.length - brut.trimStart().length;
+    const t = brut.trim();
+    if (t) out.push({ texte: t, debut: debut + gauche, mots: compterMots(t) });
+  };
+  const fins = [];
+  const re = /[.!?]+/g;
+  let m;
+  while ((m = re.exec(texteProse))) {
+    const fin = m.index + m[0].length;
+    if (fin < texteProse.length && !/\s/.test(texteProse[fin])) continue; // « p.ex », « 3.5 », « etc.) »
+    const avant = texteProse.slice(0, m.index);
+    const jeton = (/([\p{L}\p{N}°]+)$/u.exec(avant) || ["", ""])[1];
+    // TF-2334 (10/11/2026) : « h » précédé d'un nombre (« à 14 h. », « 8 h. ») est une heure, pas une abréviation : le point clôt la phrase.
+    // Sans cette exception, la lettre seule passait pour une initiale, deux phrases se soudaient et EC-2 comptait 1 phrase longue sur 2 au lieu de 0 sur 17.
+    const heure = /^h$/i.test(jeton) && /\d[\s  ]*$/.test(avant.slice(0, avant.length - jeton.length));
+    if (!heure && jeton && (ABREVIATIONS.has(jeton.toLowerCase()) || (jeton.length === 1 && /\p{L}/u.test(jeton)))) continue;
+    fins.push(fin);
+  }
+  for (const c of coupures) if (c > 0 && c < texteProse.length) fins.push(c);
+  fins.sort((a, b) => a - b);
+  let debut = 0;
+  for (const f of fins) {
+    if (f <= debut) continue;
+    pousser(debut, f);
+    debut = f;
+  }
+  pousser(debut, texteProse.length);
+  return out;
+}
+
+/** Les offsets de début de bloc : une phrase ne traverse ni une ligne vide ni un changement de bloc. */
+function coupuresDeBloc(proseLignes, horsCode, cellules = []) {
+  const coupures = [];
+  let offset = 0;
+  for (let i = 0; i < proseLignes.length; i++) {
+    const brut = horsCode[i] || "";
+    const structurel = /^\s*(?:[-*+]|\d+[.)])\s+/.test(brut) || /^\s*#{1,6}\s/.test(brut)
+      || /^\s*\|/.test(brut) || /^\s*>/.test(brut);
+    if (!proseLignes[i].trim() || structurel) coupures.push(offset);
+    for (const c of cellules[i] || []) coupures.push(offset + c);
+    offset += proseLignes[i].length + 1;
+  }
+  return coupures;
+}
+
+// ── LES OCCURRENCES D'UNE FAMILLE ────────────────────────────────────────────────────────────
+//
+// Trois régimes de motif, et chacun se lit dans la donnée plutôt que de se deviner :
+//   · `par_ligne: true` — le motif s'ancre en début de ligne (les transitions de remplissage
+//     n'en sont que là : « de plus » au milieu d'une phrase est du français) ;
+//   · famille `ponctuation-de-cadence` — le motif est un signe, pas un mot : aucune frontière
+//     de mot ne s'y applique, il se compte tel quel ;
+//   · les autres — frontière de mot Unicode, pour que « cruciale » compte et « crucialement »
+//     dans un mot composé ne déborde pas sur son voisin.
+function occurrences(famille, texteProse, proseLignes) {
+  const trouvees = [];
+  for (const m of famille.motifs || []) {
+    if (famille.cle === "ponctuation-de-cadence") {
+      for (const x of texteProse.matchAll(new RegExp(m.motif, "gu"))) trouvees.push({ offset: x.index, texte: x[0] });
+    } else if (m.par_ligne) {
+      const re = new RegExp(m.motif, "imu");
+      let offset = 0;
+      for (const ligne of proseLignes) {
+        const x = re.exec(ligne);
+        if (x) trouvees.push({ offset: offset + x.index, texte: x[0] });
+        offset += ligne.length + 1;
+      }
+    } else {
+      // `g` s'ajoute aux flags `iu` de la donnée pour ITÉRER : compter une famille demande toutes
+      // ses occurrences, pas la première.
+      const re = new RegExp(`(?<![\\p{L}\\p{N}])(?:${m.motif})(?![\\p{L}\\p{N}])`, "giu");
+      for (const x of texteProse.matchAll(re)) trouvees.push({ offset: x.index, texte: x[0] });
+    }
+  }
+  return trouvees.sort((a, b) => a.offset - b.offset);
+}
+
+const extrait = (texteProse, offset, n = 60) => texteProse.slice(offset, offset + n).replace(/\s+/g, " ").trim();
+const deuxDec = (x) => (Math.round(x * 100) / 100).toFixed(2);
+
+// ── LE JUGEMENT ──────────────────────────────────────────────────────────────────────────────
+
+// ── EC-14 ET EC-15 : UN ÉCRIT À UN TIERS, LA LANGUE (TF-1960, D-78 (c) amendée du 26/10/2026) ────
+//
+// Ces deux règles ont un statut que les autres n'ont pas : A_REJOUER. Il ne fait jamais échouer le
+// texte (le verdict reste PASS) ; il rend la liste précise des passages à réécrire et une consigne.
+// La session qui produit l'écrit le réécrit sur cette liste et rejoue l'oracle, 3 passes au plus
+// (references\ECRITURE.md, « La boucle de réécriture »). Les bornes et les listes vivent dans la
+// donnée (`ecrit_a_un_tiers`, `langue`) : loi n° 4, recalibrer ne republie pas l'oracle.
+
+/** Une chaîne repliée pour comparer : sans accents, minuscules, mots séparés par une espace. */
+const replierMots = (s) => String(s).normalize("NFD").replace(/[̀-ͯ]/g, "")
+  .toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+
+/** Les lignes `clé: valeur` de l'en-tête (front matter) d'un texte, clés en minuscules. */
+export function enTete(texte) {
+  const t = String(texte).replace(/^﻿/, "").replace(/\r\n?/g, "\n").split("\n");
+  const cles = {};
+  if (!/^---\s*$/.test(t[0] || "")) return cles;
+  for (let i = 1; i < t.length; i++) {
+    if (/^(---|\.\.\.)\s*$/.test(t[i])) break;
+    const m = /^([A-Za-z_][\w-]*)\s*:\s*(.*?)\s*$/.exec(t[i]);
+    if (m) cles[m[1].toLowerCase()] = m[2].replace(/^["']|["']$/g, "").trim();
+  }
+  return cles;
+}
+
+/**
+ * Le champ Objet d'un nom R-4 « <Marque> - <Objet> - AAAAMMJJ<indice>.<ext> » : c'est lui qui s'ouvre
+ * sur le type du livrable. Même convention que `objetDuNom` de oracle-gabarits-documents.mjs, étendue
+ * au nom sans date (« Client - Courriel relance.md ») ; une copie, parce que ce module lance son
+ * propre self-test dès qu'il est importé avec `--self-test` dans la ligne de commande.
+ */
+function objetDuNom(nomFichier) {
+  const base = String(nomFichier).replace(/\.[a-z0-9]+$/i, "");
+  const parts = base.split(" - ");
+  if (parts.length >= 2) return parts.slice(1).filter((p) => !/^\d{8}[a-z]?$/i.test(p.trim())).join(" ");
+  const date = /^(\d{8})[-_](.+)$/.exec(base);
+  return date ? date[2] : base;
+}
+
+/**
+ * Cet écrit est-il destiné à un tiers ? Rend `{ concerne, raison }`. Règle : l'en-tête `destinataire:`
+ * décide quand il existe (une valeur de `destinataires_internes` — « humain », « orchestrateur », « pilot »… — par son
+ * premier mot : document de travail, non concerné ; toute autre valeur : tiers) ; sinon le TYPE du nom du fichier (courriel, courrier, lettre, fiche…) décide, sauf
+ * exclusion nommée (une fiche de conception est un document de travail) ; sinon, PAR DÉFAUT (TF-2189, 06/11/2026), tout écrit sous un des
+ * `dossiers_juges_par_defaut` (`output/`) : une synthèse sans en-tête n'échappe plus à la règle faute de dire qui la lit. TF-2259 : ce jugement par
+ * défaut ne vaut que pour les écrits NEUFS, dont le nom porte une date égale ou postérieure à `dossiers_juges_par_defaut_depuis` (ou aucune date).
+ */
+export function ecritATiers(texte, nomFichier, conf, cheminRelatif = "") {
+  const interne = new Set((conf?.destinataires_internes || ["humain"]).map(replierMots));
+  const dest = enTete(texte).destinataire;
+  if (dest) {
+    // Le PREMIER MOT décide : « humain (commanditaire du conseil) » est un humain de la maison, comme « humain ».
+    return interne.has(replierMots(dest)) || interne.has(replierMots(dest).split(" ")[0])
+      ? { concerne: false, raison: `en-tête « destinataire: ${dest} » : document de travail` }
+      : { concerne: true, raison: `en-tête « destinataire: ${dest} »` };
+  }
+  const mots = replierMots(objetDuNom(nomFichier || "")).split(" ").filter(Boolean);
+  const types = new Set((conf?.types_de_nom || []).map(replierMots));
+  const exclus = new Set((conf?.exclusions_de_nom || []).map(replierMots));
+  for (let n = Math.min(4, mots.length); n >= 1; n--) {
+    const cle = mots.slice(0, n).join(" ");
+    if (exclus.has(cle)) return { concerne: false, raison: `type de nom « ${cle} » : document de travail` };
+  }
+  for (let n = Math.min(4, mots.length); n >= 1; n--) {
+    const cle = mots.slice(0, n).join(" ");
+    if (types.has(cle)) return { concerne: true, raison: `type de nom « ${cle} »` };
+  }
+  // TF-2189 : sans en-tête `destinataire:` ni type de nom, un écrit sous `output/` est jugé. Un en-tête interne (ci-dessus) reste l'exception déclarée.
+  const premier = String(cheminRelatif || "").replace(/\\/g, "/").replace(/^\.\//, "").split("/").filter(Boolean)[0];
+  const dossiers = (conf?.dossiers_juges_par_defaut || []).map(replierMots);
+  if (premier && String(cheminRelatif).replace(/\\/g, "/").split("/").filter(Boolean).length > 1 && dossiers.includes(replierMots(premier))) {
+    // TF-2259 (06/11/2026) : le jugement par défaut ne vaut que pour les écrits NEUFS. Le 06/11, il rendait A_REJOUER sur 179 écrits sur 193 (92,7 %) :
+    // un contrôle qui accuse presque tout le corpus se fait désactiver (leçon N4). Un écrit dont le nom porte une date antérieure au seuil de la donnée
+    // (`dossiers_juges_par_defaut_depuis`) est antérieur à la règle : la règle 5 interdit de réécrire l'existant, l'antériorité se DIT au verdict et au
+    // non_juge. Un nom sans date ne prouve aucune antériorité : l'écrit reste jugé. Sans seuil dans la donnée, tout écrit sous le dossier est jugé.
+    const depuis = /^\d{4}-\d{2}-\d{2}$/.test(String(conf?.dossiers_juges_par_defaut_depuis || "")) ? conf.dossiers_juges_par_defaut_depuis : null;
+    const dates = [...String(nomFichier || "").matchAll(/(?<!\d)(20\d{2})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])(?!\d)/g)];
+    const jour = dates.length ? dates[dates.length - 1].slice(1, 4).join("-") : null;
+    if (depuis && jour && jour < depuis)
+      return { concerne: false, raison: `écrit sous ${premier}/ daté du ${jour} par son nom, antérieur au ${depuis} : jugement par défaut non appliqué, antériorité déclarée (TF-2259)` };
+    return { concerne: true, raison: `écrit sous ${premier}/ : jugé par défaut, en-tête \`destinataire:\` ou non` };
+  }
+  return { concerne: false, raison: "ni en-tête `destinataire:`, ni type de nom d'un écrit à un tiers, ni dossier jugé par défaut" };
+}
+
+/**
+ * Les blocs de prose d'un texte : un paragraphe, ou un élément de liste. Ni titre, ni tableau, ni
+ * citation, ni filet. `{ ligne, fin, prose }`, lignes alignées sur le fichier d'origine.
+ */
+function blocsDeProse(horsCode, proseLignes) {
+  const blocs = [];
+  let cur = null;
+  const clore = () => { if (cur) blocs.push(cur); cur = null; };
+  for (let i = 0; i < horsCode.length; i++) {
+    const l = horsCode[i];
+    if (!l.trim() || /^\s*(?:#{1,6}\s|\||>)/.test(l) || /^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/.test(l)) { clore(); continue; }
+    if (/^\s*(?:[-*+]|\d+[.)])\s+/.test(l)) clore();
+    if (!cur) cur = { ligne: i + 1, fin: i + 1, prose: "" };
+    cur.prose += " " + proseLignes[i];
+    cur.fin = i + 1;
+  }
+  clore();
+  return blocs.map((b) => ({ ...b, prose: b.prose.replace(/\s+/g, " ").trim() })).filter((b) => b.prose);
+}
+
+/**
+ * Les énumérations de plus de `conf.enumeration_elements_max` éléments dans une phrase : des segments
+ * COURTS séparés par des virgules ou des points-virgules, le dernier pouvant porter « et / ou ».
+ * Un segment qui s'ouvre sur un mot de proposition (« qui », « car », « which »…) est une proposition,
+ * pas un élément, et coupe la série. Rend le nombre d'éléments de la plus longue série.
+ */
+export function elementsEnumeres(phrase, conf) {
+  const maxMots = Number(conf?.enumeration_mots_par_element_max ?? 4);
+  const maxIntro = Number(conf?.enumeration_mots_introduction_max ?? 7);
+  const propositions = new Set((conf?.mots_de_proposition || []).map(replierMots));
+  const liaisons = (conf?.mots_de_liaison || ["et", "ou"]).map(replierMots).filter(Boolean);
+  const reLiaison = new RegExp(`\\s+(?:${liaisons.join("|")})\\s+`, "iu");
+  const segments = String(phrase).replace(/[.!?]+\s*$/, "").split(/\s*[,;]\s*/).filter((s) => s.trim());
+  let meilleur = 0, serie = 0, courant = 0;
+  segments.forEach((seg, k) => {
+    const premier = replierMots(seg).split(" ")[0] || "";
+    const dernier = k === segments.length - 1;
+    const moities = dernier && serie > 0 ? seg.split(reLiaison) : [seg];
+    const limite = serie === 0 ? maxIntro : maxMots;
+    const court = moities.every((m) => compterMots(m) <= limite) && !propositions.has(premier);
+    if (!court) { meilleur = Math.max(meilleur, courant); serie = 0; courant = 0; return; }
+    serie++;
+    courant += moities.length;
+    meilleur = Math.max(meilleur, courant);
+  });
+  return Math.max(meilleur, courant);
+}
+
+/** Le jugement de concision (EC-14) : les passages à réécrire, par sorte. */
+function passagesDeConcision(horsCode, proseLignes, conf) {
+  const maxPh = Number(conf.paragraphe_phrases_max ?? 3);
+  const maxMotsP = Number(conf.paragraphe_mots_max ?? 60);
+  const maxMotsPh = Number(conf.phrase_mots_max ?? 25);
+  const maxElem = Number(conf.enumeration_elements_max ?? 3);
+  const sortie = { paragraphe: [], phrase: [], enumeration: [] };
+  const extrait70 = (t) => t.replace(/\s+/g, " ").trim().slice(0, 70);
+  for (const b of blocsDeProse(horsCode, proseLignes)) {
+    const ph = phrases(b.prose);
+    const mots = compterMots(b.prose);
+    if (ph.length > maxPh || mots > maxMotsP)
+      sortie.paragraphe.push({ ligne: b.ligne, mots, phrases: ph.length, extrait: extrait70(b.prose) });
+    let curseur = b.ligne - 1;
+    for (const p of ph) {
+      // La ligne exacte : on cherche le début de la phrase à partir de la ligne où la précédente a été trouvée.
+      const cle = p.texte.split(/\s+/).slice(0, 3).join(" ");
+      let ligne = b.ligne;
+      for (let k = curseur; k < b.fin; k++) {
+        if (proseLignes[k].replace(/\s+/g, " ").includes(cle)) { ligne = k + 1; curseur = k; break; }
+      }
+      if (p.mots > maxMotsPh) sortie.phrase.push({ ligne, mots: p.mots, extrait: extrait70(p.texte) });
+      const el = elementsEnumeres(p.texte, conf);
+      if (el > maxElem) sortie.enumeration.push({ ligne, elements: el, extrait: extrait70(p.texte) });
+    }
+  }
+  return sortie;
+}
+
+/**
+ * La langue dominante d'une prose, par la part de mots vides de chaque liste. Rend
+ * `{ jetons, parts: { fr: 0.31, en: 0.02, … } }`. Les élisions françaises (« l'oracle », « qu'il »)
+ * comptent pour le français : sans elles, « l' » et « d' » disparaîtraient de la mesure.
+ */
+export function partsDeLangue(texteProse, conf) {
+  const elisions = new Set((conf?.elisions_fr || []).map((e) => e.toLowerCase()));
+  let fr_elisions = 0;
+  const sansElision = String(texteProse).toLowerCase().replace(/(?<![\p{L}])([\p{L}]{1,7})['’](?=[\p{L}])/gu,
+    (m, a) => { if (elisions.has(a)) fr_elisions++; return " "; });
+  const jetons = sansElision.match(/[\p{L}]+/gu) || [];
+  const total = jetons.length + fr_elisions;
+  const parts = {};
+  for (const [code, liste] of Object.entries(conf?.mots_vides || {})) {
+    const ens = new Set(liste.map((m) => m.toLowerCase()));
+    let n = 0;
+    for (const j of jetons) if (ens.has(j)) n++;
+    if (code === "fr") n += fr_elisions;
+    parts[code] = total ? n / total : 0;
+  }
+  return { jetons: total, parts };
+}
+
+const MOTS_OUTILS = new Set([
+  "le", "la", "les", "un", "une", "des", "ce", "cette", "il", "elle", "on", "nous", "vous",
+  "ils", "elles", "the", "a", "an", "it", "this",
+]);
+
+/**
+ * Juge un texte. `options` : `{ donnee }` (l'objet de `tics-redactionnels.json`),
+ * `{ cheminRelatif }` (pour EC-6). Rend `{ mots, verdict, findings, non_juge }`.
+ */
+export function juger(texte, options = {}) {
+  const donnee = options.donnee;
+  const findings = [];
+  const pousser = (regle, statut, message, ligne) => findings.push(
+    ligne === undefined ? { regle, statut, message } : { regle, statut, message, ligne });
+
+  // EC-6 — ANTÉRIORITÉ. Elle se joue EN PREMIER et elle est exclusive : juger le style d'un texte
+  // normatif écrit avant la doctrine produirait un FAIL qu'aucun run n'a le mandat de corriger,
+  // donc un verdict rouge permanent — la façon la plus sûre de faire désactiver un oracle.
+  const chemins = new Set((donnee?.anteriorite?.chemins || []).map((c) => c.replace(/\\/g, "/")));
+  const rel = (options.cheminRelatif || "").replace(/\\/g, "/");
+  if (rel && chemins.has(rel)) {
+    pousser("EC-6", "SKIP", `${rel} : texte normatif antérieur à la doctrine, jugé à sa prochaine réécriture`);
+    return { mots: compterMots(prose(texte)), verdict: "SKIP", findings, non_juge: nonJuge(donnee) };
+  }
+  pousser("EC-6", "PASS", "aucune antériorité déclarée pour ce chemin");
+
+  const { horsCode, proseLignes, cellules } = decouper(texte);
+  const texteProse = proseLignes.join("\n");
+  const ligneDe = localisateur(texteProse);
+  const mots = compterMots(texteProse);
+  const minimum = Number(donnee?.mots_minimum ?? 150);
+  const assezLong = mots >= minimum;
+
+  // EC-1 — DENSITÉ PAR FAMILLE.
+  if (!assezLong) {
+    pousser("EC-1", "SKIP", `${mots} mots (< ${minimum}) : densités non jugées — un court texte à un seul tic n'est pas un texte à tics`);
+  } else {
+    for (const famille of donnee.familles || []) {
+      const trouvees = occurrences(famille, texteProse, proseLignes);
+      const densite = (trouvees.length * 1000) / mots;
+      const avert = Number(famille.seuil_avertissement);
+      const echec = Number(famille.seuil_echec);
+      const statut = densite > echec ? "FAIL" : densite > avert ? "AVERT" : "PASS";
+      const premiere = trouvees[0];
+      const ou = premiere ? ` — 1re occurrence ligne ${ligneDe(premiere.offset)} : « ${extrait(texteProse, premiere.offset)} »` : "";
+      const seuil = statut === "FAIL" ? `seuil d'échec ${deuxDec(echec)}` : `seuil d'avertissement ${deuxDec(avert)}`;
+      const remede = statut === "PASS" ? "" : ` ; remède : ${famille.remede}`;
+      pousser(`EC-1:${famille.cle}`, statut,
+        `${famille.libelle} — densité ${deuxDec(densite)} ‰ (${seuil} ‰, ${trouvees.length} occurrence(s) sur ${mots} mots)${ou}${remede}`,
+        premiere ? ligneDe(premiere.offset) : undefined);
+    }
+  }
+
+  // EC-2 — PHRASES LONGUES EN SÉRIE. Une longue phrase est une phrase ; trois d'affilée sont une
+  // cadence, et le lecteur décroche sans savoir où.
+  const ph = phrases(texteProse, coupuresDeBloc(proseLignes, horsCode, cellules));
+  if (!assezLong) {
+    pousser("EC-2", "SKIP", `${mots} mots (< ${minimum}) : longueur de phrase non jugée`);
+  } else {
+    const longues = ph.filter((p) => p.mots > 35);
+    // Recalibrage du 12/09/2026 (baseline sur 117 synthèses : 42 tombaient sur trois phrases
+    // longues d'affilée — le style d'incise de la maison). Trois d'affilée AVERTISSENT (E-2 :
+    // « trois phrases longues d'affilée sont un défaut »), SEPT échouent : mesuré sur 171 textes
+    // le 12/09, la série maximale est 7 (une fois), 5 ou plus dix fois — l'échec est posé au
+    // maximum du corpus PASS (contrat §4 du mandat, ≥ 95 %), l'avertissement garde la doctrine.
+    let serie = null, meilleure = [];
+    for (let i = 0, courante = []; i < ph.length; i++) {
+      if (ph[i].mots > 35) { courante.push(ph[i]); if (courante.length > meilleure.length) meilleure = courante.slice(); }
+      else courante = [];
+    }
+    if (meilleure.length >= 3) serie = meilleure;
+    if (serie && serie.length >= 7) {
+      pousser("EC-2", "FAIL",
+        `${serie.length} phrases de plus de 35 mots consécutives (${serie.map((p) => p.mots).join(", ")} mots) — couper, ou faire de la subordonnée une phrase`,
+        ligneDe(serie[0].debut));
+    } else if (serie) {
+      pousser("EC-2", "AVERT",
+        `${serie.length} phrases de plus de 35 mots consécutives (${serie.map((p) => p.mots).join(", ")} mots) — couper, ou faire de la subordonnée une phrase ; sept d'affilée seraient un échec (calibré le 12/09 : maximum observé sur 171 textes du pilot)`,
+        ligneDe(serie[0].debut));
+    } else if (longues.length >= 3 && longues.length / Math.max(1, ph.length) >= 0.10) {
+      pousser("EC-2", "AVERT",
+        `${longues.length} phrases de plus de 35 mots sur ${ph.length} (${deuxDec((longues.length * 100) / ph.length)} %)`,
+        ligneDe(longues[0].debut));
+    } else if (longues.length >= 15) {
+      // D-115 (a) du 02/11/2026, TF-2025 : 15 phrases longues avertissent, même non consécutives. Une page de 807 phrases
+      // en comptait 15 et passait. Mesuré le 29/10 sur 785 textes : 19 % en comptent 15 ou plus.
+      pousser("EC-2", "AVERT",
+        `${longues.length} phrases de plus de 35 mots sur ${ph.length}, non consécutives — couper les plus longues (seuil 15, D-115 (a))`,
+        ligneDe(longues[0].debut));
+    } else {
+      pousser("EC-2", "PASS", `${longues.length} phrase(s) de plus de 35 mots sur ${ph.length}`);
+    }
+    // Les deux comptes du verdict, lisibles par une machine (TF-1968) : un seuil se recalibre sur des nombres, pas sur un message.
+    Object.assign(findings[findings.length - 1], { phrases_longues: longues.length, phrases: ph.length });
+  }
+
+  // EC-19, EC-20, EC-21 (D-230 (b) du 22/11/2026) — LE PLANCHER SE RESSERRE VERS L'ASD-STE100. AVERT SEULEMENT.
+  //
+  // LE FAIT. L'étude du 22/11/2026 (output/03-etudes, « Statuts courts et ASD-STE100 ») a comparé le plancher à la norme
+  // d'anglais technique simplifié des manuels de maintenance aéronautique : 20 mots par phrase de procédure, 25 par
+  // description, 6 phrases par paragraphe, une consigne à l'impératif. EC-2 n'avertit qu'au-delà de 35 mots, en série :
+  // sur les 10 dernières synthèses, 16 % des phrases (84 sur 524) dépassaient 25 mots sans rien déclencher. Sur 1 891
+  // cellules « Action » d'output/, 240 (13 %) ne commençaient pas par un verbe. LA DÉCISION : D-230 (b), « avertir dès
+  // 25 mots, demander l'impératif dans les consignes, et 6 phrases au plus par paragraphe ».
+  //
+  // CE QU'ELLES MESURENT. EC-19 : chaque phrase de plus de `phrase_mots_avertissement` mots. EC-20 : chaque paragraphe
+  // de plus de `paragraphe_phrases_max` phrases. EC-21 : chaque consigne qui ne commence pas par un verbe ; une consigne
+  // est une cellule d'une colonne « Action » ou un élément numéroté sous un titre d'étapes. L'infinitif d'injonction
+  // (« Choisir une option ») compte comme l'impératif : c'est la forme française des consignes techniques, et 87 % des
+  // cellules « Action » la portent déjà. Les seuils et les listes vivent dans `plancher_ste` de la donnée (loi n° 4).
+  // NON JUGÉ : où couper, un nom qui finit comme un infinitif, une consigne hors de ces deux formes.
+  {
+    const ste = donnee?.plancher_ste;
+    if (!ste) {
+      for (const r of ["EC-19", "EC-20", "EC-21"]) pousser(r, "SKIP", "aucune clé `plancher_ste` dans la donnée — règle non jouée");
+    } else {
+      const maxMots = Number(ste.phrase_mots_avertissement ?? 25);
+      const maxPh = Number(ste.paragraphe_phrases_max ?? 6);
+      const ext = (t) => String(t).replace(/\s+/g, " ").trim().slice(0, 60);
+      const decision = "AVERTISSEMENT, jamais bloquant (D-230 (b) du 22/11/2026)";
+
+      // EC-19 — une phrase de plus de 25 mots.
+      if (!assezLong) {
+        pousser("EC-19", "SKIP", `${mots} mots (< ${minimum}) : longueur de phrase non jugée`);
+      } else {
+        const trop = ph.filter((p) => p.mots > maxMots);
+        if (!trop.length) {
+          pousser("EC-19", "PASS", `aucune phrase de plus de ${maxMots} mots sur ${ph.length}`);
+        } else {
+          const tri = trop.slice().sort((a, b) => b.mots - a.mots);
+          pousser("EC-19", "AVERT",
+            `${trop.length} phrase(s) de plus de ${maxMots} mots sur ${ph.length} (${deuxDec((trop.length * 100) / ph.length)} %) ; les plus longues : `
+            + tri.slice(0, 4).map((p) => `l.${ligneDe(p.debut)} (${p.mots} mots) « ${ext(p.texte)} »`).join(" · ")
+            + ` — couper en deux, une idée et un verbe par phrase (E-2, seuil de l'ASD-STE100). ${decision}`,
+            ligneDe(tri[0].debut));
+          Object.assign(findings[findings.length - 1], { phrases_trop_longues: trop.length, phrases: ph.length });
+        }
+      }
+
+      // EC-20 — un paragraphe de plus de 6 phrases.
+      const longs = blocsDeProse(horsCode, proseLignes)
+        .map((b) => ({ ...b, n: phrases(b.prose).length }))
+        .filter((b) => b.n > maxPh);
+      if (!longs.length) pousser("EC-20", "PASS", `aucun paragraphe de plus de ${maxPh} phrases`);
+      else pousser("EC-20", "AVERT",
+        `${longs.length} paragraphe(s) de plus de ${maxPh} phrases : `
+        + longs.slice(0, 4).map((b) => `l.${b.ligne} (${b.n} phrases) « ${ext(b.prose)} »`).join(" · ")
+        + (longs.length > 4 ? ` · et ${longs.length - 4} autre(s)` : "")
+        + ` — un sujet par paragraphe ; au-delà de ${maxPh} phrases, couper où le sujet change (E-20). ${decision}`,
+        longs[0].ligne);
+
+      // EC-21 — une consigne commence par un verbe.
+      const terminaisons = (ste.terminaisons_verbe || ["er", "ir", "re", "oir", "ez"]).map((t) => t.replace(/[^\p{L}]/gu, ""));
+      const reVerbe = new RegExp(`^[\\p{L}-]+(?:${terminaisons.join("|")})$`, "iu");
+      const tu = new Set((ste.imperatifs_tu || []).map((m) => m.toLowerCase()));
+      const nonVerbes = new Set((ste.non_verbes || []).map((m) => m.toLowerCase()));
+      const estVerbe = (w) => !nonVerbes.has(w) && (reVerbe.test(w) || tu.has(w));
+      const premierMot = (t) => ((t.toLowerCase().match(/[\p{L}'’-]+/gu) || [])[0] || "");
+      const ouvreParUnVerbe = (brut) => {
+        let c = String(brut).replace(/`[^`]*`/g, " ` ").replace(/[*_[\]]/g, " ").replace(/\s+/g, " ").trim();
+        c = c.replace(/^A-\d+\s*[:—–-]\s*/i, "").replace(/^[\p{L}\s'’-]{1,40}[.:]\s+(?=\S)/u, (m) => (/^\p{Lu}/u.test(m) && /[.:]\s+$/.test(m) && m.split(/\s+/).length <= 5 ? "" : m));
+        if (!/^\p{L}/u.test(c)) return true;                       // code, chiffre ou symbole en tête : non jugé
+        const w = premierMot(c);
+        if (w === "ne" || /^n['’]/.test(w)) return true;            // « Ne pas coller… »
+        if (estVerbe(w.replace(/^[ldmts]['’]/, ""))) return true;
+        const v = c.indexOf(",");                                   // « Dans VS Code, ouvrir… », « Si …, lancer… »
+        if (v > 0 && v <= 80) { const a = premierMot(c.slice(v + 1)); if (a === "ne" || estVerbe(a)) return true; }
+        return false;
+      };
+      const reEtapes = new RegExp(`(?:${ste.titres_d_etapes || "étapes?"})`, "iu");
+      const fautives = [];
+      let colAction = null, titre = "", dansTableau = false;
+      for (let i = 0; i < horsCode.length; i++) {
+        const l = horsCode[i];
+        const t = /^\s*#{1,6}\s+(.*)$/.exec(l);
+        if (t) { titre = t[1]; dansTableau = false; continue; }
+        if (/^\s*\|/.test(l)) {
+          const cases = l.trim().replace(/^\|/, "").replace(/\|\s*$/, "").split("|").map((x) => x.trim());
+          if (!dansTableau) {
+            dansTableau = true;
+            colAction = cases.findIndex((x) => /^\**\s*action\s*\**$/i.test(x));
+            continue;
+          }
+          if (estSeparateurTableau(l) || colAction < 0 || colAction >= cases.length) continue;
+          if (cases[colAction] && !ouvreParUnVerbe(cases[colAction])) fautives.push({ ligne: i + 1, texte: cases[colAction], ou: "colonne « Action »" });
+          continue;
+        }
+        dansTableau = false;
+        const item = /^\s*\d+[.)]\s+(.*)$/.exec(l);
+        if (item && reEtapes.test(titre) && !ouvreParUnVerbe(item[1])) fautives.push({ ligne: i + 1, texte: item[1], ou: `étape sous « ${ext(titre).slice(0, 40)} »` });
+      }
+      if (!fautives.length) pousser("EC-21", "PASS", "toutes les consignes lues (colonne « Action », étapes numérotées) commencent par un verbe");
+      else pousser("EC-21", "AVERT",
+        `${fautives.length} consigne(s) qui ne commencent pas par un verbe : `
+        + fautives.slice(0, 4).map((f) => `l.${f.ligne} (${f.ou}) « ${ext(f.texte)} »`).join(" · ")
+        + (fautives.length > 4 ? ` · et ${fautives.length - 4} autre(s)` : "")
+        + ` — ouvrir sur le verbe de l'action, à l'infinitif ou à l'impératif : « Choisir une option », « Relancez le banc » (E-11). ${decision}`,
+        fautives[0].ligne);
+    }
+  }
+
+  // EC-3 — PROFONDEUR DE PUCES (S7 des restitutions, étendu à tout Markdown). Un troisième niveau
+  // de liste est une table des matières déguisée : ce qui s'y trouve mérite un titre ou une phrase.
+  const profonde = horsCode.findIndex((l) => /^(?: {4,}|\t{2,})\s*(?:[-*+]|\d+[.)])\s+/.test(l));
+  if (profonde >= 0) {
+    pousser("EC-3", "FAIL",
+      `liste imbriquée au 3e niveau ou plus : « ${horsCode[profonde].trim().slice(0, 60)} » — remonter d'un niveau, ou faire un titre`,
+      profonde + 1);
+  } else {
+    pousser("EC-3", "PASS", "aucune liste imbriquée au-delà du 2e niveau");
+  }
+
+  // EC-4 — EMPHASE DE STRUCTURE. (a) un paragraphe en gras n'est pas une emphase, c'est un titre
+  // qui n'ose pas dire son nom ; (b) une puce emoji remplace le fait par un signe.
+  // Recalibrage du 12/09/2026 (baseline : 66 synthèses sur 117 tombaient ici). Un paragraphe ou
+  // une ligne ENTIÈREMENT en gras est une structure de gabarit — le verdict en une ligne du
+  // bloc 2, la question d'une décision D-N en bloc de citation — et le gabarit prime sur le
+  // plancher (ECRITURE.md, précédence 1). Seul le gras qui porte une phrase À L'INTÉRIEUR d'un
+  // paragraphe est compté : c'est lui qui souligne au lieu de structurer.
+  // TF-1488 (01/10/2026, lot Produit-03 du 28/09, RA-46) — LE GRAS D'UN SEUL CARACTÈRE EST UN GRAS.
+  // Le motif exigeait 2 caractères au moins entre les étoiles : « **0** » n'était pas reconnu, et
+  // son second « ** » s'appariait avec l'ouverture du gras suivant de la même ligne. Le texte
+  // ordinaire qui les sépare devenait un passage en gras (un faux de 125 mots, règle passée de PASS
+  // à FAIL), et un VRAI passage en gras placé après « **0** » glissait hors du compte. Un caractère
+  // suffit : l'appariement ne glisse plus, chaque gras se ferme sur son propre délimiteur.
+  const gras = [];
+  for (const x of texteProse.matchAll(/\*\*([^*\n]+)\*\*/g)) {
+    const n = compterMots(x[1]);
+    if (n < 12) continue;
+    const debutLigne = texteProse.lastIndexOf("\n", x.index) + 1;
+    const finLigneBrute = texteProse.indexOf("\n", x.index);
+    const finLigne = finLigneBrute === -1 ? texteProse.length : finLigneBrute;
+    const ligne = texteProse.slice(debutLigne, finLigne).trim()
+      .replace(/^(?:>\s*)+/, "").replace(/^#{1,6}\s+/, "").replace(/^(?:[-*+]|\d+[.)])\s+/, "").trim();
+    // Une ligne ou une puce qui OUVRE en gras est un titre de puce (bloc 4 : « **TF-0995 — la
+    // chaîne mesurait un répertoire que la session ne charge pas.** suite en prose »), un verdict
+    // ou une question de décision : structure, pas emphase — 40 synthèses sur 117 le portaient.
+    // Seul le gras qui surgit APRÈS du texte sur la même ligne est compté.
+    if (ligne.startsWith(x[0])) continue;
+    gras.push({ offset: x.index, mots: n, texte: x[1] });
+  }
+  // Seuil d'échec calibré le 12/09 : sur 171 textes, deux portent 5 passages ou plus (7 et 17,
+  // de 73 à 193 mots en gras chacun) ; un à quatre passages avertissent, cinq échouent.
+  if (gras.length >= 5) {
+    pousser("EC-4-gras", "FAIL",
+      `${gras.length} passages en gras de 12 mots ou plus (1er de ${gras[0].mots} mots : « ${extrait(texteProse, gras[0].offset + 2)} ») — le gras souligne un mot, il ne porte pas une phrase`,
+      ligneDe(gras[0].offset));
+  } else if (gras.length) {
+    pousser("EC-4-gras", "AVERT",
+      `${gras.length} passage(s) en gras de 12 mots ou plus (1er de ${gras[0].mots} mots : « ${extrait(texteProse, gras[0].offset + 2)} »)`,
+      ligneDe(gras[0].offset));
+  } else {
+    pousser("EC-4-gras", "PASS", "aucun passage en gras de 12 mots ou plus");
+  }
+  const emoji = horsCode.findIndex((l) =>
+    /^\s*(?:[-*+]|\d+[.)])\s+\p{Extended_Pictographic}/u.test(l) || /^\s*\p{Extended_Pictographic}/u.test(l));
+  if (emoji >= 0) {
+    pousser("EC-4-emoji", "FAIL",
+      `puce dont le marqueur ou le premier caractère est un emoji : « ${horsCode[emoji].trim().slice(0, 60)} » — un signe ne remplace pas le fait`,
+      emoji + 1);
+  } else {
+    pousser("EC-4-emoji", "PASS", "aucune puce emoji");
+  }
+
+  // EC-5 — ATTAQUES RÉPÉTÉES. AVERT et JAMAIS FAIL : trois phrases qui commencent pareil sont
+  // parfois une anaphore voulue. L'oracle nomme, l'humain tranche.
+  const premierMot = (p) => {
+    const x = /^[^\p{L}]*(\p{L}[\p{L}'’-]*)/u.exec(p.texte);
+    return x ? x[1].toLowerCase() : "";
+  };
+  let attaque = null;
+  for (let i = 0; i + 2 < ph.length; i++) {
+    const a = premierMot(ph[i]);
+    if (a.length < 3 || MOTS_OUTILS.has(a)) continue;
+    if (a === premierMot(ph[i + 1]) && a === premierMot(ph[i + 2])) { attaque = { mot: a, p: ph[i] }; break; }
+  }
+  if (attaque) {
+    pousser("EC-5", "AVERT",
+      `trois phrases consécutives ouvrent sur « ${attaque.mot} » — varier l'attaque, ou assumer l'anaphore`,
+      ligneDe(attaque.p.debut));
+  } else {
+    pousser("EC-5", "PASS", "aucune série de trois attaques identiques");
+  }
+
+  // EC-7 (TF-1045, 16/09/2026) — LE MOT QUE LE DESTINATAIRE NE LIT PAS.
+  //
+  // LE FAIT : un retour de vocabulaire clos « corrigé » le 08/09, le même mot redemandé par le
+  // client le 10/09. Mesure du 11/09 — le référentiel de jargon du pilot ne portait pas le terme,
+  // le CLAUDE.md du produit ne citait aucun lexique, et le juge des restitutions ne lisait aucun
+  // glossaire : deux synthèses employant le terme étaient PASS sur 41 règles. *Le producteur
+  // n'avait rencontré la règle NULLE PART sur son chemin.* C'est pour cela que la règle vit ICI en
+  // premier : cet oracle est joué à CHAQUE écriture d'un `.md` du produit, donc au moment où l'on
+  // écrit, et non au retour humain suivant.
+  //
+  // LE LEXIQUE EST CELUI DU PRODUIT, jamais une liste globale : le terme fondateur est un mot
+  // ordinaire du français et un terme juste ailleurs. Absent, la règle rend SKIP — dit à voix
+  // haute, jamais PASS par silence. Les citations ne sont pas jugées (`termesEmployes` retire le
+  // code) : un nom de champ n'est pas une déclaration d'intention de l'auteur.
+  {
+    const lex = chargerLexique({ cheminJuge: options.cheminJuge || null });
+    if (!lex.trouve)
+      pousser("EC-7", "SKIP", "aucun lexique de client dans le socle de ce projet (forge\\LEXIQUE.json, docs\\projet\\LEXIQUE.json ou references\\LEXIQUE.json) — vocabulaire du destinataire non jugé");
+    else if (lex.illisible)
+      pousser("EC-7", "SKIP", `lexique ILLISIBLE (${lex.chemin}) : ${lex.illisible} — ce n'est pas un constat sur le texte`);
+    else if (!lex.termes.length)
+      pousser("EC-7", "SKIP", `lexique présent et VIDE (${lex.chemin}) — aucun terme n'a encore coûté d'aller-retour`);
+    else {
+      const employes = termesEmployes(texte, lex.termes);
+      if (employes.length)
+        pousser("EC-7", "FAIL",
+          `${employes.length} terme(s) proscrit(s) par le lexique du destinataire : ` +
+          // TF-1150 : l'origine se dit — un terme TRANSVERSE vient d'une décision humaine portant
+          // sur tous les produits, pas d'un retour du lecteur de celui-ci.
+          employes.map((t) => `« ${t.proscrit} » (${t.occurrences}) → « ${t.remplacer_par || "à remplacer"} »`
+            + (t.origine === "transverse" ? " [transverse : décision humaine pour TOUS les produits]" : "")).join(" · ") +
+          " — un mot qui a coûté un aller-retour au client se remplace avant la livraison, pas après le second retour",
+          ligneDe(0));
+      else
+        pousser("EC-7", "PASS", `aucun des ${lex.termes.length} terme(s) proscrit(s) du lexique n'est employé`);
+    }
+  }
+
+  // EC-8 (TF-1137, 16/09/2026) — UNE TOURNURE REFUSÉE À SA POSITION, et pas seulement à sa densité.
+  //
+  // LE FAIT : un livrable de 11 pages portait 84 « Ce que / Ce qu'il », dont 6 en titre de chapitre
+  // et 20 en en-tête de colonne, et l'oracle rendait PASS sur 15 228 mots. La densité ne pouvait pas
+  // l'attraper — 84 occurrences sur 15 228 mots font 5,5 ‰, sous le seuil de n'importe quelle famille
+  // calibrée pour que le corpus reste PASS. C'est la POSITION qui fait le défaut : dans le corps, la
+  // tournure est une façon de parler ; en titre, elle PROMET un contenu au lieu de le nommer, et une
+  // table des matières faite de ces titres ne se survole plus.
+  //
+  // La règle ne connaît aucune tournure : elle joue les familles qui déclarent `positions_bloquantes`
+  // dans la DONNÉE (loi n° 4). Une famille sans ce champ n'est jugée que par EC-1, comme avant.
+  //
+  // LES EXEMPTIONS SONT DANS LA DONNÉE, DATÉES ET MOTIVÉES, jamais dans ce code : le tableau
+  // d'options du bloc 3 des restitutions IMPOSE « Coût » et « Exclusions », et
+  // trois juges les vérifient LITTÉRALEMENT. Les proscrire ici sans réécrire d'abord la doctrine
+  // mettrait deux gardiens du même socle en contradiction — toute synthèse conforme au gabarit
+  // échouerait ici, toute synthèse conforme ici serait refusée par le hook Stop.
+  {
+    const bloquantes = (donnee?.familles || []).filter((f) => Array.isArray(f.positions_bloquantes) && f.positions_bloquantes.length);
+    // TF-1974 (20/10/2026) : un TITRE IMPOSÉ mot pour mot par un contrat (la clause d'un prompt, un
+    // cahier des charges) se déclare en en-tête — `titres_imposes: <titre> | <titre>` et
+    // `titres_imposes_par: <le contrat>`, ce second champ exigé. Il ne vaut qu'en titre et au mot près,
+    // numérotation « 5. » retirée. Le 20/10, « Ce que la proposition ne protège pas », exigé par la clause
+    // 7 d'un prompt, a été refusé ici, puis contourné en le numérotant.
+    const tete8 = enTete(texte);
+    const imposes = tete8.titres_imposes_par ? String(tete8.titres_imposes || "").split(" | ").map((x) => x.trim()).filter(Boolean) : [];
+    // TF-2020 (29/10/2026) : la numérotation d'un titre (« 7. », « 7) », « 2.1 », « 3 · », « 4 — ») se retire AVANT de
+    // chercher la tournure. Le motif de position s'ancre en début de titre : « ## 7. Ce que … » lui échappait, et c'est
+    // ainsi qu'un titre refusé a été contourné le 20/10/2026. Les exemptions et les titres imposés retiraient déjà ce
+    // numéro (TF-1901) ; la recherche, elle, ne le retirait pas.
+    const sansNumero = (t) => String(t).replace(/^\s*\d+(?:\.\d+)*(?:\s*[.)·:—–-]\s*|\s+)/u, "").trim();
+    const impose = (t) => imposes.includes(sansNumero(t));
+    // Antériorité des titres NUMÉROTÉS (TF-2020) : les documents qui portaient déjà un titre numéroté refusé à la date
+    // déclarée ne se réécrivent pas (R-4, R-5) ; ils sont nommés dans la donnée, comptés, et dits au verdict. Un chemin
+    // absent de la liste, ou un titre non numéroté, reste refusé.
+    const anterieurNum = new Set((donnee?.anteriorite_titres_numerotes?.chemins || []).map((c) => c.replace(/\\/g, "/")));
+    const cheminDuTexte = (options.cheminRelatif || "").replace(/\\/g, "/");
+    const dateAnteriorite = donnee?.anteriorite_titres_numerotes?.avant || null;
+    const admisImposes = new Set();
+    const admisAnterieurs = new Set();
+    if (!bloquantes.length) {
+      pousser("EC-8", "SKIP", "aucune famille ne déclare de position bloquante dans la donnée");
+    } else {
+      const constats = [];
+      for (const famille of bloquantes) {
+        // TF-1901 (21/10/2026) : une exemption peut se BORNER — `position` (elle ne vaut qu'à cette position)
+        // et `exact` (le texte, hors numérotation « 5. », EST le libellé, il ne le contient pas seulement).
+        // Sans borne, le comportement d'avant : le libellé contenu dans le texte, à toute position.
+        const exempte = (texte, position) => (famille.exemptions || []).some((e) => {
+          if (e.position && e.position !== position) return false;
+          if (e.exact) return sansNumero(texte) === e.literal;
+          return texte.includes(e.literal);
+        });
+        // LE MOTIF DE POSITION EST PLUS LARGE QUE CELUI DE DENSITÉ, et la mesure du 16/09 dit
+        // pourquoi : le motif de densité exige un verbe de contenance, et il ne voyait donc ni
+        // « Ce qu'elle coûte » ni « Ce qu'elle exclut ». En titre et en en-tête de colonne, la
+        // POSITION lève l'ambiguïté — aucun titre n'a besoin d'ouvrir par « Ce que » —, donc un
+        // motif large y est juste. Dans le corps, il crierait sur l'usage légitime, et la leçon N4
+        // dit ce qui arrive ensuite. Une famille sans `motifs_positions` garde son motif unique.
+        const regex = (famille.motifs_positions || famille.motifs || []).map((m) => new RegExp(m.motif, "giu"));
+        // `lastIndex` SE REMET À ZÉRO AVANT CHAQUE ESSAI, et pas seulement avant le premier : les
+        // expressions portent le drapeau global et sont partagées par tous les titres et toutes
+        // les cellules du document. Sans cette remise à zéro, la deuxième occurrence d'un même
+        // motif repart d'où la première s'était arrêtée et n'est jamais trouvée — défaut mesuré le
+        // 16/09 sur un motif ANCRÉ, où il rend la règle entièrement muette.
+        const cherche = (texte) => {
+          for (const r of regex) {
+            r.lastIndex = 0;
+            const m = r.exec(texte);
+            r.lastIndex = 0;
+            if (m) return m[0].trim();
+          }
+          return null;
+        };
+        for (let i = 0; i < horsCode.length; i++) {
+          const brut = horsCode[i];
+          if (!brut) continue;
+          // Un TITRE Markdown : le dièse, puis son texte.
+          const titre = /^\s*#{1,6}\s+(.*\S)\s*$/.exec(brut);
+          if (titre && famille.positions_bloquantes.includes("titre")) {
+            const nu = sansNumero(titre[1]);
+            const trouve = cherche(nu);
+            if (trouve && impose(titre[1])) { admisImposes.add(i); continue; }
+            if (trouve && !exempte(titre[1], "titre")) {
+              if (nu !== titre[1].trim() && cheminDuTexte && anterieurNum.has(cheminDuTexte)) { admisAnterieurs.add(i); continue; }
+              constats.push({ ligne: i + 1, position: "titre", texte: titre[1].slice(0, 80), trouve });
+            }
+            continue;
+          }
+          // UN EN-TÊTE DE COLONNE : une ligne de tableau dont la SUIVANTE est le séparateur. C'est
+          // la seule définition qui ne confond pas l'en-tête avec une ligne de données.
+          if (famille.positions_bloquantes.includes("en-tete-de-colonne")
+            && /\|/.test(brut) && estSeparateurTableau(horsCode[i + 1] || "")) {
+            for (const cellule of brut.split("|")) {
+              const c = cellule.trim();
+              if (!c) continue;
+              const trouve = cherche(c);
+              if (trouve && !exempte(c, "en-tete-de-colonne")) constats.push({ ligne: i + 1, position: "en-tête de colonne", texte: c.slice(0, 80), trouve });
+            }
+          }
+        }
+      }
+      if (constats.length)
+        pousser("EC-8", "FAIL",
+          `${constats.length} tournure(s) d'annonce à une position qui les refuse : `
+          + constats.slice(0, 5).map((c) => `${c.position} l.${c.ligne} « ${c.texte} »`).join(" · ")
+          + (constats.length > 5 ? ` · et ${constats.length - 5} autre(s)` : "")
+          + " — un titre et un en-tête NOMMENT ce qu'ils portent, ils ne le promettent pas ; un titre imposé mot pour mot par un contrat "
+          + "se déclare en en-tête (`titres_imposes:` et `titres_imposes_par:`, TF-1974)",
+          constats[0].ligne);
+      else
+        pousser("EC-8", "PASS",
+          `aucune tournure d'annonce en titre ni en en-tête de colonne (${bloquantes.length} famille(s) à position bloquante)`
+          + (admisImposes.size ? ` ; ${admisImposes.size} titre(s) imposé(s) par « ${tete8.titres_imposes_par} » admis` : "")
+          + (admisAnterieurs.size ? ` ; ${admisAnterieurs.size} titre(s) numéroté(s) antérieur(s) au ${dateAnteriorite || "jour déclaré"} admis (antériorité déclarée, TF-2020) : à renommer à la prochaine réécriture de fond` : ""));
+    }
+  }
+
+  // EC-9 (E-14, 16/09/2026) — UNE VALEUR, UNE HEURE, UNE DATE S'ÉCRIVENT EN CHIFFRES.
+  //
+  // LE RETOUR EST LA MESURE, mot pour mot : « Utilise des chiffres plutôt que l'écriture en toutes
+  // lettres pour les valeurs numériques, les heures et les dates. 7 septembre ou 7/09 plutôt que
+  // sept septembre, 8,8 Mo plutôt que huit virgule huit. » Le fait : une restitution écrite le
+  // matin même rendait ses mesures en toutes lettres — « huit virgule huit mégaoctets », « cent
+  // trente-deux révisions », « le sept septembre ». *Un chiffre écrit en lettres cesse d'être
+  // comparable d'un coup d'œil* : le lecteur doit le reconstituer avant de le mettre en regard du
+  // suivant, et c'est ce qu'un tableau de mesures existe pour lui épargner. E-3 demandait déjà
+  // « un chiffre » ; elle ne disait pas sous quelle FORME, et on pouvait donc la satisfaire en
+  // lettres.
+  //
+  // CE QUI DÉCLENCHE EST À DROITE, JAMAIS LE MOT-NOMBRE SEUL. Chercher « deux », « neuf », « cent »
+  // isolément accuserait « un défaut », « en deux temps », « un banc neuf » — et un oracle qui crie
+  // sur l'usage légitime se fait désactiver dans la semaine (leçon N4). Un mot-nombre ne devient
+  // une VALEUR que suivi d'une unité, d'un dénombrable ou d'un mois : « neuf » suivi de rien reste
+  // l'adjectif, « neuf cas » est un nombre. `un` et `une` sont hors du vocabulaire, article et
+  // pronom avant tout. Le vocabulaire vit dans la DONNÉE (loi n° 4), jamais dans ce code.
+  //
+  // LA PROSE SEULE EST JUGÉE : `decouper` a déjà retiré le code, et une citation entre accents
+  // graves — un retour humain, une sortie d'outil — garde la forme qu'elle avait.
+  {
+    const n = donnee?.chiffres_en_lettres;
+    if (!n || !Array.isArray(n.nombres) || !n.nombres.length) {
+      pousser("EC-9", "SKIP", "aucun vocabulaire de nombres en lettres dans la donnée — valeurs non jugées");
+    } else {
+      const ech = (x) => String(x).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      // LE VOCABULAIRE ENTRE ACCENTUÉ ET REPLIÉ, PARCE QUE LE DÉPÔT ÉCRIT LES DEUX. Le référentiel
+      // porte « révisions » et « mégaoctets » ; les fixtures et une partie des commentaires du parc
+      // écrivent « revisions » et « megaoctets », par prudence d'encodage. Chercher la seule forme
+      // accentuée rendait la règle MUETTE sur la moitié du corpus — elle aurait vécu en croyant
+      // juger. Les deux graphies entrent donc dans l'alternance, dédoublonnées.
+      const replier = (x) => String(x).normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+      const variantes = (liste) => [...new Set([].concat(liste || [], (liste || []).map(replier)))].map(ech);
+      const NOMBRE = variantes(n.nombres).join("|");
+      const LIAISON = variantes(n.liaisons || ["et", "virgule"]).join("|");
+      const DROITE = variantes([].concat(n.unites || [], n.denombrables || [], n.mois || [])).join("|");
+      // Une SUITE de mots-nombres — « cent trente-deux », « quatre-vingts » — puis le déclencheur.
+      // DEUX ANTISLASH, PAS QUATRE. Le premier jet en portait quatre : dans un littéral gabarit,
+      // `\\\\p{L}` donne un antislash littéral suivi de `p{L}`, et la frontière de mot cessait d'en
+      // être une — « test » matchait à l'intérieur de « tests », et la règle nommait des fragments
+      // que personne n'avait écrits. *Une frontière fausse ne se voit pas : elle rend des verdicts
+      // plausibles.* Repéré parce que le message citait « quarante test » au singulier.
+      const re = new RegExp(
+        `(?<![\\p{L}\\p{N}_])((?:${NOMBRE})(?:[ \\u00a0-](?:${LIAISON}|${NOMBRE}))*)[ \\u00a0]+(${DROITE})(?![\\p{L}\\p{N}_])`,
+        "giu");
+      const vus = [];
+      for (const m of texteProse.matchAll(re)) {
+        if (vus.length < 6) vus.push(`« ${m[1]} ${m[2]} »`);
+      }
+      const total = [...texteProse.matchAll(re)].length;
+      if (total) {
+        pousser("EC-9", "FAIL",
+          `${total} valeur(s) écrite(s) en toutes lettres : ${vus.join(" · ")}${total > vus.length ? " …" : ""} — ` +
+          "une valeur, une heure et une date s'écrivent en chiffres (E-14) : « 8,8 Mo », « 132 révisions », " +
+          "« 7 septembre ». En lettres, le lecteur doit reconstituer le nombre avant de le comparer au suivant",
+          ligneDe((texteProse.match(re) || [""])[0] ? texteProse.indexOf(texteProse.match(re)[0]) : 0));
+      } else {
+        pousser("EC-9", "PASS", "aucune valeur, heure ni date écrite en toutes lettres");
+      }
+    }
+  }
+
+  // EC-10 (E-15, TF-1138, 16/09/2026) — UN BLOC QU'ON RECOPIE SERT TOUT LECTEUR, UN BLOC QU'ON
+  // EXÉCUTE NE SERT QU'UN EXÉCUTANT.
+  //
+  // LE FAIT, mot pour mot : « Les développeurs IA ne sont pas des codeurs, les lignes de code
+  // affichées doivent donc l'être uniquement si cela est strictement nécessaire. Pour voir les
+  // trigrammes déjà pris, pas la peine de code "az repos list...", un simple check sur l'URL du
+  // repo suffit. » Mesuré le même jour : 18 blocs de code dans le livrable, 4 commandes de console,
+  // 14 blocs qui se RECOPIENT — et aucun de ces 14 n'a été contesté.
+  //
+  // POURQUOI LA RÈGLE LIT LE LECTEUR ET PAS LE BLOC. Juger le bloc seul serait faux dans les deux
+  // sens : un runbook d'exploitation DOIT porter ses commandes, un guide de conception n'en porte
+  // aucune. Ce qui change, c'est à QUI le document s'adresse. La règle se branche donc sur la
+  // déclaration que les gabarits portent déjà (`role_destinataire`, règle D11) au lieu d'inventer
+  // une heuristique sur le contenu. Sans déclaration, elle rend SKIP et le DIT : un document dont
+  // le lecteur est inconnu n'est pas un document sans défaut, c'est un document non jugé.
+  {
+    const conf = donnee?.blocs_de_code;
+    // TF-2346 (10/11/2026) : le lecteur se lit à trois places (en-tête YAML, commentaire HTML masqué par le rendu, sidecar
+    // `<fichier>.lecteur.json`), voir lib-lecteur-declare.mjs. Un livrable remis à un tiers n'a plus à porter un en-tête d'auteur.
+    const lecteurLu = lecteurDeclare(texte, options.cheminJuge || "");
+    const declare = lecteurLu ? [lecteurLu, lecteurLu] : null;
+    if (!conf || !Array.isArray(conf.invocations) || !conf.invocations.length) {
+      pousser("EC-10", "SKIP", "aucun vocabulaire d'invocation dans la donnée — blocs de code non jugés");
+    } else if (!declare) {
+      pousser("EC-10", "SKIP",
+        "aucun lecteur déclaré dans l'en-tête (`role_destinataire` ou `lecteur`, règle D11) — "
+        + "à qui ce document s'adresse n'est pas su, donc ses blocs de code ne sont pas jugés ; "
+        + "ce n'est pas un constat sur le texte");
+    } else {
+      const lecteur = declare[1].trim();
+      const invocations = conf.invocations.map((m) => new RegExp(m.motif, "iu"));
+      const executant = (conf.lecteurs_executants || []).some((m) => new RegExp(m.motif, "iu").test(lecteur));
+      // Les blocs délimités, et la PREMIÈRE ligne non vide de chacun : c'est elle qui dit si le
+      // bloc se recopie ou s'exécute.
+      const lignes = String(texte).replace(/\r\n?/g, "\n").split("\n");
+      const commandes = [];
+      let dans = false, premiere = null, debut = 0, balise = "";
+      for (let i = 0; i < lignes.length; i++) {
+        if (/^\s*(```|~~~)/.test(lignes[i])) {
+          if (dans) {
+            // TF-2345 (10/11/2026) : dans un bloc balisé markdown, md ou text, une première ligne « # titre » est un titre à recopier,
+            // pas l'invite root d'une console. Les invites « $ » et « > » et les invocations d'outil y restent comptées.
+            const titreARecopier = BALISES_A_RECOPIER.has(balise) && /^\s*#+\s/.test(premiere || "");
+            if (premiere && !titreARecopier && invocations.some((r) => r.test(premiere))) commandes.push({ ligne: debut, texte: premiere.trim().slice(0, 60) });
+            dans = false; premiere = null;
+          } else { dans = true; debut = i + 1; balise = lignes[i].replace(/^\s*(?:```|~~~)\s*/, "").split(/\s+/)[0].toLowerCase(); }
+          continue;
+        }
+        if (dans && premiere === null && lignes[i].trim()) premiere = lignes[i];
+      }
+      if (!commandes.length)
+        pousser("EC-10", "PASS", `aucun bloc de code à exécuter (lecteur déclaré : « ${lecteur.slice(0, 60)} »)`);
+      else if (executant)
+        pousser("EC-10", "PASS",
+          `${commandes.length} bloc(s) à exécuter, et le lecteur déclaré EST un exécutant (« ${lecteur.slice(0, 60)} ») — la commande lui épargne une traduction`);
+      else
+        pousser("EC-10", "FAIL",
+          `${commandes.length} bloc(s) de code à EXÉCUTER dans un document dont le lecteur déclaré n'exécute pas `
+          + `(« ${lecteur.slice(0, 60)} ») : `
+          + commandes.slice(0, 4).map((c) => `l.${c.ligne} « ${c.texte} »`).join(" · ")
+          + (commandes.length > 4 ? ` · et ${commandes.length - 4} autre(s)` : "")
+          + " — un bloc qu'on recopie sert tout lecteur, un bloc qu'on exécute remplace, pour les autres, "
+          + "une action simple par une compétence qu'ils n'ont pas (E-15)",
+          commandes[0].ligne);
+    }
+  }
+
+  // EC-11 (TF-1392, décision D-2 (a) du 13/10/2026) — UNE QUESTION POSÉE AU LECTEUR NOMME CE DONT
+  // ELLE PARLE. AVERT SEULEMENT, JAMAIS FAIL.
+  //
+  // LE FAIT. La règle S47 d'oracle-synthese est née d'une décision refusée le 16/09/2026 (« on ne
+  // comprend absolument rien au charabia ») : elle demandait de trancher le sort d'un nom de dépôt
+  // sans jamais l'écrire. Mesuré le 13/10/2026 (étude 20261013-etude-opportunite-juge-de-
+  // comprehension) : les 3 relecteurs qui jouaient le lecteur ont jugé ce texte COMPRIS ; seule la
+  // règle mécanique l'attrape, avec 0 faux refus sur 17 décisions acceptées. Mais S47 ne juge que
+  // les restitutions. Cette règle la porte hors d'elles : à tout document qui pose une question de
+  // décision à son lecteur.
+  //
+  // CE QU'ELLE MESURE. Une question de DÉCISION (« Faut-il… ? », « Publier… ? », « Doit-on… ? ») et
+  // le paragraphe qui la porte doivent contenir un DÉSIGNATEUR, comme S47 : un fragment entre accents
+  // graves, un chemin, un identifiant (TF-1234, D-3), un nom à tirets (`factory-pilot`), un nom
+  // entre guillemets français, ou un nom propre au milieu d'une phrase. Elle ne juge ni la justesse
+  // ni la suffisance du nom. Les questions rhétoriques et les questions citées entre guillemets ne
+  // sont pas des questions de décision : elles ne comptent pas.
+  {
+    const OUVREURS = /^(?:faut-il|doit-on|peut-on|veut-on|voulez-vous|souhaitez-vous|acceptez-vous|validez-vous|préférez-vous|garde-t-on|retient-on|lance-t-on|publie-t-on)\b/iu;
+    const INFINITIF = /^[A-ZÀ-Ý][a-zà-ÿ]{2,}(?:er|ir)$/u;
+    const designe = (t) => /`[^`]+`/.test(t)
+      || /[\w-]+[\\/][\w.-]+/.test(t)
+      || /\b[\w-]+\.(?:md|mjs|js|json|py|html|ps1|txt|csv)\b/.test(t)
+      || /\b[A-Z]{1,5}-?\d{1,5}\b/.test(t)
+      || /\b[a-z0-9]+(?:-[a-z0-9]+){2,}\b/.test(t)
+      || /«\s*[^»]{2,}»/.test(t)
+      || /[\p{Ll},'’]\s+(?!Ce\b|Cet\b|Cette\b|Il\b|Elle\b|On\b|Un\b|Une\b|Le\b|La\b|Les\b|Et\b|Mais\b|Ou\b)[A-ZÀ-Ý][\p{L}-]{2,}/u.test(t);
+    // Les blocs : paragraphes séparés par une ligne vide ; un titre, une ligne de tableau et une
+    // puce sont chacun leur propre bloc.
+    const blocs = [];
+    let cur = null;
+    for (let i = 0; i < horsCode.length; i++) {
+      const l = horsCode[i];
+      const seul = /^\s*(#{1,6}\s|\||[-*+]\s|\d+[.)]\s)/.test(l);
+      if (!l.trim() || seul) { if (cur) blocs.push(cur); cur = null; }
+      if (!l.trim()) continue;
+      if (seul) { blocs.push({ ligne: i + 1, brut: l, prose: proseLignes[i] }); continue; }
+      if (!cur) cur = { ligne: i + 1, brut: "", prose: "" };
+      cur.brut += " " + l; cur.prose += " " + proseLignes[i];
+    }
+    if (cur) blocs.push(cur);
+    // UNE RESTITUTION N'EST PAS JUGÉE ICI : ses décisions (« > **D-1 — … ? ** ») sont celles de S47,
+    // bloquante chez elle. Mesuré le 13/10/2026 : portée sur les 243 restitutions de
+    // output\04-plans, une version qui retirait le sélecteur comme S47 avertissait sur 48 fichiers,
+    // dont D-37, tranchée sans difficulté par le porteur — du bruit, que S47 ne fait pas.
+    const restitution = /^\s*>\s*\*\*D-\d{1,3}\b/m.test(texte);
+    const muettes = [];
+    let questions = 0;
+    if (!restitution) for (const b of blocs) {
+      const sansCitation = b.prose.replace(/«[^»]*»/g, " ").replace(/"[^"]*"/g, " ");
+      const qs = (sansCitation.match(/[^.!?:;]*\?/g) || [])
+        .map((q) => q.replace(/[*_]/g, " ").replace(/^\s*(?:[A-Z]{1,3}-\d+|Décision\s*\d*|Question\s*\d*)?\s*[—–:-]?\s*/u, "").trim())
+        .filter((q) => { const premier = q.split(/\s+/)[0] || ""; return OUVREURS.test(q) || INFINITIF.test(premier); });
+      if (!qs.length) continue;
+      questions += qs.length;
+      if (!designe(b.brut)) muettes.push({ ligne: b.ligne, texte: qs[0].slice(0, 90) });
+    }
+    if (restitution) pousser("EC-11", "SKIP", "restitution : ses décisions sont jugées par S47 d'oracle-synthese, bloquante chez elle");
+    else if (!questions) pousser("EC-11", "PASS", "aucune question de décision posée au lecteur");
+    else if (!muettes.length) pousser("EC-11", "PASS", `${questions} question(s) de décision, chacune dans un paragraphe qui nomme ce dont elle parle`);
+    else pousser("EC-11", "AVERT",
+      `${muettes.length} question(s) de décision dont le paragraphe ne NOMME rien — ni accents graves, ni chemin, ni identifiant, `
+      + "ni nom entre guillemets, ni nom propre : "
+      + muettes.slice(0, 4).map((m) => `l.${m.ligne} « ${m.texte} »`).join(" · ")
+      + (muettes.length > 4 ? ` · et ${muettes.length - 4} autre(s)` : "")
+      + " — un lecteur ne tranche pas une question sur « un nom de dépôt » ou « cet objet » ; le relecteur qui joue le lecteur "
+      + "ne voit pas cette périphrase (mesure du 13/10/2026). AVERTISSEMENT, jamais bloquant (D-2 (a) du 13/10/2026)",
+      muettes[0].ligne);
+  }
+
+  // EC-12 (TF-1847, 18/10/2026, retour Produit-79 RP-10) — UNE ÉNUMÉRATION DEVIENT UNE LISTE (E-11).
+  // AVERT SEULEMENT, JAMAIS FAIL, hors restitution.
+  //
+  // LE FAIT. E-11 (« un paragraphe qui énumère devient une liste ») n'avait de juge que pour HTML (L12) et
+  // PPTX. Retour humain du 17/10/2026, mot pour mot : « J'ai déjà dit que lorsqu'il y avait des listes, il
+  // devait y avoir des puces et sous-puces affichées, ce qui n'est pas le cas ici. » Une restitution portait
+  // « Comment faire : 1) … 2) … 3) … » sur une ligne de tableau.
+  //
+  // CE QU'ELLE MESURE. Trois marqueurs « 1) … 2) … 3) » (ou « (1) … (2) … (3) ») consécutifs sur une même ligne
+  // source, hors code et hors citation entre guillemets français. Les motifs vivent une fois, dans
+  // lib-enumeration-liste.mjs, que S80 d'oracle-synthese partage. UNE RESTITUTION N'EST PAS JUGÉE ICI : S80 la
+  // juge, bloquante chez elle (mesure d'entrée : 9 accusations sur 274 synthèses d'output\04-plans, aucune
+  // fausse). Hors restitution, sur 202 autres Markdown du pilot (études, références, gabarits) : 2 accusés, vrais
+  // aussi, d'où l'avertissement seul. NON JUGÉ : une énumération sans numéros, un raisonnement coupé en puces.
+  {
+    const restitution12 = /^\s*>\s*\*\*D-\d{1,3}\b/m.test(texte) || (String(texte).match(/^#{1,4}\s*\d{1,2}\.?\s/gm) || []).length >= 5;
+    if (restitution12) pousser("EC-12", "SKIP", "restitution : ses énumérations sont jugées par S80 d'oracle-synthese, bloquante chez elle");
+    else {
+      const enums = enumerationsEnLigne(texte);
+      if (!enums.length) pousser("EC-12", "PASS", "aucune énumération numérotée « 1) … 2) … 3) » sur une même ligne");
+      else pousser("EC-12", "AVERT",
+        `${enums.length} énumération(s) numérotée(s) en ligne : `
+        + enums.slice(0, 4).map((e) => `l.${e.ligne} (${e.elements} éléments${e.cellule ? ", en cellule de tableau" : ""}) « ${e.extrait.slice(0, 60)} »`).join(" · ")
+        + (enums.length > 4 ? ` · et ${enums.length - 4} autre(s)` : "")
+        + " — une énumération devient une liste, une ligne par élément (E-11). Retour humain du 17/10/2026 : « il devait y avoir des puces et "
+        + "sous-puces affichées ». AVERTISSEMENT, jamais bloquant hors restitution (TF-1847)",
+        enums[0].ligne);
+    }
+  }
+
+  // EC-16 (TF-1977, 29/10/2026, retour Produit-84 du 20/10) — DEUX « $ » SUR UNE LIGNE SONT LUS COMME UNE FORMULE.
+  // AVERT SEULEMENT, JAMAIS FAIL, sur tout Markdown jugé, restitution comprise.
+  //
+  // LE FAIT. « 194 $ par mois, dont 105 $ » s'est affiché en italique mathématique dans l'aperçu : un moteur Markdown
+  // qui rend les formules lit le texte entre deux « $ » comme du LaTeX. 14 lignes concernées, aucun oracle ne le voyait.
+  //
+  // CE QU'ELLE MESURE. Une ligne qui porte au moins deux « $ » non échappés, hors bloc de code et hors code en ligne.
+  // Le remède : écrire la devise en lettres (« 194 USD ») ou échapper le signe (« \$ »). NON JUGÉ : un moteur qui ne
+  // rend pas les formules affiche le texte tel quel, l'avertissement y est sans effet.
+  {
+    const lignes16 = String(texte).split(/\r?\n/);
+    let dansBloc = false;
+    const dollars = [];
+    lignes16.forEach((l, i) => {
+      if (/^\s*(```|~~~)/.test(l)) { dansBloc = !dansBloc; return; }
+      if (dansBloc) return;
+      const sansCode = l.replace(/`[^`]*`/g, "");
+      if ((sansCode.match(/(?<!\\)\$/g) || []).length >= 2) dollars.push({ ligne: i + 1, extrait: sansCode.trim() });
+    });
+    if (!dollars.length) pousser("EC-16", "PASS", "aucune ligne à deux « $ » non échappés hors code");
+    else pousser("EC-16", "AVERT",
+      `${dollars.length} ligne(s) à deux « $ » non échappés ou plus : `
+      + dollars.slice(0, 4).map((d) => `l.${d.ligne} « ${d.extrait.slice(0, 60)} »`).join(" · ")
+      + (dollars.length > 4 ? ` · et ${dollars.length - 4} autre(s)` : "")
+      + " — l'aperçu lit le texte entre deux « $ » comme une formule et l'affiche en italique mathématique ; écrire la devise en lettres "
+      + "(« 194 USD ») ou échapper le signe (« \\$ »). AVERTISSEMENT, jamais bloquant (TF-1977)",
+      dollars[0].ligne);
+  }
+
+  // EC-17 (D-114 (a) du 02/11/2026, TF-1971) — DEUX MONTANTS COMPARÉS DISENT CE QUE CHACUN COMPREND (E-18).
+  // AVERT SEULEMENT, JAMAIS FAIL. Le fait : 224 € contre 320 €, pare-feu compris d'un seul côté, 6 relectures sans le voir.
+  // CE QU'ELLE MESURE : une ligne hors code qui porte deux montants et un comparateur (contre, versus, au lieu de, plutôt
+  // que, face à, comparé à), dans un texte sans rubrique « Compris » ou « Non compris ». Mesuré le 02/11/2026 sur 813
+  // Markdown suivis du pilot : 4 accusés, tous de vrais comparatifs. NON JUGÉ : deux montants dans deux cellules d'un tableau.
+  {
+    const MONTANT = /(?:\d[\d\s.,]*\s?(?:k€|€|EUR\b|USD\b|\$)|\$\s?\d[\d.,]*)/g;
+    const COMPARE = /(?:^|[^\p{L}])(contre|versus|vs\.?|au lieu de|plutôt que|face à|comparée? à)(?:$|[^\p{L}])/iu;
+    let dansBloc17 = false;
+    const comparatifs = [];
+    String(texte).split(/\r?\n/).forEach((l, i) => {
+      if (/^\s*(```|~~~)/.test(l)) { dansBloc17 = !dansBloc17; return; }
+      if (dansBloc17) return;
+      const s = l.replace(/`[^`]*`/g, "");
+      if ((s.match(MONTANT) || []).length >= 2 && COMPARE.test(s)) comparatifs.push({ ligne: i + 1, extrait: s.trim() });
+    });
+    if (!comparatifs.length) pousser("EC-17", "PASS", "aucune ligne qui compare deux montants");
+    else if (/non compris|compris\s*:/i.test(String(texte))) pousser("EC-17", "PASS", `${comparatifs.length} ligne(s) comparent deux montants, et la rubrique « Compris, non compris » est présente`);
+    else pousser("EC-17", "AVERT",
+      `${comparatifs.length} ligne(s) comparent deux montants sans la rubrique « Compris : … · Non compris : … · Conséquence : … » : `
+      + comparatifs.slice(0, 3).map((c) => `l.${c.ligne} « ${c.extrait.slice(0, 70)} »`).join(" · ")
+      + " — dire ce que chaque total comprend (E-18, D-114 (a)). AVERTISSEMENT, jamais bloquant (TF-1971)",
+      comparatifs[0].ligne);
+  }
+
+  // EC-18 (TF-2604, 16/11/2026, retour Produit-79 du 12/11, RP-27) — UN TEXTE DONT LES ACCENTS SONT CORROMPUS EST REFUSÉ.
+  //
+  // LE FAIT. Le 12/11/2026, une fiche générée par script depuis un JSON réécrit en encodage corrompu citait 69 lignes du type
+  // « ðŸŽ„ DÃ‰CEMBRE SE PRÃ‰PARE MAINTENANT. » (UTF-8 relu en Windows-1252). L'oracle l'a jugée PASS (2981 mots) et le hook d'écriture
+  // n'a rien dit : aucune règle ne regardait les caractères, la fiche a été remise à l'exploitant.
+  //
+  // CE QU'ELLE MESURE. Les quatre séquences que cette lecture fautive produit pour les lettres accentuées les plus fréquentes et les
+  // émojis : « Ã© » (é), « Ã¨ » (è), « â€ » (apostrophe, guillemets, tiret typographiques), « ðŸ » (émoji). FAIL : un texte qui en porte
+  // une est illisible pour son lecteur, quel que soit son style. Hors bloc de code et hors code en ligne : un texte qui CITE la séquence
+  // pour parler du défaut la met dans l'un ou l'autre. Une séquence entre guillemets français « … » n'est pas comptée non plus : un
+  // texte corrompu en porte aussi hors guillemets, et un retour qui décrit le défaut, lui, ne la montre qu'entre guillemets.
+  // NON JUGÉ : les autres lettres corrompues (« Ã  », « Ã§ », « Ãª », « Ã´ »…), un texte corrompu de façon que ces quatre séquences ne
+  // montrent pas, et une séquence citée sans guillemets ni code.
+  {
+    const MOJIBAKE = /Ã©|Ã¨|â€|ðŸ/;
+    let dansBloc18 = false;
+    const corrompues = [];
+    let citees = 0;
+    String(texte).split(/\r?\n/).forEach((l, i) => {
+      if (/^\s*(```|~~~)/.test(l)) { dansBloc18 = !dansBloc18; return; }
+      if (dansBloc18) return;
+      const sansCode = l.replace(/`[^`]*`/g, "");
+      const sansCitation = sansCode.replace(/«[^»]*»/g, "");
+      if (MOJIBAKE.test(sansCitation)) corrompues.push({ ligne: i + 1, extrait: sansCitation.trim() });
+      else if (MOJIBAKE.test(sansCode)) citees++;
+    });
+    if (!corrompues.length) {
+      pousser("EC-18", "PASS", citees
+        ? `aucun texte corrompu (UTF-8 relu en Windows-1252) ; ${citees} ligne(s) citent la séquence entre guillemets français, non comptées`
+        : "aucun texte corrompu (UTF-8 relu en Windows-1252) hors code");
+    } else {
+      pousser("EC-18", "FAIL",
+        `${corrompues.length} ligne(s) au texte corrompu (UTF-8 relu en Windows-1252 : « Ã© », « Ã¨ », « â€ », « ðŸ ») : `
+        + corrompues.slice(0, 3).map((c) => `l.${c.ligne} « ${c.extrait.slice(0, 60)} »`).join(" · ")
+        + (corrompues.length > 3 ? ` · et ${corrompues.length - 3} autre(s)` : "")
+        + " — le texte source a été relu avec le mauvais encodage ; regénérer le fichier depuis une source lue en UTF-8 avant de le remettre (TF-2604)",
+        corrompues[0].ligne);
+    }
+  }
+
+  // EC-13 (TF-1926, décision D-48 (a) du 19/10/2026, étude style-ecriture O3) — LA REVUE DES LISTES DE TOURNURES A UNE DATE.
+  // AVERT SEULEMENT, JAMAIS FAIL, sur tout texte jugé.
+  //
+  // LE FAIT. Les 9 familles de `references/tics-redactionnels.json` n'ont été relues qu'une fois, le 11/09/2026, et rien
+  // ne disait qui les relit ni quand ; la page qui fonde les tournures date elle-même un de ses signes. Loi n° 4 (une
+  // donnée volatile porte sa date de péremption) et loi n° 1 (une date que rien ne lit n'existe pas).
+  //
+  // CE QU'ELLE MESURE. La clé `revue_prevue` (AAAA-MM-JJ) de chaque famille : absente ou illisible, ou strictement
+  // antérieure à aujourd'hui (le jour dit n'est pas encore en retard). Le remède se joue : relire les listes contre leurs
+  // sources, puis inscrire `derniere_lecture` et une nouvelle `revue_prevue` dans la donnée. NON JUGÉ : que la relecture
+  // ait réellement eu lieu — la date est déclarée par l'humain ou la session qui relit.
+  {
+    const AAAA_MM_JJ = /^\d{4}-\d{2}-\d{2}$/;
+    const valide = (d) => AAAA_MM_JJ.test(String(d || "")) && !Number.isNaN(Date.parse(`${d}T00:00:00Z`));
+    const jour = options.aujourdhui || (() => { const n = new Date(); return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}-${String(n.getDate()).padStart(2, "0")}`; })();
+    const familles = Array.isArray(donnee?.familles) ? donnee.familles : [];
+    if (!familles.length) pousser("EC-13", "SKIP", "aucune famille dans la donnée : revue non jugée");
+    else {
+      const sansDate = familles.filter((f) => !valide(f.revue_prevue)).map((f) => f.cle);
+      const enRetard = familles.filter((f) => valide(f.revue_prevue) && f.revue_prevue < jour).map((f) => `${f.cle} (prévue le ${f.revue_prevue})`);
+      if (!sansDate.length && !enRetard.length) {
+        const prochaine = familles.map((f) => f.revue_prevue).sort()[0];
+        pousser("EC-13", "PASS", `revue des listes de tournures datée pour ${familles.length} famille(s) sur ${familles.length}, la plus proche le ${prochaine}`);
+      } else {
+        pousser("EC-13", "AVERT",
+          (enRetard.length ? `${enRetard.length} famille(s) dont la revue est en retard au ${jour} : ${enRetard.slice(0, 5).join(", ")}${enRetard.length > 5 ? ` · et ${enRetard.length - 5} autre(s)` : ""}` : "")
+          + (enRetard.length && sansDate.length ? " · " : "")
+          + (sansDate.length ? `${sansDate.length} famille(s) sans revue_prevue lisible : ${sansDate.slice(0, 5).join(", ")}${sansDate.length > 5 ? ` · et ${sansDate.length - 5} autre(s)` : ""}` : "")
+          + " — relire les listes contre leurs sources, puis inscrire derniere_lecture et une nouvelle revue_prevue dans references\\tics-redactionnels.json (loi n° 4). "
+          + "AVERTISSEMENT, jamais bloquant (TF-1926, D-48 (a) du 19/10/2026)");
+      }
+    }
+  }
+
+  // EC-14 (TF-1960, D-78 (c) amendée du 26/10/2026) — UN ÉCRIT À UN TIERS EST COURT. A_REJOUER, JAMAIS FAIL.
+  //
+  // LE FAIT. 8 reprises en 7 jours sur la longueur et la forme de courriels et de fiches destinés à un tiers
+  // (« j'ai déjà demandé plusieurs fois »), et une proposition portant 94 défauts de concision rendue PASS par cet
+  // oracle : rien ne mesurait la concision. LA DÉCISION, mot pour mot : « plutôt que de bloquer, cela doit être
+  // rejoué pour répondre aux exigences ». Le statut est donc A_REJOUER : le verdict reste PASS, et l'oracle rend la
+  // liste des passages à réécrire avec une consigne ; la session qui produit réécrit et rejoue, 3 passes au plus.
+  //
+  // CE QU'ELLE MESURE, sur la prose d'un écrit destiné à un tiers (en-tête `destinataire:` autre que « humain », ou
+  // type de nom courriel, courrier, lettre, fiche) : un paragraphe de 3 phrases et 60 mots au plus, une phrase de
+  // 25 mots au plus, aucune énumération de plus de 3 éléments en prose. Les bornes vivent dans la donnée. NON JUGÉ :
+  // le destinataire réel (il se déduit de l'en-tête ou du nom) et la justesse de ce qui est coupé.
+  let aRejouer = null;
+  {
+    const tiers = donnee?.ecrit_a_un_tiers;
+    const nomEcrit = basename(String(options.cheminRelatif || options.cheminJuge || ""));
+    if (!tiers) {
+      pousser("EC-14", "SKIP", "aucune règle `ecrit_a_un_tiers` dans la donnée — concision non jugée");
+    } else {
+      const dest = ecritATiers(texte, nomEcrit, tiers, String(options.cheminRelatif || ""));
+      if (!dest.concerne) {
+        pousser("EC-14", "SKIP", `${dest.raison} : concision d'un écrit à un tiers non jugée — ce n'est pas un constat sur le texte`);
+      } else {
+        const maxPh = Number(tiers.paragraphe_phrases_max ?? 3), maxMotsP = Number(tiers.paragraphe_mots_max ?? 60);
+        const maxMotsPh = Number(tiers.phrase_mots_max ?? 25), maxElem = Number(tiers.enumeration_elements_max ?? 3);
+        const p = passagesDeConcision(horsCode, proseLignes, tiers);
+        const sortes = [
+          ["EC-14-paragraphe", p.paragraphe, `paragraphe(s) de plus de ${maxPh} phrases ou de plus de ${maxMotsP} mots`,
+            (x) => `l.${x.ligne} (${x.mots} mots, ${x.phrases} phrases) « ${x.extrait} »`,
+            "une idée par paragraphe, ce qui sert le lecteur d'abord, le reste coupé", `aucun paragraphe de plus de ${maxPh} phrases ni de ${maxMotsP} mots`],
+          ["EC-14-phrase", p.phrase, `phrase(s) de plus de ${maxMotsPh} mots`,
+            (x) => `l.${x.ligne} (${x.mots} mots) « ${x.extrait} »`,
+            "couper la phrase en deux, un verbe et une idée par phrase", `aucune phrase de plus de ${maxMotsPh} mots`],
+          ["EC-14-enumeration", p.enumeration, `énumération(s) de plus de ${maxElem} éléments en prose`,
+            (x) => `l.${x.ligne} (${x.elements} éléments) « ${x.extrait} »`,
+            `garder les ${maxElem} éléments qui comptent pour le lecteur, ou les mettre en liste à puces (E-11)`, `aucune énumération de plus de ${maxElem} éléments en prose`],
+        ];
+        for (const [regle, liste, quoi, montrer, remede, rien] of sortes) {
+          if (!liste.length) { pousser(regle, "PASS", `${rien} (écrit à un tiers : ${dest.raison})`); continue; }
+          findings.push({ regle, statut: "A_REJOUER", ligne: liste[0].ligne, passages: liste,
+            message: `${liste.length} ${quoi}, dans un écrit destiné à un tiers (${dest.raison}) : ${liste.slice(0, 6).map(montrer).join(" · ")}`
+              + (liste.length > 6 ? ` · et ${liste.length - 6} autre(s), toutes dans \`a_rejouer.passages\`` : "")
+              + ` — remède : ${remede}. A_REJOUER, jamais bloquant : on réécrit puis on rejoue (D-78 (c) du 26/10/2026)` });
+        }
+      }
+    }
+  }
+
+  // EC-15 (TF-1960, D-78 (c) amendée du 26/10/2026) — LA LANGUE DU TEXTE EST CELLE QU'ON ATTEND DE LUI. A_REJOUER, JAMAIS FAIL.
+  //
+  // LE FAIT. Des réponses en anglais à un utilisateur francophone dans 3 sessions. LA DÉCISION : « si l'utilisateur est
+  // anglophone, l'anglais ne doit pas être un critère de blocage. Il faut s'adapter à la langue de l'utilisateur. »
+  // Attendue = `--langue`, sinon l'en-tête `langue:`, sinon « fr » (la Factory est francophone par défaut, règle 12 du
+  // CLAUDE.md global). Un texte anglais passe donc avec `--langue en` ou `langue: en`, et rien d'autre ne change.
+  // NON JUGÉ : la qualité de la langue, un texte mixte à parts proches, une langue sans liste de mots vides (dite).
+  {
+    const lc = donnee?.langue;
+    if (!lc) {
+      pousser("EC-15", "SKIP", "aucune clé `langue` dans la donnée — langue non jugée");
+    } else {
+      const enteteLangue = enTete(texte).langue;
+      const origine = options.langue ? "--langue" : enteteLangue ? "en-tête `langue:`" : "défaut de la Factory, francophone (règle 12 du CLAUDE.md global)";
+      const attendue = String(options.langue || enteteLangue || lc.defaut || "fr").toLowerCase().split(/[-_]/)[0];
+      const nom = (c) => lc.noms?.[c] || c;
+      const { jetons, parts } = partsDeLangue(texteProse, lc);
+      const pct = (x) => `${Math.round(x * 100)} %`;
+      const minMots = Number(lc.mots_minimum ?? 30), partMin = Number(lc.part_minimum ?? 0.08), ecart = Number(lc.ecart_minimum ?? 1.3);
+      if (!(attendue in parts)) {
+        pousser("EC-15", "SKIP", `langue attendue « ${attendue} » (${origine}) sans liste de mots vides dans la donnée : langue non jugée — ce n'est pas un PASS`);
+      } else if (jetons < minMots) {
+        pousser("EC-15", "SKIP", `${jetons} mots (< ${minMots}) : langue non jugée`);
+      } else {
+        const dominante = Object.keys(parts).sort((a, b) => parts[b] - parts[a])[0];
+        if (parts[dominante] < partMin) {
+          pousser("EC-15", "SKIP", `aucune langue reconnaissable (part maximale de mots vides ${pct(parts[dominante])} < ${pct(partMin)}) : langue non jugée`);
+        } else if (dominante === attendue || parts[dominante] < parts[attendue] * ecart) {
+          pousser("EC-15", "PASS", `langue dominante : ${nom(dominante)} (${pct(parts[dominante])} de mots vides) ; attendue : ${nom(attendue)} (${origine})`);
+        } else {
+          // Les passages : les blocs qui, pris seuls, sont dans l'autre langue.
+          const passages = [];
+          for (const b of blocsDeProse(horsCode, proseLignes)) {
+            const bp = partsDeLangue(b.prose, lc);
+            if (bp.jetons < 8) continue;
+            const d = Object.keys(bp.parts).sort((x, y) => bp.parts[y] - bp.parts[x])[0];
+            if (d !== attendue && bp.parts[d] >= partMin && bp.parts[d] >= bp.parts[attendue] * ecart)
+              passages.push({ ligne: b.ligne, langue: d, mots: bp.jetons, extrait: b.prose.slice(0, 70) });
+          }
+          const tete = passages.length ? passages : [{ ligne: 1, langue: dominante, mots: jetons, extrait: texteProse.replace(/\s+/g, " ").trim().slice(0, 70) }];
+          findings.push({ regle: "EC-15", statut: "A_REJOUER", ligne: tete[0].ligne, passages: tete,
+            message: `texte en ${nom(dominante)} (${pct(parts[dominante])} de mots vides, contre ${pct(parts[attendue])} en ${nom(attendue)}) alors que la langue attendue est le ${nom(attendue)} (${origine}) : `
+              + tete.slice(0, 4).map((x) => `l.${x.ligne} « ${x.extrait} »`).join(" · ")
+              + (tete.length > 4 ? ` · et ${tete.length - 4} autre(s)` : "")
+              + ` — remède : réécrire en ${nom(attendue)} ; si le lecteur lit le ${nom(dominante)}, le dire — \`langue: ${dominante}\` en en-tête ou \`--langue ${dominante}\` — et le même texte passe : `
+              + "l'anglais n'est jamais un critère de blocage, on s'adapte à la langue de l'utilisateur. A_REJOUER, jamais bloquant (D-78 (c) amendée du 26/10/2026)" });
+        }
+      }
+    }
+  }
+
+  // LA LISTE À REJOUER. Elle ne change pas le verdict : un texte à réécrire n'est pas un texte en échec. Elle dit quoi
+  // réécrire (les passages, au format de chaque finding), comment (la consigne) et jusqu'où (3 passes au plus).
+  const enRejeu = findings.filter((f) => f.statut === "A_REJOUER");
+  if (enRejeu.length) {
+    const passesMax = Number(donnee?.ecrit_a_un_tiers?.passes_max ?? 3);
+    const passe = Math.max(1, Number(options.passe) || 1);
+    const derniere = passe >= passesMax;
+    const bornes = donnee?.ecrit_a_un_tiers || {};
+    aRejouer = {
+      nombre: enRejeu.reduce((n, f) => n + Math.max(1, (f.passages || []).length), 0),
+      regles: enRejeu.map((f) => f.regle),
+      passe, passes_max: passesMax, derniere_passe: derniere,
+      consigne: "Réécris chaque passage listé, dans la langue du destinataire : "
+        + `un paragraphe de ${bornes.paragraphe_phrases_max ?? 3} phrases et ${bornes.paragraphe_mots_max ?? 60} mots au plus, `
+        + `une phrase de ${bornes.phrase_mots_max ?? 25} mots au plus, une énumération de ${bornes.enumeration_elements_max ?? 3} éléments au plus en prose `
+        + "(au-delà, ne garde que ceux qui comptent pour le lecteur, ou une liste à puces). Garde les faits, coupe le reste. "
+        + (derniere
+          ? `C'est la passe ${passe} sur ${passesMax} : si des écarts restent après cette réécriture, remets le texte avec les écarts restants nommés, sans rejouer une quatrième fois.`
+          : `Puis rejoue : node oracles\\oracle-ecriture.mjs <ce fichier> --passe ${passe + 1} (ajoute \`--langue <code>\` si le destinataire n'est pas francophone). ${passesMax} passes au plus ; au-delà, remets le texte avec les écarts restants nommés.`),
+      passages: enRejeu.flatMap((f) => (f.passages || [{ ligne: f.ligne }]).map((x) => ({ regle: f.regle, ...x }))),
+    };
+  }
+
+  const verdict = findings.some((f) => f.statut === "FAIL") ? "FAIL" : "PASS";
+  return { mots, verdict, findings, non_juge: nonJuge(donnee), a_rejouer: aRejouer };
+}
+
+function nonJuge(donnee) {
+  // TF-2259 : l'antériorité du jugement par défaut se déclare ici, avec le seuil lu dans la donnée.
+  const depuis = donnee?.ecrit_a_un_tiers?.dossiers_juges_par_defaut_depuis;
+  const dossiers = (donnee?.ecrit_a_un_tiers?.dossiers_juges_par_defaut || []).join(", ");
+  const anteriorite = /^\d{4}-\d{2}-\d{2}$/.test(String(depuis || ""))
+    ? [`EC-14 : les écrits sans en-tête \`destinataire:\` sous ${dossiers}/ dont le nom porte une date antérieure au ${depuis} ne sont pas jugés par défaut (antériorité, TF-2259) — leur concision se juge à leur prochaine réécriture sous un nom daté d'après le seuil ; un nom sans date ne prouve aucune antériorité, l'écrit reste jugé`]
+    : [];
+  return [...(donnee?.non_juge || []), ...anteriorite, ...NON_JUGE_ORACLE];
+}
+
+// ── LA DONNÉE ────────────────────────────────────────────────────────────────────────────────
+
+function lireDonnee(chemin) {
+  if (!existsSync(chemin)) return { erreur: `donnée introuvable : ${chemin}` };
+  try {
+    const d = JSON.parse(readFileSync(chemin, "utf8"));
+    if (!Array.isArray(d.familles) || !d.familles.length) return { erreur: `donnée sans familles : ${chemin}` };
+    return { donnee: d };
+  } catch (e) {
+    return { erreur: `donnée illisible : ${chemin} (${e.message})` };
+  }
+}
+
+const erreur = (message) => {
+  console.log(JSON.stringify({ oracle: NOM, version: VERSION, verdict: "ERREUR", message }));
+  process.exit(2);
+};
+
+// ── LA BASELINE ──────────────────────────────────────────────────────────────────────────────
+//
+// Un seuil ne se pose pas au jugé : il se pose sur un corpus, et il se REJOUE. Le contrat du
+// mandat (§4) est que le corpus déjà écrit du pilot reste PASS à 95 % ou plus — sans quoi la
+// doctrine condamnerait rétroactivement ce qu'elle n'a pas relu.
+function modeBaseline(dossier, donnee) {
+  let fichiers;
+  try {
+    fichiers = readdirSync(dossier).filter((f) => f.toLowerCase().endsWith(".md") && f.toLowerCase() !== "readme.md").sort();
+  } catch {
+    erreur(`dossier illisible : ${dossier}`);
+    return;
+  }
+  const lignes = [];
+  let pass = 0, skip = 0, fail = 0;
+  for (const f of fichiers) {
+    const chemin = join(dossier, f);
+    const rel = relative(RACINE, resolve(chemin)).replace(/\\/g, "/");
+    const r = juger(readFileSync(chemin, "utf8"), { donnee, cheminRelatif: rel });
+    if (r.verdict === "PASS") pass++; else if (r.verdict === "SKIP") skip++; else fail++;
+    const enDefaut = r.findings.filter((x) => x.statut === "FAIL").map((x) => x.regle).join(" ") || "—";
+    lignes.push(`${f.slice(0, 74).padEnd(74)} ${String(r.mots).padStart(6)}  ${r.verdict.padEnd(5)}  ${enDefaut}`);
+  }
+  const juges = pass + fail;
+  const taux = juges ? (pass * 100) / juges : 100;
+  console.log(`${"fichier".padEnd(74)} ${"mots".padStart(6)}  ${"verdict".padEnd(5)}  familles en défaut`);
+  for (const l of lignes) console.log(l);
+  console.log(`baseline : ${pass} PASS, ${skip} SKIP, ${fail} FAIL sur ${fichiers.length} — ${taux.toFixed(1)} % PASS (hors SKIP)`);
+  console.log(JSON.stringify({ mode: "baseline", total: fichiers.length, pass, skip, fail, taux_pass: Math.round(taux * 10) / 10 }));
+  process.exit(taux >= 95 ? 0 : 1);
+}
+
+// ── LA RECETTE À DOUBLE SENS ─────────────────────────────────────────────────────────────────
+//
+// Quatre fixtures, et la ROUGE est la plus importante : une règle qui n'a jamais échoué n'a jamais
+// prouvé qu'elle savait échouer. La VERTE porte un bloc de code SATURÉ de tournures interdites —
+// c'est la preuve que citer n'est pas commettre.
+
+const FIXTURE_ROUGE = `# Note stratégique sur la transformation
+
+Il est important de noter que ce document ouvre une réflexion — une réflexion large — qui, dans un monde en pleine mutation, se révèle absolument cruciale pour l'ensemble des parties prenantes concernées, et il convient de souligner que chacun y trouvera matière à penser, car les experts s'accordent à considérer que la transformation reste un levier incontournable pour toute organisation.
+Il est essentiel de rappeler que cette démarche engage tout le monde — les équipes, les managers, la direction générale — et que ce n'est pas seulement une affaire d'outillage mais une affaire humaine, puisqu'il est généralement admis que la conduite du changement demeure le facteur numéro un de réussite d'un programme de cette ampleur, ce que de nombreuses études montrent depuis longtemps.
+Notons que la trajectoire proposée se veut progressive — progressive mais ambitieuse — et qu'elle s'appuie sur des retours de terrain collectés auprès des directions métier, des équipes techniques et des utilisateurs finaux, de sorte que chacun puisse s'y reconnaître sans renoncer aux priorités qu'il porte depuis le début de l'année.
+
+Il va sans dire que la quatrième phrase de cette série poursuit exactement sur la même cadence que les trois précédentes — une cadence longue, très longue — afin que la série de phrases de plus de trente-cinq mots atteigne la longueur que l'oracle refuse, c'est-à-dire sept d'affilée sans respiration. Force est de constater que la cinquième phrase ne fait pas mieux, puisqu'elle empile elle aussi des subordonnées, des incises — encore des incises — et des compléments circonstanciels jusqu'à dépasser largement les trente-cinq mots que la règle E-2 fixe comme borne haute d'une phrase lisible par quelqu'un. Comme nous l'avons vu, la sixième phrase de la série reprend le même procédé — l'incise, la subordonnée relative, le complément de manière et le complément de temps — afin d'atteindre sans peine les trente-cinq mots qu'il faut dépasser pour compter, et elle y parvient sans effort. Il va sans dire que la septième phrase, la dernière de la série, s'étire encore par les mêmes moyens — une incise ici, une relative là, un dernier complément circonstanciel — pour que la cascade atteigne le nombre exact que l'oracle refuse désormais, c'est-à-dire sept phrases longues d'affilée.
+
+De plus, la plateforme se situe au cœur de la chaîne de valeur — au cœur, vraiment.
+En outre, cette approche est non seulement pragmatique mais également soutenable.
+Par ailleurs, on estime généralement que les gains apparaissent dès le premier trimestre.
+Qui plus est, la méthode retenue est proprement révolutionnaire pour le secteur — sans précédent.
+D'autre part, qu'il s'agisse de gouvernance ou d'outillage, le cap reste le même.
+Également, la dynamique engagée se nourrit des premiers succès constatés sur le terrain — partout.
+Aussi, le dispositif de pilotage sera reconduit — sans changement notable — cette année.
+
+Nous allons voir les axes retenus, que ce soit du côté des équipes ou de la direction :
+
+- Axe un — la gouvernance
+  - sous-axe — les instances
+    - détail — la fréquence des comités
+- Axe deux — l'outillage
+  - sous-axe — le socle
+    - détail — les environnements
+
+✅ Un premier jalon — celui du trimestre — est posé pour la fin du mois de juin.
+🚀 Un second jalon suivra — sans engagement ferme — au trimestre suivant.
+
+Pour finir, le comité rappelle que **cette phrase entière est mise en gras au milieu du paragraphe pour appuyer un propos qui n'en avait aucun besoin**, puis il ajoute que **la seconde phrase soulignée de la même façon ne porte pas davantage de fait que la première et fatigue le lecteur**, avant de conclure que **la troisième emphase de ce paragraphe achève de transformer le gras en bruit de fond que plus personne ne lit**. Le rapporteur insiste encore : **une quatrième phrase soulignée au milieu du texte ne convainc pas davantage que les trois premières et fatigue** ; et il termine sur **une cinquième emphase de douze mots au moins qui fait passer ce paragraphe au-dessus du seuil**.
+
+En conclusion, la démarche est un véritable atout — un atout durable — dans un marché en constante évolution.
+Pour résumer, la transformation sera progressive, mesurée et partagée par tous les acteurs.
+Au final, il reste à confirmer le calendrier avec la direction générale avant la fin du mois.
+N'hésitez pas à revenir vers nous pour toute précision — j'espère que cela vous aidera.
+`;
+
+const FIXTURE_VERTE = `# Journal de mesure du lot 12
+
+Le lot 12 est entre en recette le 2 septembre. Trois environnements ont ete mesures : poste local,
+integration, preproduction. Les relevés viennent du journal d'execution, archive au meme dossier.
+
+| environnement | duree du build | tests joues | tests en echec |
+|---|---|---|---|
+| poste local | 4 min 10 s | 312 | 0 |
+| integration | 6 min 02 s | 312 | 2 |
+| preproduction | 6 min 55 s | 312 | 0 |
+
+Les deux echecs d'integration portent sur le meme composant. Le premier vient d'un fuseau horaire
+code en dur — le poste local est en UTC. Le second vient d'un fichier de donnees absent du depot.
+Les deux ont ete corriges le 3 septembre. La recette a ete rejouee le meme jour. Elle rend zero
+echec sur les trois environnements.
+
+La duree du build a augmente de 40 secondes entre le lot 11 et le lot 12. La cause est identifiee :
+le lot 12 ajoute 40 tests. Le cout par test reste stable, a 1,2 seconde. Aucune action n'est
+demandee sur ce point.
+
+Un contre-exemple utile, tire d'un ancien rapport, montre ce que la doctrine ecarte :
+
+\`\`\`markdown
+En conclusion, il est important de noter que les experts s'accordent a dire que cette solution
+revolutionnaire est absolument cruciale. De plus, elle est non seulement performante mais aussi
+incontournable. N'hesitez pas a nous solliciter — j'espere que cela vous aidera.
+\`\`\`
+
+Ce bloc est cite, pas ecrit. L'oracle ne le compte pas, et c'est le point : un texte qui montre une
+tournure fautive ne la commet pas.
+
+Trois suites sont prevues. La migration de la base est planifiee le 20 septembre. Le decommissionnement
+de l'ancien service suit le 27 — la bascule est reversible pendant 8 jours. Le bilan de recette
+sera depose le 30, avec les relevés bruts.
+
+Les chiffres ci-dessus viennent du journal d'execution. Ils ont ete releves 2 fois, a 2 jours
+d'intervalle. L'ecart entre les deux relevés est inferieur a 5 secondes sur chaque environnement.
+La mesure est donc tenue pour stable. Le detail des commandes jouees vit dans le meme dossier que
+ce journal, sous le nom des trois environnements.
+`;
+
+const FIXTURE_COURTE = `# Point rapide
+
+Il est important de noter que le lot 12 est entre en recette le 2 septembre. 2 tests
+echouent en integration. Ils portent sur le meme composant. La correction est prevue demain.
+`;
+
+function selfTest() {
+  const dir = mkdtempSync(join(tmpdir(), "oracle-ecriture-"));
+  const moi = fileURLToPath(import.meta.url);
+  const casse = [];
+  const jouer = (nom, contenu, args = []) => {
+    const chemin = join(dir, nom);
+    writeFileSync(chemin, contenu, "utf8");
+    const r = spawnSync(process.execPath, [moi, chemin, ...args], { encoding: "utf8" });
+    let j = null;
+    try { j = JSON.parse(r.stdout || "{}"); } catch { /* illisible */ }
+    return { statut: r.status, j, brut: r.stdout };
+  };
+
+  // 1. ROUGE — un texte sature doit ECHOUER, et sur au moins cinq regles distinctes.
+  const rouge = jouer("rouge.md", FIXTURE_ROUGE);
+  if (rouge.statut !== 1) casse.push(`rouge : exit ${rouge.statut}, attendu 1`);
+  if (rouge.j?.verdict !== "FAIL") casse.push(`rouge : verdict ${rouge.j?.verdict}, attendu FAIL`);
+  const reglesRouges = new Set((rouge.j?.findings || []).filter((f) => f.statut === "FAIL").map((f) => f.regle));
+  if (reglesRouges.size < 5) casse.push(`rouge : ${reglesRouges.size} regle(s) en FAIL, attendu >= 5 (${[...reglesRouges].join(", ")})`);
+  // Recalibrage du 12/09 : les regles de STRUCTURE doivent encore savoir echouer apres leur
+  // assouplissement (EC-2 a cinq phrases d'affilee, EC-4-gras hors lignes entieres) — sinon le
+  // recalibrage les aurait tuees en silence.
+  for (const r of ["EC-2", "EC-3", "EC-4-gras", "EC-4-emoji"]) {
+    if (!reglesRouges.has(r)) casse.push(`rouge : la regle de structure ${r} n'echoue plus sur la fixture saturee`);
+  }
+  const famillesRouges = [...reglesRouges].filter((r) => r.startsWith("EC-1:"));
+  if (famillesRouges.length < 5) casse.push(`rouge : ${famillesRouges.length} famille(s) au-dessus du seuil d'echec, attendu >= 5`);
+  if (!(rouge.j?.mots >= 300)) casse.push(`rouge : ${rouge.j?.mots} mots de prose, attendu >= 300`);
+
+  // 2. VERTE — une prose sobre passe, et le bloc de code n'est pas compte.
+  const verte = jouer("verte.md", FIXTURE_VERTE);
+  if (verte.statut !== 0) casse.push(`verte : exit ${verte.statut}, attendu 0`);
+  if (verte.j?.verdict !== "PASS") casse.push(`verte : verdict ${verte.j?.verdict}, attendu PASS`);
+  const failsVerts = (verte.j?.findings || []).filter((f) => f.statut === "FAIL");
+  if (failsVerts.length) casse.push(`verte : ${failsVerts.length} FAIL — ${failsVerts.map((f) => f.regle).join(", ")}`);
+  if (!(verte.j?.mots >= 300)) casse.push(`verte : ${verte.j?.mots} mots de prose, attendu >= 300`);
+  if (/oracle-ecriture-cite/.test(verte.brut || "")) casse.push("verte : sortie inattendue");
+
+  // 3. COURTE — sous le minimum, les densites ne sont pas jugees et le texte passe.
+  const courte = jouer("courte.md", FIXTURE_COURTE);
+  if (courte.statut !== 0) casse.push(`courte : exit ${courte.statut}, attendu 0`);
+  if (courte.j?.verdict !== "PASS") casse.push(`courte : verdict ${courte.j?.verdict}, attendu PASS`);
+  const ec1 = (courte.j?.findings || []).filter((f) => f.regle === "EC-1");
+  if (!(ec1.length === 1 && ec1[0].statut === "SKIP")) casse.push("courte : les densites sont jugees alors que le texte est sous le minimum");
+
+  // 5, 6 et 7 (TF-1045) — EC-7, LE LEXIQUE DU DESTINATAIRE, DANS SES TROIS SENS. Sans lexique, la
+  // regle rend SKIP et le dit : un produit sans lexique n'est jamais PASS par silence. Avec un
+  // lexique, le meme texte passe ou echoue selon le SEUL mot qui change — et la citation du meme
+  // mot entre accents graves n'est jamais comptee, sans quoi le lexique ferait paraphraser des
+  // preuves exactes, defaut paye le meme jour sur S37 (TF-0992).
+  const ec7Absent = jouer("sans-lexique.md", FIXTURE_COURTE);
+  const f7abs = (ec7Absent.j?.findings || []).filter((f) => f.regle === "EC-7");
+  if (!(f7abs.length === 1 && f7abs[0].statut === "SKIP"))
+    casse.push("EC-7 : sans lexique dans le socle du projet, la regle devrait rendre SKIP et le DIRE — " +
+      `obtenu ${JSON.stringify(f7abs)}`);
+
+  mkdirSync(join(dir, "produit", "forge"), { recursive: true });
+  writeFileSync(join(dir, "produit", "forge", "LEXIQUE.json"), JSON.stringify({
+    format: "pilot/lexique-produit@1",
+    termes: [{ proscrit: "grain", remplacer_par: "granularite", depuis: "2026-09-08",
+      preuve: "retour humain du 08/09/2026, redemande le 10/09 (ledger seq 99)" }],
+  }), "utf8");
+  const jouerProduit = (nom, contenu) => {
+    const chemin = join(dir, "produit", nom);
+    writeFileSync(chemin, contenu, "utf8");
+    const r = spawnSync(process.execPath, [moi, chemin], { encoding: "utf8" });
+    let j = null;
+    try { j = JSON.parse(r.stdout || "{}"); } catch { /* illisible */ }
+    return { statut: r.status, j };
+  };
+  const LEX_ROUGE = "# Note\n\nLe modele expose le grain quotidien des ventes, puis le grain magasin.\n"
+    + "La colonne `grain` du registre machine garde son nom : c'est une citation, pas une intention.\n";
+  const LEX_VERTE = LEX_ROUGE.replace("le grain quotidien", "la granularite quotidienne").replace("le grain magasin", "la granularite magasin");
+  const ec7r = jouerProduit("lexique-rouge.md", LEX_ROUGE);
+  const ec7v = jouerProduit("lexique-verte.md", LEX_VERTE);
+  const f7r = (ec7r.j?.findings || []).find((f) => f.regle === "EC-7");
+  const f7v = (ec7v.j?.findings || []).find((f) => f.regle === "EC-7");
+  if (f7r?.statut !== "FAIL")
+    casse.push("EC-7 : deux emplois en prose d'un terme proscrit par le lexique du destinataire passent — " +
+      "c'est par ce silence qu'un mot clos « corrige » le 08/09 a ete redemande par le client le 10/09 (TF-1045)");
+  if (f7v?.statut !== "PASS")
+    casse.push("EC-7 : le MEME texte avec le terme retenu est accuse — la citation entre accents graves est comptee " +
+      `comme une intention de l'auteur : ${JSON.stringify(f7v)}`);
+
+  // 8, 9 et 10 (TF-1137) — EC-8, LA POSITION. Trois sens, parce que deux ne suffisent pas ici :
+  // la tournure REFUSEE en titre et en en-tete, la meme tournure ADMISE dans le corps (sans quoi
+  // la regle serait un interdit lexical, que la lecon N4 fait desactiver dans la semaine), et le
+  // libelle EXEMPTE que le gabarit de restitution impose (sans quoi ce juge et le hook Stop se
+  // contrediraient sur toute synthese).
+  const EC8_ROUGE = "# Ce que ce guide couvre\n\nUn paragraphe de prose ordinaire, assez long pour "
+    + "ne rien declencher d'autre, qui decrit un dispositif sans employer de tournure d'annonce.\n\n"
+    + "| Ce qu'elle apprend | Mesure |\n|---|---|\n| une ligne | une valeur |\n";
+  const EC8_CORPS = "# Perimetre du guide\n\nCe paragraphe emploie la tournure dans son corps : "
+    + "ce que le guide couvre est decrit ici, et cet emploi-la n'est pas un defaut de position.\n";
+  const EC8_GABARIT = "# Decision\n\nUn paragraphe de prose ordinaire qui pose le sujet avant le "
+    + "tableau, comme le bloc 3 du gabarit de restitution le prescrit a chaque decision.\n\n"
+    + "| Option | Coût | Exclusions |\n|---|---|---|\n| (a) agir | rien | rien |\n";
+  // L'EXEMPTION EST LEVÉE (D-2 (a), 16/09/2026) : les 2 anciens libelles ne sont plus admis nulle
+  // part. Sans ce cas-la, rien ne prouverait la levee — un banc qui ne teste que la forme neuve
+  // serait vert avec l'exemption comme sans elle.
+  const EC8_ANCIENS = EC8_GABARIT.replace("| Option | Coût | Exclusions |",
+    "| Option | Ce qu'elle coûte | Ce qu'elle exclut |");
+  const ec8r = jouer("ec8-rouge.md", EC8_ROUGE);
+  const ec8c = jouer("ec8-corps.md", EC8_CORPS);
+  const ec8e = jouer("ec8-gabarit.md", EC8_GABARIT);
+  const ec8a = jouer("ec8-anciens-libelles.md", EC8_ANCIENS);
+  const f8r = (ec8r.j?.findings || []).find((f) => f.regle === "EC-8");
+  const f8c = (ec8c.j?.findings || []).find((f) => f.regle === "EC-8");
+  const f8e = (ec8e.j?.findings || []).find((f) => f.regle === "EC-8");
+  const f8a = (ec8a.j?.findings || []).find((f) => f.regle === "EC-8");
+  if (f8r?.statut !== "FAIL" || !/titre/.test(f8r.message) || !/en-tête de colonne/.test(f8r.message))
+    casse.push("EC-8 : une annonce nominalisee en TITRE et en EN-TETE DE COLONNE passe — c'est par ce "
+      + `silence qu'un livrable de 11 pages a ete remis avec 6 titres et 20 en-tetes de cette forme (TF-1137) : ${JSON.stringify(f8r)}`);
+  if (f8c?.statut !== "PASS")
+    casse.push("EC-8 : la MEME tournure dans le CORPS est accusee — la regle porte sur la position, "
+      + `pas sur le lexique, et un interdit lexical se fait desactiver dans la semaine (lecon N4) : ${JSON.stringify(f8c)}`);
+  if (f8e?.statut !== "PASS")
+    casse.push("EC-8 : le tableau d'options que gabarits/RESTITUTION.md IMPOSE DEPUIS D-2 (a) est refuse — "
+      + `ce juge et le hook Stop se contrediraient alors sur toute synthese : ${JSON.stringify(f8e)}`);
+  if (f8a?.statut !== "FAIL")
+    casse.push("EC-8 : les 2 ANCIENS libelles du tableau d'options passent encore — l'exemption du "
+      + `16/09 devait etre LEVEE par D-2 (a), et un banc qui ne teste que la forme neuve ne le voit pas : ${JSON.stringify(f8a)}`);
+
+  // 41, 42 et 43 (TF-1974, 29/10/2026) — LE TITRE IMPOSÉ PAR CONTRAT. Le titre du 20/10, déclaré avec son
+  // contrat, est admis ; le MÊME déclaré sans contrat reste refusé ; un AUTRE titre fautif du même document
+  // l'est aussi : l'exemption ne vaut que pour le titre nommé, au mot près.
+  const CORPS8 = "\n\nUn paragraphe de prose ordinaire, assez long pour ne rien declencher d'autre, qui decrit un dispositif.\n";
+  const EC8_IMPOSE = "---\ntitres_imposes: Ce que la proposition ne protège pas\ntitres_imposes_par: clause 7 du prompt de proposition\n---\n\n## Ce que la proposition ne protège pas" + CORPS8;
+  const EC8_SANS_CONTRAT = EC8_IMPOSE.replace("titres_imposes_par: clause 7 du prompt de proposition\n", "");
+  const EC8_AUTRE = EC8_IMPOSE + "\n## Ce que le guide couvre" + CORPS8;
+  const f8 = (x) => (x.j?.findings || []).find((f) => f.regle === "EC-8");
+  const r8i = jouer("ec8-impose.md", EC8_IMPOSE);
+  const r8s = jouer("ec8-sans-contrat.md", EC8_SANS_CONTRAT);
+  const r8o = jouer("ec8-autre-titre.md", EC8_AUTRE);
+  if (f8(r8i)?.statut !== "PASS" || !/1 titre\(s\) imposé\(s\) par « clause 7/.test(f8(r8i)?.message || ""))
+    casse.push(`EC-8 : le titre imposé par la clause d'un contrat, déclaré en en-tête, est refusé ou admis sans le dire : ${JSON.stringify(f8(r8i))}`);
+  if (f8(r8s)?.statut !== "FAIL")
+    casse.push(`EC-8 : un titre déclaré imposé SANS nommer son contrat est admis — l'exemption deviendrait une formule : ${JSON.stringify(f8(r8s))}`);
+  if (f8(r8o)?.statut !== "FAIL" || !/Ce que le guide couvre/.test(f8(r8o)?.message || ""))
+    casse.push(`EC-8 : un AUTRE titre fautif du document passe sous l'exemption du titre imposé : ${JSON.stringify(f8(r8o))}`);
+
+  // TF-1507 (02/10/2026) — LE GABARIT RÉEL, PAS UNE FIXTURE. `gabarits\docs-projet\FONCTIONNEL.md`
+  // portait, en-tête de colonne, « Ce qu'il peut faire » et « Ce qu'il ne peut pas » : EC-8 les
+  // refusait chez le produit qui l'instancie (FAIL mesuré le 28/09/2026). Lire le fichier réel,
+  // plutôt qu'une fixture qui le recopie, protège contre un gabarit réécrit sans que le banc suive.
+  const cheminFonctionnel = join(RACINE, "gabarits", "docs-projet", "FONCTIONNEL.md");
+  const rFonctionnel = jouer("tf1507-fonctionnel-reel.md", readFileSync(cheminFonctionnel, "utf8"));
+  const f8fonctionnel = (rFonctionnel.j?.findings || []).filter((f) => f.regle === "EC-8" && f.statut === "FAIL");
+  if (f8fonctionnel.some((f) => /Ce qu'il peut faire|Ce qu'il ne peut pas/.test(f.message || "")))
+    casse.push("TF-1507 : gabarits\\docs-projet\\FONCTIONNEL.md porte encore, en en-tête de colonne, un des deux "
+      + `libellés refusés par EC-8 — le produit qui l'instancie serait de nouveau refusé : ${JSON.stringify(f8fonctionnel)}`);
+
+  // TF-1616 (13/10/2026) — TOUS LES GABARITS docs-projet, pas deux libellés. Le titre « Ce que le produit
+  // ne fait volontairement pas » de FONCTIONNEL.md était refusé par EC-8 chez le produit qui
+  // l'instancie (lot Produit-79 20261007a, RP-7) : la garde TF-1507 ne nommait que deux libellés de
+  // colonne. Sens ROUGE : le titre ancien, rejoué, est bien refusé (la règle n'est pas desserrée) ;
+  // sens VERT : aucun gabarit du dossier ne porte plus un seul constat EC-8.
+  const rAncienTitre = jouer("tf1616-ancien-titre.md",
+    "# Fonctionnel\n\nUn paragraphe de prose ordinaire qui pose le sujet du produit avant ses sections.\n\n"
+    + "## Ce que le produit ne fait volontairement pas\n\n- une exclusion assumée\n");
+  const f8ancien = (rAncienTitre.j?.findings || []).find((f) => f.regle === "EC-8");
+  if (!f8ancien || f8ancien.statut !== "FAIL")
+    casse.push(`TF-1616 : l'ancien titre « Ce que le produit ne fait volontairement pas » n'est plus refusé en titre — la règle a été desserrée au lieu du gabarit reformulé : ${JSON.stringify(f8ancien)}`);
+  const dossierDocsProjet = join(RACINE, "gabarits", "docs-projet");
+  for (const nomGabarit of readdirSync(dossierDocsProjet).filter((n) => n.endsWith(".md"))) {
+    const rg = jouer(`tf1616-${nomGabarit}`, readFileSync(join(dossierDocsProjet, nomGabarit), "utf8"));
+    const f8g = (rg.j?.findings || []).filter((f) => f.regle === "EC-8" && f.statut === "FAIL");
+    if (f8g.length)
+      casse.push(`TF-1616 : le gabarit gabarits\\docs-projet\\${nomGabarit} est refusé par EC-8 chez le produit qui l'instancie : ${JSON.stringify(f8g)}`);
+  }
+
+  // TF-1783 (lot Produit-83 20261015b, RT-8) — BORNE, PAS UN DESSERREMENT. « Ce que les tests simulent »
+  // en titre ouvre sur la tournure que la décision D-2 (a) du 16/09 refuse partout en titre : c'est le
+  // cas que la règle vise, pas un faux positif. Le cas reste rouge ; le remède est de nommer le contenu.
+  const r1783 = jouer("tf1783.md", "# Tests\n\nUn paragraphe de prose ordinaire qui pose le sujet.\n\n## Ce que les tests simulent\n\n- un service tiers\n");
+  if ((r1783.j?.findings || []).find((f) => f.regle === "EC-8")?.statut !== "FAIL")
+    casse.push("TF-1783 : le titre « Ce que les tests simulent » n'est plus refusé — EC-8 a été desserré au lieu du titre renommé");
+  const r1783v = jouer("tf1783v.md", "# Tests\n\nUn paragraphe de prose ordinaire qui pose le sujet.\n\n## Services simulés par les tests\n\n- un service tiers\n");
+  if ((r1783v.j?.findings || []).find((f) => f.regle === "EC-8")?.statut !== "PASS")
+    casse.push("TF-1783 : le titre qui NOMME son contenu (« Services simulés par les tests ») est refusé");
+
+  // TF-1901 (lot Produit-79 20261018a, RP-17) — DEUX GARDIENS DU MÊME SOCLE NE SE CONTREDISENT PLUS.
+  // DEM-3 (gabarits/oracle-demande.mjs) impose, ancré, le titre « Ce que cette demande ne réclame pas » ;
+  // EC-8 le refusait en titre : corriger l'une des deux demandes d'un produit cassait l'autre.
+  // L'exemption est dans la DONNÉE (references/tics-redactionnels.json) et BORNÉE : ce titre exact, à la
+  // position titre. Quatre sens : VERT le titre imposé (nu, puis numéroté comme DEMANDE-PRODUIT.md), le
+  // gabarit RÉEL gabarits/DEMANDE.md (le fichier qui portait le FAIL mesuré, pas une fixture qui le copie) ;
+  // ROUGE le titre voisin non imposé, le titre qui ne fait que CONTENIR le libellé, et le même libellé en
+  // en-tête de colonne — l'exemption n'est pas un desserrement de la règle.
+  const DEM_TEXTE = "Un paragraphe de prose ordinaire qui pose le sujet de la demande avant ses rubriques.\n\n";
+  const ec8Dem = (titre) => (jouer("tf1901.md", `# Demande\n\n${DEM_TEXTE}## ${titre}\n\n- une exclusion assumée\n`).j?.findings || []).find((f) => f.regle === "EC-8");
+  const f1901v = ec8Dem("Ce que cette demande ne réclame pas");
+  const f1901n = ec8Dem("5. Ce que cette demande ne réclame pas");
+  if (f1901v?.statut !== "PASS" || f1901n?.statut !== "PASS")
+    casse.push(`TF-1901 : le titre « Ce que cette demande ne réclame pas », que DEM-3 impose, est refusé par EC-8 (nu : ${f1901v?.statut}, numéroté : ${f1901n?.statut}) — corriger une demande casserait l'autre`);
+  const f1901voisin = ec8Dem("Ce que cette demande ne couvre pas");
+  const f1901contient = ec8Dem("Ce que cette demande ne réclame pas, ni ce qu'elle exclut");
+  if (f1901voisin?.statut !== "FAIL" || f1901contient?.statut !== "FAIL")
+    casse.push(`TF-1901 : l'exemption déborde — un titre voisin non imposé (${f1901voisin?.statut}) ou qui ne fait que CONTENIR le libellé (${f1901contient?.statut}) passe ; elle devait se borner au titre exact imposé`);
+  const f1901col = (jouer("tf1901-colonne.md", `# Demande\n\n${DEM_TEXTE}| Ce que cette demande ne réclame pas | Mesure |\n|---|---|\n| une ligne | une valeur |\n`).j?.findings || []).find((f) => f.regle === "EC-8");
+  if (f1901col?.statut !== "FAIL")
+    casse.push("TF-1901 : le même libellé en EN-TÊTE DE COLONNE passe — l'exemption devait se borner à la position titre");
+  for (const nomDemande of ["DEMANDE.md", "DEMANDE-PRODUIT.md"]) {
+    const rDem = jouer(`tf1901-${nomDemande}`, readFileSync(join(RACINE, "gabarits", nomDemande), "utf8"));
+    const f8dem = (rDem.j?.findings || []).filter((f) => f.regle === "EC-8" && f.statut === "FAIL");
+    if (f8dem.length)
+      casse.push(`TF-1901 : le gabarit gabarits\\${nomDemande} est refusé par EC-8 chez le produit qui l'instancie : ${JSON.stringify(f8dem)}`);
+  }
+
+  // TF-2020 (29/10/2026) — UN TITRE NUMÉROTÉ N'ÉCHAPPE PLUS À EC-8. Le motif de position s'ancre en début de titre ;
+  // « ## 7. Ce que … » lui échappait, et c'est ainsi qu'un titre refusé a été contourné le 20/10/2026. ROUGES : la
+  // numérotation en « 7. », « 7) », « 2.1 » et « 3 · ». VERT : le même titre qui nomme son contenu, numéroté. ANTÉRIORITÉ
+  // (donnée `anteriorite_titres_numerotes`) : un fichier nommé dans la donnée est admis et le dit ; le même texte sous un
+  // chemin absent de la liste reste refusé ; et la liste ne couvre jamais un titre NON numéroté.
+  const TEXTE_2020 = "Un paragraphe de prose ordinaire qui pose le sujet du guide avant ses rubriques.\n\n";
+  const ec8Num = (titre, chemin) => (jouer("tf2020.md", `# Guide\n\n${TEXTE_2020}## ${titre}\n\n- un point\n`, chemin ? ["--chemin-relatif", chemin] : []).j?.findings || []).find((f) => f.regle === "EC-8");
+  const CHEMIN_ANTERIEUR = "references/PLATEFORME-LINKEDIN.md";
+  const formes2020 = ["7. Ce que le guide couvre", "7) Ce qu'il ne tient pas", "2.1 Ce que le guide apprend", "3 · Ce que le client en dit"];
+  const statuts2020 = formes2020.map((t) => ec8Num(t)?.statut);
+  if (statuts2020.some((s) => s !== "FAIL"))
+    casse.push(`TF-2020 : un titre numéroté (« 7. », « 7) », « 2.1 », « 3 · ») échappe encore à EC-8 — statuts ${JSON.stringify(statuts2020)} pour ${JSON.stringify(formes2020)} ; c'est ainsi qu'un titre refusé a été contourné le 20/10/2026`);
+  const f2020vert = ec8Num("7. Périmètre du guide");
+  if (f2020vert?.statut !== "PASS")
+    casse.push(`TF-2020 : un titre numéroté qui NOMME son contenu est refusé : ${JSON.stringify(f2020vert)}`);
+  const f2020ant = ec8Num("7. Ce que le guide couvre", CHEMIN_ANTERIEUR);
+  if (f2020ant?.statut !== "PASS" || !/1 titre\(s\) numéroté\(s\) antérieur\(s\) au 2026-10-29 admis/.test(f2020ant?.message || ""))
+    casse.push(`TF-2020 : un titre numéroté d'un fichier nommé par l'antériorité n'est pas admis en le DISANT : ${JSON.stringify(f2020ant)}`);
+  const f2020neuf = ec8Num("7. Ce que le guide couvre", "output/04-plans/Factory - Note - Guide neuf - 20261030a.md");
+  if (f2020neuf?.statut !== "FAIL")
+    casse.push(`TF-2020 : le même titre numéroté dans un document ABSENT de la liste est admis — l'antériorité devient un laissez-passer : ${JSON.stringify(f2020neuf)}`);
+  const f2020nu = ec8Num("Ce que le guide couvre", CHEMIN_ANTERIEUR);
+  if (f2020nu?.statut !== "FAIL")
+    casse.push(`TF-2020 : un titre NON numéroté est admis sous un chemin de la liste — l'antériorité ne couvre que la numérotation : ${JSON.stringify(f2020nu)}`);
+
+  // TF-1968 (29/10/2026) — LE TEXTE D'UNE PAGE HTML EST JUGÉ COMME UN MARKDOWN. Le 19/10, une page de 807 phrases dont
+  // 15 de plus de 35 mots n'avait aucun juge : le hook d'écriture écartait tout autre fichier qu'un `.md`. ROUGE : sept
+  // phrases de 40 mots d'affilée dans des `<p>` (EC-2 FAIL, avec la ligne de la PAGE) et un titre « Ce que … » en `<h2>`
+  // (EC-8 FAIL, avec la ligne de la PAGE). VERTS : les mêmes mots coupés en phrases de 10 mots ; les mêmes phrases longues
+  // dans un `<script>`, un `<style>` ou un `<pre>`, qui ne sont pas du texte lu.
+  const motDe = (i) => "t" + i.toString(26).replace(/[0-9a-p]/g, (c) => "abcdefghijklmnopqrstuvwxyz"[parseInt(c, 26)]);
+  const phraseDe = (n, depart) => Array.from({ length: n }, (_, i) => motDe(depart + i)).join(" ") + ".";
+  const longues1968 = Array.from({ length: 7 }, (_, k) => phraseDe(40, k * 40));
+  const courtes1968 = Array.from({ length: 28 }, (_, k) => phraseDe(10, k * 10));
+  const page1968 = (corps) => `<!doctype html>\n<html lang="fr">\n<head><meta charset="utf-8"><title>Rapport</title>\n<style>p { color: red; }</style></head>\n<body>\n<h1>Rapport</h1>\n${corps}\n</body></html>\n`;
+  const htmlRouge = page1968(longues1968.map((p) => `<p>${p}</p>`).join("\n"));
+  const ligneDeLaPage = (html, extrait) => html.slice(0, html.indexOf(extrait)).split("\n").length;
+  const h1 = jouer("tf1968-rouge.html", htmlRouge);
+  const e2 = (x) => (x.j?.findings || []).find((f) => f.regle === "EC-2");
+  const ligneAttendue = ligneDeLaPage(htmlRouge, "<p>ta ");
+  if (h1.statut !== 1 || e2(h1)?.statut !== "FAIL" || e2(h1)?.ligne !== ligneAttendue)
+    casse.push(`TF-1968 : sept phrases de 40 mots d'affilée dans une page HTML ne sont pas refusées par EC-2, ou pas à la ligne de la PAGE (attendu FAIL ligne ${ligneAttendue}) : exit ${h1.statut}, ${JSON.stringify(e2(h1))}`);
+  const h2 = jouer("tf1968-vert.html", page1968(`<p>${courtes1968.join(" ")}</p>`));
+  if (h2.statut !== 0 || e2(h2)?.statut !== "PASS")
+    casse.push(`TF-1968 : les MÊMES mots coupés en phrases de 10 mots sont refusés — le remède échoue : ${JSON.stringify(e2(h2))}`);
+  const h3 = jouer("tf1968-code.html", page1968(`<script>const t = "${longues1968.join(" ")}";</script>\n<pre>${longues1968.join(" ")}</pre>\n<p>${courtes1968.join(" ")}</p>`));
+  if (e2(h3)?.statut !== "PASS")
+    casse.push(`TF-1968 : des phrases longues placées dans un <script> ou un <pre> sont comptées comme du texte lu : ${JSON.stringify(e2(h3))}`);
+  const htmlTitre = page1968(`<h2>Ce que le rapport couvre</h2>\n<p>${courtes1968.join(" ")}</p>`);
+  const h4 = jouer("tf1968-titre.html", htmlTitre);
+  const e8h = (h4.j?.findings || []).find((f) => f.regle === "EC-8");
+  if (h4.statut !== 1 || e8h?.statut !== "FAIL" || e8h?.ligne !== ligneDeLaPage(htmlTitre, "<h2>") || !new RegExp(`titre l\\.${ligneDeLaPage(htmlTitre, "<h2>")} `).test(e8h?.message || ""))
+    casse.push(`TF-1968 : un titre « Ce que … » en <h2> n'est pas refusé par EC-8, ou pas à la ligne de la PAGE (attendu ligne ${ligneDeLaPage(htmlTitre, "<h2>")}) : ${JSON.stringify(e8h)}`);
+  if (h1.j?.source !== "html" || jouer("tf1968-md.md", "# Note\n\n" + courtes1968.join(" ") + "\n").j?.source !== undefined)
+    casse.push("TF-1968 : la sortie ne dit pas que le texte d'une page HTML est extrait (champ `source`), ou le dit pour un Markdown");
+
+  // TF-1784 (lot Produit-83 20261015b, RT-9) — LE TIRET SEUL DANS UNE CELLULE EST UNE CELLULE VIDE.
+  // Le gabarit MODELE-DONNEES.md prescrit « — » pour une clé absente ; EC-1 comptait chacun comme un
+  // tiret d'incise, et un modèle de 20 tables écrit comme le gabarit échouait (120 occurrences, 77 ‰).
+  // VERT : 20 tables à cellule « — » ne déclenchent rien. ROUGE : la même prose en cascade d'incises
+  // DANS une cellule de texte reste comptée — la borne porte sur la cellule vide, pas sur le tableau.
+  const table1784 = (cle) => Array.from({ length: 20 }, (_, i) => `## Table : t${i}\n\nUne ligne représente un objet métier numéro ${i} du produit, lu dans sa migration.\n\n| Colonne | Type | Nullable | Clé |\n|---|---|---|---|\n`
+    + Array.from({ length: 6 }, (_, k) => `| c${k} | text | non | ${cle} |`).join("\n") + "\n").join("\n");
+  const r1784v = jouer("tf1784v.md", "# Modèle de données\n\n" + table1784("—"));
+  const f1784v = (r1784v.j?.findings || []).find((f) => f.regle === "EC-1:ponctuation-de-cadence");
+  if (!f1784v || f1784v.statut !== "PASS")
+    casse.push(`TF-1784 : un modèle de 20 tables à cellule « — » (forme que le gabarit prescrit) est accusé de tirets d'incise : ${JSON.stringify(f1784v)}`);
+  const r1784r = jouer("tf1784r.md", "# Modèle de données\n\n" + table1784("clé — étrangère — vers la table voisine"));
+  const f1784r = (r1784r.j?.findings || []).find((f) => f.regle === "EC-1:ponctuation-de-cadence");
+  if (!f1784r || f1784r.statut === "PASS")
+    casse.push(`TF-1784 : la cascade d'incises DANS une cellule de texte n'est plus comptée — la borne a débordé : ${JSON.stringify(f1784r)}`);
+
+  // TF-1785 (lot Produit-83 20261015b, RT-10) — CHAQUE GABARIT docs-projet DÉCLARE SON LECTEUR. Sans
+  // `role_destinataire`, EC-10 rendait SKIP sur chaque fiche instanciée et ses blocs n'étaient jamais
+  // jugés. VERT : aucun gabarit ne rend plus EC-10 SKIP ; COMMANDES.md, dont le lecteur exécute, PASS.
+  for (const nomGabarit of readdirSync(dossierDocsProjet).filter((n) => n.endsWith(".md"))) {
+    const rg = jouer(`tf1785-${nomGabarit}`, readFileSync(join(dossierDocsProjet, nomGabarit), "utf8"));
+    const f10 = (rg.j?.findings || []).find((f) => f.regle === "EC-10");
+    if (!f10 || f10.statut === "SKIP")
+      casse.push(`TF-1785 : le gabarit gabarits\\docs-projet\\${nomGabarit} ne déclare pas son lecteur — EC-10 rend ${f10?.statut || "rien"}`);
+    else if (nomGabarit === "COMMANDES.md" && f10.statut !== "PASS")
+      casse.push(`TF-1785 : COMMANDES.md, écrit pour un lecteur qui exécute, est refusé par EC-10 : ${JSON.stringify(f10)}`);
+  }
+
+  // 11, 12 et 13 (TF-1138) — EC-10, LE LECTEUR DECLARE. Trois sens : la commande REFUSEE quand le
+  // lecteur n'execute pas, ADMISE quand il execute, et le document sans lecteur declare qui rend
+  // SKIP en le DISANT — jamais PASS par silence. Le bloc qui se RECOPIE n'est compte dans aucun
+  // des trois : c'est la frontiere que le retour humain a posee.
+  const EC10_ROUGE = "---\nrole: guide\nrole_destinataire: developpeurs assistes par IA\n---\n\n"
+    + "# Guide\n\nUn paragraphe de prose.\n\n```\naz repos list --query \"[].name\"\n```\n\n```\nsrc/\n  index.js\n```\n";
+  const EC10_VERT = EC10_ROUGE.replace("developpeurs assistes par IA", "exploitant / astreinte");
+  const EC10_SKIP = "# Sans lecteur\n\nUn paragraphe de prose.\n\n```\naz repos list\n```\n";
+  const e10r = jouer("ec10-rouge.md", EC10_ROUGE);
+  const e10v = jouer("ec10-vert.md", EC10_VERT);
+  const e10s = jouer("ec10-skip.md", EC10_SKIP);
+  const f10r = (e10r.j?.findings || []).find((f) => f.regle === "EC-10");
+  const f10v = (e10v.j?.findings || []).find((f) => f.regle === "EC-10");
+  const f10s = (e10s.j?.findings || []).find((f) => f.regle === "EC-10");
+  if (f10r?.statut !== "FAIL" || !/az repos list/.test(f10r.message))
+    casse.push("EC-10 : une commande de console dans un document dont le lecteur declare n'execute pas "
+      + `passe — c'est le retour humain du 15/09, mot pour mot « pas la peine de code » (TF-1138) : ${JSON.stringify(f10r)}`);
+  if (f10r?.statut === "FAIL" && /index\.js/.test(f10r.message))
+    casse.push("EC-10 : un bloc qui se RECOPIE (une arborescence) est compte comme une commande — "
+      + "la regle accuserait alors les 14 blocs que le retour humain n'a jamais contestes");
+  if (f10v?.statut !== "PASS")
+    casse.push("EC-10 : la MEME commande est refusee a un exploitant — un runbook DOIT porter ses "
+      + `commandes, et une regle fausse dans ce sens-la se fait desactiver : ${JSON.stringify(f10v)}`);
+  if (f10s?.statut !== "SKIP")
+    casse.push("EC-10 : un document SANS lecteur declare recoit un verdict — un destinataire inconnu "
+      + `se DIT, il ne se devine pas : ${JSON.stringify(f10s)}`);
+
+  // TF-1886 (lot Produit-84 20261016c, RT-5) — UNE SESSION OU UN AGENT QUI LIT UN PROMPT L'EXÉCUTE. Le
+  // prompt du 16/10 déclarait pour lecteur « la session Claude Code du produit » et EC-10 refusait ses deux
+  // blocs bash (« le lecteur n'exécute pas ») : la liste des lecteurs exécutants ne connaissait que des
+  // métiers humains. VERTS : session Claude Code, sous-agent, agent de campagne. ROUGES, pour que la règle
+  // ne soit pas desserrée : un agent commercial (humain) et des développeurs assistés par IA (humains)
+  // restent refusés, et le bloc qui se RECOPIE n'est toujours compté pour personne.
+  const lecteurEC10 = (lecteur) => jouer("ec10-lecteur.md", EC10_ROUGE.replace("developpeurs assistes par IA", lecteur));
+  const fEC10 = (r) => (r.j?.findings || []).find((f) => f.regle === "EC-10");
+  for (const lecteur of ["la session Claude Code du produit", "un sous-agent de campagne", "agent de campagne autonome"]) {
+    const f = fEC10(lecteurEC10(lecteur));
+    if (f?.statut !== "PASS")
+      casse.push(`TF-1886 : un prompt dont le lecteur déclaré est « ${lecteur} », qui EXÉCUTE ses blocs, est refusé par EC-10 : ${JSON.stringify(f)}`);
+  }
+  for (const lecteur of ["agent commercial du réseau", "développeurs assistés par IA", "l'agent immobilier"]) {
+    const f = fEC10(lecteurEC10(lecteur));
+    if (f?.statut !== "FAIL")
+      casse.push(`TF-1886 : la règle est desserrée — un lecteur HUMAIN qui n'exécute pas (« ${lecteur} ») passe EC-10 : ${JSON.stringify(f)}`);
+  }
+
+  // 4. ANTERIORITE — le meme texte rouge, sous un chemin declare, rend SKIP et jamais FAIL.
+  const ante = jouer("anteriorite.md", FIXTURE_ROUGE, ["--chemin-relatif", "REGLES-PROJET.md"]);
+  if (ante.statut !== 0) casse.push(`anteriorite : exit ${ante.statut}, attendu 0`);
+  if (ante.j?.verdict !== "SKIP") casse.push(`anteriorite : verdict ${ante.j?.verdict}, attendu SKIP`);
+  if ((ante.j?.findings || []).length !== 1 || ante.j.findings[0].regle !== "EC-6") {
+    casse.push("anteriorite : d'autres regles ont ete jouees alors que le texte est exempte");
+  }
+
+  // EC-9 (E-14) — LES VALEURS EN LETTRES, DANS LEURS TROIS SENS. Les trois textes portent les MEMES
+  // faits : seule la forme des nombres change, et la troisieme prouve la frontiere — un mot-nombre
+  // qui n'est suivi d'aucune unite, d'aucun denombrable et d'aucun mois reste de la prose.
+  const EC9_ROUGE = "# Mesure\n\nLes vues pesent huit virgule huit megaoctets sur les deux cent "
+    + "quatre-vingts du depot. Un identifiant vit dans cent trente-deux revisions. La doctrine est "
+    + "entree le sept septembre, et la mesure a ete refaite le seize septembre.\n";
+  const EC9_VERTE = "# Mesure\n\nLes vues pesent 8,8 Mo sur les 280 du depot. Un identifiant vit "
+    + "dans 132 revisions. La doctrine est entree le 7 septembre, et la mesure a ete refaite le "
+    + "16 septembre.\n";
+  const EC9_PROSE = "# Prose\n\nUn banc neuf a ete pose sur un defaut ancien ; une regle de plus, "
+    + "un contournement de moins. L'un des deux chemins reste ouvert, et c'est le plus court.\n";
+  const r9r = jouer("ec9-rouge.md", EC9_ROUGE);
+  const r9v = jouer("ec9-verte.md", EC9_VERTE);
+  const r9p = jouer("ec9-prose.md", EC9_PROSE);
+  const g9 = (x) => (x.j?.findings || []).find((f) => f.regle === "EC-9");
+  if (g9(r9r)?.statut !== "FAIL" || !/huit virgule huit/.test(g9(r9r)?.message || ""))
+    casse.push("EC-9 : des mesures ecrites en toutes lettres passent — c'est la forme que le retour humain "
+      + `du 16/09 a refusee, mot pour mot « 8,8 Mo plutot que huit virgule huit » : ${JSON.stringify(g9(r9r))}`);
+  if (g9(r9v)?.statut !== "PASS")
+    casse.push("EC-9 : les MEMES faits ecrits en chiffres sont accuses — la regle juge autre chose que la "
+      + `forme du nombre : ${JSON.stringify(g9(r9v))}`);
+  if (g9(r9p)?.statut !== "PASS")
+    casse.push("EC-9 : de la prose ordinaire est accusee — « un defaut », « un banc neuf », « l'un des deux » "
+      + "ne sont pas des valeurs, et un oracle qui crie sur l'usage legitime se fait desactiver dans la "
+      + `semaine (lecon N4) : ${JSON.stringify(g9(r9p))}`);
+
+  // 18, 19 et 20 (TF-1488, lot Produit-03 du 28/09, RA-46) — EC-4-gras ET LE GRAS D'UN SEUL
+  // CARACTERE, DANS SES TROIS SENS. La paire du lot, mot pour mot : cinq lignes portant « **0** »
+  // puis un statut en gras rendaient FAIL (un faux passage de 18 mots, « ressource, puis un
+  // texte… ») ; sans le gras du « 0 », PASS. Les deux doivent rendre le MEME verdict, PASS. Le
+  // troisieme sens est le rouge que le meme glissement CACHAIT : de vrais passages de 12 mots en
+  // gras, places apres « **0** », doivent echouer, et le premier compte est le vrai passage.
+  const ligneGras1 = (n, avecGras0, avecVraiGras) => `Ligne ${n} : un compte de ${avecGras0 ? "**0**" : "0"} ressource, puis `
+    + (avecVraiGras ? "**un texte ordinaire de plus de douze mots sans aucune emphase ici**" : "un texte ordinaire de plus de douze mots sans aucune emphase ici")
+    + ", et enfin un statut **transmis**.";
+  const texteGras1 = (avecGras0, avecVraiGras) => "# Registre\n\n"
+    + [1, 2, 3, 4, 5].map((n) => ligneGras1(n, avecGras0, avecVraiGras)).join("\n") + "\n";
+  const g4 = (x) => (x.j?.findings || []).find((f) => f.regle === "EC-4-gras");
+  const r4a = jouer("ec4-gras-un-caractere.md", texteGras1(true, false));
+  const r4b = jouer("ec4-gras-sans-gras-du-zero.md", texteGras1(false, false));
+  const r4c = jouer("ec4-gras-vrais-passages.md", texteGras1(true, true));
+  if (g4(r4a)?.statut !== "PASS")
+    casse.push("EC-4-gras : un gras d'UN caractere (« **0** ») fait encore glisser l'appariement — le texte ordinaire "
+      + `jusqu'au gras suivant est compte comme un passage en gras, c'est le faux FAIL du 28/09 (TF-1488) : ${JSON.stringify(g4(r4a))}`);
+  if (g4(r4b)?.statut !== "PASS")
+    casse.push(`EC-4-gras : les memes lignes SANS le gras du « 0 » sont accusees : ${JSON.stringify(g4(r4b))}`);
+  if (g4(r4c)?.statut !== "FAIL" || !/1er de 12 mots : « un texte ordinaire/.test(g4(r4c)?.message || ""))
+    casse.push("EC-4-gras : de VRAIS passages de 12 mots en gras, places apres « **0** », ne sont pas comptes pour "
+      + `eux-memes — l'appariement glisse et cache le rouge (TF-1488) : ${JSON.stringify(g4(r4c))}`);
+
+  // 21, 22, 23 et 24 (TF-1392, D-2 (a) du 13/10/2026) — EC-11, LE SUJET NOMMÉ HORS DES
+  // RESTITUTIONS, EN AVERTISSEMENT. Le rouge transpose hors d'une restitution la décision refusée
+  // le 16/09/2026 (« un nom de dépôt de l'écosystème », « cet objet ») : AVERT, et JAMAIS FAIL. Le
+  // vert porte la même question avec le nom écrit. La restitution est laissée à S47 (SKIP dit). Une
+  // question citée entre guillemets ou rhétorique n'est pas une question de décision.
+  const EC11_ROUGE = "# Publication\n\nFaut-il retirer cet objet de la table des noms à masquer ? Le nom "
+    + "d'un dépôt de l'écosystème y figure, alors qu'il désigne aussi un dépôt créé par le lecteur.\n";
+  const EC11_VERTE = "# Publication\n\nFaut-il retirer le nom `depot-de-demonstration-a` de la table des noms à "
+    + "masquer ? Ce nom y figure, alors qu'il désigne aussi un dépôt créé par le lecteur.\n";
+  const EC11_RESTITUTION = "# Synthèse\n\n> **D-1 — Faut-il retirer cet objet de la table ?**\n> Le nom "
+    + "d'un dépôt de l'écosystème y figure.\n";
+  const EC11_CITEE = "# Retour\n\nLe lecteur a écrit « Faut-il vraiment tout relire ? » et la remarque a été "
+    + "notée. Pourquoi ce texte était-il si long ?\n";
+  const g11 = (x) => (x.j?.findings || []).find((f) => f.regle === "EC-11");
+  const r11r = jouer("ec11-rouge.md", EC11_ROUGE);
+  const r11v = jouer("ec11-verte.md", EC11_VERTE);
+  const r11s = jouer("ec11-restitution.md", EC11_RESTITUTION);
+  const r11c = jouer("ec11-citee.md", EC11_CITEE);
+  if (g11(r11r)?.statut !== "AVERT" || !/Faut-il retirer cet objet/.test(g11(r11r)?.message || ""))
+    casse.push(`EC-11 : une question de décision qui ne nomme rien (cas du 16/09/2026, hors restitution) n'est pas signalée : ${JSON.stringify(g11(r11r))}`);
+  if (r11r.statut !== 0 || r11r.j?.verdict === "FAIL")
+    casse.push("EC-11 : l'avertissement fait échouer le texte — la règle est en AVERTISSEMENT (D-2 (a) du 13/10/2026), jamais bloquante");
+  if (g11(r11v)?.statut !== "PASS")
+    casse.push(`EC-11 : la MÊME question, le nom écrit entre accents graves, est signalée : ${JSON.stringify(g11(r11v))}`);
+  if (g11(r11s)?.statut !== "SKIP")
+    casse.push(`EC-11 : une restitution est jugée ici alors que S47 la juge déjà : ${JSON.stringify(g11(r11s))}`);
+  if (g11(r11c)?.statut !== "PASS" || !/aucune question de décision/.test(g11(r11c)?.message || ""))
+    casse.push(`EC-11 : une question citée ou rhétorique est comptée comme question de décision : ${JSON.stringify(g11(r11c))}`);
+
+  // 25, 26, 27 et 28 (TF-1847, 18/10/2026) — EC-12, E-11 SUR LE MARKDOWN, HORS RESTITUTION, EN AVERTISSEMENT.
+  // Le rouge est le « Comment faire : 1) … 2) … 3) » du retour du 17/10/2026, dans une note ; le vert porte la
+  // MÊME information en liste numérotée ; la restitution est laissée à S80 (SKIP dit) ; la forme interdite
+  // MONTRÉE entre guillemets français n'est pas commise.
+  const EC12_ROUGE = "# Procédure\n\nComment faire : 1) ouvrir un terminal ; 2) coller la commande ; 3) saisir le code affiché.\n";
+  const EC12_VERTE = "# Procédure\n\nComment faire :\n\n1. Ouvrir un terminal.\n2. Coller la commande.\n3. Saisir le code affiché.\n";
+  const EC12_RESTITUTION = "# Synthèse\n\n> **D-1 — Publie-t-on la version 1.12.0 ?**\n> Comment faire : 1) ouvrir un terminal ; 2) coller la commande ; 3) saisir le code.\n";
+  const EC12_CITEE = "# Note\n\nL'ancien gabarit écrivait « Comment faire : 1) ouvrir ; 2) coller ; 3) saisir » sur une ligne.\n";
+  const g12 = (x) => (x.j?.findings || []).find((f) => f.regle === "EC-12");
+  const r12r = jouer("ec12-rouge.md", EC12_ROUGE);
+  const r12v = jouer("ec12-verte.md", EC12_VERTE);
+  const r12s = jouer("ec12-restitution.md", EC12_RESTITUTION);
+  const r12c = jouer("ec12-citee.md", EC12_CITEE);
+  if (g12(r12r)?.statut !== "AVERT" || !/1 énumération\(s\) numérotée\(s\) en ligne/.test(g12(r12r)?.message || ""))
+    casse.push(`EC-12 : « Comment faire : 1) … 2) … 3) » en ligne, hors restitution, n'est pas signalé : ${JSON.stringify(g12(r12r))}`);
+  if (r12r.statut !== 0 || r12r.j?.verdict === "FAIL")
+    casse.push("EC-12 : l'avertissement fait échouer le texte — hors restitution la règle est en AVERTISSEMENT (TF-1847), jamais bloquante");
+  if (g12(r12v)?.statut !== "PASS")
+    casse.push(`EC-12 : la MÊME information en liste numérotée est signalée — le remède échoue : ${JSON.stringify(g12(r12v))}`);
+  if (g12(r12s)?.statut !== "SKIP")
+    casse.push(`EC-12 : une restitution est jugée ici alors que S80 la juge déjà : ${JSON.stringify(g12(r12s))}`);
+  if (g12(r12c)?.statut !== "PASS")
+    casse.push(`EC-12 : la forme interdite montrée entre guillemets français est comptée comme commise : ${JSON.stringify(g12(r12c))}`);
+
+  // TF-1971 (D-114 (a)) — EC-17, le comparatif du 19/10 sans rubrique, le même avec, et des montants sans comparateur.
+  const EC17_ROUGE = "# Coûts\n\nLa solution retenue coûte 224 € contre 320 € pour la précédente, par mois.\n";
+  const EC17_VERTE = EC17_ROUGE + "\nCompris : hébergement et pare-feu. Non compris : support. Conséquence : l'écart tient au pare-feu.\n";
+  const EC17_SANS = "# Coûts\n\nLe forfait coûte 224 €, et le stockage 320 € de plus.\n";
+  const g17 = (x) => (x.j?.findings || []).find((f) => f.regle === "EC-17");
+  const r17r = jouer("ec17-rouge.md", EC17_ROUGE);
+  if (g17(r17r)?.statut !== "AVERT" || r17r.j?.verdict === "FAIL")
+    casse.push(`EC-17 : deux montants comparés sans rubrique ne sont pas signalés en avertissement : ${JSON.stringify(g17(r17r))}`);
+  if (g17(jouer("ec17-verte.md", EC17_VERTE))?.statut !== "PASS")
+    casse.push("EC-17 : le même comparatif avec sa rubrique est signalé — le remède échoue");
+  if (g17(jouer("ec17-sans.md", EC17_SANS))?.statut !== "PASS")
+    casse.push("EC-17 : deux montants sans comparateur sont signalés");
+  // TF-2025 (D-115 (a)) — EC-2 : 15 phrases longues non consécutives avertissent, 14 non.
+  const longue25 = "Cette phrase de démonstration porte volontairement bien plus de trente-cinq mots parce qu'elle décrit longuement un dispositif imaginaire dont chaque élément se rattache au précédent, sans jamais offrir au lecteur la moindre pause, ce qui est précisément le défaut que la règle cherche à signaler ici. ";
+  const courte25 = "Une phrase courte suit. Elle coupe la série. ";
+  const texte15 = (n) => "# Long\n\n" + Array.from({ length: n }, () => longue25 + courte25.repeat(11)).join("\n\n") + "\n";
+  const g2 = (x) => (x.j?.findings || []).find((f) => f.regle === "EC-2");
+  const r15 = jouer("ec2-quinze.md", texte15(15));
+  const r14 = jouer("ec2-quatorze.md", texte15(14));
+  if (g2(r15)?.statut !== "AVERT" || !/seuil 15/.test(g2(r15)?.message || ""))
+    casse.push(`EC-2 : 15 phrases longues non consécutives n'avertissent pas : ${JSON.stringify(g2(r15))}`);
+  if (g2(r14)?.statut !== "PASS")
+    casse.push(`EC-2 : 14 phrases longues non consécutives avertissent : ${JSON.stringify(g2(r14))}`);
+
+  // 38, 39 et 40 (TF-1977, 29/10/2026) — EC-16, DEUX « $ » SUR UNE LIGNE, EN AVERTISSEMENT. Le rouge est la ligne
+  // du 20/10 ; le vert porte la MÊME information en USD et en signe échappé ; les « $ » d'un bloc de code et d'un
+  // code en ligne ne sont pas comptés.
+  const EC16_ROUGE = "# Coûts\n\nLe forfait coûte 194 $ par mois, dont 105 $ de stockage.\n";
+  const EC16_VERTE = "# Coûts\n\nLe forfait coûte 194 USD par mois, dont 105 \\$ de stockage.\n";
+  const EC16_CODE = "# Script\n\n```sh\necho \"$HOME $PATH\"\n```\n\nLa variable `$HOME` vaut `$USERPROFILE` sous Windows.\n";
+  const g16 = (x) => (x.j?.findings || []).find((f) => f.regle === "EC-16");
+  const r16r = jouer("ec16-rouge.md", EC16_ROUGE);
+  const r16v = jouer("ec16-verte.md", EC16_VERTE);
+  const r16c = jouer("ec16-code.md", EC16_CODE);
+  if (g16(r16r)?.statut !== "AVERT" || !/1 ligne\(s\) à deux « \$ »/.test(g16(r16r)?.message || "") || r16r.j?.verdict === "FAIL")
+    casse.push(`EC-16 : « 194 $ par mois, dont 105 $ » n'est pas signalé en avertissement : ${JSON.stringify(g16(r16r))}`);
+  if (g16(r16v)?.statut !== "PASS")
+    casse.push(`EC-16 : la MÊME information en USD et en signe échappé est signalée — le remède échoue : ${JSON.stringify(g16(r16v))}`);
+  if (g16(r16c)?.statut !== "PASS")
+    casse.push(`EC-16 : des « $ » de bloc de code ou de code en ligne sont comptés : ${JSON.stringify(g16(r16c))}`);
+
+  // 31 à 37 (TF-1926, D-48 (a) du 19/10/2026) — EC-13, LA REVUE DES LISTES DE TOURNURES EST DATÉE, EN AVERTISSEMENT.
+  // Le rouge est la donnée réelle dont deux familles ont une revue dépassée et une troisième aucune date ; le vert est la
+  // donnée réelle au jour injecté (--aujourd-hui) ; le remède (dates futures inscrites) doit PASSER ; la frontière : le
+  // jour dit n'est pas en retard, le lendemain l'est.
+  const g13 = (x) => (x.j?.findings || []).find((f) => f.regle === "EC-13");
+  const reelle = JSON.parse(readFileSync(DONNEE_PAR_DEFAUT, "utf8"));
+  const prochaine13 = reelle.familles.map((f) => f.revue_prevue).filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d || "")).sort()[0];
+  const enRetard = JSON.parse(JSON.stringify(reelle));
+  enRetard.familles[0].revue_prevue = "2026-01-15";
+  enRetard.familles[1].revue_prevue = "2026-02-01";
+  delete enRetard.familles[2].revue_prevue;
+  const cheminRetard = join(dir, "donnee-en-retard.json");
+  writeFileSync(cheminRetard, JSON.stringify(enRetard), "utf8");
+  const corrigee = JSON.parse(JSON.stringify(enRetard));
+  for (const f of corrigee.familles) { f.derniere_lecture = "2026-10-19"; f.revue_prevue = "2027-01-15"; }
+  const cheminCorrigee = join(dir, "donnee-corrigee.json");
+  writeFileSync(cheminCorrigee, JSON.stringify(corrigee), "utf8");
+  const r13r = jouer("ec13-rouge.md", FIXTURE_VERTE, ["--donnee", cheminRetard, "--aujourd-hui", "2026-10-19"]);
+  const r13v = jouer("ec13-verte.md", FIXTURE_VERTE, ["--aujourd-hui", "2026-10-19"]);
+  const r13c = jouer("ec13-corrigee.md", FIXTURE_VERTE, ["--donnee", cheminCorrigee, "--aujourd-hui", "2026-10-19"]);
+  // Le jour dit et son lendemain se LISENT dans la donnée réelle (25/11/2026) : écrits en dur (« 2026-11-16 »), chaque revue
+  // datée cassait la recette alors que la règle tenait. La revue la plus proche de la donnée réelle fait foi.
+  const lendemain13 = new Date(Date.parse(`${prochaine13}T12:00:00Z`) + 86400000).toISOString().slice(0, 10);
+  // Revue du 25/11/2026 (C2) : la frontière de mot que pose `occurrences` garde « mise en sommeil » hors de « en somme ».
+  // Double sens sur la donnée réelle : le nom composé ne compte pas, la clôture résumante compte.
+  {
+    const occ = (texte) => Number(((juger(texte, { donnee: reelle }).findings.find((f) => f.regle === "EC-1:cloture-resumante") || {}).message || "").match(/(\d+) occurrence\(s\)/)?.[1] ?? -1);
+    // Au-delà de mots_minimum (150) : sous ce seuil, les familles ne se comptent pas.
+    const corps = Array.from({ length: 18 }, (_, k) => ` Le lot ${k + 1} suit sa cadence et rend son verdict au registre du pilot.`).join("");
+    if (occ("Les quatre forges passent en mise en sommeil jusqu'au prochain lot." + corps) !== 0)
+      casse.push("EC-1 cloture-resumante : « mise en sommeil » est compté comme « en somme » — la frontière de mot ne tient plus");
+    if (occ("En somme, les quatre forges restent actives jusqu'au prochain lot." + corps) !== 1)
+      casse.push("EC-1 cloture-resumante : « En somme, » n'est plus compté — la famille est fermée");
+  }
+  const r13j = jouer("ec13-jour-dit.md", FIXTURE_VERTE, ["--aujourd-hui", prochaine13]);
+  const r13l = jouer("ec13-lendemain.md", FIXTURE_VERTE, ["--aujourd-hui", lendemain13]);
+  if (g13(r13r)?.statut !== "AVERT" || !/2 famille\(s\) dont la revue est en retard au 2026-10-19 : annonce-vide \(prévue le 2026-01-15\), cloture-resumante/.test(g13(r13r)?.message || "")
+    || !/1 famille\(s\) sans revue_prevue lisible : emphase-creuse/.test(g13(r13r)?.message || ""))
+    casse.push(`EC-13 : deux revues dépassées et une date absente ne sont pas nommées : ${JSON.stringify(g13(r13r))}`);
+  if (r13r.statut !== 0 || r13r.j?.verdict === "FAIL")
+    casse.push("EC-13 : l'avertissement fait échouer le texte — la règle est en AVERTISSEMENT (TF-1926), jamais bloquante");
+  if (g13(r13v)?.statut !== "PASS" || !new RegExp(`9 famille\\(s\\) sur 9, la plus proche le ${prochaine13}`).test(g13(r13v)?.message || ""))
+    casse.push(`EC-13 : la donnée réelle, datée sur ses 9 familles, n'est pas en PASS : ${JSON.stringify(g13(r13v))}`);
+  if (g13(r13c)?.statut !== "PASS")
+    casse.push(`EC-13 : le remède (dates futures inscrites dans la donnée) ne fait pas passer la règle : ${JSON.stringify(g13(r13c))}`);
+  if (g13(r13j)?.statut !== "PASS")
+    casse.push(`EC-13 : le jour dit de la revue est compté en retard : ${JSON.stringify(g13(r13j))}`);
+  if (g13(r13l)?.statut !== "AVERT" || r13l.statut !== 0)
+    casse.push(`EC-13 : le lendemain du jour dit n'avertit pas, ou fait échouer : ${JSON.stringify(g13(r13l))}`);
+  if (jouer("ec13-date-invalide.md", FIXTURE_VERTE, ["--aujourd-hui", "hier"]).statut !== 2)
+    casse.push("EC-13 : --aujourd-hui accepte une valeur qui n'est pas une date AAAA-MM-JJ");
+
+  // 38 et suivants (TF-1960, D-78 (c) amendée du 26/10/2026) — EC-14 (CONCISION D'UN ÉCRIT À UN TIERS) ET EC-15 (LANGUE) :
+  // STATUT A_REJOUER, JAMAIS FAIL. Le rouge est un courriel à un tiers dont un paragraphe fait 90 mots ; le vert dit les MÊMES
+  // faits réécrits (le remède se joue) ; un courriel anglais sans --langue est à rejouer, le même avec --langue en passe ;
+  // un document de travail (destinataire humain), long, n'est pas concerné. Aucun de ces cas ne met le verdict en FAIL.
+  let cas14 = 0;
+  const verifie = (condition, message) => { cas14++; if (!condition) casse.push(message); };
+  const trouve = (x, regle) => (x.j?.findings || []).find((f) => f.regle === regle);
+  const jamaisFail = (x, nom) => verifie(x.statut === 0 && x.j?.verdict === "PASS" && !(x.j?.findings || []).some((f) => f.statut === "FAIL"),
+    `${nom} : le verdict n'est pas PASS (exit ${x.statut}, ${x.j?.verdict}) — A_REJOUER ne fait jamais échouer un texte (D-78 (c))`);
+
+  const COURRIEL_ROUGE = "Bonjour Madame Durand,\n\n"
+    + "Nous vous écrivons au sujet de la livraison des maquettes, qui devait nous parvenir le 12 octobre et que nous n'avons toujours pas reçue. "
+    + "Cette livraison conditionne le démarrage du développement prévu la semaine prochaine, et sans elle nous ne pouvons pas engager les équipes. "
+    + "Nous avons relancé votre service par téléphone le 15 et le 19 octobre, sans obtenir de réponse écrite de sa part. "
+    + "Nous vous demandons donc de nous confirmer une date ferme avant vendredi, faute de quoi nous reporterons le démarrage à la fin du mois.\n\n"
+    + "Cordialement,\nPaul Martin\n";
+  const COURRIEL_VERT = "Bonjour Madame Durand,\n\n"
+    + "Les maquettes devaient nous parvenir le 12 octobre. Nous ne les avons toujours pas reçues.\n\n"
+    + "Sans elles, nous ne pouvons pas engager les équipes ni démarrer le développement prévu la semaine prochaine. "
+    + "Nous avons relancé votre service par téléphone le 15 et le 19 octobre, sans réponse écrite.\n\n"
+    + "Pouvez-vous nous confirmer une date ferme avant vendredi ? À défaut, nous reporterons le démarrage à la fin du mois.\n\n"
+    + "Cordialement,\nPaul Martin\n";
+  const NOM_COURRIEL = "Client-A - Courriel - Relance livraison - 20261026a.md";
+  const c14r = jouer(NOM_COURRIEL, COURRIEL_ROUGE);
+  const c14v = jouer("Client-A - Courriel - Relance livraison v2 - 20261026b.md", COURRIEL_VERT);
+  const par = trouve(c14r, "EC-14-paragraphe");
+  verifie(par?.statut === "A_REJOUER" && par.passages?.length === 1 && par.passages[0].mots === 90 && par.passages[0].phrases === 4 && par.ligne === 3,
+    `EC-14 : un paragraphe de 90 mots et 4 phrases dans un courriel à un tiers n'est pas rendu A_REJOUER, avec sa ligne et ses mesures : ${JSON.stringify(par)}`);
+  verifie(c14r.j?.a_rejouer?.nombre >= 1 && /Réécris chaque passage listé/.test(c14r.j?.a_rejouer?.consigne || "")
+      && /--passe 2/.test(c14r.j?.a_rejouer?.consigne || "") && c14r.j.a_rejouer.passes_max === 3 && c14r.j.a_rejouer.derniere_passe === false,
+    `EC-14 : la sortie ne porte pas la liste à rejouer avec sa consigne et la passe 1 sur 3 : ${JSON.stringify(c14r.j?.a_rejouer)?.slice(0, 200)}`);
+  jamaisFail(c14r, "EC-14 (courriel rouge)");
+  verifie(["EC-14-paragraphe", "EC-14-phrase", "EC-14-enumeration"].every((r) => trouve(c14v, r)?.statut === "PASS") && trouve(c14v, "EC-15")?.statut === "PASS" && c14v.j?.a_rejouer === null,
+    `EC-14 : le MÊME courriel réécrit en 3 paragraphes n'est pas PASS sans rien à rejouer — le remède échoue : ${JSON.stringify(c14v.j?.findings?.filter((f) => f.statut !== "PASS" && /^EC-1[45]/.test(f.regle)))}`);
+  jamaisFail(c14v, "EC-14 (courriel vert)");
+
+  // La phrase de plus de 25 mots, seule : un paragraphe d'une phrase de 30 mots.
+  const PHRASE_LONGUE = "Bonjour,\n\nNous avons bien reçu votre demande du 12 octobre concernant la livraison des maquettes et nous reviendrons vers vous avant la fin de la semaine avec une date ferme.\n";
+  const c14p = jouer("Client-A - Courriel - Accuse - 20261026a.md", PHRASE_LONGUE);
+  verifie(trouve(c14p, "EC-14-phrase")?.statut === "A_REJOUER" && trouve(c14p, "EC-14-phrase").passages[0].mots === 29 && trouve(c14p, "EC-14-paragraphe")?.statut === "PASS",
+    `EC-14 : une phrase de 29 mots seule n'est pas rendue A_REJOUER sur la phrase et PASS sur le paragraphe : ${JSON.stringify(trouve(c14p, "EC-14-phrase"))}`);
+  jamaisFail(c14p, "EC-14 (phrase longue)");
+
+  // L'énumération de plus de 3 éléments en prose : 5 éléments rouge, 3 éléments vert, la liste à puces vert.
+  const ENUM_ROUGE = "Bonjour,\n\nMerci de joindre le Kbis, le RIB, l'attestation, le justificatif et la facture avant vendredi.\n";
+  const ENUM_VERTE = "Bonjour,\n\nMerci de joindre le Kbis, le RIB et l'attestation avant vendredi.\n";
+  const ENUM_PUCES = "Bonjour,\n\nMerci de joindre avant vendredi :\n\n- le Kbis ;\n- le RIB ;\n- l'attestation ;\n- le justificatif ;\n- la facture.\n";
+  const c14e = jouer("Client-A - Courriel - Pieces - 20261026a.md", ENUM_ROUGE);
+  const c14ev = jouer("Client-A - Courriel - Pieces v2 - 20261026b.md", ENUM_VERTE);
+  const c14ep = jouer("Client-A - Courriel - Pieces v3 - 20261026c.md", ENUM_PUCES);
+  verifie(trouve(c14e, "EC-14-enumeration")?.statut === "A_REJOUER" && trouve(c14e, "EC-14-enumeration").passages[0].elements === 5,
+    `EC-14 : une énumération de 5 éléments en prose n'est pas rendue A_REJOUER : ${JSON.stringify(trouve(c14e, "EC-14-enumeration"))}`);
+  verifie(trouve(c14ev, "EC-14-enumeration")?.statut === "PASS", `EC-14 : une énumération de 3 éléments est accusée : ${JSON.stringify(trouve(c14ev, "EC-14-enumeration"))}`);
+  verifie(trouve(c14ep, "EC-14-enumeration")?.statut === "PASS", `EC-14 : les 5 mêmes éléments en liste à puces sont accusés — le remède échoue : ${JSON.stringify(trouve(c14ep, "EC-14-enumeration"))}`);
+  jamaisFail(c14e, "EC-14 (énumération)");
+
+  // QUI EST UN TIERS. L'en-tête destinataire: décide ; sinon le type de nom ; une fiche de conception n'en est pas un.
+  const DOC_TRAVAIL = "---\ndestinataire: humain\n---\n\n" + COURRIEL_ROUGE;
+  const c14h = jouer("Client-A - Courriel - Brouillon de relance - 20261026a.md", DOC_TRAVAIL);
+  verifie(trouve(c14h, "EC-14")?.statut === "SKIP" && /destinataire: humain/.test(trouve(c14h, "EC-14")?.message || "") && !trouve(c14h, "EC-14-paragraphe") && c14h.j?.a_rejouer === null,
+    `EC-14 : un document de travail à destinataire humain, long, est jugé alors que l'en-tête le déclare interne : ${JSON.stringify(trouve(c14h, "EC-14"))}`);
+  jamaisFail(c14h, "EC-14 (destinataire humain)");
+  // Les valeurs INTERNES relevées dans le dépôt (« humain (commanditaire du conseil) », « orchestrateur (pilot) et forges mobilisées ») ne sont pas un tiers.
+  const c14i = jouer("Client-A - Courriel - Brouillon interne - 20261026a.md", "---\ndestinataire: humain (commanditaire du conseil)\n---\n\n" + COURRIEL_ROUGE);
+  const c14o = jouer("Client-A - Courriel - Brouillon agent - 20261026a.md", "---\ndestinataire: orchestrateur (pilot) et forges mobilis\u00e9es\n---\n\n" + COURRIEL_ROUGE);
+  verifie(trouve(c14i, "EC-14")?.statut === "SKIP" && trouve(c14o, "EC-14")?.statut === "SKIP",
+    `EC-14 : un destinataire interne à plusieurs mots (« humain (commanditaire du conseil) », « orchestrateur (pilot) et forges ») est pris pour un tiers : ${JSON.stringify([trouve(c14i, "EC-14"), trouve(c14o, "EC-14")])}`);
+  const c14n = jouer("Note de travail - Relance - 20261026a.md", COURRIEL_ROUGE);
+  verifie(trouve(c14n, "EC-14")?.statut === "SKIP" && !trouve(c14n, "EC-14-paragraphe"),
+    `EC-14 : un texte sans en-tête ni type de nom d'un écrit à un tiers est jugé : ${JSON.stringify(trouve(c14n, "EC-14"))}`);
+  const c14t = jouer("Note de travail - Relance - 20261026b.md", "---\ndestinataire: Mme Durand, Client-A\n---\n\n" + COURRIEL_ROUGE);
+  verifie(trouve(c14t, "EC-14-paragraphe")?.statut === "A_REJOUER" && /destinataire: Mme Durand/.test(trouve(c14t, "EC-14-paragraphe")?.message || ""),
+    `EC-14 : un en-tête destinataire: qui nomme un tiers ne rend pas la règle applicable : ${JSON.stringify(trouve(c14t, "EC-14-paragraphe"))}`);
+  const c14f = jouer("Factory - Fiche produit - Relance - 20261026a.md", COURRIEL_ROUGE);
+  verifie(trouve(c14f, "EC-14-paragraphe")?.statut === "A_REJOUER", `EC-14 : une fiche (type de nom « fiche produit ») n'est pas jugée : ${JSON.stringify(trouve(c14f, "EC-14"))}`);
+  // TF-1976 (29/10/2026) : une proposition commerciale est un écrit à un tiers par son type de nom ; le 20/10, la
+  // section 1 d'une proposition (306 mots en un paragraphe) rendait PASS faute d'en-tête.
+  const c14pr = jouer("Client-A - Propale - Lot 2 - 20261020a.md", COURRIEL_ROUGE);
+  const c14po = jouer("Client-A - Proposition - Accompagnement - 20261020a.md", COURRIEL_ROUGE);
+  verifie(trouve(c14pr, "EC-14-paragraphe")?.statut === "A_REJOUER" && trouve(c14po, "EC-14-paragraphe")?.statut === "A_REJOUER",
+    `EC-14 : une proposition sans en-tête (types « Propale » et « Proposition » du registre) n'est pas jugée : ${JSON.stringify([trouve(c14pr, "EC-14"), trouve(c14po, "EC-14")])}`);
+  const c14c = jouer("FICHE-CONCEPTION.md", COURRIEL_ROUGE);
+  verifie(trouve(c14c, "EC-14")?.statut === "SKIP" && /fiche conception/.test(trouve(c14c, "EC-14")?.message || ""),
+    `EC-14 : une fiche de conception (document de travail) est jugée comme un écrit à un tiers : ${JSON.stringify(trouve(c14c, "EC-14"))}`);
+  // TF-2189 (RT-48 de Produit-84, 05/11/2026) : une synthèse en un paragraphe de 5 phrases denses rendait PASS, EC-14 en SKIP « faute d'en-tête ».
+  // Par défaut, tout écrit sous output/ est jugé, en-tête `destinataire:` ou non ; un en-tête interne reste l'exception déclarée, hors de output/ rien ne change.
+  const SOUS_OUTPUT = (nom) => ["--chemin-relatif", `output/04-plans/${nom}`];
+  // TF-2259 : le jugement par défaut ne vaut que pour les écrits neufs (nom daté du seuil de la donnée, 2026-11-06, ou d'après) ; ce nom est celui d'un écrit neuf.
+  const NOM_SYNTHESE = "Factory - Synthese Mandat - Etude rendue - 20261106a.md";
+  const c14s = jouer(NOM_SYNTHESE, COURRIEL_ROUGE, SOUS_OUTPUT(NOM_SYNTHESE));
+  verifie(trouve(c14s, "EC-14-paragraphe")?.statut === "A_REJOUER" && /output\/ : jugé par défaut/.test(trouve(c14s, "EC-14-paragraphe")?.message || "") && c14s.j?.a_rejouer?.nombre >= 1,
+    `EC-14 : un écrit sans en-tête sous output/ n'est pas jugé par défaut : ${JSON.stringify(trouve(c14s, "EC-14-paragraphe") || trouve(c14s, "EC-14"))}`);
+  jamaisFail(c14s, "EC-14 (output/ sans en-tête)");
+  const c14sv = jouer(NOM_SYNTHESE, COURRIEL_VERT, SOUS_OUTPUT(NOM_SYNTHESE));
+  verifie(["EC-14-paragraphe", "EC-14-phrase", "EC-14-enumeration"].every((r) => trouve(c14sv, r)?.statut === "PASS") && c14sv.j?.a_rejouer === null,
+    `EC-14 : le MÊME texte réécrit court, sous output/, n'est pas PASS sans rien à rejouer — le remède échoue : ${JSON.stringify(c14sv.j?.findings?.filter((f) => f.statut !== "PASS" && /^EC-14/.test(f.regle)))}`);
+  const c14sh = jouer(NOM_SYNTHESE, DOC_TRAVAIL, SOUS_OUTPUT(NOM_SYNTHESE));
+  verifie(trouve(c14sh, "EC-14")?.statut === "SKIP" && /destinataire: humain/.test(trouve(c14sh, "EC-14")?.message || ""),
+    `EC-14 : l'en-tête interne déclaré (destinataire: humain) n'écarte plus la règle sous output/ : ${JSON.stringify(trouve(c14sh, "EC-14"))}`);
+  const c14st = jouer(NOM_SYNTHESE, "---\ndestinataire: Mme Durand, Client-A\n---\n\n" + COURRIEL_ROUGE, SOUS_OUTPUT(NOM_SYNTHESE));
+  verifie(trouve(c14st, "EC-14-paragraphe")?.statut === "A_REJOUER" && /destinataire: Mme Durand/.test(trouve(c14st, "EC-14-paragraphe")?.message || ""),
+    `EC-14 : un en-tête qui nomme un tiers, sous output/, perd sa raison : ${JSON.stringify(trouve(c14st, "EC-14-paragraphe"))}`);
+  const c14sh2 = jouer(NOM_SYNTHESE, COURRIEL_ROUGE, ["--chemin-relatif", `docs/${NOM_SYNTHESE}`]);
+  verifie(trouve(c14sh2, "EC-14")?.statut === "SKIP" && !trouve(c14sh2, "EC-14-paragraphe"),
+    `EC-14 : un écrit sans en-tête HORS de output/ est jugé alors que rien ne le désigne : ${JSON.stringify(trouve(c14sh2, "EC-14"))}`);
+  const c14sf = jouer("FICHE-CONCEPTION.md", COURRIEL_ROUGE, ["--chemin-relatif", "output/05-livrables/FICHE-CONCEPTION.md"]);
+  verifie(trouve(c14sf, "EC-14")?.statut === "SKIP" && /fiche conception/.test(trouve(c14sf, "EC-14")?.message || ""),
+    `EC-14 : une fiche de conception sous output/ perd son exclusion nommée : ${JSON.stringify(trouve(c14sf, "EC-14"))}`);
+  const c14sr = jouer("README.md", COURRIEL_ROUGE, ["--chemin-relatif", "output/README.md"]);
+  verifie(trouve(c14sr, "EC-14")?.statut === "SKIP", `EC-14 : un index régénéré (output/README.md) est jugé par défaut : ${JSON.stringify(trouve(c14sr, "EC-14"))}`);
+  const c14sl = jouer("lisezmoi.md", COURRIEL_ROUGE, ["--chemin-relatif", "output/LISEZMOI.md"]);
+  verifie(trouve(c14sl, "EC-14")?.statut === "SKIP", `EC-14 : un index régénéré (output/LISEZMOI.md) est jugé par défaut : ${JSON.stringify(trouve(c14sl, "EC-14"))}`);
+  // TF-2259 (06/11/2026) : le jugement par défaut ne vaut que pour les écrits NEUFS. Le MÊME texte rouge, sous output/, sans en-tête, ne diffère
+  // que par la date de son nom : daté d'avant le seuil de la donnée (2026-11-06) il est écarté et le dit ; daté du seuil (cas c14s ci-dessus) il est à rejouer.
+  const NOM_ANCIEN = "Factory - Synthese Mandat - Etude rendue - 20261105a.md";
+  const c14a = jouer(NOM_ANCIEN, COURRIEL_ROUGE, SOUS_OUTPUT(NOM_ANCIEN));
+  verifie(trouve(c14a, "EC-14")?.statut === "SKIP" && /antérieur au 2026-11-06/.test(trouve(c14a, "EC-14")?.message || "") && !trouve(c14a, "EC-14-paragraphe") && c14a.j?.a_rejouer === null,
+    `EC-14 (TF-2259) : un écrit sans en-tête sous output/, daté d'avant le seuil, est jugé par défaut : ${JSON.stringify(trouve(c14a, "EC-14") || trouve(c14a, "EC-14-paragraphe"))}`);
+  jamaisFail(c14a, "EC-14 (output/ ancien)");
+  verifie((c14a.j?.non_juge || []).some((n) => /antériorité, TF-2259/.test(n) && /2026-11-06/.test(n)),
+    `EC-14 (TF-2259) : l'antériorité du jugement par défaut n'est pas déclarée au non_juge : ${JSON.stringify((c14a.j?.non_juge || []).slice(0, 2))}`);
+  const c14at = jouer(NOM_ANCIEN, "---\ndestinataire: Mme Durand, Client-A\n---\n\n" + COURRIEL_ROUGE, SOUS_OUTPUT(NOM_ANCIEN));
+  verifie(trouve(c14at, "EC-14-paragraphe")?.statut === "A_REJOUER", `EC-14 (TF-2259) : un en-tête qui nomme un tiers perd sa raison sous output/ parce que le nom est ancien : ${JSON.stringify(trouve(c14at, "EC-14-paragraphe") || trouve(c14at, "EC-14"))}`);
+  const NOM_COURRIEL_ANCIEN = "Client-A - Courriel relance - 20261020a.md";
+  const c14ac = jouer(NOM_COURRIEL_ANCIEN, COURRIEL_ROUGE, ["--chemin-relatif", `output/${NOM_COURRIEL_ANCIEN}`]);
+  verifie(trouve(c14ac, "EC-14-paragraphe")?.statut === "A_REJOUER", `EC-14 (TF-2259) : un type de nom d'écrit à un tiers (courriel) n'est plus jugé parce que sa date est ancienne : ${JSON.stringify(trouve(c14ac, "EC-14-paragraphe") || trouve(c14ac, "EC-14"))}`);
+  const NOM_SANS_DATE = "Factory - Synthese Mandat - Etude rendue.md";
+  const c14ad = jouer(NOM_SANS_DATE, COURRIEL_ROUGE, SOUS_OUTPUT(NOM_SANS_DATE));
+  verifie(trouve(c14ad, "EC-14-paragraphe")?.statut === "A_REJOUER", `EC-14 (TF-2259) : un nom sans date, qui ne prouve aucune antériorité, n'est plus jugé : ${JSON.stringify(trouve(c14ad, "EC-14-paragraphe") || trouve(c14ad, "EC-14"))}`);
+  const sansSeuil = ecritATiers(COURRIEL_ROUGE, NOM_ANCIEN, { dossiers_juges_par_defaut: ["output"] }, `output/04-plans/${NOM_ANCIEN}`);
+  verifie(sansSeuil.concerne === true, `EC-14 (TF-2259) : sans seuil dans la donnée, un écrit ancien sous output/ n'est plus jugé (comportement d'avant 1.8.0) : ${JSON.stringify(sansSeuil)}`);
+
+  // LA LANGUE. Sans --langue, un courriel anglais est à rejouer ; avec --langue en (ou langue: en), le même texte passe.
+  const COURRIEL_EN = "Dear Ms Durand,\n\n"
+    + "The mockups were due on 12 October and we have not received them yet.\n\n"
+    + "Without them, we cannot start the development phase next week. The teams and the test environments are still to be booked.\n\n"
+    + "We called your department twice, without a written answer. Could you confirm a firm date before Friday?\n\n"
+    + "Kind regards,\nPaul Martin\n";
+  const NOM_EN = "Client-B - Courriel - Delivery follow-up - 20261026a.md";
+  const c15r = jouer(NOM_EN, COURRIEL_EN);
+  const c15v = jouer(NOM_EN, COURRIEL_EN, ["--langue", "en"]);
+  const c15e = jouer("Client-B - Courriel - Delivery follow-up v2 - 20261026b.md", "---\nlangue: en\n---\n\n" + COURRIEL_EN);
+  const c15m = jouer(NOM_EN, COURRIEL_EN, ["--langue", "fr"]);
+  verifie(trouve(c15r, "EC-15")?.statut === "A_REJOUER" && /texte en anglais/.test(trouve(c15r, "EC-15")?.message || "") && /règle 12/.test(trouve(c15r, "EC-15")?.message || "")
+      && trouve(c15r, "EC-15").passages.length === 3 && c15r.j?.a_rejouer?.regles?.includes("EC-15"),
+    `EC-15 : un courriel anglais sans --langue n'est pas rendu A_REJOUER avec ses 3 passages : ${JSON.stringify(trouve(c15r, "EC-15"))}`);
+  jamaisFail(c15r, "EC-15 (anglais sans --langue)");
+  verifie(trouve(c15v, "EC-15")?.statut === "PASS" && /attendue : anglais \(--langue\)/.test(trouve(c15v, "EC-15")?.message || "") && c15v.j?.a_rejouer === null,
+    `EC-15 : le MÊME courriel avec --langue en n'est pas PASS — l'anglais bloque ou à rejouer pour un lecteur anglophone : ${JSON.stringify(trouve(c15v, "EC-15"))}`);
+  verifie(trouve(c15e, "EC-15")?.statut === "PASS" && /en-tête `langue:`/.test(trouve(c15e, "EC-15")?.message || ""),
+    `EC-15 : l'en-tête « langue: en » ne fait pas passer un texte anglais : ${JSON.stringify(trouve(c15e, "EC-15"))}`);
+  verifie(trouve(c15m, "EC-15")?.statut === "A_REJOUER", `EC-15 : --langue fr sur un texte anglais n'est pas rendu A_REJOUER : ${JSON.stringify(trouve(c15m, "EC-15"))}`);
+  verifie(trouve(verte, "EC-15")?.statut === "PASS" && /attendue : français \(défaut de la Factory/.test(trouve(verte, "EC-15")?.message || ""),
+    `EC-15 : un texte français sans déclaration n'est pas PASS avec « fr » par défaut : ${JSON.stringify(trouve(verte, "EC-15"))}`);
+  const c15j = jouer(NOM_EN, COURRIEL_EN, ["--langue", "ja"]);
+  verifie(trouve(c15j, "EC-15")?.statut === "SKIP" && /sans liste de mots vides/.test(trouve(c15j, "EC-15")?.message || "") && /pas un PASS/.test(trouve(c15j, "EC-15")?.message || ""),
+    `EC-15 : une langue attendue sans liste de mots vides n'est pas SKIP dit : ${JSON.stringify(trouve(c15j, "EC-15"))}`);
+  const c15c = jouer("Client-B - Courriel - Court - 20261026a.md", "Hello, thanks for your message.\n");
+  verifie(trouve(c15c, "EC-15")?.statut === "SKIP", `EC-15 : un texte de moins de 30 mots est jugé : ${JSON.stringify(trouve(c15c, "EC-15"))}`);
+  // Un texte mixte à parts proches (anglais 25 %, français 21 %, écart sous 1,3) n'est pas signalé : il reste à la relecture (non_juge).
+  const MIXTE = "Bonjour Madame Durand, les maquettes devaient nous parvenir le 12 octobre et nous ne les avons pas reçues. Sans elles, nous ne pouvons pas démarrer le développement de la semaine prochaine.\n\n"
+    + "Hello Ms Durand, the mockups were due on 12 October and we have not received them yet. Without them, we cannot start the development phase of next week. "
+    + "The teams and the test environments are still to be booked, and your department has not answered our calls.\n";
+  const c15x = jouer("Note de travail - Bilingue - 20261026a.md", MIXTE);
+  verifie(trouve(c15x, "EC-15")?.statut === "PASS", `EC-15 : un texte mixte à parts proches est accusé : ${JSON.stringify(trouve(c15x, "EC-15"))}`);
+  // La langue vaut pour tout texte, pas seulement pour un écrit à un tiers : un texte neutre en anglais est à rejouer.
+  const c15n = jouer("Note de travail - Notes - 20261026a.md", COURRIEL_EN);
+  verifie(trouve(c15n, "EC-15")?.statut === "A_REJOUER" && trouve(c15n, "EC-14")?.statut === "SKIP", `EC-15 : la langue n'est pas jugée sur un texte qui n'est pas un écrit à un tiers : ${JSON.stringify(trouve(c15n, "EC-15"))}`);
+  jamaisFail(c15n, "EC-15 (texte neutre anglais)");
+
+  // LA BOUCLE BORNÉE : à la passe 3, la consigne dit de remettre avec les écarts nommés ; une passe hors 1-9 est une erreur.
+  const c14d = jouer(NOM_COURRIEL, COURRIEL_ROUGE, ["--passe", "3"]);
+  verifie(c14d.j?.a_rejouer?.derniere_passe === true && c14d.j.a_rejouer.passe === 3 && /remets le texte avec les écarts restants nommés/.test(c14d.j.a_rejouer.consigne) && !/--passe 4/.test(c14d.j.a_rejouer.consigne),
+    `EC-14 : à la passe 3 la consigne ne dit pas de remettre avec les écarts nommés : ${JSON.stringify(c14d.j?.a_rejouer?.consigne)}`);
+  verifie(jouer(NOM_COURRIEL, COURRIEL_ROUGE, ["--passe", "0"]).statut === 2, "EC-14 : --passe accepte une valeur hors 1-9");
+  verifie(jouer(NOM_COURRIEL, COURRIEL_ROUGE, ["--langue", "français"]).statut === 2, "EC-15 : --langue accepte autre chose qu'un code de langue");
+  // TF-2334 (10/11/2026) — LE POINT APRÈS UNE HEURE (« 14 h. ») CLÔT LA PHRASE. Le fautif est la phrase d'essai du 01/10/2026 : deux phrases qui
+  // se soudaient. Le conforme garde ses abréviations : « p. » devant un numéro de page et une initiale seule hors d'une heure ne coupent toujours pas.
+  verifie(phrases("Le départ est fixé à 14 h. Le retour suit demain matin.").length === 2,
+    "EC-2 (TF-2334) : « à 14 h. Le retour… » est lu comme une seule phrase — le point après une heure ne clôt pas");
+  verifie(phrases("Rendez-vous à 8 h. Ensuite, le groupe part.").length === 2,
+    "EC-2 (TF-2334) : « 8 h. » avec espace insécable est lu comme une seule phrase");
+  verifie(phrases("Voir p. 12 pour le détail. La lettre h. suit seule dans ce texte.").length === 2,
+    "EC-2 (TF-2334) : « p. » ou un « h. » sans nombre coupe la phrase — l'exception déborde de l'heure");
+  // TF-2345 (10/11/2026) — LE TITRE « # » D'UN BLOC MARKDOWN À RECOPIER N'EST PAS UNE INVITE ROOT. Le fautif est le modèle de fichier de
+  // consignes du 30/09/2026 (« # Consignes de l'assistant documentaire » en première ligne d'un bloc markdown). Le conforme garde le refus
+  // de la MÊME ligne dans un bloc bash, et celui d'une invite « $ » dans un bloc text : seule la balise markdown, md ou text lève le « # ».
+  const ENTETE_NON_EXEC = "---\nrole_destinataire: lectrice qui recopie un modèle\n---\n\n# Modèle\n\nUn paragraphe de prose.\n\n";
+  const f10 = (x) => (x.j?.findings || []).find((f) => f.regle === "EC-10");
+  const e45m = jouer("ec10-md.md", `${ENTETE_NON_EXEC}\`\`\`markdown\n# Consignes de l'assistant documentaire\n\nRéponds en français.\n\`\`\`\n`);
+  verifie(f10(e45m)?.statut === "PASS", `EC-10 (TF-2345) : un titre « # » en première ligne d'un bloc markdown est compté comme commande : ${JSON.stringify(f10(e45m))}`);
+  const e45t = jouer("ec10-text.md", `${ENTETE_NON_EXEC}\`\`\`text\n# Consignes\n\`\`\`\n`);
+  verifie(f10(e45t)?.statut === "PASS", `EC-10 (TF-2345) : un titre « # » en première ligne d'un bloc text est compté comme commande : ${JSON.stringify(f10(e45t))}`);
+  const e45b = jouer("ec10-bash.md", `${ENTETE_NON_EXEC}\`\`\`bash\n# Consignes de l'assistant documentaire\n\`\`\`\n`);
+  verifie(f10(e45b)?.statut === "FAIL", `EC-10 (TF-2345) : la même ligne « # » dans un bloc bash n'est plus refusée — la levée déborde des balises à recopier : ${JSON.stringify(f10(e45b))}`);
+  const e45d = jouer("ec10-text-dollar.md", `${ENTETE_NON_EXEC}\`\`\`text\n$ git status\n\`\`\`\n`);
+  verifie(f10(e45d)?.statut === "FAIL", `EC-10 (TF-2345) : une invite « $ » dans un bloc text n'est plus refusée : ${JSON.stringify(f10(e45d))}`);
+  // TF-2346 (10/11/2026) — LE LECTEUR SE DÉCLARE HORS DE L'EN-TÊTE QUE LE CLIENT VOIT. Sans déclaration nulle part, SKIP (déjà couvert plus haut).
+  // Commentaire HTML : le document est jugé, la commande est nommée. Sidecar : un lecteur exécutant lève le refus, preuve que la lecture a lieu.
+  const BLOC_AZ = "# Guide remis au client\n\nUn paragraphe de prose.\n\n```\naz repos list\n```\n";
+  const e46c = jouer("ec10-commentaire.md", `<!-- lecteur : le responsable métier du client, qui lit sans exécuter -->\n${BLOC_AZ}`);
+  verifie(f10(e46c)?.statut === "FAIL" && /az repos list/.test(f10(e46c)?.message || ""), `EC-10 (TF-2346) : un lecteur déclaré en commentaire HTML n'est pas lu — le document reste non jugé : ${JSON.stringify(f10(e46c))}`);
+  writeFileSync(join(dir, "ec10-sidecar.md.lecteur.json"), JSON.stringify({ lecteur: "exploitant / astreinte" }), "utf8");
+  const e46s = jouer("ec10-sidecar.md", BLOC_AZ);
+  verifie(f10(e46s)?.statut === "PASS" && /exploitant/.test(f10(e46s)?.message || ""), `EC-10 (TF-2346) : un lecteur déclaré dans le sidecar .lecteur.json n'est pas lu : ${JSON.stringify(f10(e46s))}`);
+  writeFileSync(join(dir, "ec10-sidecar-vide.md.lecteur.json"), "{ pas du json", "utf8");
+  const e46v = jouer("ec10-sidecar-vide.md", BLOC_AZ);
+  verifie(f10(e46v)?.statut === "SKIP", `EC-10 (TF-2346) : un sidecar illisible produit un verdict au lieu de rendre SKIP : ${JSON.stringify(f10(e46v))}`);
+  // TF-2604 (16/11/2026) — EC-18, LE TEXTE CORROMPU (UTF-8 relu en Windows-1252). ROUGE : la fiche de 69 lignes du 12/11, corrompue comme le fait un
+  // JSON réécrit en mauvais encodage, FAIL avec sa ligne ; la MÊME fiche saine PASS ; une citation en bloc de code, en code en ligne ou entre guillemets
+  // français PASS ; un bloc de code qui cite ne couvre pas une ligne corrompue hors bloc ; chacune des quatre séquences accuse seule.
+  const g18 = (x) => (x.j?.findings || []).find((f) => f.regle === "EC-18");
+  const FICHE_18 = [`# Campagnes de novembre à relire\n\nCette fiche liste les campagnes que l'exploitant relit avant l'envoi.\n`,
+    ...Array.from({ length: 69 }, (_v, i) => `- Campagne ${i + 1} : DÉCEMBRE SE PRÉPARE MAINTENANT. L'équipe relit les créations « de fin d'année » avant l'envoi.`)].join("\n") + "\n";
+  const corrompre18 = (s) => new TextDecoder("windows-1252").decode(Buffer.from(s, "utf8"));
+  const r18r = jouer("ec18-rouge.md", corrompre18(FICHE_18));
+  verifie(g18(r18r)?.statut === "FAIL" && r18r.j?.verdict === "FAIL" && /69 ligne\(s\) au texte corrompu/.test(g18(r18r)?.message || "") && g18(r18r)?.ligne === 5,
+    `EC-18 : la fiche de 69 lignes corrompues n'est pas refusée avec son compte et sa première ligne : ${JSON.stringify(g18(r18r))}`);
+  const r18v = jouer("ec18-verte.md", FICHE_18);
+  verifie(g18(r18v)?.statut === "PASS" && r18v.j?.verdict === "PASS", `EC-18 : la MÊME fiche saine est accusée — le remède échoue : ${JSON.stringify(g18(r18v))}`);
+  const CITE_18 = "# Note\n\nLe défaut s'écrit `Ã©` quand l'UTF-8 est relu en Windows-1252.\n\n```\nDÃ‰CEMBRE SE PRÃ‰PARE ðŸŽ„ â€™ Ã¨\n```\n\nUne prose saine suit : été, élève, très.\n";
+  const r18c = jouer("ec18-cite-code.md", CITE_18);
+  verifie(g18(r18c)?.statut === "PASS" && r18c.j?.verdict === "PASS", `EC-18 : un bloc de code et un code en ligne qui citent les séquences sont comptés comme corrompus : ${JSON.stringify(g18(r18c))}`);
+  const r18g = jouer("ec18-cite-guillemets.md", "# Retour\n\nLa fiche cite 69 lignes du type « ðŸŽ„ DÃ‰CEMBRE SE PRÃ‰PARE MAINTENANT. » et les séquences « Ã© » et « â€™ ».\n");
+  verifie(g18(r18g)?.statut === "PASS" && /citent la séquence entre guillemets/.test(g18(r18g)?.message || ""), `EC-18 : des séquences citées entre guillemets français sont comptées comme corrompues, ou la citation n'est pas dite : ${JSON.stringify(g18(r18g))}`);
+  const r18m = jouer("ec18-mixte.md", "# Mixte\n\n```\nÃ©\n```\n\nUne ligne corrompue hors du bloc : l'Ã©quipe.\n");
+  verifie(g18(r18m)?.statut === "FAIL" && g18(r18m)?.ligne === 7, `EC-18 : un bloc de code qui cite couvre une ligne corrompue hors bloc : ${JSON.stringify(g18(r18m))}`);
+  for (const [nom, seq] of [["é", "Ã©"], ["è", "Ã¨"], ["apostrophe et guillemets", "â€™"], ["émoji", "ðŸŽ„"]]) {
+    const r18s = jouer(`ec18-seq-${nom.slice(0, 3)}.md`, `# Titre\n\nUne ligne saine.\n\nUne ligne avec ${seq} dedans.\n`);
+    verifie(g18(r18s)?.statut === "FAIL" && g18(r18s)?.ligne === 5, `EC-18 : la séquence « ${seq} » (${nom}) n'est pas accusée à sa ligne : ${JSON.stringify(g18(r18s))}`);
+  }
+  // EC-19, EC-20, EC-21 (D-230 (b) du 22/11/2026) — LE PLANCHER RESSERRÉ VERS L'ASD-STE100, EN AVERTISSEMENT.
+  const g = (x, r) => (x.j?.findings || []).find((f) => f.regle === r);
+  const FOND_230 = Array.from({ length: 16 }, (_, i) => `La règle numéro ${i + 1} se lit vite et se retient bien.`).join(" ");
+  const LONGUE_230 = "Cette phrase compte volontairement bien plus de mots que le seuil admis, parce qu'elle enchaîne une proposition principale, une subordonnée, une incise et encore une précision finale qui allonge tout.";
+  const r19r = jouer("ec19-rouge.md", `# Note\n\n${FOND_230}\n\n${LONGUE_230}\n`);
+  verifie(g(r19r, "EC-19")?.statut === "AVERT" && g(r19r, "EC-19")?.ligne === 5 && r19r.j?.verdict === "PASS" && r19r.statut === 0,
+    `EC-19 : une phrase de plus de 25 mots n'est pas signalée à sa ligne, ou fait échouer le texte : ${JSON.stringify(g(r19r, "EC-19"))}`);
+  const r19v = jouer("ec19-verte.md", `# Note\n\n${FOND_230}\n\nCette phrase enchaîne une principale et une subordonnée. Une incise et une précision suivent, dans une seconde phrase.\n`);
+  verifie(g(r19v, "EC-19")?.statut === "PASS", `EC-19 : la MÊME idée coupée en deux phrases est signalée — le remède échoue : ${JSON.stringify(g(r19v, "EC-19"))}`);
+  const r19c = jouer("ec19-court.md", `# Note\n\n${LONGUE_230}\n`);
+  verifie(g(r19c, "EC-19")?.statut === "SKIP", `EC-19 : un texte de moins de 150 mots est jugé : ${JSON.stringify(g(r19c, "EC-19"))}`);
+  const SEPT = Array.from({ length: 7 }, (_, i) => `Phrase courte ${i + 1}.`).join(" ");
+  const r20r = jouer("ec20-rouge.md", `# Note\n\n${SEPT}\n`);
+  verifie(g(r20r, "EC-20")?.statut === "AVERT" && g(r20r, "EC-20")?.ligne === 3 && r20r.j?.verdict === "PASS",
+    `EC-20 : un paragraphe de 7 phrases n'est pas signalé à sa ligne, ou fait échouer le texte : ${JSON.stringify(g(r20r, "EC-20"))}`);
+  const r20v = jouer("ec20-verte.md", `# Note\n\nPhrase courte 1. Phrase courte 2. Phrase courte 3. Phrase courte 4.\n\nPhrase courte 5. Phrase courte 6. Phrase courte 7.\n`);
+  verifie(g(r20v, "EC-20")?.statut === "PASS", `EC-20 : les MÊMES phrases en deux paragraphes sont signalées : ${JSON.stringify(g(r20v, "EC-20"))}`);
+  const TABLE_21 = (cellule) => `# Suite\n\n| A-N | Action | Acteur |\n|---|---|---|\n| A-1 | ${cellule} | auto_ia |\n`;
+  const r21r = jouer("ec21-rouge.md", TABLE_21("Le seuil de l'oracle à resserrer"));
+  verifie(g(r21r, "EC-21")?.statut === "AVERT" && g(r21r, "EC-21")?.ligne === 5 && r21r.j?.verdict === "PASS",
+    `EC-21 : une cellule « Action » qui ouvre sur un article n'est pas signalée à sa ligne, ou fait échouer le texte : ${JSON.stringify(g(r21r, "EC-21"))}`);
+  for (const [nom, cellule] of [["infinitif", "Resserrer le seuil de l'oracle"], ["imperatif", "Resserrez le seuil de l'oracle"],
+    ["tu", "Relance le banc"], ["negation", "Ne pas coller la ligne anglaise"], ["complement", "Dans VS Code, ouvrir le dossier"], ["code", "`node oracles/x.mjs`"]]) {
+    const r = jouer(`ec21-vert-${nom}.md`, TABLE_21(cellule));
+    verifie(g(r, "EC-21")?.statut === "PASS", `EC-21 : la consigne « ${cellule} » (${nom}) est signalée : ${JSON.stringify(g(r, "EC-21"))}`);
+  }
+  const r21e = jouer("ec21-etapes.md", "# Guide\n\n## Étapes\n\n1. La commande du banc.\n2. Lancer le banc.\n\n## Contexte\n\n1. La commande du banc.\n");
+  verifie(g(r21e, "EC-21")?.statut === "AVERT" && /1 consigne/.test(g(r21e, "EC-21")?.message || "") && g(r21e, "EC-21")?.ligne === 5,
+    `EC-21 : sous « Étapes », un élément sans verbe n'est pas seul signalé, ou un élément hors titre d'étapes l'est : ${JSON.stringify(g(r21e, "EC-21"))}`);
+  const donneeSans = join(dir, "sans-plancher.json");
+  const brute230 = JSON.parse(readFileSync(DONNEE_PAR_DEFAUT, "utf8"));
+  delete brute230.plancher_ste;
+  writeFileSync(donneeSans, JSON.stringify(brute230), "utf8");
+  const r230s = jouer("ec19-sans-donnee.md", `# Note\n\n${FOND_230}\n\n${LONGUE_230}\n`, ["--donnee", donneeSans]);
+  verifie(["EC-19", "EC-20", "EC-21"].every((r) => g(r230s, r)?.statut === "SKIP"), `EC-19 à EC-21 : sans clé plancher_ste, les règles ne disent pas SKIP : ${JSON.stringify((r230s.j?.findings || []).filter((f) => /EC-(19|20|21)/.test(f.regle)))}`);
+
+  const BILAN_14 = cas14;
+
+  rmSync(dir, { recursive: true, force: true });
+  console.log(casse.length
+    ? `Self-test ${NOM} : ${casse.length} DEFAUT(S)\n - ${casse.join("\n - ")}`
+    : `Self-test ${NOM} : ${58 + BILAN_14} cas, 0 défaut (${58 + BILAN_14}/${58 + BILAN_14} PASS — EC-19, EC-20 et EC-21 en AVERTISSEMENT (D-230 (b)) : une phrase de 30 mots signalée à sa ligne sans échec, la même coupée en deux PASS, un texte court SKIP ; un paragraphe de 7 phrases signalé, les mêmes en deux paragraphes PASS ; une cellule « Action » qui ouvre sur un article signalée, l'infinitif, l'impératif, la négation, un complément suivi d'une virgule et un code en tête PASS ; sous « Étapes » seul l'élément sans verbe signalé ; sans clé plancher_ste les trois SKIP ; EC-18 en FAIL (TF-2604) : une fiche de 69 lignes dont l'UTF-8 a été relu en Windows-1252 refusée avec son compte et sa première ligne, la MÊME fiche saine PASS, un bloc de code, un code en ligne ou des guillemets français qui citent les séquences PASS, un bloc qui cite ne couvre pas une ligne corrompue hors bloc, chacune des quatre séquences accuse seule ; EC-17 (D-114 (a)) : comparatif sans rubrique AVERT, avec rubrique PASS, sans comparateur PASS ; EC-2 (D-115 (a)) : 15 phrases longues non consécutives AVERT, 14 PASS ; page HTML jugée sur son texte visible (TF-1968) : sept phrases de 40 mots d'affilée refusées par EC-2 à la ligne de la page, les mêmes mots en phrases de 10 mots PASS, <script> et <pre> non comptés, un titre « Ce que » en <h2> refusé par EC-8 à la ligne de la page, source html dite ; EC-8 titre NUMÉROTÉ (TF-2020) : « 7. », « 7) », « 2.1 » et « 3 · » refusés, le même titre qui nomme son contenu PASS, un fichier de la liste d'antériorité admis en le disant, le même texte hors liste ou non numéroté refusé ; EC-8 titre imposé par contrat (TF-1974) : déclaré avec son contrat admis et compté, sans contrat refusé, un autre titre fautif refusé ; EC-16 en AVERTISSEMENT (TF-1977) : « 194 $ par mois, dont 105 $ » signalé, la même en USD et en signe échappé PASS, les « $ » de code non comptés ; EC-14 et EC-15 en A_REJOUER, jamais FAIL (TF-1960, D-78 (c) amendée du 26/10/2026) : ${BILAN_14} cas — un courriel à un tiers dont un paragraphe fait 90 mots est à rejouer avec sa ligne, ses mesures et sa consigne, le MÊME courriel réécrit PASS, une phrase de 29 mots et une énumération de 5 éléments sont à rejouer, les 3 éléments et la liste à puces PASS ; un document de travail à destinataire humain, long, est non concerné (SKIP dit), une fiche de conception aussi, un en-tête destinataire: qui nomme un tiers rend la règle applicable ; un courriel anglais sans --langue est à rejouer, le même avec --langue en ou langue: en PASS, une langue sans liste SKIP dit ; la passe 3 dit de remettre avec les écarts nommés, une passe hors 1-9 rend 2 ; le jugement par défaut sous output/ ne vaut que pour les écrits neufs (TF-2259) — le même texte daté d'avant le seuil est écarté, dit au verdict et déclaré au non_juge, daté du seuil il est à rejouer, un en-tête tiers, un type de nom de tiers ou un nom sans date restent jugés, sans seuil dans la donnée tout est jugé ; EC-13 en AVERTISSEMENT (revue des listes de tournures datée, TF-1926), cas rouge : deux revues dépassées et une date absente nommées, AVERT sans FAIL ; la donnée réelle PASS ; le remède PASS ; le jour dit PASS, le lendemain AVERT ; une date invalide rend 2 ; EC-12 en AVERTISSEMENT (E-11 sur le Markdown, TF-1847), cas rouge : « Comment faire : 1) … 2) … 3) » en ligne, hors restitution, AVERT sans FAIL ; la MÊME information en liste numérotée PASS ; une restitution SKIP, laissée à S80 ; la forme interdite montrée entre guillemets français non comptée ; EC-11 en AVERTISSEMENT, cas rouge : une question de décision qui ne nomme rien, transposée du 16/09/2026, AVERT sans FAIL ; le même texte avec le nom PASS ; une restitution SKIP, laissée à S47 ; une question citée ou rhétorique non comptée (TF-1392) ; rouge FAIL sur ${reglesRouges.size} règles, verte PASS sans FAIL, courte PASS densités non jugées, antériorité SKIP ; EC-7 dans ses TROIS sens — sans lexique SKIP et dit, deux emplois en prose FAIL, le terme retenu PASS avec la citation entre accents graves épargnée (TF-1045) ; EC-9 dans ses TROIS sens (E-14) — des mesures en toutes lettres FAIL, les MÊMES faits en chiffres PASS, et de la prose ordinaire — « un défaut », « un banc neuf », « l'un des deux » — PASS, la frontière étant le déclencheur à DROITE et jamais le mot-nombre seul ; EC-8 dans ses TROIS sens — titre et en-tête de colonne FAIL, la même tournure dans le corps PASS, le tableau d'options imposé par le gabarit PASS, et les 2 ANCIENS libellés désormais FAIL depuis que D-2 (a) a levé leur exemption (TF-1137) ; EC-10 dans ses TROIS sens — une commande de console FAIL quand le lecteur déclaré n'exécute pas, la MÊME commande PASS pour un exploitant, aucun lecteur déclaré SKIP et dit, le bloc qui se RECOPIE jamais compté (TF-1138) ; EC-4-gras dans ses TROIS sens (TF-1488) — un gras d'UN caractère « **0** » ne fait plus glisser l'appariement et les lignes du faux FAIL du 28/09 PASS, les mêmes sans ce gras PASS, et de vrais passages de 12 mots en gras placés après lui FAIL, comptés pour eux-mêmes ; EC-10 pour un lecteur qui EXÉCUTE dans ses DEUX sens (TF-1886) — une session Claude Code, un sous-agent, un agent de campagne PASS, un agent commercial, un agent immobilier et des développeurs assistés par IA restent FAIL)`);
+  return casse.length ? 1 : 0;
+}
+
+// ── LA LIGNE DE COMMANDE ─────────────────────────────────────────────────────────────────────
+
+const lanceEnDirect = process.argv[1]
+  && fileURLToPath(import.meta.url).toLowerCase().replace(/\\/g, "/") === resolve(process.argv[1]).toLowerCase().replace(/\\/g, "/");
+
+if (lanceEnDirect) {
+  const args = process.argv.slice(2);
+  if (args.includes("--self-test")) process.exit(selfTest());
+
+  const valeur = (drapeau) => {
+    const i = args.indexOf(drapeau);
+    return i >= 0 ? args[i + 1] : null;
+  };
+  const cheminDonnee = valeur("--donnee") || DONNEE_PAR_DEFAUT;
+  const { donnee, erreur: pourquoi } = lireDonnee(cheminDonnee);
+  if (pourquoi) erreur(pourquoi);
+
+  const dossier = valeur("--baseline");
+  if (dossier) modeBaseline(dossier, donnee);
+
+  const DRAPEAUX_A_VALEUR = new Set(["--donnee", "--chemin-relatif", "--baseline", "--aujourd-hui", "--langue", "--passe"]);
+  const cible = args.find((a, i) => !a.startsWith("--") && !(i > 0 && DRAPEAUX_A_VALEUR.has(args[i - 1])));
+  if (!cible) erreur("cible absente — usage : node oracle-ecriture.mjs <fichier.md> [--donnee <tics.json>] | --baseline <dossier> | --self-test");
+  if (!existsSync(cible)) erreur(`fichier introuvable : ${cible}`);
+
+  const cheminRelatif = valeur("--chemin-relatif") || relative(RACINE, resolve(cible)).replace(/\\/g, "/");
+  let texte;
+  try { texte = readFileSync(cible, "utf8"); } catch (e) { erreur(`fichier illisible : ${cible} (${e.message})`); }
+  const aujourdhui = valeur("--aujourd-hui");
+  if (aujourdhui && !/^\d{4}-\d{2}-\d{2}$/.test(aujourdhui)) erreur("--aujourd-hui attend une date AAAA-MM-JJ");
+  const langue = valeur("--langue");
+  if (langue && !/^[A-Za-z]{2,3}([-_][A-Za-z0-9]{2,8})?$/.test(langue)) erreur("--langue attend un code de langue (fr, en, es, de…)");
+  const passeBrute = valeur("--passe");
+  if (passeBrute && !/^[1-9]$/.test(passeBrute)) erreur("--passe attend un entier de 1 à 9 (le numéro de la passe de réécriture)");
+  // TF-1968 : une page HTML est jugée sur son TEXTE VISIBLE (`texteDeHtml`), et les lignes du verdict sont celles de la PAGE.
+  const estHtml = /\.html?$/i.test(String(cible));
+  const page = estHtml ? texteDeHtml(texte) : null;
+  const r = juger(page ? page.texte : texte, { donnee, cheminRelatif, cheminJuge: resolve(cible), aujourdhui, langue, passe: passeBrute ? Number(passeBrute) : undefined });
+  const dePage = (n) => (page && Number.isInteger(n) && page.lignes[n - 1] ? page.lignes[n - 1] : n);
+  if (page) {
+    // Les numéros de ligne cités DANS un message (« l.66 », « ligne 66 ») sont ceux du texte extrait : ils se disent ceux de la page.
+    const messageDePage = (s) => String(s).replace(/\bl\.(\d+)/g, (m, n) => `l.${dePage(Number(n))}`).replace(/\bligne (\d+)/g, (m, n) => `ligne ${dePage(Number(n))}`);
+    for (const f of r.findings || []) {
+      if (typeof f.message === "string") f.message = messageDePage(f.message);
+      if (Number.isInteger(f.ligne)) f.ligne = dePage(f.ligne);
+      for (const p of f.passages || []) if (Number.isInteger(p.ligne)) p.ligne = dePage(p.ligne);
+    }
+    for (const p of r.a_rejouer?.passages || []) if (Number.isInteger(p.ligne)) p.ligne = dePage(p.ligne);
+  }
+  console.log(JSON.stringify({
+    oracle: NOM, version: VERSION, cible: String(cible).replace(/\\/g, "/"),
+    ...(page ? { source: "html", lignes: "de la page (le texte visible est extrait par texteDeHtml)" } : {}),
+    mots: r.mots, verdict: r.verdict, findings: r.findings, a_rejouer: r.a_rejouer ?? null, non_juge: r.non_juge,
+  }, null, 1));
+  process.exit(r.verdict === "FAIL" ? 1 : 0);
+}

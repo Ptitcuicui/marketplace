@@ -1,0 +1,693 @@
+#!/usr/bin/env node
+/**
+ * relever-heritage.mjs — l'état de l'héritage chez TOUS les produits du parc, sans rien y écrire.
+ *
+ * ============================================================================================
+ * POURQUOI (TF-0626, décision humaine du 25/08/2026 — « mesurer d'abord, décider ensuite »)
+ * ============================================================================================
+ *
+ * LE FAIT QUI L'A FAIT NAÎTRE. En corrigeant le résolveur de produits (TF-0623), la localisation
+ * a cessé d'être aveugle — et la première mesure possible a rendu, pour deux produits, SIX et SEPT
+ * artefacts d'héritage absents sur huit. Parmi les absents : le gabarit de restitution et le hook
+ * qui la juge. Un produit qui ne les a pas rend ses travaux hors du format prescrit SANS QU'AUCUN
+ * CONTRÔLE NE LE REFUSE.
+ *
+ * CE QUI REND LE RELEVÉ NÉCESSAIRE PLUTÔT QU'UNE SUITE DE GESTES. R-47 existe, elle est câblée à
+ * l'ingestion, sa recette est verte — et elle rendait « non vérifié » sur les cibles qu'elle ne
+ * savait pas trouver. Le parc croyait donc avoir un juge de conformité là où il n'en avait pas, et
+ * personne ne pouvait le savoir. Avant de décider quoi recopier et où, il faut un état DATÉ,
+ * exhaustif sur ce qui est localisable, et opposable.
+ *
+ * ============================================================================================
+ * CE QU'IL FAIT, ET SURTOUT CE QU'IL NE FAIT PAS
+ * ============================================================================================
+ *
+ * IL N'ÉCRIT RIEN CHEZ AUCUN PRODUIT. Pas un fichier, pas une ligne, pas un `.gitignore`. Il lit
+ * des noms de fichiers et vérifie des existences. La recopie est un geste HUMAIN, produit par
+ * produit (N-5 : seuls les produits se modifient eux-mêmes), et un relevé qui se mettrait à
+ * réparer serait exactement le geste qu'aucun contrôle ne pourrait annuler.
+ *
+ * IL NE LIT AUCUN CONTENU, sauf pour les artefacts en `copie_conforme` dont il compare
+ * l'EMPREINTE à celle de la source — c'est la seule façon de distinguer « présent » de « présent
+ * et à jour », et cette distinction est le cœur du sujet : un produit qui porte une COPIE PÉRIMÉE
+ * du gabarit est plus dangereux qu'un produit qui n'en a pas, parce qu'il croit être conforme.
+ * L'empreinte est calculée sur les lignes normalisées (`lib-empreinte`), donc insensible aux fins
+ * de ligne — sans quoi tout le parc paraîtrait divergent sous Windows.
+ *
+ * IL DÉCLARE CE QU'IL NE VOIT PAS. Un produit rangé au-delà de la profondeur bornée n'est pas
+ * relevé, et le relevé le DIT plutôt que de laisser croire à l'exhaustivité.
+ *
+ * Usage : node scripts\relever-heritage.mjs [--md <fichier>] [--json]
+ */
+import { existsSync, readdirSync, writeFileSync, statSync } from "node:fs";
+import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { join, dirname, relative } from "node:path";
+import { fileURLToPath } from "node:url";
+import { empreinteFichier, empreinteTexte, normaliserLignes } from "./lib-empreinte.mjs";
+import { estDepotEcosysteme } from "./lib-parc.mjs";
+import { PROFONDEUR_MAX, SAUTES } from "../todo/localiser-produit.mjs";
+// TF-1471 (28/09/2026, campagne D-32 (a)) — mêmes helpers que R-13/R-27 d'oracle-conformite-projet.mjs
+// (TF-1439) : un seul endroit sait lire `type_projet: documentaire` et confronter la déclaration
+// au dépôt réel, et c'est lui, jamais une seconde lecture maison du même en-tête.
+import { surfaceWebEcarteePar, TYPE_DOCUMENTAIRE, CONDITION_SITE } from "./adopter-projet-existant.mjs";
+
+const ICI = dirname(fileURLToPath(import.meta.url));
+const PILOT = join(ICI, "..");
+const args = process.argv.slice(2);
+const racine = process.env.FORGE_ROOT || join(PILOT, "..");
+
+/**
+ * Les dépôts du pilot et des forges ne sont pas des produits : ils ne reçoivent pas l'héritage.
+ * Les produits de l'écosystème (`PRODUITS_DE_L_ECOSYSTEME` de lib-parc) en sont, malgré leur
+ * préfixe : le 12/10/2026, le préfixe seul tenait factory-marketing hors du parc, et un constat
+ * qui lui était confié (TF-1023) sortait orphelin à l'émission des travaux.
+ */
+const PAS_UN_PRODUIT = { test: (nom) => /^_archive-/i.test(nom) || estDepotEcosysteme(nom) };
+
+const enfants = (d) => {
+  try { return readdirSync(d, { withFileTypes: true }).filter((x) => x.isDirectory()); }
+  catch { return []; }
+};
+
+//: Les dossiers qu'on ne fouille jamais en cherchant un artefact ailleurs : ils portent des copies
+//: de tout, et y trouver un `robots.txt` ne dirait rien de ce que le produit SERT.
+const JAMAIS_FOUILLES = new Set([
+  ".git", "node_modules", ".venv", "__pycache__", "dist", "build", ".next", "old", "Old",
+  "coverage", ".oracles", "input", "output", "forge",
+]);
+
+/**
+ * Le même artefact, trouvé AILLEURS qu'à l'endroit prescrit — ou `null`.
+ *
+ * Cherché sur DEUX niveaux seulement, et jamais dans les dossiers ci-dessus : au-delà, on ne
+ * trouve plus l'artefact du produit mais une copie de quelque chose. La fonction rend le CHEMIN
+ * relatif tel qu'on le lit, parce que c'est lui l'information — pas le fait qu'un fichier de ce
+ * nom existe quelque part (TF-0654).
+ */
+export function trouverAilleurs(dossierProduit, cible, profondeur = 2) {
+  const nom = String(cible).replaceAll("\\", "/").split("/").pop();
+  if (!nom) return null;
+  const descendre = (d, niveau) => {
+    if (niveau > profondeur) return null;
+    for (const e of enfants(d)) {
+      if (JAMAIS_FOUILLES.has(e.name) || e.name.startsWith(".")) continue;
+      const candidat = join(d, e.name, nom);
+      if (existsSync(candidat)) return relative(dossierProduit, candidat).replaceAll("\\", "/");
+      const plusLoin = descendre(join(d, e.name), niveau + 1);
+      if (plusLoin) return plusLoin;
+    }
+    return null;
+  };
+  return descendre(dossierProduit, 1);
+}
+
+// ── TF-2668 (16/11/2026) : LES COPIES DU SOCLE QU'UN PRODUIT FAIT DE SON CHEF ────────────────────────────────────────────────
+// LE FAIT. Le 16/11/2026, `oracle-surcouche` SC4 rend FAIL sur une page d'un produit jugée PASS le 10/11 : le boilerplate de
+// `factory-page-html` porte `color-scheme` depuis TF-2384, et la copie `scripts/apdlb/gabarit.html` du produit datait d'avant
+// (3 déclarations et 1 commentaire d'écart). R-47 ne jugeait que les artefacts à CIBLE FIXE ; un produit qui copie un fichier du
+// socle à l'endroit de son choix n'avait aucun contrôle, ni à l'ouverture ni ailleurs, et sa copie dérivait sans signal.
+// CE QUE FAIT LA FONCTION. `copies_du_socle` de HERITAGE.json déclare le fichier du socle, comment reconnaître sa copie (un nom
+// de gabarit ET des marqueurs que seule une copie porte) et où le chercher ; elle rend, par copie trouvée, son état : à jour
+// (même empreinte, fins de ligne normalisées), PÉRIMÉE (le socle porte des lignes que la copie n'a pas) ou personnalisée (elle
+// n'ajoute que des lignes : ce que le produit en fait lui appartient). NON JUGÉ : une page INSTANCIÉE depuis le gabarit (son nom
+// n'est pas celui d'un gabarit), et une copie dont le nom ne dit pas gabarit — un contrôle par contenu seul accuserait chaque
+// page rendue du produit.
+const SAUTES_COPIES = new Set([...JAMAIS_FOUILLES].filter((n) => n !== "forge"));
+export function copiesDuSocle(dossierProduit, declaration, texteSource, profondeur = 6) {
+  const nom = new RegExp(declaration.noms_de_copie || "^$", "i");
+  const extensions = declaration.extensions || [".html"];
+  const marqueurs = declaration.reconnaissance || [];
+  const source = normaliserLignes(texteSource);
+  const lignes = (t) => t.split("\n").map((l) => l.trim()).filter(Boolean);
+  const lignesSource = [...new Set(lignes(source))];
+  const copies = [];
+  const descendre = (d, niveau) => {
+    if (niveau > profondeur) return;
+    let entrees;
+    try { entrees = readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const e of entrees) {
+      if (e.isDirectory()) {
+        if (!SAUTES_COPIES.has(e.name) && !e.name.startsWith(".")) descendre(join(d, e.name), niveau + 1);
+        continue;
+      }
+      if (!e.isFile() || !nom.test(e.name) || !extensions.some((x) => e.name.toLowerCase().endsWith(x))) continue;
+      const chemin = join(d, e.name);
+      let contenu;
+      try { if (statSync(chemin).size > 1024 * 1024) continue; contenu = normaliserLignes(readFileSync(chemin, "utf8")); } catch { continue; }
+      if (!marqueurs.every((m) => contenu.includes(m))) continue;
+      const rel = relative(dossierProduit, chemin).replaceAll("\\", "/");
+      if (empreinteTexte(contenu) === empreinteTexte(source)) { copies.push({ chemin: rel, etat: "a_jour", manquantes: [], en_plus: 0 }); continue; }
+      const dansCopie = new Set(lignes(contenu));
+      const manquantes = lignesSource.filter((l) => !dansCopie.has(l));
+      const enPlus = [...dansCopie].filter((l) => !lignesSource.includes(l)).length;
+      copies.push({ chemin: rel, etat: manquantes.length ? "perimee" : "personnalisee", manquantes, en_plus: enPlus });
+    }
+  };
+  descendre(dossierProduit, 1);
+  return copies;
+}
+
+/**
+ * Tous les produits du parc, reconnus à leur `forge\` — le marqueur qu'un run de forge a eu lieu.
+ * On ne descend pas SOUS un produit : ses sous-dossiers ne sont pas des produits.
+ */
+export function produitsDuParc(base, profondeurMax = PROFONDEUR_MAX) {
+  const trouves = [];
+  const descendre = (d, niveau) => {
+    if (niveau > profondeurMax) return;
+    for (const e of enfants(d)) {
+      if (SAUTES.has(e.name)) continue;
+      const c = join(d, e.name);
+      if (niveau === 1 && PAS_UN_PRODUIT.test(e.name)) continue;
+      if (existsSync(join(c, "forge"))) { trouves.push(c); continue; }
+      descendre(c, niveau + 1);
+    }
+  };
+  descendre(base, 1);
+  return trouves;
+}
+
+/**
+ * La racine WEB que le produit a DÉCLARÉE — ligne `racine_web:` du frontmatter de
+ * `docs/projet/PARAMETRAGE.md` — ou null s'il n'a rien déclaré.
+ *
+ * TF-0793 (03/09/2026, lot du produit 02) : TF-0654 demandait cette déclaration et promettait
+ * que le relevé cesserait de compter l'artefact « hors racine ». Le produit a déclaré
+ * (`racine_web: site`, 01/09) et le relevé rendait toujours « 2 HORS RACINE » : AUCUN script ne
+ * lisait la ligne — seul le gabarit d'émission des travaux la citait. Un contrôle qui prescrit
+ * un geste et ne le lit jamais apprend au produit à l'ignorer. Lecture volontairement étroite :
+ * une seule ligne, dans le frontmatter seulement, un chemin relatif au dépôt ; rien n'est deviné.
+ */
+export function racineWebDeclaree(dossierProduit) {
+  const param = join(dossierProduit, "docs", "projet", "PARAMETRAGE.md");
+  if (!existsSync(param)) return null;
+  const texte = readFileSync(param, "utf8").replace(/^﻿/, "");
+  const fm = /^---\r?\n([\s\S]*?)\r?\n---/.exec(texte);
+  if (!fm) return null;
+  const m = /^racine_web\s*:\s*["']?([^"'\r\n#]+?)["']?\s*$/m.exec(fm[1]);
+  if (!m) return null;
+  const rel = m[1].trim().replace(/^[.][\\/]/, "").replace(/[\\/]+$/, "");
+  return rel && rel !== "." ? rel : null;
+}
+
+/**
+ * TF-0882 — UN MOTIF D'EXCLUSION COUVERT PAR PLUS LARGE EST TENU.
+ *
+ * Un motif exigé (`*.oracles.json`) est TENU si une autre ligne du fichier, prise comme glob,
+ * attrape tout ce qu'il attrape (`*.oracles*.json`). La couverture se prouve par TÉMOINS : on
+ * fabrique depuis le motif exigé quelques chemins qu'il désigne — l'étoile valant rien, un mot,
+ * puis un mot composé — et la ligne candidate doit les attraper TOUS. Un témoin qui échappe suffit
+ * à refuser : mieux vaut demander une ligne de trop que déclarer protégé ce qui ne l'est pas.
+ *
+ * DEUX BORNES, chacune contre un dégât précis :
+ *   · une NÉGATION (`!forge/**`) ne se couvre jamais : dans un `.gitignore`, c'est l'ORDRE des
+ *     lignes qui décide du résultat, pas leur présence (leçon TF-0850 : insérer trois graphies
+ *     APRÈS `!forge/**` aurait ré-ignoré onze fichiers que le dépôt portait déjà) ;
+ *   · une ligne de NÉGATION ne couvre rien non plus — elle ré-inclut, elle n'exclut pas.
+ *
+ * Un motif à barre oblique finale (`.venv/`) est aussi cherché sans elle : dans un `.gitignore`,
+ * `.venv` couvre le dossier comme le fichier.
+ */
+const globVersRegex = (glob) => {
+  let re = "";
+  for (let i = 0; i < glob.length; i++) {
+    const c = glob[i];
+    if (c === "*") { if (glob[i + 1] === "*") { re += ".*"; i++; } else re += "[^/]*"; }
+    else if (c === "?") re += "[^/]";
+    else re += c.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+  }
+  return new RegExp(`^${re}$`);
+};
+const temoinsDe = (motif) => [...new Set(["", "a", "a-b"].map((jeton) => motif.replace(/\*+/g, jeton)))];
+/** TF-1903 : le texte où se cherche un `motif_exige`, guillemet fermant du lanceur ancré ôté (`factory.mjs\" x` → `factory.mjs x`). */
+export const texteDesMotifs = (texte) => String(texte).replace(/factory\.mjs\\?"(?=\s)/g, "factory.mjs");
+export function estCouvertParPlusLarge(motif, lignes) {
+  if (motif.startsWith("!")) return false;
+  const familles = [temoinsDe(motif)];
+  if (motif.endsWith("/")) familles.push(temoinsDe(motif.slice(0, -1)));
+  for (const ligne of lignes) {
+    if (ligne.startsWith("!") || ligne === motif) continue;
+    let re;
+    try { re = globVersRegex(ligne); } catch { continue; }
+    if (familles.some((temoins) => temoins.every((t) => re.test(t)))) return true;
+  }
+  return false;
+}
+
+/**
+ * TF-0851 / TF-0848 (08/09) — LE DISQUE N'EST PAS L'HISTOIRE, et R-47 ne lisait que le disque.
+ *
+ * Deux faits mesurés le 06/09 chez deux produits différents, même classe. (1) `forge/retours/
+ * CLASSES.json` était PRÉSENT, conforme à une version du pilot, et NON SUIVI par git : il n'a pu
+ * arriver que par une recopie d'héritage, et `git status` le rangeait en « Untracked ». (2) Trois
+ * artefacts en copie conforme étaient CONFORMES au pilot et NON COMMIS : `recopier-heritage
+ * --essai` les rendait [CONFORME], `git status` les rendait « modified », et R-47 comptait
+ * « 11 artefacts présents et à jour » — verdict identique qu'ils soient versionnés ou non.
+ *
+ * CE QUE ÇA COÛTE : un `git restore` ramène l'héritage de la veille, un `git clone` (CI, autre
+ * poste) livre les artefacts périmés, et la session suivante ne peut pas distinguer ces recopies
+ * de travaux du produit — elle arbitre à l'aveugle entre les commettre et les jeter. Le relevé du
+ * parc, lui, mesure ce même disque : il mesure l'état d'un POSTE, pas l'état d'un produit.
+ *
+ * CE QUI EST FAIT ICI, et pas plus : l'état de l'artefact DANS L'HISTOIRE est relevé et COMPTÉ À
+ * PART — `non_suivi` (présent, conforme, hors histoire), `non_commis` (suivi, mais l'arbre de
+ * travail diverge de HEAD), `commis`. Le verdict de R-47 n'est pas retourné par ce relevé : la
+ * décision de le faire basculer appartient au pilot (TF-0848 le dit en toutes lettres), et le
+ * comptage à part en est le préalable. Ce qui change dès aujourd'hui, c'est que le silence cesse.
+ */
+/**
+ * TF-2184 (06/11/2026) — L'HISTOIRE SE LIT UNE FOIS PAR PRODUIT, PAS DEUX FOIS PAR ARTEFACT.
+ *
+ * Le fait : le relevé du parc a pris 92 s sous charge (05/11), pour environ 1 838 sous-processus
+ * `git` d'un passage ; la plupart venaient d'ici — `ls-files` puis `diff` PAR artefact, soit 56 par
+ * produit. Les deux questions se posent désormais sur tous les chemins jugés d'un produit à la fois,
+ * en deux appels : mêmes pathspecs, mêmes verdicts, 28 fois moins de sous-processus.
+ * Rend, pour chaque cible existante d'un dépôt git, le résultat qu'`etatDansHistoire` rendait seul.
+ */
+function histoireDesCibles(dossierProduit, cibles) {
+  const sortie = new Map();
+  if (!existsSync(join(dossierProduit, ".git"))) return sortie;
+  const rels = new Map(); // cible → chemin relatif posix
+  for (const c of cibles) if (c && existsSync(c)) rels.set(c, relative(dossierProduit, c).replaceAll("\\", "/"));
+  if (!rels.size) return sortie;
+  const chemins = [...new Set(rels.values())];
+  const noms = (r) => new Set((r.stdout || "").split("\0").filter(Boolean).map((x) => x.toLowerCase()));
+  const suivis = noms(spawnSync("git", ["-C", dossierProduit, "ls-files", "-z", "--", ...chemins],
+    { encoding: "utf8", timeout: 20000, maxBuffer: 64 * 1024 * 1024 }));
+  const rD = spawnSync("git", ["-C", dossierProduit, "diff", "--name-only", "-z", "HEAD", "--", ...chemins],
+    { encoding: "utf8", timeout: 20000, maxBuffer: 64 * 1024 * 1024 });
+  const differents = rD.status === 0 ? noms(rD) : new Set(); // HEAD illisible : « commis », comme avant
+  for (const [cible, rel] of rels) {
+    if (!suivis.has(rel.toLowerCase())) {
+      sortie.set(cible, { histoire: "non_suivi", geste_git: `git add "${rel}"`,
+        note_histoire: "présent, conforme, HORS HISTOIRE — ce poste l'a, le dépôt ne l'a pas : un clone neuf repartirait sans lui" });
+    } else if (differents.has(rel.toLowerCase())) {
+      sortie.set(cible, { histoire: "non_commis", geste_git: `git add "${rel}" && git commit`,
+        note_histoire: "conforme sur le DISQUE, divergent de HEAD — une recopie n'est TENUE qu'une fois commise ; un `git restore` ramènerait la version d'avant" });
+    } else sortie.set(cible, { histoire: "commis" });
+  }
+  return sortie;
+}
+
+/** L'état assemblé d'un artefact : disque, puis histoire, puis alias périmé (l'ordre des clés est celui du relevé). */
+function assemblerEtat(etat, sortie, histoire) {
+  const alias = sortie.alias_perime
+    ? { alias_perime: sortie.alias_perime, geste_alias: sortie.geste_alias,
+        note_alias: "l'alias de TRANSITION survit à côté de la cible canonique — un gabarit périmé qu'aucun contrôle ne regarde reste lu et cité (TF-0881)" }
+    : {};
+  return { ...etat, ...(histoire || {}), ...alias };
+}
+
+/** L'état d'UN artefact chez UN produit : absent, présent-divergent, ou conforme. */
+export function etatArtefact(dossierProduit, artefact, racinePilot, ctx) {
+  const sortie = {};
+  const etat = etatSurDisque(dossierProduit, artefact, racinePilot, sortie, ctx);
+  return assemblerEtat(etat, sortie, histoireDesCibles(dossierProduit, [sortie.cible]).get(sortie.cible));
+}
+
+function etatSurDisque(dossierProduit, artefact, racinePilot, sortie = {}, ctx = undefined) {
+  let cible = join(dossierProduit, String(artefact.cible));
+  // TF-0793 — LA DÉCLARATION SE LIT. Quand la cible manque à la racine du dépôt et que le produit
+  // a déclaré sa racine web, l'artefact se cherche SOUS cette racine, et c'est là qu'il se juge
+  // (présence, motifs ou conformité, comme à la racine). Le chemin déclaré est nommé au relevé.
+  let sousRacineWeb = null;
+  if (!existsSync(cible)) {
+    const racineWeb = racineWebDeclaree(dossierProduit);
+    if (racineWeb) {
+      const sous = join(dossierProduit, racineWeb, String(artefact.cible));
+      if (existsSync(sous)) { cible = sous; sousRacineWeb = racineWeb; }
+    }
+  }
+  // TF-0710 (01/09) — UN ALIAS DE TRANSITION EST UNE CIBLE ACCEPTÉE, PAS UN DÉFAUT. Quand la
+  // cible canonique manque mais que l'alias déclaré au contrat existe, c'est LUI la copie du
+  // produit : le juger absent forcerait tout le parc à migrer le jour de la publication, et
+  // c'est exactement le renommage en cascade que l'item corrige.
+  if (!existsSync(cible) && artefact.alias_accepte) {
+    const alias = join(dossierProduit, String(artefact.alias_accepte));
+    if (existsSync(alias)) cible = alias;
+  }
+  // TF-0881 (08/09) — L'ALIAS DE TRANSITION SURVIT À CÔTÉ DE LA CIBLE CANONIQUE, ET R-47 CESSE DE
+  // LE REGARDER. L'alias n'est LU que si la cible canonique manque (TF-0710, à bon droit : un
+  // produit qui n'a que l'ancien nom n'est pas en défaut). Mais quand les DEUX existent, l'ancien
+  // fichier — 62 lignes du 14/08, sans obligation de classe ni section « la règle qui aurait évité
+  // le retour » — reste sur le disque et R-47 rend PASS. Mesure du 06/09 chez TROIS produits
+  // anciens : seul faux vert du lot, et trois lots d'un de ces produits citaient encore l'ancien
+  // nom. Un gabarit périmé qu'aucun contrôle ne regarde est un gabarit qu'on continue de lire.
+  // Le constat est DÉCLARÉ et compté à part : le retrait est un geste du produit (`git rm`), le
+  // pilot n'écrit pas chez lui — mais il cesse de se taire.
+  // La comparaison porte sur le chemin CANONIQUE du contrat, jamais sur `cible` — qui vient
+  // justement d'être réassignée à l'alias quand la cible canonique manque (TF-0710). Les
+  // confondre ferait relever « alias périmé » sur le cas exact que TF-0710 déclare LÉGITIME.
+  const canonique = join(dossierProduit, String(artefact.cible));
+  if (artefact.alias_accepte && existsSync(canonique)) {
+    const alias = join(dossierProduit, String(artefact.alias_accepte));
+    if (existsSync(alias)) {
+      sortie.alias_perime = String(artefact.alias_accepte);
+      sortie.geste_alias = `git rm "${artefact.alias_accepte}"`;
+    }
+  }
+  // Le chemin RÉELLEMENT jugé, une fois toutes les résolutions faites (racine web, alias) : c'est
+  // lui, et pas la cible du contrat, dont l'état dans l'histoire git se relève (TF-0851).
+  sortie.cible = cible;
+  if (!existsSync(cible)) {
+    // LE TROISIEME CAS, CELUI QUI N'AVAIT PAS DE NOM (TF-0654, 26/08/2026).
+    //
+    // LE FAIT, remonte par un produit et VERIFIE ici : `robots.txt` et `llms.txt` etaient comptes
+    // ABSENT, gravite majeur. Ils ne l'etaient pas — ils vivent en `site/robots.txt` et
+    // `site/llms.txt`, et repondent 200 en production. La racine WEB de ce produit est `site/`,
+    // le repertoire reellement servi ; ce n'est pas la racine du depot.
+    //
+    // La sonde ne connaissait que DEUX lectures : « le produit a une surface web et le fichier
+    // manque » ou « il n'a pas de surface web et l'absence est legitime ». Aucune des deux n'etait
+    // vraie. CE QUE CA COUTAIT SI ON AVAIT APPLIQUE LE TRAVAIL CONFIE : deux fichiers deposes a la
+    // racine du depot, JAMAIS SERVIS, et un relevé passe au vert — le pire des deux mondes, une
+    // exigence qu'on croit satisfaite par des fichiers morts.
+    //
+    // CE QUE CET ETAT FAIT, ET CE QU'IL NE FAIT PAS : il NOMME l'endroit ou le fichier a ete
+    // trouve, et il ne DEVINE PAS la racine web. Deviner reviendrait a affirmer ce que la donnee
+    // ne porte pas — un `site/` peut etre servi comme il peut etre un dossier d'archives. Ce que
+    // le produit doit faire est donc DECLARER sa racine web, pas recopier un fichier qu'il a deja.
+    const ailleurs = trouverAilleurs(dossierProduit, artefact.cible);
+    if (ailleurs) return { etat: "hors_racine", trouve_a: ailleurs };
+    // TF-1471 (28/09/2026, campagne D-32 (a)) — LE CONTRAT DÉCLARE UN `conditionnel`, LE RELEVÉ
+    // NE LE LISAIT PAS. `robots.txt` et `llms.txt` (gabarits\HERITAGE.json) portent `conditionnel:
+    // "produit à surface web"` ; un projet DÉCLARÉ documentaire (`type_projet`, même mécanisme que
+    // R-13/R-27 dans oracle-conformite-projet.mjs, TF-1439) n'a par construction aucune surface web
+    // à ouvrir. Mesuré le 28/09 sur un parc jetable : les deux fichiers restaient « absent » chez
+    // un tel projet, alors que R-27 les tient déjà pour SANS_OBJET — deux consommateurs du même
+    // contrat rendaient deux verdicts différents sur le même fichier, ce que TF-0649 interdit déjà
+    // pour le mode `presence_et_motifs`. La confrontation au dépôt (signaux de code ou de site)
+    // est la MÊME que R-13/R-27 : une déclaration non confrontée exempterait un produit web qui se
+    // dirait documentaire pour échapper au contrat.
+    if (artefact.conditionnel === CONDITION_SITE) {
+      // TF-1699 (15/10/2026) : le type « service » (sans site public) exempte aussi, confronté aux
+      // seuls signaux de SITE — même lecteur que R-27 (`surfaceWebEcarteePar`).
+      const type = surfaceWebEcarteePar(dossierProduit);
+      if (type) {
+        return { etat: "sans_objet",
+          motif: type.type === TYPE_DOCUMENTAIRE
+            ? `projet déclaré documentaire (${type.ou}, type_projet) : ${artefact.conditionnel} non dû (TF-1439, TF-1471)`
+            : `projet déclaré service sans site public (${type.ou}, type_projet) : ${artefact.conditionnel} non dû (TF-1699)` };
+      }
+    }
+    return { etat: "absent" };
+  }
+  // TF-0649 — LE RELEVE ET R-47 DOIVENT DIRE LA MEME CHOSE. Ce module rendait « present » pour
+  // tout mode autre que `copie_conforme`, alors que l'oracle de conformite, lui, VERIFIE les
+  // motifs exiges. Deux consommateurs du meme contrat qui rendent deux verdicts differents sur le
+  // meme fichier, c'est la double verite que le parc a payee dix fois. Le mode est donc jugé ici
+  // aussi — un socle se verifie, il ne se suppose pas.
+  if (artefact.mode === "presence_et_motifs") {
+    const lignes = new Set(readFileSync(cible, "utf8").split(/\r?\n/)
+      .map((l) => l.trim()).filter((l) => l && !l.startsWith("#")));
+    // TF-0882 (08/09/2026) — UN MOTIF EST TENU S'IL EST PRÉSENT **OU COUVERT PAR PLUS LARGE**.
+    // Le contrôle comparait des lignes NUES, à l'exacte graphie. Mesuré le 06/09 chez un produit
+    // ancien : `*.oracles*.json` et `*.oracles*.jsonl` couvraient STRICTEMENT les trois motifs de
+    // sidecars exigés, comptés « 3 absents sur 6 » ; la mise en conformité a donc écrit trois
+    // lignes redondantes à côté des deux qui faisaient déjà le travail. `HERITAGE.json` pose
+    // pourtant le raisonnement INVERSE pour `.env` — « exiger une graphie exacte ferait crier sur
+    // une protection équivalente » : le relevé contredisait la règle qu'il applique ailleurs.
+    const absents = (artefact.motifs_exiges || []).filter((m) => !lignes.has(m) && !estCouvertParPlusLarge(m, lignes));
+    return absents.length ? { etat: "incomplet", motifs_absents: absents } : { etat: "present" };
+  }
+  // TF-1903 (21/10/2026) : le lanceur s'écrit désormais ancré et entre guillemets
+  // (`node \"${CLAUDE_PROJECT_DIR}/forge/hooks/factory.mjs\" ecriture` dans le JSON) ; le motif
+  // `forge/hooks/factory.mjs ecriture` se lit sur le texte dont ce guillemet fermant est ôté (texteDesMotifs).
+  // TF-1592 (13/10/2026) — LE MODE AU SINGULIER, `presence_et_motif`, TOMBAIT DANS « present ».
+  // R-47 (oracle-conformite-projet) cherche le motif littéral dans le texte ; le relevé ne le
+  // lisait pas, et l'émetteur de travaux ne confiait donc jamais le câblage manquant : le hook
+  // publication-hebergee, exigé de 7 produits sur 7 le 12/10, n'atteignait aucun d'eux.
+  if (artefact.mode === "presence_et_motif" && artefact.motif_exige) {
+    // TF-1635 (13/10/2026) : `motif_exige` peut être une liste, chaque motif exigé à part.
+    const texte = texteDesMotifs(readFileSync(cible, "utf8"));
+    const absents = [].concat(artefact.motif_exige).filter((m) => !texte.includes(m));
+    return absents.length ? { etat: "incomplet", motifs_absents: absents } : { etat: "present" };
+  }
+  if (artefact.mode !== "copie_conforme") return sousRacineWeb ? { etat: "present", sous_racine_web: sousRacineWeb } : { etat: "present" };
+  const source = join(racinePilot, String(artefact.source));
+  if (!existsSync(source)) return { etat: "present", note: "source introuvable au pilot — non comparable" };
+  const a = empreinteFichier(source, 12);
+  const b = empreinteFichier(cible, 12);
+  // LES EMPREINTES NE S'APPELLENT PLUS `source` ET `produit` (TF-0645, 26/08). Le contrat
+  // `HERITAGE.json` donne a `source` un sens PRECIS : le CHEMIN de l'artefact chez le pilot.
+  // Ce retour l'ecrasait par une EMPREINTE, et le releve perdait le chemin en route — si bien
+  // que `emettre-travaux.mjs` le REFABRIQUAIT par chirurgie de chaine sur la cible, avec deux
+  // cas particuliers rustines a la main. Un champ qui porte deux sens dans deux fichiers voisins
+  // ne se documente pas : il se renomme.
+  if (a === b) return { etat: "conforme", empreinte: a };
+  return { etat: "divergent", empreinte_pilot: a, empreinte_produit: b,
+    cause: attribuerDivergence(artefact.source, readFileSync(cible, "utf8"), racinePilot, ctx) };
+}
+
+/**
+ * TF-0711 (01/09) — DIRE QUI A BOUGÉ, au lieu d'un « diverge » symétrique.
+ *
+ * Le fait mesuré à la minute, le 30/08 : une copie posée à 08:56 était déclarée périmée à
+ * 09:12 parce que le PILOT avait publié une version neuve à 09:01 — et le message accusait la
+ * copie comme si le produit avait failli. Le même scénario s'est rejoué dans l'heure. Deux
+ * situations opposées — « le produit n'a pas recopié » et « le pilot vient de publier » —
+ * sortaient dans le même mot, et le produit ne pouvait pas savoir laquelle le concernait.
+ *
+ * LA MESURE REMPLACE LA DÉCLARATION : plutôt que de faire porter une version à chaque gabarit,
+ * on confronte la copie du produit à l'HISTORIQUE GIT de la source chez le pilot. Si la copie
+ * correspond à une version publiée — la divergence vient du pilot, qui a avancé depuis ; sinon
+ * — la copie a été modifiée côté produit, ou tirée d'un état jamais publié. Borne déclarée :
+ * la recherche s'arrête aux 30 dernières révisions de la source, et un pilot sans git (ou une
+ * source jamais commitée) rend une attribution inconnue, dite comme telle.
+ */
+/**
+ * TF-0849 (08/09) — LA VERSION QU'UN ARTEFACT DÉCLARE, quand il en déclare une. Un JSON porte
+ * `version` et `date` ; un document versionné porte un en-tête « version X.Y.Z » ou un
+ * frontmatter. `null` quand rien n'est déclaré — auquel cas la date du commit reste la seule
+ * mesure disponible, et le message le dit comme telle.
+ */
+function versionDeclaree(contenu) {
+  const t = String(contenu);
+  try {
+    const j = JSON.parse(t);
+    if (j && (j.version || j.date)) return [j.version, j.date].filter(Boolean).join(" du ");
+  } catch { /* pas un JSON : on lit l'en-tête */ }
+  const enTete = t.slice(0, 2000);
+  const m = /(?:^|\n)[^\n]*?\bversion\s*:?\s*(?:\*\*)?\s*(\d+\.\d+\.\d+)/i.exec(enTete)
+    || /(?:^|\n)[^\n]*?\bv(\d+\.\d+\.\d+)\b/.exec(enTete);
+  if (!m) return null;
+  const d = /(\d{4}-\d{2}-\d{2})/.exec(enTete);
+  return m[1] + (d ? ` du ${d[1]}` : "");
+}
+
+const norm = (t) => String(t).split("\r\n").join("\n").trimEnd();
+
+/**
+ * TF-2184 (06/11/2026) — L'HISTORIQUE D'UNE SOURCE SE LIT UNE FOIS, EN DEUX APPELS, PAS 31 FOIS.
+ *
+ * Le fait : chaque copie divergente relançait `git log` puis jusqu'à 30 `git show` de la MÊME source
+ * du pilot, autant de fois qu'il y avait de produits en retard sur elle — l'essentiel des sous-processus
+ * du relevé. Les contenus des 30 dernières révisions et celui de HEAD viennent d'un seul
+ * `git cat-file --batch` ; `ctx.versions` les garde pour les produits suivants du MÊME relevé (une
+ * source ne change pas pendant un passage). Sans `ctx`, rien n'est gardé : un appel isolé relit tout,
+ * comme avant. Rend `null` si le journal git du pilot est illisible.
+ */
+function versionsDeSource(racinePilot, posix, ctx) {
+  const cle = `${racinePilot}\0${posix}`;
+  if (ctx?.versions?.has(cle)) return ctx.versions.get(cle);
+  const log = spawnSync("git", ["-C", racinePilot, "log", "-n", "30", "--format=%H %cs", "--", posix],
+    { encoding: "utf8", timeout: 30000 });
+  let versions = null;
+  if (log.status === 0) {
+    const revs = (log.stdout || "").split("\n").filter((l) => l.trim()).map((l) => l.trim().split(/\s+/));
+    const demande = [...revs.map(([h]) => `${h}:${posix}`), `HEAD:${posix}`];
+    const lot = spawnSync("git", ["-C", racinePilot, "cat-file", "--batch"],
+      { input: demande.join("\n") + "\n", timeout: 60000, maxBuffer: 256 * 1024 * 1024 });
+    const contenus = [];
+    if (lot.status === 0 && lot.stdout) {
+      // Sortie : `<oid> blob <taille>\n<octets>\n` par objet trouvé, `<demande> missing\n` sinon, dans l'ordre.
+      const buf = lot.stdout;
+      let pos = 0;
+      for (let i = 0; i < demande.length && pos < buf.length; i++) {
+        const fin = buf.indexOf(10, pos);
+        if (fin < 0) break;
+        const [, type, taille] = buf.toString("utf8", pos, fin).split(" ");
+        pos = fin + 1;
+        if (type === "blob" && taille !== undefined) {
+          const n = Number(taille);
+          contenus.push(buf.toString("utf8", pos, pos + n));
+          pos += n + 1;
+        } else contenus.push(null);
+      }
+    }
+    versions = { revs: revs.map(([h, date], i) => ({ h, date, contenu: contenus[i] ?? null, norme: null })),
+      tete: contenus[revs.length] ?? null };
+  }
+  ctx?.versions?.set(cle, versions);
+  return versions;
+}
+
+/**
+ * TF-2408 (14/11/2026) — UN NOM DE HOOK PRÉSENT AU PRODUIT ET ABSENT DU GABARIT SE SIGNALE, IL NE S'ÉCRASE PAS. Le 10/11/2026, la recopie de
+ * `gabarits/hooks-factory.mjs` (pilot 8483b9fd) a retiré chez Produit-79 le nom `fichiers-env` que l'autre poste avait posé au produit le 04/11
+ * (846af92, D-106 (b)) : le conflit de fusion a été résolu à la main par l'union, et le hook, absent du pilot, sautait en exit 0 — une règle de
+ * sécurité inactive sur un poste. Le lanceur déclare ses hooks dans `const NOMS = new Set([...])`. Rend les noms que la copie du produit déclare et
+ * qu'AUCUNE version du gabarit ne déclare : ni la source actuelle, ni les 30 dernières révisions publiées. Un nom que le gabarit a retiré depuis
+ * (présent dans une révision) n'est pas signalé : c'est le pilot qui a avancé, recopier suffit. Vide quand la copie ne déclare aucun `NOMS`
+ * (autre fichier, lanceur jouet) : aucun appel git dans ce cas.
+ */
+const NOMS_DE_HOOK = /const NOMS = new Set\(\[([^\]]*)\]\)/;
+const nomsDeHook = (texte) => { const m = NOMS_DE_HOOK.exec(String(texte)); return m ? [...m[1].matchAll(/["']([^"']+)["']/g)].map((x) => x[1]) : null; };
+export function nomsDeHookHorsGabarit(contenuProduit, sourceRel, racinePilot, ctx = undefined) {
+  const duProduit = nomsDeHook(contenuProduit);
+  if (!duProduit?.length) return [];
+  const connus = new Set();
+  const lire = (contenu) => { const n = contenu == null ? null : nomsDeHook(contenu); if (n) for (const x of n) connus.add(x); };
+  try { lire(readFileSync(join(racinePilot, String(sourceRel)), "utf8")); } catch { /* source absente : rien à lire */ }
+  const histo = versionsDeSource(racinePilot, String(sourceRel).replaceAll("\\", "/"), ctx);
+  if (histo) { lire(histo.tete); for (const r of histo.revs) lire(r.contenu); }
+  return duProduit.filter((n) => !connus.has(n));
+}
+
+export function attribuerDivergence(sourceRel, contenuProduit, racinePilot, ctx = undefined) {
+  const posix = String(sourceRel).replaceAll("\\", "/");
+  const histo = versionsDeSource(racinePilot, posix, ctx);
+  if (!histo) return { qui: "inconnu", detail: "historique git du pilot illisible — attribution impossible, dite plutôt que devinée" };
+  const attendu = norm(contenuProduit);
+  for (const rev of histo.revs) {
+    if (rev.contenu === null) continue;
+    rev.norme ??= norm(rev.contenu);
+    const date = rev.date;
+    if (rev.norme === attendu) {
+      // TF-0849 (08/09/2026) — LE MESSAGE DISAIT « VERSION PUBLIÉE LE X » LÀ OÙ IL MESURE
+      // « ÉTAT PORTÉ PAR LE COMMIT DU X ». Le mécanisme n'était pas faux, la PHRASE l'était : la
+      // date rendue est celle du COMMIT qui portait ce contenu, pas la version que l'artefact
+      // DÉCLARE — et elle est systématiquement la plus RÉCENTE des deux, exactement le sens qui
+      // pousse à croire sa copie fraîche. Mesure du 06/09 chez un produit : l'oracle écrivait
+      // « votre copie correspond à la version publiée le 2026-09-05 » pour un fichier qui portait
+      // `version 1.0.0, date 2026-09-03, 32 classes`, quand la source du pilot portait
+      // `1.2.0, 2026-09-05, 37 classes` ; le lot de travaux lu dans la même minute écrivait, lui,
+      // « correspond à la version du 03/09 ». Deux dates pour le même fichier, à deux jours
+      // d'écart, dans les deux documents que le produit lit côte à côte — et l'écart n'était
+      // visible qu'en ouvrant le JSON, geste qu'aucune consigne ne demande.
+      // Deux corrections indépendantes : NOMMER ce qui est mesuré, et CITER les deux versions
+      // déclarées quand l'artefact en porte une. Le message machine dit désormais ce que la prose
+      // humaine du lot disait déjà — au lieu de la contredire.
+      const vProduit = versionDeclaree(contenuProduit);
+      const vPilot = histo.tete !== null ? versionDeclaree(histo.tete) : null;
+      const versions = vProduit || vPilot
+        ? ` · versions DÉCLARÉES — votre copie : ${vProduit || "aucune"} · pilot : ${vPilot || "aucune"}`
+        : "";
+      return { qui: "pilot", detail: `votre copie correspond à l'état publié PAR LE COMMIT du ${date} ` +
+        `(date du commit, pas la version que le fichier déclare)${versions} — ` +
+        "le PILOT a avancé depuis : recopier suffit (aucune faute côté produit)" };
+    }
+  }
+  const noms = nomsDeHookHorsGabarit(contenuProduit, sourceRel, racinePilot, ctx);
+  if (noms.length) {
+    return { qui: "produit", noms_hors_gabarit: noms, detail: "votre copie ne correspond à AUCUNE des 30 dernières versions publiées, et elle déclare le(s) nom(s) de hook " +
+      `${noms.map((n) => `« ${n} »`).join(", ")} qu'aucune version de ${sourceRel} ne déclare : la recopier le RETIRERAIT (TF-2408). ` +
+      `Ne pas écraser : remonter le hook au pilot (le nom dans ${sourceRel}, son entrée dans gabarits/settings-produit.json, son oracle), puis recopier` };
+  }
+  return { qui: "produit", detail: "votre copie ne correspond à AUCUNE des 30 dernières versions publiées — " +
+    "elle a été modifiée côté produit, ou tirée d'un état jamais publié : ne pas écraser sans lire la différence" };
+}
+
+export function relever(base, contrat, racinePilot) {
+  // TF-2184 : un contexte PAR relevé — l'historique de chaque source du pilot n'y est lu qu'une fois,
+  // et l'histoire git d'un produit en deux appels pour tous ses artefacts (voir `histoireDesCibles`).
+  const ctx = { versions: new Map() };
+  return produitsDuParc(base).map((dossier) => {
+    const sorties = contrat.artefacts.map(() => ({}));
+    const etats = contrat.artefacts.map((a, i) => etatSurDisque(dossier, a, racinePilot, sorties[i], ctx));
+    const histoire = histoireDesCibles(dossier, sorties.map((s) => s.cible));
+    const artefacts = contrat.artefacts.map((a, i) => ({
+      // `source` est PORTE jusqu'ici, tel que le contrat l'ecrit : c'est le chemin que le
+      // consommateur doit citer, et le deduire de la cible est faux des que les deux ne se
+      // repondent pas (TF-0645).
+      cible: a.cible, source: a.source, mode: a.mode, ...assemblerEtat(etats[i], sorties[i], histoire.get(sorties[i].cible)),
+    }));
+    const compte = (e) => artefacts.filter((x) => x.etat === e).length;
+    return {
+      produit: relative(base, dossier).replaceAll("\\", "/"),
+      dossier,
+      absents: compte("absent"),
+      divergents: compte("divergent"),
+      // `hors_racine` compte A PART, et surtout PAS parmi les conformes (TF-0654) : un fichier
+      // trouvé ailleurs n'est pas un fichier tenu — il est peut-être servi, peut-être pas, et
+      // c'est précisément ce que le produit doit DÉCLARER. Le noyer dans les conformes rendrait
+      // le relevé vert sur une question ouverte ; le compter absent ferait recopier un fichier
+      // qui existe déjà, au mauvais endroit. Il lui faut sa propre colonne.
+      hors_racine: compte("hors_racine"),
+      // `incomplet` (TF-0649) : le fichier existe mais ne porte pas les motifs du socle. Il compte
+      // comme un manque, pas comme un conforme — un `.gitignore` present et vide protege autant
+      // qu'un `.gitignore` absent.
+      incomplets: compte("incomplet"),
+      // TF-0851 / TF-0848 : l'état dans l'HISTOIRE se compte À PART, comme `hors_racine`. Ni un
+      // manque (le produit a fait le geste), ni un artefact tenu (le dépôt ne le porte pas). Le
+      // relevé du parc mesurait l'état d'un POSTE en croyant mesurer l'état d'un produit.
+      hors_histoire: artefacts.filter((x) => x.histoire === "non_suivi").length,
+      non_commis: artefacts.filter((x) => x.histoire === "non_commis").length,
+      // TF-0881 : l'alias de transition PÉRIMÉ (la cible canonique existe, l'ancien fichier aussi).
+      alias_perimes: artefacts.filter((x) => x.alias_perime).length,
+      // TF-1471 : un artefact `conditionnel` exempté par un `type_projet` déclaré et confronté —
+      // ni un manque (rien n'est dû), ni un conforme (rien n'est présent). Sa propre colonne,
+      // comme `hors_racine` et `alias_perimes` : le noyer dans un autre compte fausserait l'un
+      // des deux.
+      exemptes: compte("sans_objet"),
+      conformes: compte("conforme") + compte("present"),
+      total: artefacts.length,
+      artefacts,
+    };
+  }).sort((x, y) => (y.absents + y.divergents + y.hors_racine) - (x.absents + x.divergents + x.hors_racine));
+}
+
+// ---- exécution ------------------------------------------------------------------------------
+const lanceEnDirect = process.argv[1]
+  && fileURLToPath(import.meta.url).toLowerCase().replaceAll("\\", "/")
+     === process.argv[1].toLowerCase().replaceAll("\\", "/");
+if (lanceEnDirect) {
+  const contrat = JSON.parse(readFileSync(join(PILOT, "gabarits", "HERITAGE.json"), "utf8"));
+  const lignes = relever(racine, contrat, PILOT);
+  const totalManques = lignes.reduce((n, l) => n + l.absents + l.divergents + l.hors_racine + l.incomplets, 0);
+
+  if (args.includes("--json")) {
+    console.log(JSON.stringify({ outil: "relever-heritage", racine: String(racine),
+      contrat: contrat.version, produits: lignes.length, manques: totalManques, lignes }, null, 1));
+  } else {
+    for (const l of lignes) {
+      const drapeau = l.absents + l.divergents + l.hors_racine + l.incomplets === 0 ? "CONFORME" : `${l.absents} absent(s)`
+        + (l.divergents ? `, ${l.divergents} DIVERGENT(s)` : "")
+        + (l.hors_racine ? `, ${l.hors_racine} HORS RACINE` : "")
+        + (l.incomplets ? `, ${l.incomplets} INCOMPLET(s)` : "");
+      // TF-0851 : l'état dans l'HISTOIRE se dit à côté du verdict de contenu, jamais à sa place.
+      const histoire = (l.hors_histoire ? ` · ${l.hors_histoire} HORS HISTOIRE (présents, non suivis par git)` : "")
+        + (l.non_commis ? ` · ${l.non_commis} NON COMMIS (conformes sur le disque, divergents de HEAD)` : "")
+        + (l.alias_perimes ? ` · ${l.alias_perimes} ALIAS PÉRIMÉ(S) à côté de la cible canonique (le produit supprime : git rm)` : "")
+        + (l.exemptes ? ` · ${l.exemptes} EXEMPTÉ(S) (type_projet documentaire, TF-1471)` : "");
+      console.log(`${l.produit.padEnd(50)} ${drapeau}${histoire}`);
+    }
+    console.log(`\n${lignes.length} produit(s) relevé(s), ${totalManques} manque(s) au total — contrat v${contrat.version}`);
+    console.log(`NON RELEVÉ : tout produit rangé au-delà de ${PROFONDEUR_MAX} niveaux sous ${racine}, ` +
+      "et tout produit absent de ce poste. Aucune écriture n'a été faite chez aucun produit.");
+  }
+
+  const iMd = args.indexOf("--md");
+  if (iMd >= 0 && args[iMd + 1]) {
+    writeFileSync(args[iMd + 1], rendreMarkdown(lignes, contrat, racine, totalManques), "utf8");
+    console.log(`\nrelevé écrit : ${args[iMd + 1]}`);
+  }
+}
+
+export function rendreMarkdown(lignes, contrat, base, totalManques) {
+  const t = [];
+  t.push("| Produit | Absents | Divergents | Hors racine | Conformes | Ce qui manque |");
+  t.push("|---|---|---|---|---|---|");
+  for (const l of lignes) {
+    const manque = l.artefacts.filter((a) => a.etat === "absent").map((a) => a.cible);
+    const diverge = l.artefacts.filter((a) => a.etat === "divergent").map((a) => `${a.cible} (PÉRIMÉ)`);
+    const ailleurs = l.artefacts.filter((a) => a.etat === "hors_racine")
+      .map((a) => `${a.cible} → trouvé à \`${a.trouve_a}\` : racine web à DÉCLARER`);
+    t.push(`| \`${l.produit}\` | ${l.absents} | ${l.divergents} | ${l.hors_racine} | ${l.conformes}/${l.total} | `
+      + `${[...diverge, ...manque, ...ailleurs].join(" · ") || "—"} |`);
+  }
+  return t.join("\n") + `\n\n${lignes.length} produits relevés · ${totalManques} manques · contrat v${contrat.version}`
+    + `\n\nNON RELEVÉ : tout produit rangé au-delà de ${PROFONDEUR_MAX} niveaux sous \`${base}\`, et tout`
+    + " produit absent de ce poste. Aucune écriture n'a été faite chez aucun produit.\n";
+}

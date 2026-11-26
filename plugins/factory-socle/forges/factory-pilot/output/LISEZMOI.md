@@ -1,0 +1,884 @@
+# output\ — rangement (13/08/2026, amendé le 18/08/2026 — TF-0339)
+
+Livrables du pilot rangés en dossiers numérotés par famille ; **une seule version à la
+racine de chaque dossier, versions antérieures dans `old\`** (mandat humain du 13/08).
+Le nom des fichiers ne change jamais (`<Projet> - <Objet> - AAAAMMJJ<indice>`, règle
+`references\ETAPES-RUN.md`) : seul leur emplacement change.
+
+| Dossier | Famille | Contenu |
+|---|---|---|
+| `01-revues-et-propositions\` | Revues et propositions d'écosystème | Revue Écosystème 20260808a (+ sidecars `.oracles*`), Proposition Tuyauterie cognitive 20260809a |
+| `02-schema-ecosysteme\` | Schéma d'écosystème (HTML) | version courante : `20260820a.html` (V14, forge-seo-geo — TF-0412) ; `old\` : 20260810a.png, 20260811h.html, 20260812a.html, 20260812b.html, 20260813a.html + `.oracles\` (rendus 20260811h) |
+| `03-etudes\` | Études d'opportunité | opportunité forges (12/08), forge-data × moteurs (12/08), personas agents (13/08) |
+| `04-plans\` | Plans stratégiques | stratégie tests e2e (13/08) |
+| `05-catalogues-readmes-forges\` | Sections catalogue proposées aux README des forges | 13 sections + LISEZMOI (générées depuis `catalogues\catalogue.jsonl`) |
+| `05-insatisfactions\` | Dossiers d'instruction des insatisfactions (TF-0287) | un dossier par insatisfaction (`INS-XXXX\`), chemins portés par `insatisfactions\REGISTRE.jsonl` |
+| `06-travaux-confies\` | Originaux des lots de travaux confiés par le pilot à une forge ou à un produit (gabarit `gabarits\TRAVAUX-PILOT.md`, jugés T1-T6 avant dépôt) | `pilot - TRAVAUX - AAAAMMJJ<i>.md` + sidecar `.tf.jsonl` ; la copie déposée chez le destinataire (`input\00-travaux\`) est la seule qui change de statut (05/09) |
+
+**Deux familles portent le numéro 05, et ce n'est pas une erreur à corriger — c'est une
+erreur à DÉCLARER (TF-0339, 18/08).** `05-insatisfactions\` a été créée sans prendre le
+premier numéro libre, qui était 06 : la collision est réelle et contraire à D-15. Elle n'est
+pourtant PAS résolue par un renumérotage, et R-39 al. 2 dit pourquoi — « le numéro s'attribue à
+la création et ne se renumérote JAMAIS : un renumérotage casse les chemins portés par les
+registres à événements figés ». Vérifié avant d'écrire ces lignes, et c'est ce qui tranche :
+les DEUX familles sont citées dans des registres figés — `todo\TODO.jsonl` porte les deux,
+`todo\TODO-ARCHIVE.jsonl` et `insatisfactions\REGISTRE.jsonl` portent
+`05-insatisfactions\` (dont le dossier d'INS-0001). Déplacer l'une ou l'autre romprait des
+chemins que ces registres ne réécrivent jamais. Ce qui rend la collision tenable : le numéro est
+LOCAL au dépôt, le nom de famille est canonique (D-16) — c'est le nom qui identifie, le numéro
+qui ordonne. **Conséquence opérationnelle : la prochaine famille créée ici prend `06-`.**
+
+Correspondance des anciens chemins (références des documents antérieurs à ce rangement,
+notamment les événements du registre `todo\TODO.jsonl`, jamais réécrits) :
+
+- `output\Factory - Revue Forge - …` → `output\01-revues-et-propositions\…`
+- `output\Factory - Proposition Forge - …` → `output\01-revues-et-propositions\…`
+- `output\Forge Pilot - Schéma Écosystème - …` → `output\02-schema-ecosysteme\…` (ou `…\old\`)
+- `output\.oracles\` → `output\02-schema-ecosysteme\old\.oracles\`
+- `output\20260812-etude-*.md`, `output\20260813-etude-*.md` → `output\03-etudes\…`
+- `output\20260813-plan-*.md` → `output\04-plans\…`
+- `output\20260812-catalogues-readmes-forges\` → `output\05-catalogues-readmes-forges\`
+
+**Archivage du 24/08/2026 (TF-0562 — décision humaine, voie (c)).** Un livrable remis le 15/08 est
+passé en `old\` : il rendait **PASS au rendu** et **FAIL au marquage** sous le jeu de règles courant,
+sur **cinq familles nées après sa production** — titre sans indice daté, favicon absent, ponctuation
+orpheline (×2), composant déclaré sans style, onglets sans panneau (×2).
+
+*Il n'a pas été corrigé, et c'est la règle qui l'impose* : une nouvelle version est un nouveau fichier
+daté, jamais un écrasement (R-5). Son **sceau de jugement l'accompagne** dans `old\`, pour que la
+preuve reste attachée à l'artefact — vérifié après déplacement : « 1 livrable scellé vérifié, aucun
+modifié après jugement ».
+
+- `output\01-revues-et-propositions\Produit-02 - Maquette Vue d'ensemble - Rapport SEO -
+  20260815a.html` → `output\01-revues-et-propositions\old\…` (même nom, dossier `old\`)
+
+*Le document frère qui le cite — `Produit-02 - Proposition Refonte - Rapport SEO -
+20260815a.md` — n'a **pas** été modifié : il est lui-même scellé, et rouvrir un livrable remis pour
+corriger un chemin casserait son sceau. C'est précisément le rôle de cette table de correspondance.*
+
+Même méthode appliquée le 13/08 aux `output\` des forges : agents (01-pv, 02-skills),
+design (01-pages-temoins), organization (01-etudes, 02-composants), seo (01-decisions,
+02-veille). forge-audit_client-a était déjà conforme (modèle d'origine : `01-…`/`07-…` + `old\`).
+
+<!-- index-livrables:debut — genere par scripts/generer-lisezmoi-output.mjs, NE PAS EDITER A LA MAIN -->
+
+## Index des livrables — le point d'entrée cliquable
+
+**Pourquoi cet index existe, et il vaut d'être lu une fois.** Le nom d'un livrable porte sa
+date et son indice — donc au moins trois espaces. Or le résolveur de liens de la session de
+travail **coupe le chemin au premier espace** : un livrable n'est jamais atteignable au clic,
+ni tel quel, ni encodé, ni entre chevrons. Mesuré le 24/08/2026 sur un produit : **22
+livrables, 0 atteignable**, pendant 11 jours sans que la cause soit nommée.
+
+Ce fichier-ci n'a pas d'espace dans son nom : il s'ouvre. Les chemins ci-dessous sont donnés
+à **copier-coller** — c'est ce qui marche aujourd'hui, et le dire vaut mieux que laisser
+essayer. *Le nom daté n'est pas le problème : il porte la version et la traçabilité.*
+
+**État** : 759 livrable(s) courant(s), 8 archivé(s), 7 famille(s).
+
+### 01-revues-et-propositions
+
+| Livrable | Version | Poids | Chemin à copier |
+|---|---|---|---|
+| 20260825-releve-heritage-produits.md | — | 5.7 Ko | `01-revues-et-propositions/20260825-releve-heritage-produits.md` |
+| Factory - Proposition Architecture - Circuit - 20260815d.md | 20260815d | 5.4 Ko | `01-revues-et-propositions/Factory - Proposition Architecture - Circuit - 20260815d.md` |
+| Factory - Proposition Forge - Restitution lisible - 20260815a.md | 20260815a | 11 Ko | `01-revues-et-propositions/Factory - Proposition Forge - Restitution lisible - 20260815a.md` |
+| Factory - Proposition Forge - Tuyauterie cognitive - 20260809a.md | 20260809a | 9.4 Ko | `01-revues-et-propositions/Factory - Proposition Forge - Tuyauterie cognitive - 20260809a.md` |
+| Factory - Revue - Prompt amelioration de la boucle de relecture passe au crible L99 - 20261029b.md | 20261029b | 29.8 Ko | `01-revues-et-propositions/Factory - Revue - Prompt amelioration de la boucle de relecture passe au crible L99 - 20261029b.md` |
+| Factory - Revue - Prompt amelioration de la boucle de relecture passe au crible L99 - 20261029b.md.boucle.json | — | 49.1 Ko | `01-revues-et-propositions/Factory - Revue - Prompt amelioration de la boucle de relecture passe au crible L99 - 20261029b.md.boucle.json` |
+| Factory - Revue - Prompt strategie de lancement des agents passe au crible L99 - 20261029a.md | 20261029a | 29.7 Ko | `01-revues-et-propositions/Factory - Revue - Prompt strategie de lancement des agents passe au crible L99 - 20261029a.md` |
+| Factory - Revue - Prompt strategie de lancement des agents passe au crible L99 - 20261029a.md.boucle.json | — | 61.4 Ko | `01-revues-et-propositions/Factory - Revue - Prompt strategie de lancement des agents passe au crible L99 - 20261029a.md.boucle.json` |
+| Factory - Revue D8 - Restitutions du 15-08 - 20260815c.md | 20260815c | 3.7 Ko | `01-revues-et-propositions/Factory - Revue D8 - Restitutions du 15-08 - 20260815c.md` |
+| Factory - Revue Forge - Écosystème - 20260808a.md | 20260808a | 11.2 Ko | `01-revues-et-propositions/Factory - Revue Forge - Écosystème - 20260808a.md` |
+| Factory - Revue Forge - Écosystème - 20260819a.md | 20260819a | 6 Ko | `01-revues-et-propositions/Factory - Revue Forge - Écosystème - 20260819a.md` |
+| Produit-02 - Maquette Vue d'ensemble - Rapport SEO - 20260815a.html *(archivé)* | 20260815a | 34.6 Ko | `01-revues-et-propositions/old/Produit-02 - Maquette Vue d'ensemble - Rapport SEO - 20260815a.html` |
+| Produit-02 - Proposition Refonte - Rapport SEO - 20260815b.md | 20260815b | 6.9 Ko | `01-revues-et-propositions/Produit-02 - Proposition Refonte - Rapport SEO - 20260815b.md` |
+
+### 02-schema-ecosysteme
+
+| Livrable | Version | Poids | Chemin à copier |
+|---|---|---|---|
+| Forge Pilot - Schéma Écosystème - 20260820a.html | 20260820a | 57.3 Ko | `02-schema-ecosysteme/Forge Pilot - Schéma Écosystème - 20260820a.html` |
+| Forge Pilot - Schéma Écosystème - 20260811h.html *(archivé)* | 20260811h | 52.5 Ko | `02-schema-ecosysteme/old/Forge Pilot - Schéma Écosystème - 20260811h.html` |
+| Forge Pilot - Schéma Écosystème - 20260812a.html *(archivé)* | 20260812a | 55.3 Ko | `02-schema-ecosysteme/old/Forge Pilot - Schéma Écosystème - 20260812a.html` |
+| Forge Pilot - Schéma Écosystème - 20260812b.html *(archivé)* | 20260812b | 56.7 Ko | `02-schema-ecosysteme/old/Forge Pilot - Schéma Écosystème - 20260812b.html` |
+| Forge Pilot - Schéma Écosystème - 20260813a.html *(archivé)* | 20260813a | 56.8 Ko | `02-schema-ecosysteme/old/Forge Pilot - Schéma Écosystème - 20260813a.html` |
+
+### 03-etudes
+
+| Livrable | Version | Poids | Chemin à copier |
+|---|---|---|---|
+| 20260812-etude-forge-data-moteurs.md | — | 7.3 Ko | `03-etudes/2026-08/20260812-etude-forge-data-moteurs.md` |
+| 20260812-etude-opportunite-forges.md | — | 15 Ko | `03-etudes/2026-08/20260812-etude-opportunite-forges.md` |
+| 20260813-etude-opportunite-outillage-analyse.md | — | 19.8 Ko | `03-etudes/2026-08/20260813-etude-opportunite-outillage-analyse.md` |
+| 20260813-etude-personas-agents.md | — | 11.3 Ko | `03-etudes/2026-08/20260813-etude-personas-agents.md` |
+| 20260814-etude-opportunite-pans-tests-prompts.md | — | 18.4 Ko | `03-etudes/2026-08/20260814-etude-opportunite-pans-tests-prompts.md` |
+| 20260814-etude-opportunite-pentest-owasp.md | — | 17.2 Ko | `03-etudes/2026-08/20260814-etude-opportunite-pentest-owasp.md` |
+| 20260814-etude-opportunite-taste-skill.md | — | 14.4 Ko | `03-etudes/2026-08/20260814-etude-opportunite-taste-skill.md` |
+| 20260815-etude-opportunite-ce-que-personne-ne-juge.md | — | 6.4 Ko | `03-etudes/2026-08/20260815-etude-opportunite-ce-que-personne-ne-juge.md` |
+| 20260815-etude-opportunite-circuit-insatisfaction.md | — | 5.3 Ko | `03-etudes/2026-08/20260815-etude-opportunite-circuit-insatisfaction.md` |
+| 20260815-etude-opportunite-cout-du-faux-positif.md | — | 6.9 Ko | `03-etudes/2026-08/20260815-etude-opportunite-cout-du-faux-positif.md` |
+| 20260815-etude-opportunite-lecons-audit-reel.md | — | 5.6 Ko | `03-etudes/2026-08/20260815-etude-opportunite-lecons-audit-reel.md` |
+| 20260815-etude-opportunite-qualite-graphique.md | — | 5.6 Ko | `03-etudes/2026-08/20260815-etude-opportunite-qualite-graphique.md` |
+| 20260815-etude-opportunite-restitution-lisible.md | — | 6.3 Ko | `03-etudes/2026-08/20260815-etude-opportunite-restitution-lisible.md` |
+| 20260816-etude-skills-animation-motion.md | — | 10.7 Ko | `03-etudes/2026-08/20260816-etude-skills-animation-motion.md` |
+| 20260817-etude-opportunite-cadence-de-mission.md | — | 24 Ko | `03-etudes/2026-08/20260817-etude-opportunite-cadence-de-mission.md` |
+| 20260817-etude-opportunite-consignes-de-mise-a-jour.md | — | 20.1 Ko | `03-etudes/2026-08/20260817-etude-opportunite-consignes-de-mise-a-jour.md` |
+| 20260817-etude-opportunite-conventions-parametrables.md | — | 20.6 Ko | `03-etudes/2026-08/20260817-etude-opportunite-conventions-parametrables.md` |
+| 20260817-etude-opportunite-couverture-par-role.md | — | 5.4 Ko | `03-etudes/2026-08/20260817-etude-opportunite-couverture-par-role.md` |
+| 20260817-etude-opportunite-ecart-servi-versionne.md | — | 6.3 Ko | `03-etudes/2026-08/20260817-etude-opportunite-ecart-servi-versionne.md` |
+| 20260817-etude-opportunite-publication-livrables.md | — | 6.3 Ko | `03-etudes/2026-08/20260817-etude-opportunite-publication-livrables.md` |
+| 20260817-etude-opportunite-rangement-output.md | — | 18.3 Ko | `03-etudes/2026-08/20260817-etude-opportunite-rangement-output.md` |
+| 20260817-etude-opportunite-renommage-factory.md | — | 22.7 Ko | `03-etudes/2026-08/20260817-etude-opportunite-renommage-factory.md` |
+| 20260817-etude-opportunite-sequencement-factory.md | — | 44.7 Ko | `03-etudes/2026-08/20260817-etude-opportunite-sequencement-factory.md` |
+| 20260817-etude-opportunite-tests-bout-en-bout.md | — | 27.2 Ko | `03-etudes/2026-08/20260817-etude-opportunite-tests-bout-en-bout.md` |
+| 20260817-etude-opportunite-todo-produit.md | — | 27.4 Ko | `03-etudes/2026-08/20260817-etude-opportunite-todo-produit.md` |
+| 20260818-cartographie-oracles-cadence-de-mission.md | — | 5.7 Ko | `03-etudes/2026-08/20260818-cartographie-oracles-cadence-de-mission.md` |
+| 20260818-etude-opportunite-admission-factory-queue.md | — | 14.8 Ko | `03-etudes/2026-08/20260818-etude-opportunite-admission-factory-queue.md` |
+| 20260818-etude-opportunite-cablage-orchestrer-boucle.md | — | 12.3 Ko | `03-etudes/2026-08/20260818-etude-opportunite-cablage-orchestrer-boucle.md` |
+| 20260818-etude-opportunite-memoire-partagee.md | — | 25.4 Ko | `03-etudes/2026-08/20260818-etude-opportunite-memoire-partagee.md` |
+| 20260818-etude-opportunite-retour-usage-vers-delta.md | — | 9.1 Ko | `03-etudes/2026-08/20260818-etude-opportunite-retour-usage-vers-delta.md` |
+| 20260819-etude-opportunite-forge-consulting.md | — | 13.3 Ko | `03-etudes/2026-08/20260819-etude-opportunite-forge-consulting.md` |
+| 20260819-etude-opportunite-meta-oracle-enclenchement.md | — | 16.8 Ko | `03-etudes/2026-08/20260819-etude-opportunite-meta-oracle-enclenchement.md` |
+| 20260819-etude-opportunite-module-de-traduction.md | — | 16.3 Ko | `03-etudes/2026-08/20260819-etude-opportunite-module-de-traduction.md` |
+| 20260819-etude-opportunite-retro-documentation.md | — | 9.5 Ko | `03-etudes/2026-08/20260819-etude-opportunite-retro-documentation.md` |
+| 20260819-etude-opportunite-retro-engineering.md | — | 10.3 Ko | `03-etudes/2026-08/20260819-etude-opportunite-retro-engineering.md` |
+| 20260820-etude-opportunite-communication-interlocuteur.md | — | 10.4 Ko | `03-etudes/2026-08/20260820-etude-opportunite-communication-interlocuteur.md` |
+| 20260820-etude-opportunite-rgaa.md | — | 12.9 Ko | `03-etudes/2026-08/20260820-etude-opportunite-rgaa.md` |
+| 20260822-etude-opportunite-fraicheur-des-verdicts.md | — | 13.8 Ko | `03-etudes/2026-08/20260822-etude-opportunite-fraicheur-des-verdicts.md` |
+| 20260822-etude-opportunite-troisieme-point-observation-i18n.md | — | 8.1 Ko | `03-etudes/2026-08/20260822-etude-opportunite-troisieme-point-observation-i18n.md` |
+| 20260822-etude-opportunite-vue-portefeuille.md | — | 8.4 Ko | `03-etudes/2026-08/20260822-etude-opportunite-vue-portefeuille.md` |
+| 20260830-L99-etat-de-l-art-marche.md | — | 26.9 Ko | `03-etudes/2026-08/20260830-L99-etat-de-l-art-marche.md` |
+| 20260831-opportunite-etat-de-l-art-marche.md | — | 9 Ko | `03-etudes/2026-08/20260831-opportunite-etat-de-l-art-marche.md` |
+| 20260901-etude-dataforseo-cadrage-v2.md | — | 8.6 Ko | `03-etudes/2026-09/20260901-etude-dataforseo-cadrage-v2.md` |
+| 20260901-etude-opportunite-dataforseo.md | — | 20.6 Ko | `03-etudes/2026-09/20260901-etude-opportunite-dataforseo.md` |
+| 20260901-etude-opportunite-donnees-de-recherche.md | — | 20.6 Ko | `03-etudes/2026-09/20260901-etude-opportunite-donnees-de-recherche.md` |
+| 20260901-etude-opportunite-strategie-tests.md | — | 23.9 Ko | `03-etudes/2026-09/20260901-etude-opportunite-strategie-tests.md` |
+| 20260902-etude-opportunite-dataforseo-produit-02.md | — | 43.7 Ko | `03-etudes/2026-09/20260902-etude-opportunite-dataforseo-produit-02.md` |
+| 20260903-L99-amelioration-continue.md | — | 42.3 Ko | `03-etudes/2026-09/20260903-L99-amelioration-continue.md` |
+| 20260903-recidives-mesure.md | — | 7.3 Ko | `03-etudes/2026-09/20260903-recidives-mesure.md` |
+| 20260907-etude-opportunite-mission-data-silver-gold-powerbi.html | — | 134.5 Ko | `03-etudes/2026-09/20260907-etude-opportunite-mission-data-silver-gold-powerbi.html` |
+| 20260907-etude-opportunite-mission-data-silver-gold-powerbi.md | — | 46.5 Ko | `03-etudes/2026-09/20260907-etude-opportunite-mission-data-silver-gold-powerbi.md` |
+| 20260907-L99-mission-data-silver-gold-powerbi.md | — | 47.5 Ko | `03-etudes/2026-09/20260907-L99-mission-data-silver-gold-powerbi.md` |
+| 20260908-pourquoi-on-reecrit-l-histoire-et-comment-cesser.md | — | 10.9 Ko | `03-etudes/2026-09/20260908-pourquoi-on-reecrit-l-histoire-et-comment-cesser.md` |
+| 20260911-etude-opportunite-communication-marketing-ao.html | — | 142 Ko | `03-etudes/2026-09/20260911-etude-opportunite-communication-marketing-ao.html` |
+| 20260911-etude-opportunite-communication-marketing-ao.md | — | 48.9 Ko | `03-etudes/2026-09/20260911-etude-opportunite-communication-marketing-ao.md` |
+| 20260911-L99-forge-communication-marketing.md | — | 52.3 Ko | `03-etudes/2026-09/20260911-L99-forge-communication-marketing.md` |
+| 20260911-L99-regles-d-ecriture-factory.md | — | 58.5 Ko | `03-etudes/2026-09/20260911-L99-regles-d-ecriture-factory.md` |
+| 20260914-etude-opportunite-conception-documentaire-amont.html | — | 113.1 Ko | `03-etudes/2026-09/20260914-etude-opportunite-conception-documentaire-amont.html` |
+| 20260914-etude-opportunite-conception-documentaire-amont.md | — | 27.4 Ko | `03-etudes/2026-09/20260914-etude-opportunite-conception-documentaire-amont.md` |
+| 20260914-etude-opportunite-personas-par-phase.html | — | 111.1 Ko | `03-etudes/2026-09/20260914-etude-opportunite-personas-par-phase.html` |
+| 20260914-etude-opportunite-personas-par-phase.md | — | 26.4 Ko | `03-etudes/2026-09/20260914-etude-opportunite-personas-par-phase.md` |
+| 20260914-etude-opportunite-premiers-html-nouveaux-formats.md | — | 31.2 Ko | `03-etudes/2026-09/20260914-etude-opportunite-premiers-html-nouveaux-formats.md` |
+| 20260914-L99-conception-documentaire-amont.md | — | 36.8 Ko | `03-etudes/2026-09/20260914-L99-conception-documentaire-amont.md` |
+| 20260914-L99-personas-par-phase.md | — | 34.9 Ko | `03-etudes/2026-09/20260914-L99-personas-par-phase.md` |
+| 20260914-L99-qualite-premiers-html-nouveaux-formats.md | — | 57.9 Ko | `03-etudes/2026-09/20260914-L99-qualite-premiers-html-nouveaux-formats.md` |
+| 20260914-personas-mesure-baseline.md | — | 19.5 Ko | `03-etudes/2026-09/20260914-personas-mesure-baseline.md` |
+| 20260914-personas-mesure-echantillon.md | — | 5.8 Ko | `03-etudes/2026-09/20260914-personas-mesure-echantillon.md` |
+| 20260914-personas-mesure-fiches.md | — | 5.5 Ko | `03-etudes/2026-09/20260914-personas-mesure-fiches.md` |
+| 20260914-personas-mesure-passes.md | — | 54.9 Ko | `03-etudes/2026-09/20260914-personas-mesure-passes.md` |
+| 20260914-personas-mesure-protocole.md | — | 4.4 Ko | `03-etudes/2026-09/20260914-personas-mesure-protocole.md` |
+| 20260914-releve-restes-archives.md | — | 6.5 Ko | `03-etudes/2026-09/20260914-releve-restes-archives.md` |
+| 20260915-etude-opportunite-inventaire-des-composants.html | — | 102.8 Ko | `03-etudes/2026-09/20260915-etude-opportunite-inventaire-des-composants.html` |
+| 20260915-etude-opportunite-inventaire-des-composants.md | — | 22.9 Ko | `03-etudes/2026-09/20260915-etude-opportunite-inventaire-des-composants.md` |
+| 20260917-etude-opportunite-gestion-reseaux-sociaux.html | — | 129.7 Ko | `03-etudes/2026-09/20260917-etude-opportunite-gestion-reseaux-sociaux.html` |
+| 20260917-etude-opportunite-gestion-reseaux-sociaux.md | — | 39.7 Ko | `03-etudes/2026-09/20260917-etude-opportunite-gestion-reseaux-sociaux.md` |
+| 20260917-etude-opportunite-revue-hebdomadaire-de-l-existant.html | — | 98 Ko | `03-etudes/2026-09/20260917-etude-opportunite-revue-hebdomadaire-de-l-existant.html` |
+| 20260917-etude-opportunite-revue-hebdomadaire-de-l-existant.md | — | 20.8 Ko | `03-etudes/2026-09/20260917-etude-opportunite-revue-hebdomadaire-de-l-existant.md` |
+| 20260917-L99-gestion-reseaux-sociaux.md | — | 45.7 Ko | `03-etudes/2026-09/20260917-L99-gestion-reseaux-sociaux.md` |
+| 20260917-L99-revue-hebdomadaire-amelioration-continue.md | — | 36.4 Ko | `03-etudes/2026-09/20260917-L99-revue-hebdomadaire-amelioration-continue.md` |
+| 20260917-releve-autres-reseaux-sociaux.md | — | 8.3 Ko | `03-etudes/2026-09/20260917-releve-autres-reseaux-sociaux.md` |
+| 20260917-revue-hebdomadaire-mesure-pas0.md | — | 21.2 Ko | `03-etudes/2026-09/20260917-revue-hebdomadaire-mesure-pas0.md` |
+| 20260919-etude-opportunite-plan-d-amelioration-post-audit.html | — | 116.8 Ko | `03-etudes/2026-09/20260919-etude-opportunite-plan-d-amelioration-post-audit.html` |
+| 20260919-etude-opportunite-plan-d-amelioration-post-audit.md | — | 33 Ko | `03-etudes/2026-09/20260919-etude-opportunite-plan-d-amelioration-post-audit.md` |
+| 20260919-L99-audit-et-plan-d-amelioration-plateforme.md | — | 43.3 Ko | `03-etudes/2026-09/20260919-L99-audit-et-plan-d-amelioration-plateforme.md` |
+| 20260921-etude-opportunite-reseaux-sociaux-complement.md | — | 26.1 Ko | `03-etudes/2026-09/20260921-etude-opportunite-reseaux-sociaux-complement.md` |
+| 20260922-etude-opportunite-messagerie-inter-sessions.md | — | 35.6 Ko | `03-etudes/2026-09/20260922-etude-opportunite-messagerie-inter-sessions.md` |
+| 20260922-L99-echanges-inter-session.md | — | 28.3 Ko | `03-etudes/2026-09/20260922-L99-echanges-inter-session.md` |
+| 20260922-revue-des-candidatures-par-famille.md | — | 11.6 Ko | `03-etudes/2026-09/20260922-revue-des-candidatures-par-famille.md` |
+| 20260925-etude-opportunite-niveaux-d-intervention.md | — | 47.9 Ko | `03-etudes/2026-09/20260925-etude-opportunite-niveaux-d-intervention.md` |
+| 20260925-L99-niveaux-d-intervention.md | — | 51 Ko | `03-etudes/2026-09/20260925-L99-niveaux-d-intervention.md` |
+| 20260927-L99-saut-opus-5-vers-opus-5-5.md | — | 54.1 Ko | `03-etudes/2026-09/20260927-L99-saut-opus-5-vers-opus-5-5.md` |
+| 20261001-etude-opportunite-rsi-et-ssl.md | — | 30 Ko | `03-etudes/20261001-etude-opportunite-rsi-et-ssl.md` |
+| 20261001-etude-opportunite-saut-opus-5-5.md | — | 37.1 Ko | `03-etudes/20261001-etude-opportunite-saut-opus-5-5.md` |
+| 20261001-etude-opportunite-textes-affiches.md | — | 18.2 Ko | `03-etudes/20261001-etude-opportunite-textes-affiches.md` |
+| 20261001-etude-resultats-rejeu-opus-5-5.md | — | 13.7 Ko | `03-etudes/20261001-etude-resultats-rejeu-opus-5-5.md` |
+| 20261001-L99-etude-textes-relance.md | — | 13.8 Ko | `03-etudes/20261001-L99-etude-textes-relance.md` |
+| 20261001-L99-textes-affiches-en-session.md | — | 14.2 Ko | `03-etudes/20261001-L99-textes-affiches-en-session.md` |
+| 20261003-etude-opportunite-pages-html-indicateurs.md | — | 16.3 Ko | `03-etudes/20261003-etude-opportunite-pages-html-indicateurs.md` |
+| 20261013-etude-opportunite-juge-de-comprehension.md | — | 21.9 Ko | `03-etudes/20261013-etude-opportunite-juge-de-comprehension.md` |
+| 20261013-revue-essai-niveaux-d-intervention.md | — | 10.5 Ko | `03-etudes/20261013-revue-essai-niveaux-d-intervention.md` |
+| 20261016-etude-opportunite-boucle-l99-jusqu-a-un-score.md | — | 12.9 Ko | `03-etudes/20261016-etude-opportunite-boucle-l99-jusqu-a-un-score.md` |
+| 20261018-etude-opportunite-connexion-sources-google.md | — | 32.4 Ko | `03-etudes/20261018-etude-opportunite-connexion-sources-google.md` |
+| 20261018-etude-opportunite-flotte-d-agents.md | — | 22.7 Ko | `03-etudes/20261018-etude-opportunite-flotte-d-agents.md` |
+| 20261018-etude-opportunite-relecteur-d-intention-v2.md | — | 18 Ko | `03-etudes/20261018-etude-opportunite-relecteur-d-intention-v2.md` |
+| 20261018-etude-opportunite-relecteur-d-intention.md | — | 18.3 Ko | `03-etudes/20261018-etude-opportunite-relecteur-d-intention.md` |
+| 20261018-etude-opportunite-tableau-de-bord-pilotage.md | — | 35.4 Ko | `03-etudes/20261018-etude-opportunite-tableau-de-bord-pilotage.md` |
+| 20261018-L99-relecteur-critique-d-intention.md | — | 22.7 Ko | `03-etudes/20261018-L99-relecteur-critique-d-intention.md` |
+| 20261018-mesure-relecteur-d-intention.json | — | 14.7 Ko | `03-etudes/20261018-mesure-relecteur-d-intention.json` |
+| 20261019-etude-opportunite-animation-finition-interfaces.md | — | 21.2 Ko | `03-etudes/20261019-etude-opportunite-animation-finition-interfaces.md` |
+| 20261019-etude-opportunite-base-connaissance-wiki.md | — | 21.2 Ko | `03-etudes/20261019-etude-opportunite-base-connaissance-wiki.md` |
+| 20261019-etude-opportunite-check-list-avant-mise-en-ligne.md | — | 22 Ko | `03-etudes/20261019-etude-opportunite-check-list-avant-mise-en-ligne.md` |
+| 20261019-etude-opportunite-jeton-abonnement-taches-sans-ecran.md | — | 21.8 Ko | `03-etudes/20261019-etude-opportunite-jeton-abonnement-taches-sans-ecran.md` |
+| 20261019-etude-opportunite-modele-local-sans-gpu.md | — | 23 Ko | `03-etudes/20261019-etude-opportunite-modele-local-sans-gpu.md` |
+| 20261019-etude-opportunite-packs-agents-skills-tiers.md | — | 27 Ko | `03-etudes/20261019-etude-opportunite-packs-agents-skills-tiers.md` |
+| 20261019-etude-opportunite-pilotage-ordinateur-a-distance.md | — | 29.3 Ko | `03-etudes/20261019-etude-opportunite-pilotage-ordinateur-a-distance.md` |
+| 20261019-etude-opportunite-retro-ingenierie-par-agents.md | — | 20.8 Ko | `03-etudes/20261019-etude-opportunite-retro-ingenierie-par-agents.md` |
+| 20261019-etude-opportunite-service-marketing-agents.md | — | 21.5 Ko | `03-etudes/20261019-etude-opportunite-service-marketing-agents.md` |
+| 20261019-etude-opportunite-sessions-paralleles-paliers-autonomie.md | — | 24 Ko | `03-etudes/20261019-etude-opportunite-sessions-paralleles-paliers-autonomie.md` |
+| 20261019-etude-opportunite-skills-design-tiers.md | — | 27.6 Ko | `03-etudes/20261019-etude-opportunite-skills-design-tiers.md` |
+| 20261019-etude-opportunite-style-ecriture.md | — | 19.7 Ko | `03-etudes/20261019-etude-opportunite-style-ecriture.md` |
+| 20261019-etude-opportunite-tactiques-seo-geo-recentes.md | — | 22.4 Ko | `03-etudes/20261019-etude-opportunite-tactiques-seo-geo-recentes.md` |
+| 20261019-etude-opportunite-video-lancement-generee-par-code.md | — | 19.9 Ko | `03-etudes/20261019-etude-opportunite-video-lancement-generee-par-code.md` |
+| 20261019-tri-opportunites-favoris-tiktok.md | — | 25.7 Ko | `03-etudes/20261019-tri-opportunites-favoris-tiktok.md` |
+| 20261020-etude-opportunite-conseil-avant-arbitrage.md | — | 15.7 Ko | `03-etudes/20261020-etude-opportunite-conseil-avant-arbitrage.md` |
+| 20261020-etude-opportunite-oeil-critique-des-process.md | — | 17.1 Ko | `03-etudes/20261020-etude-opportunite-oeil-critique-des-process.md` |
+| 20261020-L99-oeil-critique-amelioration-continue-automatisee.md | — | 25.8 Ko | `03-etudes/20261020-L99-oeil-critique-amelioration-continue-automatisee.md` |
+| 20261020-L99-oeil-critique-des-process.md | — | 24.6 Ko | `03-etudes/20261020-L99-oeil-critique-des-process.md` |
+| 20261020-L99-oeil-critique-global-des-process.md | — | 24.9 Ko | `03-etudes/20261020-L99-oeil-critique-global-des-process.md` |
+| 20261021-etude-opportunite-relecteur-de-bon-sens-restitution.md | — | 28.6 Ko | `03-etudes/20261021-etude-opportunite-relecteur-de-bon-sens-restitution.md` |
+| 20261021-etude-opportunite-surcouche-permissions-produit.md | — | 19.6 Ko | `03-etudes/20261021-etude-opportunite-surcouche-permissions-produit.md` |
+| 20261021-L99-agent-nocturne-oeil-critique.md | — | 27.4 Ko | `03-etudes/20261021-L99-agent-nocturne-oeil-critique.md` |
+| 20261021-L99-agent-nocturne-skill-vs-code.md | — | 27.3 Ko | `03-etudes/20261021-L99-agent-nocturne-skill-vs-code.md` |
+| 20261026-comparaison-task-observer-oeil-critique.md | — | 5.2 Ko | `03-etudes/20261026-comparaison-task-observer-oeil-critique.md` |
+| 20261026-L99-oeil-critique-cible-retravaillee.md | — | 22.8 Ko | `03-etudes/20261026-L99-oeil-critique-cible-retravaillee.md` |
+| Factory - Diagnostic Factory - Oeil critique - 20261020b.md | 20261020b | 23.9 Ko | `03-etudes/Factory - Diagnostic Factory - Oeil critique - 20261020b.md` |
+| Factory - Diagnostic Factory - Oeil critique - 20261020c.md | 20261020c | 31.7 Ko | `03-etudes/Factory - Diagnostic Factory - Oeil critique - 20261020c.md` |
+| Factory - Diagnostic Factory - Oeil critique - 20261021a.md | 20261021a | 48.9 Ko | `03-etudes/Factory - Diagnostic Factory - Oeil critique - 20261021a.md` |
+| Factory - Diagnostic Factory - Oeil critique - 20261026a.md | 20261026a | 23 Ko | `03-etudes/Factory - Diagnostic Factory - Oeil critique - 20261026a.md` |
+| Factory - Diagnostic Factory - Sauvegardes Drive des produits - 20261121c.md | 20261121c | 12.7 Ko | `03-etudes/Factory - Diagnostic Factory - Sauvegardes Drive des produits - 20261121c.md` |
+| Factory - Diagnostic Factory - Sauvegardes Drive des produits - 20261121n.md | 20261121n | 12.9 Ko | `03-etudes/Factory - Diagnostic Factory - Sauvegardes Drive des produits - 20261121n.md` |
+| Factory - Diagnostic Factory - Sessions concurrentes sur forge-site - 20261114b.md | 20261114b | 8.9 Ko | `03-etudes/Factory - Diagnostic Factory - Sessions concurrentes sur forge-site - 20261114b.md` |
+| Factory - Étude - Amelioration continue des agents par leurs lecons - 20261114d.md | 20261114d | 31.5 Ko | `03-etudes/Factory - Étude - Amelioration continue des agents par leurs lecons - 20261114d.md` |
+| Factory - Étude - Amelioration de la boucle de relecture L99 - 20261029f.md | 20261029f | 7.7 Ko | `03-etudes/Factory - Étude - Amelioration de la boucle de relecture L99 - 20261029f.md` |
+| Factory - Étude - Amelioration de la boucle de relecture L99 - 20261029f.md.experience.json | — | 98.7 Ko | `03-etudes/Factory - Étude - Amelioration de la boucle de relecture L99 - 20261029f.md.experience.json` |
+| Factory - Étude - Apprentissage des erreurs par les produits et la Factory - 20261104b.md | 20261104b | 22.5 Ko | `03-etudes/Factory - Étude - Apprentissage des erreurs par les produits et la Factory - 20261104b.md` |
+| Factory - Étude - ArtCraft pour la Factory - 20261102s.md | 20261102s | 14.1 Ko | `03-etudes/Factory - Étude - ArtCraft pour la Factory - 20261102s.md` |
+| Factory - Étude - Audit de securite par agents de Cloudflare - 20261102f.md | 20261102f | 35.8 Ko | `03-etudes/Factory - Étude - Audit de securite par agents de Cloudflare - 20261102f.md` |
+| Factory - Étude - Bases de donnees de dev et qualification - 20261029a.md | 20261029a | 8.8 Ko | `03-etudes/Factory - Étude - Bases de donnees de dev et qualification - 20261029a.md` |
+| Factory - Étude - Competences Cloudflare GitHub Supabase - 20261028a.md | 20261028a | 12.6 Ko | `03-etudes/Factory - Étude - Competences Cloudflare GitHub Supabase - 20261028a.md` |
+| Factory - Étude - Competences OpenAI et Gemini - 20261103l.md | 20261103l | 199.3 Ko | `03-etudes/Factory - Étude - Competences OpenAI et Gemini - 20261103l.md` |
+| Factory - Étude - Coordination des sessions multiples d'un projet - 20261114c.md | 20261114c | 18.2 Ko | `03-etudes/Factory - Étude - Coordination des sessions multiples d'un projet - 20261114c.md` |
+| Factory - Étude - Cout et qualite de la boucle L99 - 20261106b.md | 20261106b | 24.3 Ko | `03-etudes/Factory - Étude - Cout et qualite de la boucle L99 - 20261106b.md` |
+| Factory - Étude - Defauts crees par les corrections des agents - 20261114a.md | 20261114a | 31.3 Ko | `03-etudes/Factory - Étude - Defauts crees par les corrections des agents - 20261114a.md` |
+| Factory - Étude - Étape de revue de code par un seul agent - 20261103k.md | 20261103k | 13 Ko | `03-etudes/Factory - Étude - Étape de revue de code par un seul agent - 20261103k.md` |
+| Factory - Étude - Huit outils de motion design pour la Factory - 20261102t.md | 20261102t | 25.3 Ko | `03-etudes/Factory - Étude - Huit outils de motion design pour la Factory - 20261102t.md` |
+| Factory - Étude - Intégration des compétences de clip vidéo dans la Factory - 20261110c.md | 20261110c | 12.7 Ko | `03-etudes/Factory - Étude - Intégration des compétences de clip vidéo dans la Factory - 20261110c.md` |
+| Factory - Étude - Oeil critique global des process - 20261020a.md | 20261020a | 30.6 Ko | `03-etudes/Factory - Étude - Oeil critique global des process - 20261020a.md` |
+| Factory - Etude - Opportunite plateforme pentest autorise automatise - 20261102p.md | 20261102p | 36.8 Ko | `03-etudes/Factory - Etude - Opportunite plateforme pentest autorise automatise - 20261102p.md` |
+| Factory - Étude - Parcours d accueil des nouveaux utilisateurs - 20261121g.md | 20261121g | 15.6 Ko | `03-etudes/Factory - Étude - Parcours d accueil des nouveaux utilisateurs - 20261121g.md` |
+| Factory - Étude - Parcours d accueil des nouveaux utilisateurs - 20261121h.md | 20261121h | 12.7 Ko | `03-etudes/Factory - Étude - Parcours d accueil des nouveaux utilisateurs - 20261121h.md` |
+| Factory - Étude - Parcours d accueil des nouveaux utilisateurs - 20261121k.md | 20261121k | 17.4 Ko | `03-etudes/Factory - Étude - Parcours d accueil des nouveaux utilisateurs - 20261121k.md` |
+| Factory - Étude - Plan Mode pour organiser les chantiers - 20261121b.md | 20261121b | 13.9 Ko | `03-etudes/Factory - Étude - Plan Mode pour organiser les chantiers - 20261121b.md` |
+| Factory - Étude - Plan multi-agents Claude Codex Antigravity - 20261121r.md | 20261121r | 10.8 Ko | `03-etudes/Factory - Étude - Plan multi-agents Claude Codex Antigravity - 20261121r.md` |
+| Factory - Étude - Plan multi-agents Claude Codex Antigravity - 20261121r.md.banc.json | — | 6.4 Ko | `03-etudes/Factory - Étude - Plan multi-agents Claude Codex Antigravity - 20261121r.md.banc.json` |
+| Factory - Étude - Preuve de chaque affirmation ajoutée par une correction - 20261115a.md | 20261115a | 11.7 Ko | `03-etudes/Factory - Étude - Preuve de chaque affirmation ajoutée par une correction - 20261115a.md` |
+| Factory - Étude - Relecteurs a angle distinct - 20261122b.md | 20261122b | 31.7 Ko | `03-etudes/Factory - Étude - Relecteurs a angle distinct - 20261122b.md` |
+| Factory - Étude - Securite par defaut de bout en bout - 20261106a.json | 20261106a | 19.2 Ko | `03-etudes/Factory - Étude - Securite par defaut de bout en bout - 20261106a.json` |
+| Factory - Étude - Securite par defaut de bout en bout - 20261106a.md | 20261106a | 98 Ko | `03-etudes/Factory - Étude - Securite par defaut de bout en bout - 20261106a.md` |
+| Factory - Étude - Skill de tri de sujets - 20261102c.md | 20261102c | 10.7 Ko | `03-etudes/Factory - Étude - Skill de tri de sujets - 20261102c.md` |
+| Factory - Étude - Skill PDF de la Factory - 20261030a.md | 20261030a | 14.2 Ko | `03-etudes/Factory - Étude - Skill PDF de la Factory - 20261030a.md` |
+| Factory - Étude - Statuts courts et ASD-STE100 - 20261122a.md | 20261122a | 8.4 Ko | `03-etudes/Factory - Étude - Statuts courts et ASD-STE100 - 20261122a.md` |
+| Factory - Étude - Suivi des temps et des couts par produit - 20261105a.md | 20261105a | 23 Ko | `03-etudes/Factory - Étude - Suivi des temps et des couts par produit - 20261105a.md` |
+| Factory - Étude - Tri des sujets Claude et IA des favoris TikTok - 20261102e.md | 20261102e | 19.1 Ko | `03-etudes/Factory - Étude - Tri des sujets Claude et IA des favoris TikTok - 20261102e.md` |
+| Factory - Étude - Tri des sujets Claude et IA des favoris TikTok - 20261109c.md | 20261109c | 10.3 Ko | `03-etudes/Factory - Étude - Tri des sujets Claude et IA des favoris TikTok - 20261109c.md` |
+| Factory - Étude - Video Make it better cent fois - 20261102b.md | 20261102b | 15.5 Ko | `03-etudes/Factory - Étude - Video Make it better cent fois - 20261102b.md` |
+| Factory - Fiche - Actions A-2 et A-3 detaillees - 20261105b.md | 20261105b | 4.5 Ko | `03-etudes/Factory - Fiche - Actions A-2 et A-3 detaillees - 20261105b.md` |
+| Factory - Fiche - Oeil critique actions pour tenir les 8 demandes - 20261029c.md | 20261029c | 5.5 Ko | `03-etudes/Factory - Fiche - Oeil critique actions pour tenir les 8 demandes - 20261029c.md` |
+| Factory - Fiche - Oeil critique ce qu il fait et ne fait pas - 20261029b.md | 20261029b | 4.8 Ko | `03-etudes/Factory - Fiche - Oeil critique ce qu il fait et ne fait pas - 20261029b.md` |
+| Factory - Fiche - Oeil critique code mort et sujets a integrer - 20261029e.md | 20261029e | 6.9 Ko | `03-etudes/Factory - Fiche - Oeil critique code mort et sujets a integrer - 20261029e.md` |
+| Factory - Inventaire - Fonctionnalites Cloudflare GitHub Supabase - 20261028a.json | 20261028a | 514.7 Ko | `03-etudes/Factory - Inventaire - Fonctionnalites Cloudflare GitHub Supabase - 20261028a.json` |
+| Factory - Inventaire - Fonctionnalites Cloudflare GitHub Supabase - 20261028a.md | 20261028a | 190.2 Ko | `03-etudes/Factory - Inventaire - Fonctionnalites Cloudflare GitHub Supabase - 20261028a.md` |
+| Factory - Inventaire - Protections GitHub des depots publics - 20261028a.md | 20261028a | 5.1 Ko | `03-etudes/Factory - Inventaire - Protections GitHub des depots publics - 20261028a.md` |
+| Factory - Note - Codex et Gemini en ligne de commande installes et configures - 20261121d.md | 20261121d | 11 Ko | `03-etudes/Factory - Note - Codex et Gemini en ligne de commande installes et configures - 20261121d.md` |
+| Factory - Note - Essai de MarkItDown sur 3 entrants bureautiques - 20261103a.md | 20261103a | 6 Ko | `03-etudes/Factory - Note - Essai de MarkItDown sur 3 entrants bureautiques - 20261103a.md` |
+| Factory - Note - Essai des regles i-have-adhd contre nos regles d ecriture - 20261102g.md | 20261102g | 3.9 Ko | `03-etudes/Factory - Note - Essai des regles i-have-adhd contre nos regles d ecriture - 20261102g.md` |
+| Factory - Note - Essai du skill logo-design-skill sur un produit en construction - 20261103b.md | 20261103b | 6.3 Ko | `03-etudes/Factory - Note - Essai du skill logo-design-skill sur un produit en construction - 20261103b.md` |
+| Factory - Note - Essais d Antigravity en ligne de commande - 20261121f.md | 20261121f | 4.5 Ko | `03-etudes/Factory - Note - Essais d Antigravity en ligne de commande - 20261121f.md` |
+| Factory - Note - Essais de Codex et Gemini en ligne de commande - 20261121e.md | 20261121e | 5.4 Ko | `03-etudes/Factory - Note - Essais de Codex et Gemini en ligne de commande - 20261121e.md` |
+| Factory - Note - Harvey compare a factory-prospection - 20261102q.md | 20261102q | 8.3 Ko | `03-etudes/Factory - Note - Harvey compare a factory-prospection - 20261102q.md` |
+| Factory - Note - Niveau des LLM par activite d agent - 20261123a.md | 20261123a | 4 Ko | `03-etudes/Factory - Note - Niveau des LLM par activite d agent - 20261123a.md` |
+| Factory - Note - Niveau des LLM par activite d agent - 20261123b.md | 20261123b | 5.8 Ko | `03-etudes/Factory - Note - Niveau des LLM par activite d agent - 20261123b.md` |
+| Factory - Note - Niveau des LLM par activite d agent - 20261123c.md | 20261123c | 8 Ko | `03-etudes/Factory - Note - Niveau des LLM par activite d agent - 20261123c.md` |
+| Factory - Note - Niveau des LLM par activite d agent - 20261123c.md.banc.json | — | 3.6 Ko | `03-etudes/Factory - Note - Niveau des LLM par activite d agent - 20261123c.md.banc.json` |
+| Factory - Note - Recompte des graves par angle des relecteurs - 20261123a.md | 20261123a | 14.6 Ko | `03-etudes/Factory - Note - Recompte des graves par angle des relecteurs - 20261123a.md` |
+| Factory - Note - Refine de Prime Agent compare a oeil-critique - 20261102r.md | 20261102r | 9.1 Ko | `03-etudes/Factory - Note - Refine de Prime Agent compare a oeil-critique - 20261102r.md` |
+| Factory - Note - Relais de Claude, Codex et Antigravity - 20261121o.md | 20261121o | 4.9 Ko | `03-etudes/Factory - Note - Relais de Claude, Codex et Antigravity - 20261121o.md` |
+| Factory - Note - Relais de Claude, Codex et Antigravity - 20261121q.md | 20261121q | 5.2 Ko | `03-etudes/Factory - Note - Relais de Claude, Codex et Antigravity - 20261121q.md` |
+| Factory - Proposition - Lots du parcours d accueil - 20261121i.md | 20261121i | 8.1 Ko | `03-etudes/Factory - Proposition - Lots du parcours d accueil - 20261121i.md` |
+| Factory - Proposition - Lots du parcours d accueil - 20261121l.md | 20261121l | 6.4 Ko | `03-etudes/Factory - Proposition - Lots du parcours d accueil - 20261121l.md` |
+| Factory - Rapport - Banc du Plan Mode dans ce harnais - 20261121j.md | 20261121j | 6 Ko | `03-etudes/Factory - Rapport - Banc du Plan Mode dans ce harnais - 20261121j.md` |
+| Factory - Rapport - Essai borne de l audit de securite de Cloudflare - 20261102k.md | 20261102k | 5.9 Ko | `03-etudes/Factory - Rapport - Essai borne de l audit de securite de Cloudflare - 20261102k.md` |
+| Factory - Revue - Prompt actions code mort et sujets oeil critique passe au crible L99 - 20261029d.md | 20261029d | 15.2 Ko | `03-etudes/Factory - Revue - Prompt actions code mort et sujets oeil critique passe au crible L99 - 20261029d.md` |
+| Factory - Revue - Prompt aide aux nouveaux utilisateurs passe au crible L99 - 20261121m.md | 20261121m | 26.1 Ko | `03-etudes/Factory - Revue - Prompt aide aux nouveaux utilisateurs passe au crible L99 - 20261121m.md` |
+| Factory - Revue - Prompt apprentissage des erreurs passe au crible L99 - 20261104a.md | 20261104a | 53.5 Ko | `03-etudes/Factory - Revue - Prompt apprentissage des erreurs passe au crible L99 - 20261104a.md` |
+| Factory - Revue - Prompt apprentissage des erreurs passe au crible L99 - 20261104a.md.boucle.json | — | 10.7 Ko | `03-etudes/Factory - Revue - Prompt apprentissage des erreurs passe au crible L99 - 20261104a.md.boucle.json` |
+| Factory - Revue - Prompt competences OpenAI et Gemini passe au crible L99 - 20261103c.md | 20261103c | 20.6 Ko | `03-etudes/Factory - Revue - Prompt competences OpenAI et Gemini passe au crible L99 - 20261103c.md` |
+| Factory - Revue - Prompt competences OpenAI et Gemini passe au crible L99 - 20261103c.md.boucle.json | — | 10.6 Ko | `03-etudes/Factory - Revue - Prompt competences OpenAI et Gemini passe au crible L99 - 20261103c.md.boucle.json` |
+| Factory - Revue - Prompt pentest automatise de bout en bout passe au crible L99 - 20261102j.md | 20261102j | 56.1 Ko | `03-etudes/Factory - Revue - Prompt pentest automatise de bout en bout passe au crible L99 - 20261102j.md` |
+| Factory - Revue - Prompt pentest automatise de bout en bout passe au crible L99 - 20261102j.md.boucle-cdc.json | — | 6.9 Ko | `03-etudes/Factory - Revue - Prompt pentest automatise de bout en bout passe au crible L99 - 20261102j.md.boucle-cdc.json` |
+| Factory - Revue - Prompt pentest automatise de bout en bout passe au crible L99 - 20261102j.md.boucle.json | — | 6.9 Ko | `03-etudes/Factory - Revue - Prompt pentest automatise de bout en bout passe au crible L99 - 20261102j.md.boucle.json` |
+| Factory - Revue - Prompt plan multi-agents passe au crible L99 - 20261121p.md | 20261121p | 29.7 Ko | `03-etudes/Factory - Revue - Prompt plan multi-agents passe au crible L99 - 20261121p.md` |
+| Factory - Revue - Prompt plan multi-agents passe au crible L99 - 20261121p.md.boucle.json | — | 20.7 Ko | `03-etudes/Factory - Revue - Prompt plan multi-agents passe au crible L99 - 20261121p.md.boucle.json` |
+| Factory - Revue - Prompt série d'animations de la Factory passé au crible L99 - 20261109b.md | 20261109b | 36.5 Ko | `03-etudes/Factory - Revue - Prompt série d'animations de la Factory passé au crible L99 - 20261109b.md` |
+| Factory - Revue - Prompt série d'animations de la Factory passé au crible L99 - 20261109b.md.boucle.json | — | 19.1 Ko | `03-etudes/Factory - Revue - Prompt série d'animations de la Factory passé au crible L99 - 20261109b.md.boucle.json` |
+| Factory - Revue - Prompt skill make-it-better passe au crible L99 - 20261102d.md | 20261102d | 19.1 Ko | `03-etudes/Factory - Revue - Prompt skill make-it-better passe au crible L99 - 20261102d.md` |
+| Factory - Revue - Prompt skill make-it-better passe au crible L99 - 20261102d.md.boucle.json | — | 19.6 Ko | `03-etudes/Factory - Revue - Prompt skill make-it-better passe au crible L99 - 20261102d.md.boucle.json` |
+| Factory - Revue - Prompt suivi d avancement des agents passe au crible L99 - 20261112a.md | 20261112a | 17.8 Ko | `03-etudes/Factory - Revue - Prompt suivi d avancement des agents passe au crible L99 - 20261112a.md` |
+| Factory - Revue - Prompt suivi d avancement des agents passe au crible L99 - 20261112a.md.boucle.json | — | 11.8 Ko | `03-etudes/Factory - Revue - Prompt suivi d avancement des agents passe au crible L99 - 20261112a.md.boucle.json` |
+| Factory - Revue - Prompt suivi des temps et couts des produits passe au crible L99 - 20261104c.md | 20261104c | 35.7 Ko | `03-etudes/Factory - Revue - Prompt suivi des temps et couts des produits passe au crible L99 - 20261104c.md` |
+| Factory - Revue - Prompt suivi des temps et couts des produits passe au crible L99 - 20261104c.md.boucle.json | — | 12.8 Ko | `03-etudes/Factory - Revue - Prompt suivi des temps et couts des produits passe au crible L99 - 20261104c.md.boucle.json` |
+| Factory - Revue - Prompt textes du clip ingénierie logicielle passé au crible L99 - 20261110b.md | 20261110b | 25.7 Ko | `03-etudes/Factory - Revue - Prompt textes du clip ingénierie logicielle passé au crible L99 - 20261110b.md` |
+| Factory - Revue - Prompt tri des sujets TikTok et skill passe au crible L99 - 20261102a.md | 20261102a | 20 Ko | `03-etudes/Factory - Revue - Prompt tri des sujets TikTok et skill passe au crible L99 - 20261102a.md` |
+| Factory - Revue - Prompt tri des sujets TikTok et skill passe au crible L99 - 20261102a.md.boucle.json | — | 9.2 Ko | `03-etudes/Factory - Revue - Prompt tri des sujets TikTok et skill passe au crible L99 - 20261102a.md.boucle.json` |
+| Factory - Étude - Tri des sujets Claude et IA des favoris TikTok - 20261109a.md *(archivé)* | 20261109a | 7.1 Ko | `03-etudes/old/Factory - Étude - Tri des sujets Claude et IA des favoris TikTok - 20261109a.md` |
+
+### 04-plans
+
+| Livrable | Version | Poids | Chemin à copier |
+|---|---|---|---|
+| 20260813-plan-strategie-tests-e2e.md | — | 13.3 Ko | `04-plans/2026-08/20260813-plan-strategie-tests-e2e.md` |
+| Factory - Note Migration - Chemins du pilot renomme - 20260818b.md | 20260818b | 4.2 Ko | `04-plans/2026-08/Factory - Note Migration - Chemins du pilot renomme - 20260818b.md` |
+| Factory - Note Revue - Denominateur des freres - 20260818a.md | 20260818a | 4.1 Ko | `04-plans/2026-08/Factory - Note Revue - Denominateur des freres - 20260818a.md` |
+| Factory - Plan Renommage - Fenetre A factory - 20260817e.md | 20260817e | 3.2 Ko | `04-plans/2026-08/Factory - Plan Renommage - Fenetre A factory - 20260817e.md` |
+| Factory - Synthese Boucle - 17 restants du registre - 20260818c.md | 20260818c | 13.1 Ko | `04-plans/2026-08/Factory - Synthese Boucle - 17 restants du registre - 20260818c.md` |
+| Factory - Synthese Campagne - Quatrieme mandat global - 20260815a.md | 20260815a | 3.6 Ko | `04-plans/2026-08/Factory - Synthese Campagne - Quatrieme mandat global - 20260815a.md` |
+| Factory - Synthese Diagnostic - Avancement traitements longs - 20260815c.md | 20260815c | 3.7 Ko | `04-plans/2026-08/Factory - Synthese Diagnostic - Avancement traitements longs - 20260815c.md` |
+| Factory - Synthese Mandat - Analyse L99 etat de l art marche - 20260830n.md | 20260830n | 15.3 Ko | `04-plans/2026-08/Factory - Synthese Mandat - Analyse L99 etat de l art marche - 20260830n.md` |
+| Factory - Synthese Mandat - Anatomie du bloc 3 armee - 20260830e.md | 20260830e | 17.8 Ko | `04-plans/2026-08/Factory - Synthese Mandat - Anatomie du bloc 3 armee - 20260830e.md` |
+| Factory - Synthese Mandat - Architecture circuit - 20260815f.md | 20260815f | 3.8 Ko | `04-plans/2026-08/Factory - Synthese Mandat - Architecture circuit - 20260815f.md` |
+| Factory - Synthese Mandat - Avancement des campagnes cable - 20260815d.md | 20260815d | 3.4 Ko | `04-plans/2026-08/Factory - Synthese Mandat - Avancement des campagnes cable - 20260815d.md` |
+| Factory - Synthese Mandat - Bloc 3 forme de reference - 20260830f.md | 20260830f | 15.3 Ko | `04-plans/2026-08/Factory - Synthese Mandat - Bloc 3 forme de reference - 20260830f.md` |
+| Factory - Synthese Mandat - Etude opportunite etat de l art - 20260831a.md | 20260831a | 15.2 Ko | `04-plans/2026-08/Factory - Synthese Mandat - Etude opportunite etat de l art - 20260831a.md` |
+| Factory - Synthese Mandat - Forme du bloc 3 et redescente aux produits - 20260830c.md | 20260830c | 17.7 Ko | `04-plans/2026-08/Factory - Synthese Mandat - Forme du bloc 3 et redescente aux produits - 20260830c.md` |
+| Factory - Synthese Mandat - Heritage a l ouverture et localisateurs - 20260830g.md | 20260830g | 16 Ko | `04-plans/2026-08/Factory - Synthese Mandat - Heritage a l ouverture et localisateurs - 20260830g.md` |
+| Factory - Synthese Mandat - Identifiants exposes verification - 20260830i.md | 20260830i | 16.4 Ko | `04-plans/2026-08/Factory - Synthese Mandat - Identifiants exposes verification - 20260830i.md` |
+| Factory - Synthese Mandat - Ingestion rouverte et banc au vert - 20260831c.md | 20260831c | 13.8 Ko | `04-plans/2026-08/Factory - Synthese Mandat - Ingestion rouverte et banc au vert - 20260831c.md` |
+| Factory - Synthese Mandat - Juste milieu du canal de remontee - 20260830k.md | 20260830k | 15.1 Ko | `04-plans/2026-08/Factory - Synthese Mandat - Juste milieu du canal de remontee - 20260830k.md` |
+| Factory - Synthese Mandat - Lexique d invocation inerte - 20260830l.md | 20260830l | 14.4 Ko | `04-plans/2026-08/Factory - Synthese Mandat - Lexique d invocation inerte - 20260830l.md` |
+| Factory - Synthese Mandat - Lexique d invocation reactive - 20260830m.md | 20260830m | 14 Ko | `04-plans/2026-08/Factory - Synthese Mandat - Lexique d invocation reactive - 20260830m.md` |
+| Factory - Synthese Mandat - Pourquoi le bloc 3 derive - 20260830d.md | 20260830d | 16.1 Ko | `04-plans/2026-08/Factory - Synthese Mandat - Pourquoi le bloc 3 derive - 20260830d.md` |
+| Factory - Synthese Mandat - Prompt reecrit execute - 20260817f.md | 20260817f | 7.2 Ko | `04-plans/2026-08/Factory - Synthese Mandat - Prompt reecrit execute - 20260817f.md` |
+| Factory - Synthese Mandat - Publication et campagne des items decides - 20260831d.md | 20260831d | 22.9 Ko | `04-plans/2026-08/Factory - Synthese Mandat - Publication et campagne des items decides - 20260831d.md` |
+| Factory - Synthese Mandat - Recopie de l heritage et parite - 20260830h.md | 20260830h | 14.6 Ko | `04-plans/2026-08/Factory - Synthese Mandat - Recopie de l heritage et parite - 20260830h.md` |
+| Factory - Synthese Mandat - Recupere et traite tout - 20260817d.md | 20260817d | 7 Ko | `04-plans/2026-08/Factory - Synthese Mandat - Recupere et traite tout - 20260817d.md` |
+| Factory - Synthese Mandat - Remise a niveau et renommage - 20260830b.md | 20260830b | 19.2 Ko | `04-plans/2026-08/Factory - Synthese Mandat - Remise a niveau et renommage - 20260830b.md` |
+| Factory - Synthese Mandat - Remontee automatique des retours produits - 20260830j.md | 20260830j | 16.6 Ko | `04-plans/2026-08/Factory - Synthese Mandat - Remontee automatique des retours produits - 20260830j.md` |
+| Factory - Synthese Mandat - Synchronisation GitHub - 20260822a.md | 20260822a | 13.2 Ko | `04-plans/2026-08/Factory - Synthese Mandat - Synchronisation GitHub - 20260822a.md` |
+| Factory - Synthese Mandat - Toute la todo avec le a - 20260815g.md | 20260815g | 5.5 Ko | `04-plans/2026-08/Factory - Synthese Mandat - Toute la todo avec le a - 20260815g.md` |
+| Factory - Synthese Mandat - Traite les todo et retours - 20260815e.md | 20260815e | 4.4 Ko | `04-plans/2026-08/Factory - Synthese Mandat - Traite les todo et retours - 20260815e.md` |
+| Factory - Synthese Mandat - Traite les todos a faire - 20260817b.md | 20260817b | 6.1 Ko | `04-plans/2026-08/Factory - Synthese Mandat - Traite les todos a faire - 20260817b.md` |
+| Factory - Synthese Mandat - Traite les todos et retours - 20260830a.md | 20260830a | 17.8 Ko | `04-plans/2026-08/Factory - Synthese Mandat - Traite les todos et retours - 20260830a.md` |
+| Factory - Synthese Mandat - Traite retours et todos - 20260817a.md | 20260817a | 6.3 Ko | `04-plans/2026-08/Factory - Synthese Mandat - Traite retours et todos - 20260817a.md` |
+| Factory - Synthese Mandat - Traite todos et retours - 20260822b.md | 20260822b | 16.8 Ko | `04-plans/2026-08/Factory - Synthese Mandat - Traite todos et retours - 20260822b.md` |
+| Factory - Synthese Mandat - Traite todos et retours - 20260822c.md | 20260822c | 9.2 Ko | `04-plans/2026-08/Factory - Synthese Mandat - Traite todos et retours - 20260822c.md` |
+| Factory - Synthese Mandat - Traite todos et retours - 20260831b.md | 20260831b | 17.3 Ko | `04-plans/2026-08/Factory - Synthese Mandat - Traite todos et retours - 20260831b.md` |
+| Factory - Synthese Mandat - Traite tous les retours - 20260817c.md | 20260817c | 5.1 Ko | `04-plans/2026-08/Factory - Synthese Mandat - Traite tous les retours - 20260817c.md` |
+| Factory - Synthese Mandat - Traite tous les sujets - 20260823a.md | 20260823a | 9.8 Ko | `04-plans/2026-08/Factory - Synthese Mandat - Traite tous les sujets - 20260823a.md` |
+| Factory - Synthese Mandat - Vocabulaire SEO site vs produit - 20260815b.md | 20260815b | 3.2 Ko | `04-plans/2026-08/Factory - Synthese Mandat - Vocabulaire SEO site vs produit - 20260815b.md` |
+| Factory - Plan - Mise en oeuvre des huit rangs d opportunites - 20260922h.md | 20260922h | 20.8 Ko | `04-plans/2026-09/Factory - Plan - Mise en oeuvre des huit rangs d opportunites - 20260922h.md` |
+| Factory - Restitution - Verification d une rectification et cle confirmee - 20260910a.md | 20260910a | 33.1 Ko | `04-plans/2026-09/Factory - Restitution - Verification d une rectification et cle confirmee - 20260910a.md` |
+| Factory - Specification Produit - factory-marketing - 20260911k.md | 20260911k | 36.6 Ko | `04-plans/2026-09/Factory - Specification Produit - factory-marketing - 20260911k.md` |
+| Factory - Synthese - D-3a actee et execution transferee au produit - 20260901i.md | 20260901i | 5.7 Ko | `04-plans/2026-09/Factory - Synthese - D-3a actee et execution transferee au produit - 20260901i.md` |
+| Factory - Synthese - Etapes transferees au produit par lot de travaux - 20260901j.md | 20260901j | 5.2 Ko | `04-plans/2026-09/Factory - Synthese - Etapes transferees au produit par lot de travaux - 20260901j.md` |
+| Factory - Synthese - Etude donnees de recherche et cascade intention - 20260901h.md | 20260901h | 10.4 Ko | `04-plans/2026-09/Factory - Synthese - Etude donnees de recherche et cascade intention - 20260901h.md` |
+| Factory - Synthese - Expertise SEO capitalisee au pilot - 20260901k.md | 20260901k | 7.3 Ko | `04-plans/2026-09/Factory - Synthese - Expertise SEO capitalisee au pilot - 20260901k.md` |
+| Factory - Synthese Conseil - Agents nouvelles versions modeles - 20260924b.md | 20260924b | 17.3 Ko | `04-plans/2026-09/Factory - Synthese Conseil - Agents nouvelles versions modeles - 20260924b.md` |
+| Factory - Synthese Conseil - Qualite sans personas cinq propositions - 20260914g.md | 20260914g | 15.8 Ko | `04-plans/2026-09/Factory - Synthese Conseil - Qualite sans personas cinq propositions - 20260914g.md` |
+| Factory - Synthese Etude - Communication marketing AO verdict O3 - 20260911g.md | 20260911g | 22.2 Ko | `04-plans/2026-09/Factory - Synthese Etude - Communication marketing AO verdict O3 - 20260911g.md` |
+| Factory - Synthese Etude - Decision 5a executee etape - 20260925e.md | 20260925e | 5.3 Ko | `04-plans/2026-09/Factory - Synthese Etude - Decision 5a executee etape - 20260925e.md` |
+| Factory - Synthese Etude - Decisions 3a 4a 2a executees sept candidatures - 20260919d.md | 20260919d | 16.6 Ko | `04-plans/2026-09/Factory - Synthese Etude - Decisions 3a 4a 2a executees sept candidatures - 20260919d.md` |
+| Factory - Synthese Etude - Decisions 3a 4a executees etape - 20260925d.md | 20260925d | 11 Ko | `04-plans/2026-09/Factory - Synthese Etude - Decisions 3a 4a executees etape - 20260925d.md` |
+| Factory - Synthese Etude - Decisions 5a 6a executees deux restes au registre - 20260919e.md | 20260919e | 10.5 Ko | `04-plans/2026-09/Factory - Synthese Etude - Decisions 5a 6a executees deux restes au registre - 20260919e.md` |
+| Factory - Synthese Etude - Gestion reseaux sociaux verdict O2 sans forge - 20260917c.md | 20260917c | 14 Ko | `04-plans/2026-09/Factory - Synthese Etude - Gestion reseaux sociaux verdict O2 sans forge - 20260917c.md` |
+| Factory - Synthese Etude - Niveaux intervention verdict O3 - 20260925c.md | 20260925c | 14.9 Ko | `04-plans/2026-09/Factory - Synthese Etude - Niveaux intervention verdict O3 - 20260925c.md` |
+| Factory - Synthese Etude - Personas phase verdict statu quo banc rejouable - 20260914h.md | 20260914h | 16.9 Ko | `04-plans/2026-09/Factory - Synthese Etude - Personas phase verdict statu quo banc rejouable - 20260914h.md` |
+| Factory - Synthese Etude - Plan amelioration post-audit verdict O2 forges - 20260919c.md | 20260919c | 20.3 Ko | `04-plans/2026-09/Factory - Synthese Etude - Plan amelioration post-audit verdict O2 forges - 20260919c.md` |
+| Factory - Synthese Etude - Revue hebdomadaire existant verdict sondes - 20260917d.md | 20260917d | 13.7 Ko | `04-plans/2026-09/Factory - Synthese Etude - Revue hebdomadaire existant verdict sondes - 20260917d.md` |
+| Factory - Synthese L99 - Audit plan amelioration plateforme prompt reecrit - 20260919b.md | 20260919b | 17.2 Ko | `04-plans/2026-09/Factory - Synthese L99 - Audit plan amelioration plateforme prompt reecrit - 20260919b.md` |
+| Factory - Synthese L99 - Forge communication marketing prompt reecrit - 20260911f.md | 20260911f | 19.9 Ko | `04-plans/2026-09/Factory - Synthese L99 - Forge communication marketing prompt reecrit - 20260911f.md` |
+| Factory - Synthese L99 - Gestion reseaux sociaux prompt reecrit - 20260917m.md | 20260917m | 14.7 Ko | `04-plans/2026-09/Factory - Synthese L99 - Gestion reseaux sociaux prompt reecrit - 20260917m.md` |
+| Factory - Synthese L99 - Niveaux d intervention prompt reecrit - 20260925b.md | 20260925b | 26 Ko | `04-plans/2026-09/Factory - Synthese L99 - Niveaux d intervention prompt reecrit - 20260925b.md` |
+| Factory - Synthese L99 - Passage Opus 5 vers Opus 5.5 prompt reecrit - 20260927d.md | 20260927d | 20.3 Ko | `04-plans/2026-09/Factory - Synthese L99 - Passage Opus 5 vers Opus 5.5 prompt reecrit - 20260927d.md` |
+| Factory - Synthese L99 - Personas par phase prompt reecrit - 20260914i.md | 20260914i | 12.7 Ko | `04-plans/2026-09/Factory - Synthese L99 - Personas par phase prompt reecrit - 20260914i.md` |
+| Factory - Synthese L99 - Regles ecriture Factory prompt reecrit esquisse - 20260911j.md | 20260911j | 21.5 Ko | `04-plans/2026-09/Factory - Synthese L99 - Regles ecriture Factory prompt reecrit esquisse - 20260911j.md` |
+| Factory - Synthese L99 - Revue hebdomadaire de l existant prompt reecrit - 20260917b.md | 20260917b | 14 Ko | `04-plans/2026-09/Factory - Synthese L99 - Revue hebdomadaire de l existant prompt reecrit - 20260917b.md` |
+| Factory - Synthese Mandat - 115 valeurs passees en chiffres chez producteurs - 20260916f.md | 20260916f | 8.4 Ko | `04-plans/2026-09/Factory - Synthese Mandat - 115 valeurs passees en chiffres chez producteurs - 20260916f.md` |
+| Factory - Synthese Mandat - 4 decisions executees etude - 20260921g.md | 20260921g | 13.5 Ko | `04-plans/2026-09/Factory - Synthese Mandat - 4 decisions executees etude - 20260921g.md` |
+| Factory - Synthese Mandat - 6 lots ingeres 2 oracles nes - 20260922a.md | 20260922a | 30.1 Ko | `04-plans/2026-09/Factory - Synthese Mandat - 6 lots ingeres 2 oracles nes - 20260922a.md` |
+| Factory - Synthese Mandat - 6 objets reseaux sociaux - 20260921h.md | 20260921h | 13.8 Ko | `04-plans/2026-09/Factory - Synthese Mandat - 6 objets reseaux sociaux - 20260921h.md` |
+| Factory - Synthese Mandat - Actions 31 32 33 achevees - 20260905i.md | 20260905i | 15.3 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Actions 31 32 33 achevees - 20260905i.md` |
+| Factory - Synthese Mandat - Actions 36 a 40 achevees - 20260905k.md | 20260905k | 23.2 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Actions 36 a 40 achevees - 20260905k.md` |
+| Factory - Synthese Mandat - Amelioration continue pas 0 a 4 - 20260903h.md | 20260903h | 19.1 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Amelioration continue pas 0 a 4 - 20260903h.md` |
+| Factory - Synthese Mandat - Analyse L99 amelioration continue - 20260903a.md | 20260903a | 15.5 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Analyse L99 amelioration continue - 20260903a.md` |
+| Factory - Synthese Mandat - Analyse L99 qualite premiers HTML nouveaux - 20260914a.md | 20260914a | 21.5 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Analyse L99 qualite premiers HTML nouveaux - 20260914a.md` |
+| Factory - Synthese Mandat - Anonymisation cablee sur git - 20260901g.md | 20260901g | 11.2 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Anonymisation cablee sur git - 20260901g.md` |
+| Factory - Synthese Mandat - Banc elargi source unique deux lignees - 20260917a.md | 20260917a | 21.8 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Banc elargi source unique deux lignees - 20260917a.md` |
+| Factory - Synthese Mandat - Barres validees et publication decisions D6a D7a - 20260907e.md | 20260907e | 10.4 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Barres validees et publication decisions D6a D7a - 20260907e.md` |
+| Factory - Synthese Mandat - Boite d entree videe et cinq campagnes lancees - 20260917k.md | 20260917k | 17.3 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Boite d entree videe et cinq campagnes lancees - 20260917k.md` |
+| Factory - Synthese Mandat - Boite entree videe huit items clos sous - 20260916e.md | 20260916e | 17.4 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Boite entree videe huit items clos sous - 20260916e.md` |
+| Factory - Synthese Mandat - Branche pilot reportee branche - 20260921b.md | 20260921b | 13.7 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Branche pilot reportee branche - 20260921b.md` |
+| Factory - Synthese Mandat - Campagne des todos et retours - 20260915a.md | 20260915a | 22.6 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Campagne des todos et retours - 20260915a.md` |
+| Factory - Synthese Mandat - Campagne des todos et retours 18 items clos - 20260920e.md | 20260920e | 30 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Campagne des todos et retours 18 items clos - 20260920e.md` |
+| Factory - Synthese Mandat - Campagne todos retours - 20260920d.md | 20260920d | 17.6 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Campagne todos retours - 20260920d.md` |
+| Factory - Synthese Mandat - Campagne tous les todos - 20260901b.md | 20260901b | 13.1 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Campagne tous les todos - 20260901b.md` |
+| Factory - Synthese Mandat - Campagnes cours trois corrections closes porte - 20260908d.md | 20260908d | 20.1 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Campagnes cours trois corrections closes porte - 20260908d.md` |
+| Factory - Synthese Mandat - Canal confidentiel et actions 58 60 61 62 63 - 20260907m.md | 20260907m | 25.4 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Canal confidentiel et actions 58 60 61 62 63 - 20260907m.md` |
+| Factory - Synthese Mandat - Ce poste rattrape fusion - 20260920c.md | 20260920c | 12.3 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Ce poste rattrape fusion - 20260920c.md` |
+| Factory - Synthese Mandat - Cinq decisions executees publication a decider - 20260920g.md | 20260920g | 18.1 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Cinq decisions executees publication a decider - 20260920g.md` |
+| Factory - Synthese Mandat - Cinq familles de cadence et le controle aveugle - 20260915f.md | 20260915f | 25.3 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Cinq familles de cadence et le controle aveugle - 20260915f.md` |
+| Factory - Synthese Mandat - Circuit heberge corrige et accueil sous harnais - 20260915c.md | 20260915c | 9.5 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Circuit heberge corrige et accueil sous harnais - 20260915c.md` |
+| Factory - Synthese Mandat - Communication parts de forge finies 6 decisions - 20260921f.md | 20260921f | 22.3 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Communication parts de forge finies 6 decisions - 20260921f.md` |
+| Factory - Synthese Mandat - D-11 etait executee 09h10 boucle mesuree deposee - 20260911b.md | 20260911b | 21.7 Ko | `04-plans/2026-09/Factory - Synthese Mandat - D-11 etait executee 09h10 boucle mesuree deposee - 20260911b.md` |
+| Factory - Synthese Mandat - D-12 a executee regle etendue registre publie - 20260911c.md | 20260911c | 14.9 Ko | `04-plans/2026-09/Factory - Synthese Mandat - D-12 a executee regle etendue registre publie - 20260911c.md` |
+| Factory - Synthese Mandat - D-13 a executee pilot et forge publies CI lue - 20260911e.md | 20260911e | 13.4 Ko | `04-plans/2026-09/Factory - Synthese Mandat - D-13 a executee pilot et forge publies CI lue - 20260911e.md` |
+| Factory - Synthese Mandat - D-3 executee spec factory-marketing RUN-AO lots - 20260911h.md | 20260911h | 25.8 Ko | `04-plans/2026-09/Factory - Synthese Mandat - D-3 executee spec factory-marketing RUN-AO lots - 20260911h.md` |
+| Factory - Synthese Mandat - D-4 executee marque deux supports produit - 20260911i.md | 20260911i | 27.9 Ko | `04-plans/2026-09/Factory - Synthese Mandat - D-4 executee marque deux supports produit - 20260911i.md` |
+| Factory - Synthese Mandat - D-4 executee secrets et conception amont - 20260914j.md | 20260914j | 21.8 Ko | `04-plans/2026-09/Factory - Synthese Mandat - D-4 executee secrets et conception amont - 20260914j.md` |
+| Factory - Synthese Mandat - D-6 D-9 D-7 D-8 executees - 20260914k.md | 20260914k | 15.1 Ko | `04-plans/2026-09/Factory - Synthese Mandat - D-6 D-9 D-7 D-8 executees - 20260914k.md` |
+| Factory - Synthese Mandat - Decision 31a executee quatorze lots accueillis - 20260928b.md | 20260928b | 14.2 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Decision 31a executee quatorze lots accueillis - 20260928b.md` |
+| Factory - Synthese Mandat - Decision 31a la porte connait le canal - 20260908a.md | 20260908a | 14.6 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Decision 31a la porte connait le canal - 20260908a.md` |
+| Factory - Synthese Mandat - Decision 32a executee trente quatre candidatures - 20260928c.md | 20260928c | 23.2 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Decision 32a executee trente quatre candidatures - 20260928c.md` |
+| Factory - Synthese Mandat - Decision 5a et TF-0793 clos - 20260903f.md | 20260903f | 13.8 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Decision 5a et TF-0793 clos - 20260903f.md` |
+| Factory - Synthese Mandat - Decision 5a jetons factory-schemas - 20260904a.md | 20260904a | 19.7 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Decision 5a jetons factory-schemas - 20260904a.md` |
+| Factory - Synthese Mandat - Decisions 10a 13a executees retours 15 septembre - 20260915e.md | 20260915e | 15.3 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Decisions 10a 13a executees retours 15 septembre - 20260915e.md` |
+| Factory - Synthese Mandat - Decisions 11b 12a - 20260905j.md | 20260905j | 19.9 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Decisions 11b 12a - 20260905j.md` |
+| Factory - Synthese Mandat - Decisions 13 14 15 executees campagnes en cours - 20260908c.md | 20260908c | 11.6 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Decisions 13 14 15 executees campagnes en cours - 20260908c.md` |
+| Factory - Synthese Mandat - Decisions 14a et 15a executees - 20260915b.md | 20260915b | 9.5 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Decisions 14a et 15a executees - 20260915b.md` |
+| Factory - Synthese Mandat - Decisions 16a 17a 18a - 20260905l.md | 20260905l | 17.6 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Decisions 16a 17a 18a - 20260905l.md` |
+| Factory - Synthese Mandat - Decisions 19a 20a et actions 44 a 48 - 20260905m.md | 20260905m | 24.3 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Decisions 19a 20a et actions 44 a 48 - 20260905m.md` |
+| Factory - Synthese Mandat - Decisions 1a 2a 3a 4a - 20260903g.md | 20260903g | 16.4 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Decisions 1a 2a 3a 4a - 20260903g.md` |
+| Factory - Synthese Mandat - Decisions 1a 2a 3b 4a synchronisation - 20260903e.md | 20260903e | 16.1 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Decisions 1a 2a 3b 4a synchronisation - 20260903e.md` |
+| Factory - Synthese Mandat - Decisions 1a 2a executees modeles - 20260925f.md | 20260925f | 14.6 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Decisions 1a 2a executees modeles - 20260925f.md` |
+| Factory - Synthese Mandat - Decisions 1b et 3a executees et cout vues mesure - 20260916c.md | 20260916c | 13.6 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Decisions 1b et 3a executees et cout vues mesure - 20260916c.md` |
+| Factory - Synthese Mandat - Decisions 21a 22a 23a et actions 49 a 52 - 20260906n.md | 20260906n | 24.8 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Decisions 21a 22a 23a et actions 49 a 52 - 20260906n.md` |
+| Factory - Synthese Mandat - Decisions 24-09 executees - 20260925g.md | 20260925g | 26.7 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Decisions 24-09 executees - 20260925g.md` |
+| Factory - Synthese Mandat - Decisions 27a 28a forges rebaties - 20260907b.md | 20260907b | 18.1 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Decisions 27a 28a forges rebaties - 20260907b.md` |
+| Factory - Synthese Mandat - Decisions 2a 3a 5a executees - 20260920f.md | 20260920f | 15.9 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Decisions 2a 3a 5a executees - 20260920f.md` |
+| Factory - Synthese Mandat - Decisions 42a 43a 38a - 20260903b.md | 20260903b | 25.9 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Decisions 42a 43a 38a - 20260903b.md` |
+| Factory - Synthese Mandat - Decisions 8a 9a et actions 28 29 30 - 20260905h.md | 20260905h | 13.5 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Decisions 8a 9a et actions 28 29 30 - 20260905h.md` |
+| Factory - Synthese Mandat - Emission retours cablee sources muettes nommees - 20260917g.md | 20260917g | 13.8 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Emission retours cablee sources muettes nommees - 20260917g.md` |
+| Factory - Synthese Mandat - Enregistrement fait publication refusee porte - 20260917h.md | 20260917h | 11.7 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Enregistrement fait publication refusee porte - 20260917h.md` |
+| Factory - Synthese Mandat - Etat des merges et commits - 20260915d.md | 20260915d | 9.8 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Etat des merges et commits - 20260915d.md` |
+| Factory - Synthese Mandat - Etude opportunite premiers HTML nouveaux formats - 20260914b.md | 20260914b | 19.9 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Etude opportunite premiers HTML nouveaux formats - 20260914b.md` |
+| Factory - Synthese Mandat - Fais tous les A second tour acheve - 20260905g.md | 20260905g | 19 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Fais tous les A second tour acheve - 20260905g.md` |
+| Factory - Synthese Mandat - Forge d audit publiee CI hebergee rouge - 20260910g.md | 20260910g | 19.1 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Forge d audit publiee CI hebergee rouge - 20260910g.md` |
+| Factory - Synthese Mandat - Fusion de la branche du pilot publiee sur GitHub - 20260921c.md | 20260921c | 8.1 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Fusion de la branche du pilot publiee sur GitHub - 20260921c.md` |
+| Factory - Synthese Mandat - Fusion des deux postes sept depots publies - 20260920b.md | 20260920b | 14.4 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Fusion des deux postes sept depots publies - 20260920b.md` |
+| Factory - Synthese Mandat - Fusion mergee et une alerte diagnostic effacait - 20260921d.md | 20260921d | 15.5 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Fusion mergee et une alerte diagnostic effacait - 20260921d.md` |
+| Factory - Synthese Mandat - Fusion publiee session distante - 20260921e.md | 20260921e | 14.1 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Fusion publiee session distante - 20260921e.md` |
+| Factory - Synthese Mandat - Garde d envoi canal confidentiel posee eprouvee - 20260927c.md | 20260927c | 12.6 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Garde d envoi canal confidentiel posee eprouvee - 20260927c.md` |
+| Factory - Synthese Mandat - Histoire pilot reecrite republiee zero nom - 20260909a.md | 20260909a | 20.3 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Histoire pilot reecrite republiee zero nom - 20260909a.md` |
+| Factory - Synthese Mandat - Huit enregistrements publies registre ligne jour - 20260911a.md | 20260911a | 12.5 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Huit enregistrements publies registre ligne jour - 20260911a.md` |
+| Factory - Synthese Mandat - Le corpus corrige et 9 arbitrages poses - 20260922d.md | 20260922d | 33.7 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Le corpus corrige et 9 arbitrages poses - 20260922d.md` |
+| Factory - Synthese Mandat - Le registre est entierement classe - 20260922f.md | 20260922f | 15.7 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Le registre est entierement classe - 20260922f.md` |
+| Factory - Synthese Mandat - Les 3 decisions executees branche - 20260922c.md | 20260922c | 30.6 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Les 3 decisions executees branche - 20260922c.md` |
+| Factory - Synthese Mandat - Les 4 decisions executees - 20260922b.md | 20260922b | 30.5 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Les 4 decisions executees - 20260922b.md` |
+| Factory - Synthese Mandat - Les cinq decisions en attente detaillees - 20260922i.md | 20260922i | 20.9 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Les cinq decisions en attente detaillees - 20260922i.md` |
+| Factory - Synthese Mandat - Lots L1 L2 mission data ouverts decision D5a - 20260907d.md | 20260907d | 14.9 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Lots L1 L2 mission data ouverts decision D5a - 20260907d.md` |
+| Factory - Synthese Mandat - Lots L3 L8 mission data livres decisions D8a A24 - 20260907f.md | 20260907f | 16 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Lots L3 L8 mission data livres decisions D8a A24 - 20260907f.md` |
+| Factory - Synthese Mandat - Mission data Silver Gold Power BI decisions D3a - 20260907c.md | 20260907c | 9.5 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Mission data Silver Gold Power BI decisions D3a - 20260907c.md` |
+| Factory - Synthese Mandat - Modele corrige et familles outillees - 20260914e.md | 20260914e | 20.6 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Modele corrige et familles outillees - 20260914e.md` |
+| Factory - Synthese Mandat - Mutation a la demande et Portee rectifiee - 20260901c.md | 20260901c | 12.2 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Mutation a la demande et Portee rectifiee - 20260901c.md` |
+| Factory - Synthese Mandat - Neuf decisions executees publiees et propagees - 20260927a.md | 20260927a | 23.6 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Neuf decisions executees publiees et propagees - 20260927a.md` |
+| Factory - Synthese Mandat - Noyau corrige publie exclusivite retablie ligne - 20260910d.md | 20260910d | 11.7 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Noyau corrige publie exclusivite retablie ligne - 20260910d.md` |
+| Factory - Synthese Mandat - Onze actions executees et la fusion validee - 20260922g.md | 20260922g | 33.5 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Onze actions executees et la fusion validee - 20260922g.md` |
+| Factory - Synthese Mandat - Outil de reconstruction de clone decision D12a - 20260907j.md | 20260907j | 11.2 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Outil de reconstruction de clone decision D12a - 20260907j.md` |
+| Factory - Synthese Mandat - Outils recopies quatre forges - 20260919h.md | 20260919h | 10.2 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Outils recopies quatre forges - 20260919h.md` |
+| Factory - Synthese Mandat - Paliers 1 et 2 premiers HTML nouveaux formats - 20260914c.md | 20260914c | 22.7 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Paliers 1 et 2 premiers HTML nouveaux formats - 20260914c.md` |
+| Factory - Synthese Mandat - Paliers 2 et 3 premiers HTML nouveaux formats - 20260914d.md | 20260914d | 22.9 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Paliers 2 et 3 premiers HTML nouveaux formats - 20260914d.md` |
+| Factory - Synthese Mandat - Parc aligne GitHub deux branches non fusionnees - 20260921a.md | 20260921a | 13.7 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Parc aligne GitHub deux branches non fusionnees - 20260921a.md` |
+| Factory - Synthese Mandat - Parc resynchronise apres travail - 20260923c.md | 20260923c | 18.5 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Parc resynchronise apres travail - 20260923c.md` |
+| Factory - Synthese Mandat - Parc synchronise apres fusion pilot autre poste - 20260921i.md | 20260921i | 11.2 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Parc synchronise apres fusion pilot autre poste - 20260921i.md` |
+| Factory - Synthese Mandat - Parc synchronise avec GitHub - 20260913a.md | 20260913a | 20.7 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Parc synchronise avec GitHub - 20260913a.md` |
+| Factory - Synthese Mandat - Parc synchronise avec GitHub - 20260920a.md | 20260920a | 9.4 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Parc synchronise avec GitHub - 20260920a.md` |
+| Factory - Synthese Mandat - Parc synchronise et decisions des deux postes - 20260925a.md | 20260925a | 33.8 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Parc synchronise et decisions des deux postes - 20260925a.md` |
+| Factory - Synthese Mandat - Parc synchronise et quatre depots publies - 20260923b.md | 20260923b | 16.7 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Parc synchronise et quatre depots publies - 20260923b.md` |
+| Factory - Synthese Mandat - Parc synchronise et travail deux postes reuni - 20260928a.md | 20260928a | 23.7 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Parc synchronise et travail deux postes reuni - 20260928a.md` |
+| Factory - Synthese Mandat - Parc synchronise retour coherence - 20260924a.md | 20260924a | 30.1 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Parc synchronise retour coherence - 20260924a.md` |
+| Factory - Synthese Mandat - Pilot publie et depot marketing declare produit - 20260917i.md | 20260917i | 9.1 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Pilot publie et depot marketing declare produit - 20260917i.md` |
+| Factory - Synthese Mandat - Pilot rattrape autre poste index retard consigne - 20260923e.md | 20260923e | 21.6 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Pilot rattrape autre poste index retard consigne - 20260923e.md` |
+| Factory - Synthese Mandat - Plancher d ecriture pose regle Full HD 4K - 20260912a.md | 20260912a | 25.5 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Plancher d ecriture pose regle Full HD 4K - 20260912a.md` |
+| Factory - Synthese Mandat - Point d etape fais tous les A - 20260905f.md | 20260905f | 12.3 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Point d etape fais tous les A - 20260905f.md` |
+| Factory - Synthese Mandat - Publication de forge-development actions A39 A37 - 20260907l.md | 20260907l | 10.7 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Publication de forge-development actions A39 A37 - 20260907l.md` |
+| Factory - Synthese Mandat - Publication des forges decision D9a - 20260907g.md | 20260907g | 11.2 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Publication des forges decision D9a - 20260907g.md` |
+| Factory - Synthese Mandat - Publication du parc et branche ancienne retiree - 20260916a.md | 20260916a | 8.1 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Publication du parc et branche ancienne retiree - 20260916a.md` |
+| Factory - Synthese Mandat - Publication faite verifiee clone frais zero - 20260910b.md | 20260910b | 11.9 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Publication faite verifiee clone frais zero - 20260910b.md` |
+| Factory - Synthese Mandat - Quatre decisions executees - 20260923d.md | 20260923d | 23.6 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Quatre decisions executees - 20260923d.md` |
+| Factory - Synthese Mandat - Quatre decisions executees cinq dossiers - 20260922e.md | 20260922e | 30.4 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Quatre decisions executees cinq dossiers - 20260922e.md` |
+| Factory - Synthese Mandat - Quatre decisions executees parc publie tables - 20260908f.md | 20260908f | 14.1 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Quatre decisions executees parc publie tables - 20260908f.md` |
+| Factory - Synthese Mandat - Quatre decisions executees quatre nouvelles - 20260923a.md | 20260923a | 29.6 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Quatre decisions executees quatre nouvelles - 20260923a.md` |
+| Factory - Synthese Mandat - Quinze actions traitees publication en attente - 20260911d.md | 20260911d | 22.7 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Quinze actions traitees publication en attente - 20260911d.md` |
+| Factory - Synthese Mandat - Quinze items registre traites controles poses - 20260916b.md | 20260916b | 17.6 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Quinze items registre traites controles poses - 20260916b.md` |
+| Factory - Synthese Mandat - Reecriture histoires design tests development - 20260907h.md | 20260907h | 13.3 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Reecriture histoires design tests development - 20260907h.md` |
+| Factory - Synthese Mandat - Regle portee GO ecrite publiee restitution - 20260910c.md | 20260910c | 17.4 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Regle portee GO ecrite publiee restitution - 20260910c.md` |
+| Factory - Synthese Mandat - Reseaux sociaux barre validee perimetre LinkedIn - 20260917l.md | 20260917l | 11.3 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Reseaux sociaux barre validee perimetre LinkedIn - 20260917l.md` |
+| Factory - Synthese Mandat - Reseaux sociaux D-2 executee premier lot ecrit - 20260917e.md | 20260917e | 12.8 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Reseaux sociaux D-2 executee premier lot ecrit - 20260917e.md` |
+| Factory - Synthese Mandat - Reseaux sociaux D-3 executee mandat permanent - 20260917j.md | 20260917j | 14.9 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Reseaux sociaux D-3 executee mandat permanent - 20260917j.md` |
+| Factory - Synthese Mandat - Retours ingeres cinq campagnes lancees soixante - 20260908g.md | 20260908g | 37.5 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Retours ingeres cinq campagnes lancees soixante - 20260908g.md` |
+| Factory - Synthese Mandat - Retours ingeres et todos a partager entre postes - 20260908b.md | 20260908b | 17.6 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Retours ingeres et todos a partager entre postes - 20260908b.md` |
+| Factory - Synthese Mandat - Retours pris et propagation mesurable - 20260901a.md | 20260901a | 12.6 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Retours pris et propagation mesurable - 20260901a.md` |
+| Factory - Synthese Mandat - Selecteurs de familles et palier 1 des tests - 20260901e.md | 20260901e | 13.8 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Selecteurs de familles et palier 1 des tests - 20260901e.md` |
+| Factory - Synthese Mandat - Sept campagnes closes et format sortie corrige - 20260908e.md | 20260908e | 22.8 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Sept campagnes closes et format sortie corrige - 20260908e.md` |
+| Factory - Synthese Mandat - Sept decisions executees parc publie puis bloque - 20260908h.md | 20260908h | 45.1 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Sept decisions executees parc publie puis bloque - 20260908h.md` |
+| Factory - Synthese Mandat - Six actions et une porte de publication - 20260901f.md | 20260901f | 12.8 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Six actions et une porte de publication - 20260901f.md` |
+| Factory - Synthese Mandat - Six actions retenues cinq faites derniere erreur - 20260910e.md | 20260910e | 25.9 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Six actions retenues cinq faites derniere erreur - 20260910e.md` |
+| Factory - Synthese Mandat - Sondes etendues descente produit controles - 20260917f.md | 20260917f | 15.3 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Sondes etendues descente produit controles - 20260917f.md` |
+| Factory - Synthese Mandat - Surveillance des recidives TF-0790 - 20260903c.md | 20260903c | 11.3 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Surveillance des recidives TF-0790 - 20260903c.md` |
+| Factory - Synthese Mandat - Synchronisation et action A45 de l autre poste - 20260907k.md | 20260907k | 14 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Synchronisation et action A45 de l autre poste - 20260907k.md` |
+| Factory - Synthese Mandat - Synchronisation GitHub et procedure autre poste - 20260907i.md | 20260907i | 15.8 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Synchronisation GitHub et procedure autre poste - 20260907i.md` |
+| Factory - Synthese Mandat - Synchronisation GitHub et reconstruction clone - 20260903d.md | 20260903d | 25.2 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Synchronisation GitHub et reconstruction clone - 20260903d.md` |
+| Factory - Synthese Mandat - Synchronisation GitHub reconstruction du clone - 20260907a.md | 20260907a | 19.4 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Synchronisation GitHub reconstruction du clone - 20260907a.md` |
+| Factory - Synthese Mandat - Synchronisation suspendue campagne 14 09 jouee - 20260919g.md | 20260919g | 14.6 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Synchronisation suspendue campagne 14 09 jouee - 20260919g.md` |
+| Factory - Synthese Mandat - TF-0794 clos rectification de seq - 20260905a.md | 20260905a | 12.3 Ko | `04-plans/2026-09/Factory - Synthese Mandat - TF-0794 clos rectification de seq - 20260905a.md` |
+| Factory - Synthese Mandat - TF-0795 clos chemin d echec des controles - 20260905b.md | 20260905b | 9 Ko | `04-plans/2026-09/Factory - Synthese Mandat - TF-0795 clos chemin d echec des controles - 20260905b.md` |
+| Factory - Synthese Mandat - TF-0801 clos cle de versions et file d attente - 20260905c.md | 20260905c | 10 Ko | `04-plans/2026-09/Factory - Synthese Mandat - TF-0801 clos cle de versions et file d attente - 20260905c.md` |
+| Factory - Synthese Mandat - TF-0802 clos la 404 d office et fin du tri - 20260905d.md | 20260905d | 12.3 Ko | `04-plans/2026-09/Factory - Synthese Mandat - TF-0802 clos la 404 d office et fin du tri - 20260905d.md` |
+| Factory - Synthese Mandat - Todos et retours 23 clos et troisieme vague - 20260919a.md | 20260919a | 16.5 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Todos et retours 23 clos et troisieme vague - 20260919a.md` |
+| Factory - Synthese Mandat - Todos retours 32 clos preuve - 20260919i.md | 20260919i | 19.4 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Todos retours 32 clos preuve - 20260919i.md` |
+| Factory - Synthese Mandat - Toutes les actions A executees - 20260905e.md | 20260905e | 18 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Toutes les actions A executees - 20260905e.md` |
+| Factory - Synthese Mandat - Traite les todos et les retours - 20260902b.md | 20260902b | 24.7 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Traite les todos et les retours - 20260902b.md` |
+| Factory - Synthese Mandat - Traite tous les retours et todos - 20260902a.md | 20260902a | 27.7 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Traite tous les retours et todos - 20260902a.md` |
+| Factory - Synthese Mandat - Traite tous todos retours registre 87 candidats - 20260914f.md | 20260914f | 20.4 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Traite tous todos retours registre 87 candidats - 20260914f.md` |
+| Factory - Synthese Mandat - Treize decisions executees sceau rendu portable - 20260922j.md | 20260922j | 17.9 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Treize decisions executees sceau rendu portable - 20260922j.md` |
+| Factory - Synthese Mandat - Trois correctifs au socle et balayage perimetres - 20260915g.md | 20260915g | 22.8 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Trois correctifs au socle et balayage perimetres - 20260915g.md` |
+| Factory - Synthese Mandat - Trois decisions executees lots adresse garde - 20260927b.md | 20260927b | 17.7 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Trois decisions executees lots adresse garde - 20260927b.md` |
+| Factory - Synthese Mandat - Trois decisions executees moteur couverture - 20260910f.md | 20260910f | 25.4 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Trois decisions executees moteur couverture - 20260910f.md` |
+| Factory - Synthese Mandat - Trois forges jouees plancher propage - 20260912b.md | 20260912b | 26.8 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Trois forges jouees plancher propage - 20260912b.md` |
+| Factory - Synthese Mandat - Trois lots ingeres quatre defauts pilot corriges - 20260909b.md | 20260909b | 23.2 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Trois lots ingeres quatre defauts pilot corriges - 20260909b.md` |
+| Factory - Synthese Mandat - Verification apres changement d empreinte socle - 20260917n.md | 20260917n | 13.3 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Verification apres changement d empreinte socle - 20260917n.md` |
+| Factory - Synthese Mandat - Verification de non perte jouable - 20260901d.md | 20260901d | 9 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Verification de non perte jouable - 20260901d.md` |
+| Factory - Synthese Mandat - Verification des deux arbitrages deja executes - 20260915h.md | 20260915h | 15.8 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Verification des deux arbitrages deja executes - 20260915h.md` |
+| Factory - Synthese Mandat - Vos deux decisions executees clone rebati porte - 20260910h.md | 20260910h | 20 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Vos deux decisions executees clone rebati porte - 20260910h.md` |
+| Factory - Synthese Mandat - Vues sorties du suivi et regle ecriture nombres - 20260916d.md | 20260916d | 11.9 Ko | `04-plans/2026-09/Factory - Synthese Mandat - Vues sorties du suivi et regle ecriture nombres - 20260916d.md` |
+| Factory - Synthese Video - Film de 25 secondes sur depot factory rendu local - 20260919f.md | 20260919f | 17.7 Ko | `04-plans/2026-09/Factory - Synthese Video - Film de 25 secondes sur depot factory rendu local - 20260919f.md` |
+| Factory - Dossier - Mise a jour des competences - 20261121l.md | 20261121l | 72.3 Ko | `04-plans/Factory - Dossier - Mise a jour des competences - 20261121l.md` |
+| Factory - Fiche - Produit plateforme de pentest autorise a construire pour Client-A - 20261103a.md | 20261103a | 14.6 Ko | `04-plans/Factory - Fiche - Produit plateforme de pentest autorise a construire pour Client-A - 20261103a.md` |
+| Factory - Note - Oeil critique des process a travailler - 20261020l.md | 20261020l | 14.7 Ko | `04-plans/Factory - Note - Oeil critique des process a travailler - 20261020l.md` |
+| Factory - Prompt - Activation du releve des couts chez un produit - 20261105h.md | 20261105h | 2 Ko | `04-plans/Factory - Prompt - Activation du releve des couts chez un produit - 20261105h.md` |
+| Factory - Prompt - Bases de donnees de dev et qualification dans les forges - 20261029a.md | 20261029a | 8.3 Ko | `04-plans/Factory - Prompt - Bases de donnees de dev et qualification dans les forges - 20261029a.md` |
+| Factory - Prompt - Competences Cloudflare GitHub Supabase dans les forges - 20261028a.md | 20261028a | 10.1 Ko | `04-plans/Factory - Prompt - Competences Cloudflare GitHub Supabase dans les forges - 20261028a.md` |
+| Factory - Prompt - Competences OpenAI et Gemini dans la Factory - 20261103i.md | 20261103i | 16.5 Ko | `04-plans/Factory - Prompt - Competences OpenAI et Gemini dans la Factory - 20261103i.md` |
+| Factory - Prompt - Competences Supabase dans les forges - 20261016b.md | 20261016b | 10 Ko | `04-plans/Factory - Prompt - Competences Supabase dans les forges - 20261016b.md` |
+| Factory - Prompt - Competences Supabase dans les forges - 20261016b.md.boucle.json | — | 3.2 Ko | `04-plans/Factory - Prompt - Competences Supabase dans les forges - 20261016b.md.boucle.json` |
+| Factory - Prompt - Plan de mise a jour des competences - 20261121j.md | 20261121j | 14.5 Ko | `04-plans/Factory - Prompt - Plan de mise a jour des competences - 20261121j.md` |
+| Factory - Prompt - Serie d animations de la Factory - 20261109g.md | 20261109g | 14.9 Ko | `04-plans/Factory - Prompt - Serie d animations de la Factory - 20261109g.md` |
+| Factory - Prompt - Skill make-it-better et page de versions - 20261102g.md | 20261102g | 22.1 Ko | `04-plans/Factory - Prompt - Skill make-it-better et page de versions - 20261102g.md` |
+| Factory - Prompt - Suivi des agents toutes les 15 minutes - 20261112e.md | 20261112e | 15.2 Ko | `04-plans/Factory - Prompt - Suivi des agents toutes les 15 minutes - 20261112e.md` |
+| Factory - Prompt - Suivi des agents toutes les 15 minutes - 20261112g.md | 20261112g | 15.3 Ko | `04-plans/Factory - Prompt - Suivi des agents toutes les 15 minutes - 20261112g.md` |
+| Factory - Prompt - Tri des sujets Claude et IA des favoris TikTok et skill - 20261102c.md | 20261102c | 14.5 Ko | `04-plans/Factory - Prompt - Tri des sujets Claude et IA des favoris TikTok et skill - 20261102c.md` |
+| Factory - Revue - Prompt mise a jour competences passé au crible L99 - 20261121g.md | 20261121g | 39.7 Ko | `04-plans/Factory - Revue - Prompt mise a jour competences passé au crible L99 - 20261121g.md` |
+| Factory - Revue - Prompt mise a jour competences passé au crible L99 - 20261121g.md.boucle.json | — | 15.7 Ko | `04-plans/Factory - Revue - Prompt mise a jour competences passé au crible L99 - 20261121g.md.boucle.json` |
+| Factory - Revue hebdomadaire - Propositions D-114 a D-119 - 20261102a.md | 20261102a | 11.1 Ko | `04-plans/Factory - Revue hebdomadaire - Propositions D-114 a D-119 - 20261102a.md` |
+| Factory - Revue hebdomadaire - Propositions D-81 a D-84 - 20261026r.md | 20261026r | 8.9 Ko | `04-plans/Factory - Revue hebdomadaire - Propositions D-81 a D-84 - 20261026r.md` |
+| Factory - Revue hebdomadaire - Propositions D-91 et bases de donnees - 20261029d.md | 20261029d | 3.6 Ko | `04-plans/Factory - Revue hebdomadaire - Propositions D-91 et bases de donnees - 20261029d.md` |
+| Factory - Revue Hebdomadaire - Sept propositions D-41 a D-47 - 20261001f.md | 20261001f | 11.9 Ko | `04-plans/Factory - Revue Hebdomadaire - Sept propositions D-41 a D-47 - 20261001f.md` |
+| Factory - Synthese Conseil - Audit complet route vers forge-tests - 20261015b.md | 20261015b | 8.4 Ko | `04-plans/Factory - Synthese Conseil - Audit complet route vers forge-tests - 20261015b.md` |
+| Factory - Synthese Conseil - Bases de donnees de dev et qualification - 20261029c.md | 20261029c | 6.5 Ko | `04-plans/Factory - Synthese Conseil - Bases de donnees de dev et qualification - 20261029c.md` |
+| Factory - Synthese Conseil - Boucle L99 jusqu a un score etudiee - 20261016f.md | 20261016f | 7.1 Ko | `04-plans/Factory - Synthese Conseil - Boucle L99 jusqu a un score etudiee - 20261016f.md` |
+| Factory - Synthese Conseil - Competences Cloudflare GitHub Supabase - 20261028a.md | 20261028a | 6.8 Ko | `04-plans/Factory - Synthese Conseil - Competences Cloudflare GitHub Supabase - 20261028a.md` |
+| Factory - Synthese Conseil - Competences OpenAI et Gemini - 20261103n.md | 20261103n | 10.3 Ko | `04-plans/Factory - Synthese Conseil - Competences OpenAI et Gemini - 20261103n.md` |
+| Factory - Synthese Conseil - D-173 appliquee au prompt de suivi des couts - 20261105c.md | 20261105c | 4.2 Ko | `04-plans/Factory - Synthese Conseil - D-173 appliquee au prompt de suivi des couts - 20261105c.md` |
+| Factory - Synthese Conseil - D-177 charge suivie en 3 indicateurs - 20261105f.md | 20261105f | 3.5 Ko | `04-plans/Factory - Synthese Conseil - D-177 charge suivie en 3 indicateurs - 20261105f.md` |
+| Factory - Synthese Conseil - Decisions a traiter en detail - 20261017a.md | 20261017a | 24.9 Ko | `04-plans/Factory - Synthese Conseil - Decisions a traiter en detail - 20261017a.md` |
+| Factory - Synthese Conseil - Detail de l'etude d'une etape de revue de code - 20261103h.md | 20261103h | 4 Ko | `04-plans/Factory - Synthese Conseil - Detail de l'etude d'une etape de revue de code - 20261103h.md` |
+| Factory - Synthese Conseil - Elements a traiter du tri TikTok et options - 20261102o.md | 20261102o | 18.8 Ko | `04-plans/Factory - Synthese Conseil - Elements a traiter du tri TikTok et options - 20261102o.md` |
+| Factory - Synthese Conseil - Etude apprentissage des erreurs - 20261104g.md | 20261104g | 9.6 Ko | `04-plans/Factory - Synthese Conseil - Etude apprentissage des erreurs - 20261104g.md` |
+| Factory - Synthese Conseil - Etude suivi des temps et couts rendue - 20261105e.md | 20261105e | 8.6 Ko | `04-plans/Factory - Synthese Conseil - Etude suivi des temps et couts rendue - 20261105e.md` |
+| Factory - Synthese Conseil - Flotte d agents analyse critique - 20261018b.md | 20261018b | 11.1 Ko | `04-plans/Factory - Synthese Conseil - Flotte d agents analyse critique - 20261018b.md` |
+| Factory - Synthese Conseil - Format des decisions auto-portantes - 20261017b.md | 20261017b | 10.4 Ko | `04-plans/Factory - Synthese Conseil - Format des decisions auto-portantes - 20261017b.md` |
+| Factory - Synthese Conseil - Integration des competences de clip video - 20261110c.md | 20261110c | 6.3 Ko | `04-plans/Factory - Synthese Conseil - Integration des competences de clip video - 20261110c.md` |
+| Factory - Synthese Conseil - Liste des TODOs et retours ouverts - 20261015h.md | 20261015h | 9.1 Ko | `04-plans/Factory - Synthese Conseil - Liste des TODOs et retours ouverts - 20261015h.md` |
+| Factory - Synthese Conseil - Parcours d accueil complete par des exemples - 20261121f.md | 20261121f | 5 Ko | `04-plans/Factory - Synthese Conseil - Parcours d accueil complete par des exemples - 20261121f.md` |
+| Factory - Synthese Conseil - Parcours d accueil des nouveaux utilisateurs - 20261121d.md | 20261121d | 7.4 Ko | `04-plans/Factory - Synthese Conseil - Parcours d accueil des nouveaux utilisateurs - 20261121d.md` |
+| Factory - Synthese Conseil - Parcours d accueil niveau suivi et note sur 100 - 20261121i.md | 20261121i | 6.1 Ko | `04-plans/Factory - Synthese Conseil - Parcours d accueil niveau suivi et note sur 100 - 20261121i.md` |
+| Factory - Synthese Conseil - Plan Mode pour organiser les chantiers - 20261121c.md | 20261121c | 7.5 Ko | `04-plans/Factory - Synthese Conseil - Plan Mode pour organiser les chantiers - 20261121c.md` |
+| Factory - Synthese Conseil - Prompt aide aux nouveaux venus passe au crible L99 - 20261121a.md | 20261121a | 5.9 Ko | `04-plans/Factory - Synthese Conseil - Prompt aide aux nouveaux venus passe au crible L99 - 20261121a.md` |
+| Factory - Synthese Conseil - Prompt apprentissage des erreurs passe au crible L99 - 20261104f.md | 20261104f | 6.1 Ko | `04-plans/Factory - Synthese Conseil - Prompt apprentissage des erreurs passe au crible L99 - 20261104f.md` |
+| Factory - Synthese Conseil - Prompt bases de donnees passe au crible L99 - 20261029b.md | 20261029b | 10.3 Ko | `04-plans/Factory - Synthese Conseil - Prompt bases de donnees passe au crible L99 - 20261029b.md` |
+| Factory - Synthese Conseil - Prompt Cloudflare GitHub Supabase passe au crible L99 - 20261028a.md | 20261028a | 8.3 Ko | `04-plans/Factory - Synthese Conseil - Prompt Cloudflare GitHub Supabase passe au crible L99 - 20261028a.md` |
+| Factory - Synthese Conseil - Prompt competences OpenAI et Gemini passe au crible L99 - 20261103j.md | 20261103j | 7.8 Ko | `04-plans/Factory - Synthese Conseil - Prompt competences OpenAI et Gemini passe au crible L99 - 20261103j.md` |
+| Factory - Synthese Conseil - Prompt make-it-better avec Word et PDF - 20261102h.md | 20261102h | 7.8 Ko | `04-plans/Factory - Synthese Conseil - Prompt make-it-better avec Word et PDF - 20261102h.md` |
+| Factory - Synthese Conseil - Prompt mise a jour competences passe au crible L99 - 20261121h.md | 20261121h | 8.6 Ko | `04-plans/Factory - Synthese Conseil - Prompt mise a jour competences passe au crible L99 - 20261121h.md` |
+| Factory - Synthese Conseil - Prompt serie d animations passe au crible L99 - 20261109f.md | 20261109f | 7.5 Ko | `04-plans/Factory - Synthese Conseil - Prompt serie d animations passe au crible L99 - 20261109f.md` |
+| Factory - Synthese Conseil - Prompt skill make-it-better passe au crible L99 - 20261102f.md | 20261102f | 10.6 Ko | `04-plans/Factory - Synthese Conseil - Prompt skill make-it-better passe au crible L99 - 20261102f.md` |
+| Factory - Synthese Conseil - Prompt suivi d avancement des agents passe au crible L99 - 20261112f.md | 20261112f | 10.4 Ko | `04-plans/Factory - Synthese Conseil - Prompt suivi d avancement des agents passe au crible L99 - 20261112f.md` |
+| Factory - Synthese Conseil - Prompt suivi des temps et couts passe au crible L99 - 20261104h.md | 20261104h | 9.2 Ko | `04-plans/Factory - Synthese Conseil - Prompt suivi des temps et couts passe au crible L99 - 20261104h.md` |
+| Factory - Synthese Conseil - Prompt Supabase passe au crible L99 - 20261016c.md | 20261016c | 6.5 Ko | `04-plans/Factory - Synthese Conseil - Prompt Supabase passe au crible L99 - 20261016c.md` |
+| Factory - Synthese Conseil - Prompt tri TikTok et skill passe au crible L99 - 20261102d.md | 20261102d | 12.1 Ko | `04-plans/Factory - Synthese Conseil - Prompt tri TikTok et skill passe au crible L99 - 20261102d.md` |
+| Factory - Synthese Conseil - Skill PDF de la Factory - 20261030a.md | 20261030a | 8.7 Ko | `04-plans/Factory - Synthese Conseil - Skill PDF de la Factory - 20261030a.md` |
+| Factory - Synthese Conseil - Sujets traitables maintenant - 20261015k.md | 20261015k | 8.7 Ko | `04-plans/Factory - Synthese Conseil - Sujets traitables maintenant - 20261015k.md` |
+| Factory - Synthese Etude - Relecteur d intention tous travaux - 20261018i.md | 20261018i | 8.5 Ko | `04-plans/Factory - Synthese Etude - Relecteur d intention tous travaux - 20261018i.md` |
+| Factory - Synthese Etude - Relecteur d intention verdict O4 - 20261018g.md | 20261018g | 9 Ko | `04-plans/Factory - Synthese Etude - Relecteur d intention verdict O4 - 20261018g.md` |
+| Factory - Synthese L99 - Oeil critique des process prompt reecrit - 20261020e.md | 20261020e | 16.2 Ko | `04-plans/Factory - Synthese L99 - Oeil critique des process prompt reecrit - 20261020e.md` |
+| Factory - Synthese L99 - Oeil critique global des process prompt reecrit - 20261020i.md | 20261020i | 17.2 Ko | `04-plans/Factory - Synthese L99 - Oeil critique global des process prompt reecrit - 20261020i.md` |
+| Factory - Synthese L99 - Relecteur critique d intention prompt reecrit - 20261018e.md | 20261018e | 13.6 Ko | `04-plans/Factory - Synthese L99 - Relecteur critique d intention prompt reecrit - 20261018e.md` |
+| Factory - Synthese Mandat - A-1 a A-8 du reste a faire - 20261019k.md | 20261019k | 13.3 Ko | `04-plans/Factory - Synthese Mandat - A-1 a A-8 du reste a faire - 20261019k.md` |
+| Factory - Synthese Mandat - A-1 et A-2 indices du 19-10 et revue hebdomadaire - 20261026s.md | 20261026s | 14.1 Ko | `04-plans/Factory - Synthese Mandat - A-1 et A-2 indices du 19-10 et revue hebdomadaire - 20261026s.md` |
+| Factory - Synthese Mandat - A1 A2 A3 de la mi-journee du 13-11 - 20261113g.md | 20261113g | 5 Ko | `04-plans/Factory - Synthese Mandat - A1 A2 A3 de la mi-journee du 13-11 - 20261113g.md` |
+| Factory - Synthese Mandat - A1 A2 A3 de la nuit du 12-11 - 20261112k.md | 20261112k | 7.8 Ko | `04-plans/Factory - Synthese Mandat - A1 A2 A3 de la nuit du 12-11 - 20261112k.md` |
+| Factory - Synthese Mandat - A1 A2 A3 du 12-11 au soir - 20261112i.md | 20261112i | 5.2 Ko | `04-plans/Factory - Synthese Mandat - A1 A2 A3 du 12-11 au soir - 20261112i.md` |
+| Factory - Synthese Mandat - A1 A2 A3 du matin du 13-11 - 20261113e.md | 20261113e | 6.1 Ko | `04-plans/Factory - Synthese Mandat - A1 A2 A3 du matin du 13-11 - 20261113e.md` |
+| Factory - Synthese Mandat - A1 A2 faites A3 en cours - 20261026h.md | 20261026h | 5.3 Ko | `04-plans/Factory - Synthese Mandat - A1 A2 faites A3 en cours - 20261026h.md` |
+| Factory - Synthese Mandat - A1 et A2 de l apres-midi du 13-11 - 20261113h.md | 20261113h | 5.4 Ko | `04-plans/Factory - Synthese Mandat - A1 et A2 de l apres-midi du 13-11 - 20261113h.md` |
+| Factory - Synthese Mandat - Accueil des lots au sas un ingere quatre refuses - 20261004a.md | 20261004a | 9.9 Ko | `04-plans/Factory - Synthese Mandat - Accueil des lots au sas un ingere quatre refuses - 20261004a.md` |
+| Factory - Synthese Mandat - Accueil du sas et trois lots ingeres - 20261012a.md | 20261012a | 10.3 Ko | `04-plans/Factory - Synthese Mandat - Accueil du sas et trois lots ingeres - 20261012a.md` |
+| Factory - Synthese Mandat - Actions A-1 a A-4 du 14-11 executees - 20261114c.md | 20261114c | 6.8 Ko | `04-plans/Factory - Synthese Mandat - Actions A-1 a A-4 du 14-11 executees - 20261114c.md` |
+| Factory - Synthese Mandat - Actions du Plan Mode executees - 20261121k.md | 20261121k | 8.5 Ko | `04-plans/Factory - Synthese Mandat - Actions du Plan Mode executees - 20261121k.md` |
+| Factory - Synthese Mandat - Affichage double corrige revue - 20261001e.md | 20261001e | 9.9 Ko | `04-plans/Factory - Synthese Mandat - Affichage double corrige revue - 20261001e.md` |
+| Factory - Synthese Mandat - Appel de preuve Gemini et cadence mensuelle des modeles - 20261104d.md | 20261104d | 5.6 Ko | `04-plans/Factory - Synthese Mandat - Appel de preuve Gemini et cadence mensuelle des modeles - 20261104d.md` |
+| Factory - Synthese Mandat - Archives classees en sous-dossiers - 20261016h.md | 20261016h | 9 Ko | `04-plans/Factory - Synthese Mandat - Archives classees en sous-dossiers - 20261016h.md` |
+| Factory - Synthese Mandat - Audit complet vers forge-audit - 20261015c.md | 20261015c | 7 Ko | `04-plans/Factory - Synthese Mandat - Audit complet vers forge-audit - 20261015c.md` |
+| Factory - Synthese Mandat - Bases de donnees de dev et qualification construites - 20261029e.md | 20261029e | 8.9 Ko | `04-plans/Factory - Synthese Mandat - Bases de donnees de dev et qualification construites - 20261029e.md` |
+| Factory - Synthese Mandat - Boucle de correction en place - 20261018n.md | 20261018n | 9.6 Ko | `04-plans/Factory - Synthese Mandat - Boucle de correction en place - 20261018n.md` |
+| Factory - Synthese Mandat - Boucle de correction publiee - 20261018o.md | 20261018o | 6.1 Ko | `04-plans/Factory - Synthese Mandat - Boucle de correction publiee - 20261018o.md` |
+| Factory - Synthese Mandat - Boussole construite lots L01 a L06 - 20261121m.md | 20261121m | 9.5 Ko | `04-plans/Factory - Synthese Mandat - Boussole construite lots L01 a L06 - 20261121m.md` |
+| Factory - Synthese Mandat - Campagne A1 et tri A2 du 12-11 - 20261112c.md | 20261112c | 7.8 Ko | `04-plans/Factory - Synthese Mandat - Campagne A1 et tri A2 du 12-11 - 20261112c.md` |
+| Factory - Synthese Mandat - Campagne A2 du 10-11 - 20261110b.md | 20261110b | 13.6 Ko | `04-plans/Factory - Synthese Mandat - Campagne A2 du 10-11 - 20261110b.md` |
+| Factory - Synthese Mandat - Campagne A2 sur les 21 candidats - 20261102n.md | 20261102n | 20.8 Ko | `04-plans/Factory - Synthese Mandat - Campagne A2 sur les 21 candidats - 20261102n.md` |
+| Factory - Synthese Mandat - Campagne D-41 - 20261019e.md | 20261019e | 13.5 Ko | `04-plans/Factory - Synthese Mandat - Campagne D-41 - 20261019e.md` |
+| Factory - Synthese Mandat - Campagne D-55 socle des pages - 20261003b.md | 20261003b | 11.7 Ko | `04-plans/Factory - Synthese Mandat - Campagne D-55 socle des pages - 20261003b.md` |
+| Factory - Synthese Mandat - Campagne du matin reprise et close - 20261013h.md | 20261013h | 9.6 Ko | `04-plans/Factory - Synthese Mandat - Campagne du matin reprise et close - 20261013h.md` |
+| Factory - Synthese Mandat - Campagne du registre, 50 sujets clos - 20261012c.md | 20261012c | 12.5 Ko | `04-plans/Factory - Synthese Mandat - Campagne du registre, 50 sujets clos - 20261012c.md` |
+| Factory - Synthese Mandat - Campagne sur les 38 candidats - 20261029h.md | 20261029h | 6.8 Ko | `04-plans/Factory - Synthese Mandat - Campagne sur les 38 candidats - 20261029h.md` |
+| Factory - Synthese Mandat - Campagne TODOs et retours - 20261014a.md | 20261014a | 9.9 Ko | `04-plans/Factory - Synthese Mandat - Campagne TODOs et retours - 20261014a.md` |
+| Factory - Synthese Mandat - Campagne TODOs et retours - 20261015a.md | 20261015a | 11.8 Ko | `04-plans/Factory - Synthese Mandat - Campagne TODOs et retours - 20261015a.md` |
+| Factory - Synthese Mandat - Campagne TODOs et retours - 20261015e.md | 20261015e | 13.7 Ko | `04-plans/Factory - Synthese Mandat - Campagne TODOs et retours - 20261015e.md` |
+| Factory - Synthese Mandat - Campagne TODOs et retours - 20261015f.md | 20261015f | 4.4 Ko | `04-plans/Factory - Synthese Mandat - Campagne TODOs et retours - 20261015f.md` |
+| Factory - Synthese Mandat - Campagne TODOs et retours - 20261015g.md | 20261015g | 7.1 Ko | `04-plans/Factory - Synthese Mandat - Campagne TODOs et retours - 20261015g.md` |
+| Factory - Synthese Mandat - Cible oeil critique retravaillee - 20261026e.md | 20261026e | 11 Ko | `04-plans/Factory - Synthese Mandat - Cible oeil critique retravaillee - 20261026e.md` |
+| Factory - Synthese Mandat - Commande publiee verte et reprise reseau - 20261013i.md | 20261013i | 7.1 Ko | `04-plans/Factory - Synthese Mandat - Commande publiee verte et reprise reseau - 20261013i.md` |
+| Factory - Synthese Mandat - Competences Cloudflare GitHub Supabase construites - 20261028a.md | 20261028a | 10.2 Ko | `04-plans/Factory - Synthese Mandat - Competences Cloudflare GitHub Supabase construites - 20261028a.md` |
+| Factory - Synthese Mandat - Competences OpenAI et Gemini construites - 20261103r.md | 20261103r | 8.9 Ko | `04-plans/Factory - Synthese Mandat - Competences OpenAI et Gemini construites - 20261103r.md` |
+| Factory - Synthese Mandat - Competences Supabase dans les forges - 20261016g.md | 20261016g | 9.1 Ko | `04-plans/Factory - Synthese Mandat - Competences Supabase dans les forges - 20261016g.md` |
+| Factory - Synthese Mandat - Conseil avant arbitrage instruit - 20261020f.md | 20261020f | 6.5 Ko | `04-plans/Factory - Synthese Mandat - Conseil avant arbitrage instruit - 20261020f.md` |
+| Factory - Synthese Mandat - Correctif d'ouverture reporte et applique - 20261013b.md | 20261013b | 8 Ko | `04-plans/Factory - Synthese Mandat - Correctif d'ouverture reporte et applique - 20261013b.md` |
+| Factory - Synthese Mandat - D-108 (b) appliquee aux forges ops et design - 20261114d.md | 20261114d | 5.5 Ko | `04-plans/Factory - Synthese Mandat - D-108 (b) appliquee aux forges ops et design - 20261114d.md` |
+| Factory - Synthese Mandat - D-208 appliquee - 20261112d.md | 20261112d | 4.1 Ko | `04-plans/Factory - Synthese Mandat - D-208 appliquee - 20261112d.md` |
+| Factory - Synthese Mandat - D-209 appliquee - 20261112h.md | 20261112h | 3.2 Ko | `04-plans/Factory - Synthese Mandat - D-209 appliquee - 20261112h.md` |
+| Factory - Synthese Mandat - D-214 et actions A-2 a A-7 executees - 20261114b.md | 20261114b | 8.6 Ko | `04-plans/Factory - Synthese Mandat - D-214 et actions A-2 a A-7 executees - 20261114b.md` |
+| Factory - Synthese Mandat - D-41 D-43 D-44 executees - 20261019f.md | 20261019f | 9.4 Ko | `04-plans/Factory - Synthese Mandat - D-41 D-43 D-44 executees - 20261019f.md` |
+| Factory - Synthese Mandat - D-45 b executee - 20261019h.md | 20261019h | 6 Ko | `04-plans/Factory - Synthese Mandat - D-45 b executee - 20261019h.md` |
+| Factory - Synthese Mandat - D-45 expliquee - 20261019g.md | 20261019g | 5.8 Ko | `04-plans/Factory - Synthese Mandat - D-45 expliquee - 20261019g.md` |
+| Factory - Synthese Mandat - D-74 executee conventions client - 20261026g.md | 20261026g | 3.9 Ko | `04-plans/Factory - Synthese Mandat - D-74 executee conventions client - 20261026g.md` |
+| Factory - Synthese Mandat - D-79 c enregistree - 20261026n.md | 20261026n | 2.8 Ko | `04-plans/Factory - Synthese Mandat - D-79 c enregistree - 20261026n.md` |
+| Factory - Synthese Mandat - D-79 detaillee - 20261026m.md | 20261026m | 5.7 Ko | `04-plans/Factory - Synthese Mandat - D-79 detaillee - 20261026m.md` |
+| Factory - Synthese Mandat - Decisions 125a et 126a du tri TikTok - 20261102j.md | 20261102j | 9.8 Ko | `04-plans/Factory - Synthese Mandat - Decisions 125a et 126a du tri TikTok - 20261102j.md` |
+| Factory - Synthese Mandat - Decisions 191 a 193 appliquees - 20261110e.md | 20261110e | 5.8 Ko | `04-plans/Factory - Synthese Mandat - Decisions 191 a 193 appliquees - 20261110e.md` |
+| Factory - Synthese Mandat - Decisions 36a et 37a executees et publiees - 20261001c.md | 20261001c | 21.3 Ko | `04-plans/Factory - Synthese Mandat - Decisions 36a et 37a executees et publiees - 20261001c.md` |
+| Factory - Synthese Mandat - Decisions 49 50 51 en cours - 20261002a.md | 20261002a | 19.6 Ko | `04-plans/Factory - Synthese Mandat - Decisions 49 50 51 en cours - 20261002a.md` |
+| Factory - Synthese Mandat - Decisions 58 a 60 executees et publiees - 20261012b.md | 20261012b | 5.4 Ko | `04-plans/Factory - Synthese Mandat - Decisions 58 a 60 executees et publiees - 20261012b.md` |
+| Factory - Synthese Mandat - Decisions D-130 a D-135 construites - 20261102p.md | 20261102p | 9.3 Ko | `04-plans/Factory - Synthese Mandat - Decisions D-130 a D-135 construites - 20261102p.md` |
+| Factory - Synthese Mandat - Decisions D-194 a D-198 appliquees - 20261110c.md | 20261110c | 14.3 Ko | `04-plans/Factory - Synthese Mandat - Decisions D-194 a D-198 appliquees - 20261110c.md` |
+| Factory - Synthese Mandat - Decisions D-24 a D-28 executees - 20261018m.md | 20261018m | 16.7 Ko | `04-plans/Factory - Synthese Mandat - Decisions D-24 a D-28 executees - 20261018m.md` |
+| Factory - Synthese Mandat - Decisions D-29 a D-33 executees - 20261018p.md | 20261018p | 8.1 Ko | `04-plans/Factory - Synthese Mandat - Decisions D-29 a D-33 executees - 20261018p.md` |
+| Factory - Synthese Mandat - Decisions D-49 a D-51 detaillees - 20261020b.md | 20261020b | 7.6 Ko | `04-plans/Factory - Synthese Mandat - Decisions D-49 a D-51 detaillees - 20261020b.md` |
+| Factory - Synthese Mandat - Decisions D-49 a D-51 executees - 20261020c.md | 20261020c | 7.5 Ko | `04-plans/Factory - Synthese Mandat - Decisions D-49 a D-51 executees - 20261020c.md` |
+| Factory - Synthese Mandat - Decisions posees seulement si ressort - 20261001h.md | 20261001h | 10.7 Ko | `04-plans/Factory - Synthese Mandat - Decisions posees seulement si ressort - 20261001h.md` |
+| Factory - Synthese Mandat - Depots prives hors d'acces non bloquants - 20261013e.md | 20261013e | 6.5 Ko | `04-plans/Factory - Synthese Mandat - Depots prives hors d'acces non bloquants - 20261013e.md` |
+| Factory - Synthese Mandat - Depots prives silencieux confirmation - 20261013f.md | 20261013f | 5.2 Ko | `04-plans/Factory - Synthese Mandat - Depots prives silencieux confirmation - 20261013f.md` |
+| Factory - Synthese Mandat - Derogation A2 et A3 du 12-11 - 20261112b.md | 20261112b | 5.5 Ko | `04-plans/Factory - Synthese Mandat - Derogation A2 et A3 du 12-11 - 20261112b.md` |
+| Factory - Synthese Mandat - Deux chantiers fusionnes sur quatre - 20261026l.md | 20261026l | 4.9 Ko | `04-plans/Factory - Synthese Mandat - Deux chantiers fusionnes sur quatre - 20261026l.md` |
+| Factory - Synthese Mandat - Douze decisions executees - 20261017d.md | 20261017d | 17.4 Ko | `04-plans/Factory - Synthese Mandat - Douze decisions executees - 20261017d.md` |
+| Factory - Synthese Mandat - Essai de l audit de securite de Cloudflare - 20261102l.md | 20261102l | 6.4 Ko | `04-plans/Factory - Synthese Mandat - Essai de l audit de securite de Cloudflare - 20261102l.md` |
+| Factory - Synthese Mandat - Essai de relecture d intention lance - 20261018j.md | 20261018j | 11.3 Ko | `04-plans/Factory - Synthese Mandat - Essai de relecture d intention lance - 20261018j.md` |
+| Factory - Synthese Mandat - Essai du conseil de cinq agents - 20261020g.md | 20261020g | 6.7 Ko | `04-plans/Factory - Synthese Mandat - Essai du conseil de cinq agents - 20261020g.md` |
+| Factory - Synthese Mandat - Essai publie et boucle de correction - 20261018l.md | 20261018l | 12.6 Ko | `04-plans/Factory - Synthese Mandat - Essai publie et boucle de correction - 20261018l.md` |
+| Factory - Synthese Mandat - Essai unslop dans oracle-slop - 20261109b.md | 20261109b | 7.8 Ko | `04-plans/Factory - Synthese Mandat - Essai unslop dans oracle-slop - 20261109b.md` |
+| Factory - Synthese Mandat - Essais de MarkItDown et du skill de logo - 20261103d.md | 20261103d | 8 Ko | `04-plans/Factory - Synthese Mandat - Essais de MarkItDown et du skill de logo - 20261103d.md` |
+| Factory - Synthese Mandat - Etude d'une etape de revue de code - 20261103m.md | 20261103m | 7.3 Ko | `04-plans/Factory - Synthese Mandat - Etude d'une etape de revue de code - 20261103m.md` |
+| Factory - Synthese Mandat - Etude opportunite pages HTML et indicateurs - 20261003a.md | 20261003a | 10.2 Ko | `04-plans/Factory - Synthese Mandat - Etude opportunite pages HTML et indicateurs - 20261003a.md` |
+| Factory - Synthese Mandat - Etude Opus 5.5 jouee enregistrement local - 20261001g.md | 20261001g | 17.8 Ko | `04-plans/Factory - Synthese Mandat - Etude Opus 5.5 jouee enregistrement local - 20261001g.md` |
+| Factory - Synthese Mandat - Etude RSI et SSL dans la Factory - 20261001d.md | 20261001d | 10.8 Ko | `04-plans/Factory - Synthese Mandat - Etude RSI et SSL dans la Factory - 20261001d.md` |
+| Factory - Synthese Mandat - Etudes des favoris TikTok - 20261019d.md | 20261019d | 8.9 Ko | `04-plans/Factory - Synthese Mandat - Etudes des favoris TikTok - 20261019d.md` |
+| Factory - Synthese Mandat - Extrait de production anonymise admis et outille - 20261029f.md | 20261029f | 6.9 Ko | `04-plans/Factory - Synthese Mandat - Extrait de production anonymise admis et outille - 20261029f.md` |
+| Factory - Synthese Mandat - Favicon du produit de pentest en thème sombre - 20261103g.md | 20261103g | 3.6 Ko | `04-plans/Factory - Synthese Mandat - Favicon du produit de pentest en thème sombre - 20261103g.md` |
+| Factory - Synthese Mandat - Favori TikTok ecoute et tri complete - 20261109d.md | 20261109d | 6 Ko | `04-plans/Factory - Synthese Mandat - Favori TikTok ecoute et tri complete - 20261109d.md` |
+| Factory - Synthese Mandat - Flotte d agents nommee et mesuree - 20261018c.md | 20261018c | 12.3 Ko | `04-plans/Factory - Synthese Mandat - Flotte d agents nommee et mesuree - 20261018c.md` |
+| Factory - Synthese Mandat - Flotte d agents publiee - 20261018d.md | 20261018d | 5.3 Ko | `04-plans/Factory - Synthese Mandat - Flotte d agents publiee - 20261018d.md` |
+| Factory - Synthese Mandat - Format B applique aux decisions - 20261017c.md | 20261017c | 28.5 Ko | `04-plans/Factory - Synthese Mandat - Format B applique aux decisions - 20261017c.md` |
+| Factory - Synthese Mandat - Fusion des postes et lot Produit-12 ingere - 20261015d.md | 20261015d | 13.1 Ko | `04-plans/Factory - Synthese Mandat - Fusion des postes et lot Produit-12 ingere - 20261015d.md` |
+| Factory - Synthese Mandat - Installateur publie commande Windows - 20261013g.md | 20261013g | 8.1 Ko | `04-plans/Factory - Synthese Mandat - Installateur publie commande Windows - 20261013g.md` |
+| Factory - Synthese Mandat - Installation sans question banniere - 20261013d.md | 20261013d | 12 Ko | `04-plans/Factory - Synthese Mandat - Installation sans question banniere - 20261013d.md` |
+| Factory - Synthese Mandat - Kit du logo du produit de pentest - 20261103f.md | 20261103f | 7.7 Ko | `04-plans/Factory - Synthese Mandat - Kit du logo du produit de pentest - 20261103f.md` |
+| Factory - Synthese Mandat - L99 agent nocturne et skill VS Code - 20261021a.md | 20261021a | 9.8 Ko | `04-plans/Factory - Synthese Mandat - L99 agent nocturne et skill VS Code - 20261021a.md` |
+| Factory - Synthese Mandat - L99 cible oeil critique retravaillee - 20261026c.md | 20261026c | 10.8 Ko | `04-plans/Factory - Synthese Mandat - L99 cible oeil critique retravaillee - 20261026c.md` |
+| Factory - Synthese Mandat - Largeur des gabarits de lecture corrigee - 20261103e.md | 20261103e | 5 Ko | `04-plans/Factory - Synthese Mandat - Largeur des gabarits de lecture corrigee - 20261103e.md` |
+| Factory - Synthese Mandat - Lot de retours Produit-86 du 12-11 traite - 20261113f.md | 20261113f | 7.8 Ko | `04-plans/Factory - Synthese Mandat - Lot de retours Produit-86 du 12-11 traite - 20261113f.md` |
+| Factory - Synthese Mandat - Lots refuses remontes et fusion des postes - 20261121p.md | 20261121p | 7.1 Ko | `04-plans/Factory - Synthese Mandat - Lots refuses remontes et fusion des postes - 20261121p.md` |
+| Factory - Synthese Mandat - Lots refuses traites huit corrections - 20261004b.md | 20261004b | 7.4 Ko | `04-plans/Factory - Synthese Mandat - Lots refuses traites huit corrections - 20261004b.md` |
+| Factory - Synthese Mandat - Mode boucle L99 construit et publie - 20261016i.md | 20261016i | 6.5 Ko | `04-plans/Factory - Synthese Mandat - Mode boucle L99 construit et publie - 20261016i.md` |
+| Factory - Synthese Mandat - Moment de la revue de code dans la mise en production - 20261103q.md | 20261103q | 3.2 Ko | `04-plans/Factory - Synthese Mandat - Moment de la revue de code dans la mise en production - 20261103q.md` |
+| Factory - Synthese Mandat - Note oeil critique remise - 20261020m.md | 20261020m | 4.8 Ko | `04-plans/Factory - Synthese Mandat - Note oeil critique remise - 20261020m.md` |
+| Factory - Synthese Mandat - Oeil critique continu propose - 20261021b.md | 20261021b | 10.7 Ko | `04-plans/Factory - Synthese Mandat - Oeil critique continu propose - 20261021b.md` |
+| Factory - Synthese Mandat - Oeil critique des process etudie et premier cycle - 20261020h.md | 20261020h | 11 Ko | `04-plans/Factory - Synthese Mandat - Oeil critique des process etudie et premier cycle - 20261020h.md` |
+| Factory - Synthese Mandat - Oeil critique du 29-10 au 05-11 - 20261110a.md | 20261110a | 24.5 Ko | `04-plans/Factory - Synthese Mandat - Oeil critique du 29-10 au 05-11 - 20261110a.md` |
+| Factory - Synthese Mandat - Oeil critique et architecture etat au 26-10 - 20261026a.md | 20261026a | 11.6 Ko | `04-plans/Factory - Synthese Mandat - Oeil critique et architecture etat au 26-10 - 20261026a.md` |
+| Factory - Synthese Mandat - Oeil critique global des process etudie - 20261020j.md | 20261020j | 10.4 Ko | `04-plans/Factory - Synthese Mandat - Oeil critique global des process etudie - 20261020j.md` |
+| Factory - Synthese Mandat - Oeil critique global releve des appels - 20261020k.md | 20261020k | 5.2 Ko | `04-plans/Factory - Synthese Mandat - Oeil critique global releve des appels - 20261020k.md` |
+| Factory - Synthese Mandat - Oeil critique premiere analyse du poste - 20261026i.md | 20261026i | 16.4 Ko | `04-plans/Factory - Synthese Mandat - Oeil critique premiere analyse du poste - 20261026i.md` |
+| Factory - Synthese Mandat - Oeil critique recommandations affichees - 20261026j.md | 20261026j | 18.7 Ko | `04-plans/Factory - Synthese Mandat - Oeil critique recommandations affichees - 20261026j.md` |
+| Factory - Synthese Mandat - Oeil critique T1 a T4 detaillees et catalogue - 20261026b.md | 20261026b | 17.7 Ko | `04-plans/Factory - Synthese Mandat - Oeil critique T1 a T4 detaillees et catalogue - 20261026b.md` |
+| Factory - Synthese Mandat - Opus 5.5 Medium defaut prouve 2 profils - 20261001a.md | 20261001a | 8.6 Ko | `04-plans/Factory - Synthese Mandat - Opus 5.5 Medium defaut prouve 2 profils - 20261001a.md` |
+| Factory - Synthese Mandat - Ouverture session correctif arrete - 20261013a.md | 20261013a | 9.9 Ko | `04-plans/Factory - Synthese Mandat - Ouverture session correctif arrete - 20261013a.md` |
+| Factory - Synthese Mandat - Ouverture session reparee chez 19 produits - 20261013c.md | 20261013c | 9.3 Ko | `04-plans/Factory - Synthese Mandat - Ouverture session reparee chez 19 produits - 20261013c.md` |
+| Factory - Synthese Mandat - Parc et Drive synchronises - 20261115e.md | 20261115e | 5.7 Ko | `04-plans/Factory - Synthese Mandat - Parc et Drive synchronises - 20261115e.md` |
+| Factory - Synthese Mandat - Parc et Drive synchronises - 20261121b.md | 20261121b | 7.5 Ko | `04-plans/Factory - Synthese Mandat - Parc et Drive synchronises - 20261121b.md` |
+| Factory - Synthese Mandat - Pilot pousse sur GitHub - 20261026u.md | 20261026u | 2.5 Ko | `04-plans/Factory - Synthese Mandat - Pilot pousse sur GitHub - 20261026u.md` |
+| Factory - Synthese Mandat - Pilot publie apres reconstruction - 20261016k.md | 20261016k | 5.6 Ko | `04-plans/Factory - Synthese Mandat - Pilot publie apres reconstruction - 20261016k.md` |
+| Factory - Synthese Mandat - Pilot publie T2 en cours - 20261026p.md | 20261026p | 3.6 Ko | `04-plans/Factory - Synthese Mandat - Pilot publie T2 en cours - 20261026p.md` |
+| Factory - Synthese Mandat - Plans classes par mois noms raccourcis - 20261016l.md | 20261016l | 8.3 Ko | `04-plans/Factory - Synthese Mandat - Plans classes par mois noms raccourcis - 20261016l.md` |
+| Factory - Synthese Mandat - Point d'etape de l'etude d'une revue de code - 20261103l.md | 20261103l | 3.2 Ko | `04-plans/Factory - Synthese Mandat - Point d'etape de l'etude d'une revue de code - 20261103l.md` |
+| Factory - Synthese Mandat - Prompt cible oeil critique adapte a oeil-critique 1.1.0 - 20261026d.md | 20261026d | 10.6 Ko | `04-plans/Factory - Synthese Mandat - Prompt cible oeil critique adapte a oeil-critique 1.1.0 - 20261026d.md` |
+| Factory - Synthese Mandat - Prompt d activation du releve des couts - 20261105i.md | 20261105i | 5.7 Ko | `04-plans/Factory - Synthese Mandat - Prompt d activation du releve des couts - 20261105i.md` |
+| Factory - Synthese Mandat - Publication 48a du pilot et forge-agents - 20261001i.md | 20261001i | 3.9 Ko | `04-plans/Factory - Synthese Mandat - Publication 48a du pilot et forge-agents - 20261001i.md` |
+| Factory - Synthese Mandat - Publication D-52 du pilot - 20261020d.md | 20261020d | 4.1 Ko | `04-plans/Factory - Synthese Mandat - Publication D-52 du pilot - 20261020d.md` |
+| Factory - Synthese Mandat - Publication du pilot constatee - 20261104e.md | 20261104e | 3.3 Ko | `04-plans/Factory - Synthese Mandat - Publication du pilot constatee - 20261104e.md` |
+| Factory - Synthese Mandat - Publication du pilot et detail de D-182 et D-184 - 20261109c.md | 20261109c | 7.8 Ko | `04-plans/Factory - Synthese Mandat - Publication du pilot et detail de D-182 et D-184 - 20261109c.md` |
+| Factory - Synthese Mandat - Publication du pilot sur A1 - 20261109e.md | 20261109e | 2.3 Ko | `04-plans/Factory - Synthese Mandat - Publication du pilot sur A1 - 20261109e.md` |
+| Factory - Synthese Mandat - Publication et campagne de consigne - 20261017e.md | 20261017e | 9.3 Ko | `04-plans/Factory - Synthese Mandat - Publication et campagne de consigne - 20261017e.md` |
+| Factory - Synthese Mandat - Publication et charte unique actee - 20261012d.md | 20261012d | 5.3 Ko | `04-plans/Factory - Synthese Mandat - Publication et charte unique actee - 20261012d.md` |
+| Factory - Synthese Mandat - Quatre lots ingeres et premiere revue hebdomadaire - 20261001l.md | 20261001l | 19.8 Ko | `04-plans/Factory - Synthese Mandat - Quatre lots ingeres et premiere revue hebdomadaire - 20261001l.md` |
+| Factory - Synthese Mandat - Quatrieme campagne close et publiee - 20261115c.md | 20261115c | 7.2 Ko | `04-plans/Factory - Synthese Mandat - Quatrieme campagne close et publiee - 20261115c.md` |
+| Factory - Synthese Mandat - Rangement des entrants dans input et output - 20261016d.md | 20261016d | 5.9 Ko | `04-plans/Factory - Synthese Mandat - Rangement des entrants dans input et output - 20261016d.md` |
+| Factory - Synthese Mandat - Rappel des lecons et frictions du tour - 20261105b.md | 20261105b | 7.4 Ko | `04-plans/Factory - Synthese Mandat - Rappel des lecons et frictions du tour - 20261105b.md` |
+| Factory - Synthese Mandat - Recette complete apres six travaux - 20261015m.md | 20261015m | 6.1 Ko | `04-plans/Factory - Synthese Mandat - Recette complete apres six travaux - 20261015m.md` |
+| Factory - Synthese Mandat - Recette Terraform et revues datees - 20261016j.md | 20261016j | 5.9 Ko | `04-plans/Factory - Synthese Mandat - Recette Terraform et revues datees - 20261016j.md` |
+| Factory - Synthese Mandat - Registre des mutants et index des dossiers corriges - 20261103o.md | 20261103o | 8.8 Ko | `04-plans/Factory - Synthese Mandat - Registre des mutants et index des dossiers corriges - 20261103o.md` |
+| Factory - Synthese Mandat - Rejeu arrete corrige et relance - 20261001n.md | 20261001n | 9.6 Ko | `04-plans/Factory - Synthese Mandat - Rejeu arrete corrige et relance - 20261001n.md` |
+| Factory - Synthese Mandat - Rejeu joue effort high retenu sur 6 taches - 20261001k.md | 20261001k | 18.3 Ko | `04-plans/Factory - Synthese Mandat - Rejeu joue effort high retenu sur 6 taches - 20261001k.md` |
+| Factory - Synthese Mandat - Rejeu lance candidatures ouvertes etude enregistree - 20261001m.md | 20261001m | 9.9 Ko | `04-plans/Factory - Synthese Mandat - Rejeu lance candidatures ouvertes etude enregistree - 20261001m.md` |
+| Factory - Synthese Mandat - Relecteur du lecteur vise construit - 20261013k.md | 20261013k | 7.1 Ko | `04-plans/Factory - Synthese Mandat - Relecteur du lecteur vise construit - 20261013k.md` |
+| Factory - Synthese Mandat - Releve des couts par session construit - 20261105g.md | 20261105g | 6.8 Ko | `04-plans/Factory - Synthese Mandat - Releve des couts par session construit - 20261105g.md` |
+| Factory - Synthese Mandat - Reponses 68a 69a 70a 73b executees - 20261026f.md | 20261026f | 7.9 Ko | `04-plans/Factory - Synthese Mandat - Reponses 68a 69a 70a 73b executees - 20261026f.md` |
+| Factory - Synthese Mandat - Reponses 75 a 80 en cours - 20261026k.md | 20261026k | 6.7 Ko | `04-plans/Factory - Synthese Mandat - Reponses 75 a 80 en cours - 20261026k.md` |
+| Factory - Synthese Mandat - Reponses 81 a 84 en cours - 20261026t.md | 20261026t | 8.3 Ko | `04-plans/Factory - Synthese Mandat - Reponses 81 a 84 en cours - 20261026t.md` |
+| Factory - Synthese Mandat - Reponses 81 a 84 executees et publiees - 20261026x.md | 20261026x | 6.4 Ko | `04-plans/Factory - Synthese Mandat - Reponses 81 a 84 executees et publiees - 20261026x.md` |
+| Factory - Synthese Mandat - Reponses D-165 a D-169 appliquees - 20261105a.md | 20261105a | 11.1 Ko | `04-plans/Factory - Synthese Mandat - Reponses D-165 a D-169 appliquees - 20261105a.md` |
+| Factory - Synthese Mandat - Reponses de la revue D-114 a D-119 construites - 20261102k.md | 20261102k | 8.4 Ko | `04-plans/Factory - Synthese Mandat - Reponses de la revue D-114 a D-119 construites - 20261102k.md` |
+| Factory - Synthese Mandat - Reprise multi-poste fusionnee - 20261015i.md | 20261015i | 4.7 Ko | `04-plans/Factory - Synthese Mandat - Reprise multi-poste fusionnee - 20261015i.md` |
+| Factory - Synthese Mandat - Reprise multi-poste prete a publier - 20261015j.md | 20261015j | 9.5 Ko | `04-plans/Factory - Synthese Mandat - Reprise multi-poste prete a publier - 20261015j.md` |
+| Factory - Synthese Mandat - Reprise reseau publiee, installation close - 20261013j.md | 20261013j | 3.5 Ko | `04-plans/Factory - Synthese Mandat - Reprise reseau publiee, installation close - 20261013j.md` |
+| Factory - Synthese Mandat - Reprise sur un autre poste - 20261115d.md | 20261115d | 9 Ko | `04-plans/Factory - Synthese Mandat - Reprise sur un autre poste - 20261115d.md` |
+| Factory - Synthese Mandat - Reste a faire au 19-10 soir - 20261019j.md | 20261019j | 7.9 Ko | `04-plans/Factory - Synthese Mandat - Reste a faire au 19-10 soir - 20261019j.md` |
+| Factory - Synthese Mandat - Restes de campagne corriges et largeur des gabarits - 20261103b.md | 20261103b | 10.4 Ko | `04-plans/Factory - Synthese Mandat - Restes de campagne corriges et largeur des gabarits - 20261103b.md` |
+| Factory - Synthese Mandat - Retours et sujets du poste traites - 20261014b.md | 20261014b | 12.2 Ko | `04-plans/Factory - Synthese Mandat - Retours et sujets du poste traites - 20261014b.md` |
+| Factory - Synthese Mandat - Retours et TODOs du 04-11 - 20261104a.md | 20261104a | 17.6 Ko | `04-plans/Factory - Synthese Mandat - Retours et TODOs du 04-11 - 20261104a.md` |
+| Factory - Synthese Mandat - Retours et TODOs du 05-11 - 20261105d.md | 20261105d | 11.3 Ko | `04-plans/Factory - Synthese Mandat - Retours et TODOs du 05-11 - 20261105d.md` |
+| Factory - Synthese Mandat - Retours et TODOs du 06-11 - 20261106a.md | 20261106a | 9.6 Ko | `04-plans/Factory - Synthese Mandat - Retours et TODOs du 06-11 - 20261106a.md` |
+| Factory - Synthese Mandat - Retours et TODOs du 06-11 seconde passe - 20261106b.md | 20261106b | 13.2 Ko | `04-plans/Factory - Synthese Mandat - Retours et TODOs du 06-11 seconde passe - 20261106b.md` |
+| Factory - Synthese Mandat - Retours et TODOs du 09-11 - 20261109d.md | 20261109d | 10.5 Ko | `04-plans/Factory - Synthese Mandat - Retours et TODOs du 09-11 - 20261109d.md` |
+| Factory - Synthese Mandat - Retours et TODOs du 09-11 au soir - 20261109h.md | 20261109h | 13.6 Ko | `04-plans/Factory - Synthese Mandat - Retours et TODOs du 09-11 au soir - 20261109h.md` |
+| Factory - Synthese Mandat - Retours et TODOs du 14-11 - 20261114a.md | 20261114a | 15.9 Ko | `04-plans/Factory - Synthese Mandat - Retours et TODOs du 14-11 - 20261114a.md` |
+| Factory - Synthese Mandat - Retours et TODOs du 16-11 - 20261116a.md | 20261116a | 16.7 Ko | `04-plans/Factory - Synthese Mandat - Retours et TODOs du 16-11 - 20261116a.md` |
+| Factory - Synthese Mandat - Retours et TODOs du 22-11 - 20261122a.md | 20261122a | 19.1 Ko | `04-plans/Factory - Synthese Mandat - Retours et TODOs du 22-11 - 20261122a.md` |
+| Factory - Synthese Mandat - Retours et TODOs traites - 20261029g.md | 20261029g | 10.2 Ko | `04-plans/Factory - Synthese Mandat - Retours et TODOs traites - 20261029g.md` |
+| Factory - Synthese Mandat - Revue D-114 a D-119 et restes de campagne - 20261102b.md | 20261102b | 16.6 Ko | `04-plans/Factory - Synthese Mandat - Revue D-114 a D-119 et restes de campagne - 20261102b.md` |
+| Factory - Synthese Mandat - Revue de code proposee a la mise en production - 20261103p.md | 20261103p | 8.3 Ko | `04-plans/Factory - Synthese Mandat - Revue de code proposee a la mise en production - 20261103p.md` |
+| Factory - Synthese Mandat - Sas traite onze lots ingeres deux attente - 20261001b.md | 20261001b | 18.6 Ko | `04-plans/Factory - Synthese Mandat - Sas traite onze lots ingeres deux attente - 20261001b.md` |
+| Factory - Synthese Mandat - Seconde campagne du 14-11 close et publiee - 20261114e.md | 20261114e | 7.8 Ko | `04-plans/Factory - Synthese Mandat - Seconde campagne du 14-11 close et publiee - 20261114e.md` |
+| Factory - Synthese Mandat - Six travaux faits et onze fiches - 20261015l.md | 20261015l | 47.6 Ko | `04-plans/Factory - Synthese Mandat - Six travaux faits et onze fiches - 20261015l.md` |
+| Factory - Synthese Mandat - Skill clip de presentation integre - 20261110d.md | 20261110d | 5.6 Ko | `04-plans/Factory - Synthese Mandat - Skill clip de presentation integre - 20261110d.md` |
+| Factory - Synthese Mandat - Skill make-it-better construit - 20261102m.md | 20261102m | 8.2 Ko | `04-plans/Factory - Synthese Mandat - Skill make-it-better construit - 20261102m.md` |
+| Factory - Synthese Mandat - Skill oeil-critique installe - 20261021c.md | 20261021c | 6.3 Ko | `04-plans/Factory - Synthese Mandat - Skill oeil-critique installe - 20261021c.md` |
+| Factory - Synthese Mandat - Skill PDF construit - 20261030a.md | 20261030a | 7.8 Ko | `04-plans/Factory - Synthese Mandat - Skill PDF construit - 20261030a.md` |
+| Factory - Synthese Mandat - Skills propages, menage, tri et alertes expliquees - 20261115a.md | 20261115a | 8.5 Ko | `04-plans/Factory - Synthese Mandat - Skills propages, menage, tri et alertes expliquees - 20261115a.md` |
+| Factory - Synthese Mandat - Suites du tri TikTok et revues de code - 20261103c.md | 20261103c | 14.4 Ko | `04-plans/Factory - Synthese Mandat - Suites du tri TikTok et revues de code - 20261103c.md` |
+| Factory - Synthese Mandat - Suivi des agents A1 et A2 - 20261113d.md | 20261113d | 8.7 Ko | `04-plans/Factory - Synthese Mandat - Suivi des agents A1 et A2 - 20261113d.md` |
+| Factory - Synthese Mandat - Suivi des agents toutes les 15 minutes - 20261112j.md | 20261112j | 13.6 Ko | `04-plans/Factory - Synthese Mandat - Suivi des agents toutes les 15 minutes - 20261112j.md` |
+| Factory - Synthese Mandat - Sujets ouverts au 19-10 - 20261019a.md | 20261019a | 9.2 Ko | `04-plans/Factory - Synthese Mandat - Sujets ouverts au 19-10 - 20261019a.md` |
+| Factory - Synthese Mandat - Synchronisation avec GitHub - 20261019i.md | 20261019i | 6.8 Ko | `04-plans/Factory - Synthese Mandat - Synchronisation avec GitHub - 20261019i.md` |
+| Factory - Synthese Mandat - Synchronisation des deux postes publiee - 20261020a.md | 20261020a | 7 Ko | `04-plans/Factory - Synthese Mandat - Synchronisation des deux postes publiee - 20261020a.md` |
+| Factory - Synthese Mandat - Synchronisation GitHub du 26-10 - 20261026q.md | 20261026q | 4.5 Ko | `04-plans/Factory - Synthese Mandat - Synchronisation GitHub du 26-10 - 20261026q.md` |
+| Factory - Synthese Mandat - T2 fusionnee et publiee T4 lancee - 20261026v.md | 20261026v | 8 Ko | `04-plans/Factory - Synthese Mandat - T2 fusionnee et publiee T4 lancee - 20261026v.md` |
+| Factory - Synthese Mandat - T4 fusionnee carte des forges en place - 20261026w.md | 20261026w | 8.2 Ko | `04-plans/Factory - Synthese Mandat - T4 fusionnee carte des forges en place - 20261026w.md` |
+| Factory - Synthese Mandat - TODOs et retours du 18-10 - 20261018k.md | 20261018k | 17.6 Ko | `04-plans/Factory - Synthese Mandat - TODOs et retours du 18-10 - 20261018k.md` |
+| Factory - Synthese Mandat - TODOs et retours du 19-10 - 20261019b.md | 20261019b | 10.7 Ko | `04-plans/Factory - Synthese Mandat - TODOs et retours du 19-10 - 20261019b.md` |
+| Factory - Synthese Mandat - Todos et retours recette hebergee au vert - 20261001j.md | 20261001j | 16.1 Ko | `04-plans/Factory - Synthese Mandat - Todos et retours recette hebergee au vert - 20261001j.md` |
+| Factory - Synthese Mandat - TODOs et retours, publication cedee a la session d'origine - 20261015n.md | 20261015n | 5.4 Ko | `04-plans/Factory - Synthese Mandat - TODOs et retours, publication cedee a la session d'origine - 20261015n.md` |
+| Factory - Synthese Mandat - Tri A3 et boite d entree du 12-11 - 20261112a.md | 20261112a | 6.3 Ko | `04-plans/Factory - Synthese Mandat - Tri A3 et boite d entree du 12-11 - 20261112a.md` |
+| Factory - Synthese Mandat - Tri des favoris TikTok - 20261019c.md | 20261019c | 7.1 Ko | `04-plans/Factory - Synthese Mandat - Tri des favoris TikTok - 20261019c.md` |
+| Factory - Synthese Mandat - Tri des favoris TikTok du 09-11 - 20261109a.md | 20261109a | 9.7 Ko | `04-plans/Factory - Synthese Mandat - Tri des favoris TikTok du 09-11 - 20261109a.md` |
+| Factory - Synthese Mandat - Tri TikTok et skill de tri - 20261102i.md | 20261102i | 11.2 Ko | `04-plans/Factory - Synthese Mandat - Tri TikTok et skill de tri - 20261102i.md` |
+| Factory - Synthese Mandat - Trois chantiers fusionnes sur quatre - 20261026o.md | 20261026o | 4.4 Ko | `04-plans/Factory - Synthese Mandat - Trois chantiers fusionnes sur quatre - 20261026o.md` |
+| Factory - Synthese Mandat - Troisieme campagne et alertes des fixtures closes - 20261115b.md | 20261115b | 7.8 Ko | `04-plans/Factory - Synthese Mandat - Troisieme campagne et alertes des fixtures closes - 20261115b.md` |
+| Factory - Prompt - Competences Supabase dans les forges - 20261016a.md *(archivé)* | 20261016a | 4.4 Ko | `04-plans/old/Factory - Prompt - Competences Supabase dans les forges - 20261016a.md` |
+| Factory - Prompt - Skill make-it-better et page de versions - 20261102e.md *(archivé)* | 20261102e | 18.4 Ko | `04-plans/old/Factory - Prompt - Skill make-it-better et page de versions - 20261102e.md` |
+| 00-audit-environnement.md | — | 20.2 Ko | `04-plans/plateforme-pentest-gate-a-20261102/00-audit-environnement.md` |
+| 01-architecture.md | — | 49.6 Ko | `04-plans/plateforme-pentest-gate-a-20261102/01-architecture.md` |
+| 02-threat-model.md | — | 31.9 Ko | `04-plans/plateforme-pentest-gate-a-20261102/02-threat-model.md` |
+| 03-data-protection.md | — | 26.7 Ko | `04-plans/plateforme-pentest-gate-a-20261102/03-data-protection.md` |
+| 04-backlog.md | — | 19.4 Ko | `04-plans/plateforme-pentest-gate-a-20261102/04-backlog.md` |
+| 05-decisions.md | — | 17.7 Ko | `04-plans/plateforme-pentest-gate-a-20261102/05-decisions.md` |
+| 06-open-questions.md | — | 14.7 Ko | `04-plans/plateforme-pentest-gate-a-20261102/06-open-questions.md` |
+| 07-ai-access-matrix.md | — | 22.2 Ko | `04-plans/plateforme-pentest-gate-a-20261102/07-ai-access-matrix.md` |
+| 08-cost-model.md | — | 18.6 Ko | `04-plans/plateforme-pentest-gate-a-20261102/08-cost-model.md` |
+| 09-cyber-model-evaluation.md | — | 21.4 Ko | `04-plans/plateforme-pentest-gate-a-20261102/09-cyber-model-evaluation.md` |
+
+### 05-catalogues-readmes-forges
+
+| Livrable | Version | Poids | Chemin à copier |
+|---|---|---|---|
+| agents-section-catalogue.md | — | 1.7 Ko | `05-catalogues-readmes-forges/agents-section-catalogue.md` |
+| agents-security-section-catalogue.md | — | 1 Ko | `05-catalogues-readmes-forges/agents-security-section-catalogue.md` |
+| audit-section-catalogue.md | — | 1.4 Ko | `05-catalogues-readmes-forges/audit-section-catalogue.md` |
+| conception-section-catalogue.md | — | 1.9 Ko | `05-catalogues-readmes-forges/conception-section-catalogue.md` |
+| data-section-catalogue.md | — | 1.9 Ko | `05-catalogues-readmes-forges/data-section-catalogue.md` |
+| design-section-catalogue.md | — | 2.1 Ko | `05-catalogues-readmes-forges/design-section-catalogue.md` |
+| development-section-catalogue.md | — | 1.9 Ko | `05-catalogues-readmes-forges/development-section-catalogue.md` |
+| observability-section-catalogue.md | — | 1.1 Ko | `05-catalogues-readmes-forges/observability-section-catalogue.md` |
+| ops-section-catalogue.md | — | 1.5 Ko | `05-catalogues-readmes-forges/ops-section-catalogue.md` |
+| organization-section-catalogue.md | — | 1.3 Ko | `05-catalogues-readmes-forges/organization-section-catalogue.md` |
+| seo-section-catalogue.md | — | 1.9 Ko | `05-catalogues-readmes-forges/seo-section-catalogue.md` |
+| tests-section-catalogue.md | — | 2 Ko | `05-catalogues-readmes-forges/tests-section-catalogue.md` |
+| websec-section-catalogue.md | — | 1.2 Ko | `05-catalogues-readmes-forges/websec-section-catalogue.md` |
+
+### 05-insatisfactions
+
+| Livrable | Version | Poids | Chemin à copier |
+|---|---|---|---|
+| INSTRUCTION.md | — | 6.8 Ko | `05-insatisfactions/INS-0001/INSTRUCTION.md` |
+| INSTRUCTION.md | — | 9.6 Ko | `05-insatisfactions/INS-0002/INSTRUCTION.md` |
+| INSTRUCTION.md | — | 7 Ko | `05-insatisfactions/INS-0003/INSTRUCTION.md` |
+| INSTRUCTION.md | — | 6.7 Ko | `05-insatisfactions/INS-0004/INSTRUCTION.md` |
+| INSTRUCTION.md | — | 11.2 Ko | `05-insatisfactions/INS-0005/INSTRUCTION.md` |
+
+### 06-travaux-confies
+
+| Livrable | Version | Poids | Chemin à copier |
+|---|---|---|---|
+| pilot - TRAVAUX - 20260905c.md | 20260905c | 9.8 Ko | `06-travaux-confies/2026-09/pilot - TRAVAUX - 20260905c.md` |
+| pilot - TRAVAUX - 20260905c.tf.jsonl | — | 1.7 Ko | `06-travaux-confies/2026-09/pilot - TRAVAUX - 20260905c.tf.jsonl` |
+| pilot - TRAVAUX - 20260905d.md | 20260905d | 6.9 Ko | `06-travaux-confies/2026-09/pilot - TRAVAUX - 20260905d.md` |
+| pilot - TRAVAUX - 20260905d.tf.jsonl | — | 0.9 Ko | `06-travaux-confies/2026-09/pilot - TRAVAUX - 20260905d.tf.jsonl` |
+| pilot - TRAVAUX - 20260905e.md | 20260905e | 6.4 Ko | `06-travaux-confies/2026-09/pilot - TRAVAUX - 20260905e.md` |
+| pilot - TRAVAUX - 20260905e.tf.jsonl | — | 0.9 Ko | `06-travaux-confies/2026-09/pilot - TRAVAUX - 20260905e.tf.jsonl` |
+| pilot - TRAVAUX - 20260905f.md | 20260905f | 6.2 Ko | `06-travaux-confies/2026-09/pilot - TRAVAUX - 20260905f.md` |
+| pilot - TRAVAUX - 20260905f.tf.jsonl | — | 0.7 Ko | `06-travaux-confies/2026-09/pilot - TRAVAUX - 20260905f.tf.jsonl` |
+| pilot - TRAVAUX - 20260905g.md | 20260905g | 9 Ko | `06-travaux-confies/2026-09/pilot - TRAVAUX - 20260905g.md` |
+| pilot - TRAVAUX - 20260905g.tf.jsonl | — | 1.5 Ko | `06-travaux-confies/2026-09/pilot - TRAVAUX - 20260905g.tf.jsonl` |
+| pilot - TRAVAUX - 20260905h.md | 20260905h | 9.3 Ko | `06-travaux-confies/2026-09/pilot - TRAVAUX - 20260905h.md` |
+| pilot - TRAVAUX - 20260905h.tf.jsonl | — | 1.3 Ko | `06-travaux-confies/2026-09/pilot - TRAVAUX - 20260905h.tf.jsonl` |
+| pilot - TRAVAUX - 20260905i.md | 20260905i | 6.1 Ko | `06-travaux-confies/2026-09/pilot - TRAVAUX - 20260905i.md` |
+| pilot - TRAVAUX - 20260905i.tf.jsonl | — | 0.7 Ko | `06-travaux-confies/2026-09/pilot - TRAVAUX - 20260905i.tf.jsonl` |
+| pilot - TRAVAUX - 20260905j.md | 20260905j | 5.6 Ko | `06-travaux-confies/2026-09/pilot - TRAVAUX - 20260905j.md` |
+| pilot - TRAVAUX - 20260905j.tf.jsonl | — | 0.6 Ko | `06-travaux-confies/2026-09/pilot - TRAVAUX - 20260905j.tf.jsonl` |
+| pilot - TRAVAUX - 20260905k.md | 20260905k | 5.7 Ko | `06-travaux-confies/2026-09/pilot - TRAVAUX - 20260905k.md` |
+| pilot - TRAVAUX - 20260905k.tf.jsonl | — | 0.6 Ko | `06-travaux-confies/2026-09/pilot - TRAVAUX - 20260905k.tf.jsonl` |
+| pilot - TRAVAUX - 20260907a.md | 20260907a | 9.3 Ko | `06-travaux-confies/2026-09/pilot - TRAVAUX - 20260907a.md` |
+| pilot - TRAVAUX - 20260907a.tf.jsonl | — | 1.3 Ko | `06-travaux-confies/2026-09/pilot - TRAVAUX - 20260907a.tf.jsonl` |
+| pilot - TRAVAUX - 20260908a.md | 20260908a | 7.3 Ko | `06-travaux-confies/2026-09/pilot - TRAVAUX - 20260908a.md` |
+| pilot - TRAVAUX - 20260908a.tf.jsonl | — | 1 Ko | `06-travaux-confies/2026-09/pilot - TRAVAUX - 20260908a.tf.jsonl` |
+| pilot - TRAVAUX - 20260912a.md | 20260912a | 10.8 Ko | `06-travaux-confies/2026-09/pilot - TRAVAUX - 20260912a.md` |
+| pilot - TRAVAUX - 20260912a.tf.jsonl | — | 1.7 Ko | `06-travaux-confies/2026-09/pilot - TRAVAUX - 20260912a.tf.jsonl` |
+| pilot - TRAVAUX - 20260912b.md | 20260912b | 10.1 Ko | `06-travaux-confies/2026-09/pilot - TRAVAUX - 20260912b.md` |
+| pilot - TRAVAUX - 20260912b.tf.jsonl | — | 1.5 Ko | `06-travaux-confies/2026-09/pilot - TRAVAUX - 20260912b.tf.jsonl` |
+| pilot - TRAVAUX - 20260912c.md | 20260912c | 7.7 Ko | `06-travaux-confies/2026-09/pilot - TRAVAUX - 20260912c.md` |
+| pilot - TRAVAUX - 20260912c.tf.jsonl | — | 1.4 Ko | `06-travaux-confies/2026-09/pilot - TRAVAUX - 20260912c.tf.jsonl` |
+| pilot - TRAVAUX - 20260914a.md | 20260914a | 12.9 Ko | `06-travaux-confies/2026-09/pilot - TRAVAUX - 20260914a.md` |
+| pilot - TRAVAUX - 20260914a.tf.jsonl | — | 2.2 Ko | `06-travaux-confies/2026-09/pilot - TRAVAUX - 20260914a.tf.jsonl` |
+
+*Un livrable présent et absent de ce tableau est un défaut : cet index est régénéré, et un
+index qui a dérivé de son dossier ne sert plus qu'à donner confiance à tort.*
+
+<!-- index-livrables:fin -->

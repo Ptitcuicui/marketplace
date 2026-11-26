@@ -1,0 +1,560 @@
+/**
+ * lib-decisions.mjs — LE REGISTRE DES NUMÉROS DE DÉCISION (D-N) DU PILOT, ET LA RÉSERVATION (TF-1872, 18/10/2026).
+ *
+ * LE FAIT, mesuré le 18/10/2026 : la synthèse 20261018j pose D-24, la synthèse 20261018l pose D-25 et D-26, et la synthèse
+ * 20261018k, d'une autre session du même poste sur le même arbre, pose D-24 à D-28 pour cinq autres sujets. Une réponse
+ * « 24a » devient ambiguë. Le contrôle RÉSERVATION livré le même jour par TF-1849 ne s'appliquait qu'aux produits, qui
+ * inscrivent leurs D-N dans `forge\ledger.jsonl` ; au pilot, il se taisait : aucun registre n'existait.
+ *
+ * LA DÉCISION HUMAINE (D-32 (a), « valable tous produits », 18/10/2026) : « Chaque décision nouvelle s'inscrit dans un registre
+ * partagé du pilot avant d'être affichée ; le contrôle de restitution refuse un numéro déjà pris » — et le même mécanisme vaut
+ * pour tous les produits : UNE règle, UNE façon de réserver, au pilot comme chez chaque produit.
+ *
+ * CE QUE CE MODULE PORTE
+ *   · le registre du pilot, `decisions\REGISTRE.jsonl` : une entrée `decision` par numéro réservé, amorcée avec les numéros
+ *     déjà affichés ; tenu sous le dépôt du pilot, donc PARTAGÉ par toutes les sessions qui travaillent sur le même arbre ;
+ *   · `reserverAuPilot` / `reserverChezProduit` : rendre le prochain numéro libre ET l'inscrire, sous UN verrou, en une seule
+ *     opération. Chez un produit l'inscription reste celle de SON `forge\ledger.jsonl` (entrée `question_humain`, champ
+ *     `decisions_posees`), écrite par SON écrivain (`forge\ledger.py`, sinon `ledger.mjs` de forge-agents) ;
+ *   · `ressemblance` : deux libellés de la même question se reconnaissent, deux questions différentes se distinguent ;
+ *   · le REGISTRE COMMUN DU POSTE chez un produit (TF-1911, D-83 (a) du 26/10/2026) : `<git rev-parse --git-common-dir>/forge-decisions.jsonl`,
+ *     partagé par tous les arbres de travail d'un même dépôt, jamais versionné ; voir plus bas `lireRegistreCommun` et `reserverChezProduit`.
+ *
+ * CE QUE LA RÉSERVATION NE COUVRE PAS (dit, non tu)
+ *   · une session qui prend un numéro SANS passer par l'outil (le texte est écrit à la main, ou par une autre voie) : le
+ *     verrou n'arbitre que les sessions qui l'utilisent ; le contrôle de restitution rattrape le numéro au moment d'afficher ;
+ *   · deux POSTES : le registre du pilot voyage par git ; deux postes qui réservent chacun de leur côté prennent le même numéro, et la
+ *     collision n'apparaît qu'à la fusion (`--verifier` la nomme). Les D-N sont numérotées par poste (fusion du 20/09/2026). Chez un
+ *     produit, le registre commun ne couvre pas non plus deux postes (D-83 (a)) : il vit dans le dossier git de CE poste ;
+ *   · que la question réservée soit celle qui sera affichée : le contrôle ne compare que le sens, par les mots.
+ */
+import { existsSync, readFileSync, readdirSync, appendFileSync, openSync, closeSync, unlinkSync, mkdirSync, statSync, writeFileSync } from "node:fs";
+import { join, dirname, resolve, sep } from "node:path";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { signature } from "./lib-session.mjs";
+
+const ICI = dirname(fileURLToPath(import.meta.url));
+export const PILOT = resolve(ICI, "..");
+export const REGISTRE_PILOT = join(PILOT, "decisions", "REGISTRE.jsonl");
+
+export const D_NUMERO = /(?<![\p{L}\p{N}_])D\s*-?\s*(\d{1,3})(?![\p{N}])/giu;
+
+// ---- LA RESSEMBLANCE DE DEUX QUESTIONS ---------------------------------------------------------------------------
+const MOTS_VIDES = new Set(["faut", "elle", "elles", "vous", "nous", "dans", "pour", "avec", "sans", "cette", "cela", "leur", "leurs", "sont", "être", "etre",
+  "faire", "avant", "comme", "plus", "moins", "tout", "tous", "toute", "toutes", "doit", "doivent", "peut", "peuvent", "puis", "dont", "mais", "aussi", "entre", "chaque"]);
+const sansAccents = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "");
+/** Les mots qui portent le sens d'une question : minuscules, sans accent, quatre lettres au moins, hors mots vides. */
+export function jetons(question) {
+  return new Set(sansAccents(question).toLowerCase().replace(/\bd-?\d{1,3}\b/g, " ").split(/[^a-z0-9]+/)
+    .filter((m) => m.length >= 4 && !MOTS_VIDES.has(m)).map((m) => m.replace(/(?:s|x)$/, "")));
+}
+/** Part des mots du libellé le plus court qui se retrouvent dans l'autre : 1 = même question, 0 = rien en commun. */
+export function ressemblance(a, b) {
+  const A = jetons(a), B = jetons(b);
+  if (!A.size || !B.size) return 0;
+  let communs = 0; for (const m of A) if (B.has(m)) communs++;
+  return communs / Math.min(A.size, B.size);
+}
+/** Deux libellés qui parlent de la même décision (seuil fixé sur les 18 questions du 18/10/2026 — voir la recette). */
+export const SEUIL_MEME_QUESTION = 0.5;
+export const memeQuestion = (a, b) => ressemblance(a, b) >= SEUIL_MEME_QUESTION;
+
+// ---- LE REGISTRE DU PILOT ------------------------------------------------------------------------------------------
+/** Le registre : { fichier, existe, entrees: [{ n, question, ... }], numeros: Set<string>, max }. Une ligne illisible est ignorée, comptée. */
+export function lireRegistrePilot(fichier = REGISTRE_PILOT) {
+  if (!existsSync(fichier)) return { fichier, existe: false, entrees: [], numeros: new Set(), max: 0, illisibles: 0 };
+  const entrees = []; let illisibles = 0;
+  for (const l of readFileSync(fichier, "utf8").split(/\r?\n/)) {
+    if (!l.trim()) continue;
+    let e; try { e = JSON.parse(l); } catch { illisibles++; continue; }
+    if (e?.type !== "decision" || !Number.isInteger(e.n)) continue;
+    entrees.push(e);
+  }
+  return { fichier, existe: true, entrees, numeros: new Set(entrees.map((e) => String(e.n))), max: entrees.reduce((m, e) => Math.max(m, e.n), 0), illisibles };
+}
+
+/** La session est-elle au pilot (le dossier de travail est le dépôt du pilot ou en dessous, worktrees compris) ? */
+export function estAuPilot(racine, pilot = PILOT) {
+  if (!racine) return false;
+  const norm = (p) => resolve(p).toLowerCase().replace(/[\\/]+$/, "");
+  const r = norm(racine), p = norm(pilot);
+  return r === p || r.startsWith(p + sep.toLowerCase()) || r.startsWith(p + "/");
+}
+
+// ---- LE VERROU (même mécanisme que `ledger.mjs append` : fichier adjacent créé en exclusif) -------------------------
+const dormir = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+const VERROU_ESSAIS = 200, VERROU_PAUSE_MS = 50, VERROU_PERIME_MS = 60_000;
+/** `options` (TF-1911) : nombre d'essais, pause et délai de péremption propres à un verrou ; sans elles, les valeurs d'avant (registre du pilot inchangé). */
+export function sousVerrou(verrou, fn, { essais = VERROU_ESSAIS, pauseMs = VERROU_PAUSE_MS, perimeMs = VERROU_PERIME_MS } = {}) {
+  mkdirSync(dirname(verrou), { recursive: true });
+  let pris = false;
+  for (let i = 0; i < essais && !pris; i++) {
+    try { closeSync(openSync(verrou, "wx")); pris = true; }
+    catch (e) {
+      if (e.code !== "EEXIST" && e.code !== "EPERM" && e.code !== "EACCES") throw e;
+      // Un verrou plus vieux que `perimeMs` (une minute par défaut) est celui d'un processus mort : la section verrouillée dure quelques millisecondes.
+      try { if (Date.now() - statSync(verrou).mtimeMs > perimeMs) unlinkSync(verrou); } catch { /* disparu entre-temps */ }
+      dormir(pauseMs);
+    }
+  }
+  if (!pris) throw new Error(`verrou non obtenu après ${(essais * pauseMs) / 1000} s : un autre processus détient ${verrou}`);
+  try { return fn(); } finally { try { unlinkSync(verrou); } catch { /* déjà absent */ } }
+}
+
+export function controlerQuestion(question) {
+  const q = String(question || "").replace(/\s+/g, " ").trim();
+  if (q.length < 15) return { ok: false, raison: "la question est vide ou trop courte : une décision se pose comme une question complète, avec son point d'interrogation" };
+  if (!/\?\s*$/.test(q)) return { ok: false, raison: "la question ne finit pas par un point d'interrogation : le libellé réservé est celui qui sera affiché (« > **D-N — <la question ?>** »)" };
+  return { ok: true, question: q };
+}
+
+// D-218 (b), item I1 (15/11/2026, RP-25 du lot factory-site 20261114u) : la signature vient de la source unique de
+// `lib-session.mjs` — l'identifiant passé, sinon la variable que le hook SessionStart de la session a posée, sinon
+// `CLAUDE_CODE_SESSION_ID`, marquée « heritee_possible ». Cette ligne lisait la seule variable héritée : D-218 a été signée du nom
+// de la session mère. Rend { session (8 caractères), session_source }.
+const session = (s) => signature({ explicite: s });
+const aujourdhui = () => new Date().toISOString().slice(0, 10);
+
+/** Réserve le prochain numéro libre au registre du pilot et l'inscrit : UN verrou, une lecture, une écriture. */
+export function reserverAuPilot({ question, fichier = REGISTRE_PILOT, sessionId = null, source = null, plancher = 0 }) {
+  const q = controlerQuestion(question);
+  if (!q.ok) throw new Error(q.raison);
+  return sousVerrou(fichier + ".lock", () => {
+    const reg = lireRegistrePilot(fichier);
+    const n = Math.max(reg.max, plancher) + 1;
+    const entree = { type: "decision", n, question: q.question, date: aujourdhui(), ts: new Date().toISOString(), ...session(sessionId), origine: "reservation", ...(source ? { source } : {}) };
+    mkdirSync(dirname(fichier), { recursive: true });
+    const contenu = existsSync(fichier) ? readFileSync(fichier, "utf8") : "";
+    appendFileSync(fichier, (contenu && !contenu.endsWith("\n") ? "\n" : "") + JSON.stringify(entree) + "\n", "utf8");
+    return { id: "D-" + n, n, question: q.question, registre: fichier, ecrit_par: "lib-decisions.mjs (registre du pilot)" };
+  });
+}
+
+/** Reformule une décision DÉJÀ inscrite (même numéro, libellé réécrit — le cas du format B du 17/10/2026, où D-1 à D-12 ont été reposées plus lisiblement). */
+export function reformulerAuPilot({ n, question, fichier = REGISTRE_PILOT, sessionId = null }) {
+  const q = controlerQuestion(question);
+  if (!q.ok) throw new Error(q.raison);
+  const num = Number(String(n).replace(/\D/g, ""));
+  return sousVerrou(fichier + ".lock", () => {
+    const reg = lireRegistrePilot(fichier);
+    if (!reg.numeros.has(String(num))) throw new Error(`D-${num} n'est pas inscrite au registre : une décision NOUVELLE se réserve (--question), seule une décision inscrite se reformule`);
+    const entree = { type: "decision", n: num, question: q.question, date: aujourdhui(), ts: new Date().toISOString(), ...session(sessionId), origine: "reformulation" };
+    const contenu = readFileSync(fichier, "utf8");
+    appendFileSync(fichier, (contenu && !contenu.endsWith("\n") ? "\n" : "") + JSON.stringify(entree) + "\n", "utf8");
+    return { id: "D-" + num, n: num, question: q.question, registre: fichier, ecrit_par: "lib-decisions.mjs (registre du pilot)" };
+  });
+}
+
+// ---- LA RÉPONSE HUMAINE AU REGISTRE DU PILOT (TF-2214, 16/11/2026) -----------------------------------------------------
+// LE FAIT. Le 03/11/2026, D-48 (« Supprime-t-on le réseau vide créé en Europe du Nord ? ») a été posée sans réponse ni rappel ; les ressources
+// sont restées facturées deux jours. S93 rappelait les décisions du ledger d'un PRODUIT ; au pilot, `decisions\REGISTRE.jsonl` ne portait que des
+// lignes `registre` et `decision`, jamais une réponse : sur 119 décisions posées depuis le 26/10, 83 avaient une réponse lisible au champ decideur
+// du registre des tâches, 92 dans les transcriptions, 106 par l'une ou l'autre ; lue au seul registre des tâches, S93 se serait trompée 23 fois sur 36.
+// Le chaînon manquant est l'ÉCRIVAIN de la réponse : `hook-lexique.mjs` lit déjà la lettre du porteur contre les décisions ouvertes (TF-1958) ; il
+// consigne maintenant, au registre, une entrée `reponse` par décision tranchée, avec ses LETTRES et jamais le texte du message (le registre est
+// versionné dans un dépôt public). S93 et le relevé d'ouverture lisent ensuite ce registre.
+export const REPONSE_AU_REGISTRE = "reponse";
+/** Avant cette date, aucun écrivain ne consignait les réponses : une décision plus ancienne n'est pas jugée sans réponse, elle n'a pas pu en recevoir. */
+export const REPONSES_DEPUIS = "2026-11-16T00:00:00Z";
+
+/** Les lettres que `message` donne à la décision `n` (« 223a », « D-76 (c) », « 68a + b » → ["a"], ["c"], ["a", "b"]) ; [] sans lettre. Jamais le texte du message. */
+export function lettresDeReponse(message, n) {
+  const t = String(message ?? "");
+  if (t.length > 300) return [];
+  const m = new RegExp(`(?<![\\w-])(?:D-?)?0*${Number(n)}\\s*\\(?([a-z])\\)?((?:\\s*[+&]\\s*[a-z](?![\\p{L}\\d]))*)(?![\\p{L}\\d])`, "iu").exec(t);
+  if (!m) return [];
+  return [m[1], ...[...m[2].matchAll(/[a-z]/gi)].map((x) => x[0])].map((x) => x.toLowerCase());
+}
+
+/** Les entrées `reponse` du registre : [{ n, lettres, ts }]. */
+export function reponsesDuRegistre(fichier = REGISTRE_PILOT) {
+  if (!existsSync(fichier)) return [];
+  const sortie = [];
+  for (const l of readFileSync(fichier, "utf8").split(/\r?\n/)) {
+    if (!l.trim()) continue;
+    let e; try { e = JSON.parse(l); } catch { continue; }
+    if (e?.type === REPONSE_AU_REGISTRE && Number.isInteger(e.n)) sortie.push({ n: e.n, lettres: Array.isArray(e.lettres) ? e.lettres : [], ts: e.ts || null });
+  }
+  return sortie;
+}
+
+/** Consigne la réponse du porteur à D-`n` au registre du pilot : une seule entrée par décision, sous le verrou du registre. Rend { consignee, motif? }. */
+export function consignerReponse({ n, lettres, fichier = REGISTRE_PILOT, sessionId = null }) {
+  const num = Number(String(n).replace(/\D/g, ""));
+  const lettresPropres = (lettres || []).map((x) => String(x).toLowerCase()).filter((x) => /^[a-z]$/.test(x));
+  if (!Number.isInteger(num) || num < 1 || !lettresPropres.length) return { consignee: false, motif: "numéro ou lettre absent : rien n'est consigné" };
+  if (!existsSync(fichier)) return { consignee: false, motif: "registre du pilot introuvable" };
+  return sousVerrou(fichier + ".lock", () => {
+    if (!lireRegistrePilot(fichier).numeros.has(String(num))) return { consignee: false, motif: `D-${num} n'est pas inscrite au registre : une réponse ne se consigne que pour une décision réservée` };
+    if (reponsesDuRegistre(fichier).some((r) => r.n === num)) return { consignee: false, motif: `D-${num} a déjà sa réponse au registre` };
+    const entree = { type: REPONSE_AU_REGISTRE, n: num, lettres: lettresPropres, date: aujourdhui(), ts: new Date().toISOString(), ...session(sessionId), origine: "hook-lexique" };
+    const contenu = readFileSync(fichier, "utf8");
+    appendFileSync(fichier, (contenu && !contenu.endsWith("\n") ? "\n" : "") + JSON.stringify(entree) + "\n", "utf8");
+    return { consignee: true, id: "D-" + num, lettres: lettresPropres, registre: fichier };
+  });
+}
+
+/**
+ * Les décisions du PILOT posées (réservées) sans réponse consignée, depuis `fenetreJours` jours au plus et depuis l'entrée en service de l'écrivain
+ * (`REPONSES_DEPUIS`), de la plus ancienne à la plus récente : [{ n: "D-48", question, ts }]. Même rendu que `decisionsSansReponse` du ledger d'un produit.
+ * Limite dite : une réponse donnée sans lettre (« oui », « fais-le »), ou hors d'une session du pilot, n'est pas consignée ; la décision reste rappelée
+ * jusqu'à la fin de sa fenêtre, ce qui avertit sans bloquer.
+ */
+// `jusqua` (16/11/2026) : une synthèse ne peut rappeler qu'une décision posée avant elle. Sans cette borne, la recette du
+// banc de mutation jugeait une synthèse du 17/10 contre les décisions réservées le 16/11 et la déclarait fautive.
+export function decisionsPiloteSansReponse({ fichier = REGISTRE_PILOT, maintenant = Date.now(), fenetreJours = 14, depuis = REPONSES_DEPUIS, jusqua = Infinity } = {}) {
+  if (!existsSync(fichier)) return [];
+  const reps = new Set(reponsesDuRegistre(fichier).map((r) => r.n));
+  const parNumero = new Map();
+  // La date de pose est la PLUS ANCIENNE du numéro : une reformulation (format B du 17/10) ne rouvre pas la fenêtre.
+  for (const e of lireRegistrePilot(fichier).entrees) {
+    const t = e.ts ? Date.parse(e.ts) : NaN;
+    const vu = parNumero.get(e.n);
+    if (!vu) { parNumero.set(e.n, { n: e.n, question: e.question || "", ts: e.ts || null, t }); continue; }
+    if (Number.isFinite(t) && (!Number.isFinite(vu.t) || t < vu.t)) { vu.ts = e.ts; vu.t = t; }
+    if (e.question) vu.question = e.question;
+  }
+  const plancher = Math.max(maintenant - fenetreJours * 86400000, Date.parse(depuis));
+  return [...parNumero.values()]
+    .filter((d) => Number.isFinite(d.t) && d.t >= plancher && d.t <= jusqua && !reps.has(d.n))
+    .map((d) => ({ n: `D-${d.n}`, question: d.question, ts: d.ts, seq: null }))
+    .sort((a, b) => Date.parse(a.ts) - Date.parse(b.ts));
+}
+
+// ---- CHEZ UN PRODUIT : l'inscription reste celle de `forge\ledger.jsonl` ----------------------------------------------
+/** Tous les numéros D-N que le ledger d'un produit nomme, toutes entrées confondues (une décision posée ou répondue occupe son numéro). */
+export function numerosDuLedger(produit) {
+  const fichier = join(produit, "forge", "ledger.jsonl");
+  const horsRun = join(produit, "forge", HORS_RUN_NOM);
+  const numeros = new Set();
+  // TF-2223 : le journal hors run compte comme le ledger du run pour le prochain numéro et pour la preuve d'inscription.
+  const existe = existsSync(fichier) || existsSync(horsRun);
+  for (const f of [fichier, horsRun]) {
+    if (!existsSync(f)) continue;
+    for (const l of readFileSync(f, "utf8").split(/\r?\n/)) {
+      if (!l.trim()) continue;
+      let e; try { e = JSON.parse(l); } catch { continue; }
+      for (const m of JSON.stringify(e).matchAll(D_NUMERO)) numeros.add(String(Number(m[1])));
+    }
+  }
+  return { fichier, existe, numeros, max: [...numeros].reduce((m, n) => Math.max(m, Number(n)), 0) };
+}
+
+/** TF-2223 (RP-2, 06/11/2026) : le journal des entrées écrites hors run, à côté du ledger — `forge/ledger.py` l'écrit de la même façon. */
+export const HORS_RUN_NOM = "hors-run.jsonl";
+
+/** TF-2415 : le type de ledger qui dit qu'une décision posée est retirée, sans réponse ni décision de remplacement. */
+export const DECISION_RETIREE = "decision_retiree";
+/** Les décisions qu'une entrée `decision_retiree` retire, au format « D-N » : champs `decision`, `decisions` et `decisions_retirees` (chaîne ou liste). */
+export function decisionsRetirees(e) {
+  return [].concat(e?.decision ?? [], e?.decisions ?? [], e?.decisions_retirees ?? [])
+    .map((x) => /^D-?\s*(\d{1,4})$/i.exec(String(x).trim())).filter(Boolean).map((m) => `D-${Number(m[1])}`);
+}
+
+/**
+ * TF-2779 (RS-52 de Produit-12, 22/11/2026) : les numéros de décision DÉJÀ RÉPONDUS dans les écrits d'un projet, ceux que le porteur a tranchés par un message qui ne
+ * nomme pas la lettre à la session : D-83, répondue au ledger du produit (seq 417), a été réclamée à chaque restitution de la session. Rend un Set de numéros
+ * (chaînes, « 83 »). Au ledger d'un produit : une entrée `reponse_humain` qui nomme D-N, POSTÉRIEURE à la dernière entrée `question_humain` qui la nomme (une décision
+ * reposée après sa réponse est de nouveau ouverte). Au pilot : une entrée `reponse` du registre `decisions\REGISTRE.jsonl`. Un dossier sans l'un ni l'autre : Set vide.
+ */
+export function numerosRepondus(racine, { registre = REGISTRE_PILOT } = {}) {
+  const repondus = new Set();
+  const ledger = join(racine, "forge", "ledger.jsonl");
+  if (existsSync(ledger)) {
+    const entrees = [];
+    for (const l of readFileSync(ledger, "utf8").split(/\r?\n/)) { if (!l.trim()) continue; try { entrees.push(JSON.parse(l)); } catch { /* ligne illisible : ignorée */ } }
+    const derniereQuestion = new Map();
+    entrees.forEach((e, i) => {
+      if (e?.type === "question_humain") for (const m of JSON.stringify(e).matchAll(D_NUMERO)) derniereQuestion.set(String(Number(m[1])), i);
+    });
+    entrees.forEach((e, i) => {
+      if (e?.type !== "reponse_humain") return;
+      for (const m of JSON.stringify(e).matchAll(D_NUMERO)) { const n = String(Number(m[1])); if (i > (derniereQuestion.get(n) ?? -1)) repondus.add(n); }
+    });
+  }
+  if (estAuPilot(racine)) for (const r of reponsesDuRegistre(registre)) repondus.add(String(r.n));
+  return repondus;
+}
+
+/**
+ * Les décisions POSÉES au ledger d'un produit et SANS RÉPONSE NOMMÉE (TF-2214, 06/11/2026). Le 03/11/2026, D-48 (« Supprime-t-on le réseau vide créé en Europe du Nord ?
+ * ») a été posée, n'a reçu ni réponse ni rappel, et les ressources qu'elle visait sont restées facturées deux jours. Une décision est POSÉE par une entrée `question_humain`
+ * (`decisions_posees` : { "D-N": question }, ou `decision` : "D-N") ; elle est RÉPONDUE quand une entrée `reponse_humain` POSTÉRIEURE la nomme, où que ce soit dans l'entrée.
+ * Limite dite : une réponse que le produit n'a pas consignée avec son numéro compte comme absente (la mesure du 06/11/2026 sur 11 ledgers locaux : 25 décisions sur 40 sans réponse
+ * nommée, dont beaucoup de réponses probablement non consignées) ; c'est pourquoi la fenêtre est bornée (`fenetreJours`, 14 par défaut) et que les contrôles qui s'en servent avertissent.
+ * TF-2415 (14/11/2026) — UNE DÉCISION RETIRÉE EST SORTIE, ELLE N'ATTEND PLUS. Le 10/11/2026, D-12 (retirée au seq 58) et D-178 (retirée au seq 231) étaient rappelées au porteur
+ * comme ouvertes : 5 décisions sur 8 pendant 2 tours, la seule sortie connue étant une `reponse_humain` qui nomme la décision. Deux autres sorties : une entrée de type
+ * `decision_retiree` (`DECISION_RETIREE`) qui nomme la décision retirée (`decision`, `decisions` ou `decisions_retirees`), et le rattachement « D-N remplacée par D-M » : une
+ * `reponse_humain` de D-M qui porte `remplace: "D-N"` (écrite par `forge/ledger.py --remplace`) sort D-N, comme toute entrée de ce type qui la nomme.
+ * Rend [{ n: "D-48", question, ts, seq }], de la plus ancienne à la plus récente. `maintenant` s'injecte pour les essais.
+ */
+export function decisionsSansReponse(produit, { maintenant = Date.now(), fenetreJours = 14 } = {}) {
+  const fichier = join(produit, "forge", "ledger.jsonl");
+  if (!existsSync(fichier)) return [];
+  const entrees = [];
+  for (const l of readFileSync(fichier, "utf8").split(/\r?\n/)) {
+    if (!l.trim()) continue;
+    try { entrees.push(JSON.parse(l)); } catch { /* ligne illisible : ignorée */ }
+  }
+  const posees = new Map();
+  entrees.forEach((e, i) => {
+    if (e.type !== "question_humain") return;
+    const d = e.decisions_posees;
+    const posees_ = d && typeof d === "object" && !Array.isArray(d) ? Object.entries(d).map(([k, q]) => [k, String(q)])
+      : Array.isArray(d) ? d.map((x) => [typeof x === "string" ? x : (x && x.n ? `D-${x.n}` : ""), String(x && x.question ? x.question : "")])
+        : (typeof e.decision === "string" ? [[e.decision, String(e.question || "")]] : []);
+    for (const [k, q] of posees_) {
+      const m = /^D-(\d{1,4})$/.exec(String(k).trim());
+      if (m && !posees.has(`D-${Number(m[1])}`)) posees.set(`D-${Number(m[1])}`, { i, ts: e.ts || null, seq: e.seq ?? null, question: q });
+    }
+  });
+  const limite = maintenant - fenetreJours * 86400000;
+  const ouvertes = [];
+  for (const [n, { i, ts, seq, question }] of posees) {
+    const t = ts ? Date.parse(ts) : NaN;
+    if (!Number.isFinite(t) || t < limite) continue;
+    const re = new RegExp(`\\b${n}\\b`);
+    if (entrees.some((e, j) => j > i && ((e.type === "reponse_humain" && re.test(JSON.stringify(e))) || (e.type === DECISION_RETIREE && decisionsRetirees(e).includes(n))))) continue;
+    ouvertes.push({ n, question, ts, seq });
+  }
+  return ouvertes.sort((a, b) => Date.parse(a.ts) - Date.parse(b.ts));
+}
+
+/**
+ * Les numéros de décision DÉJÀ AFFICHÉS chez un produit (TF-1961, 29/10/2026) : la tête « > **D-N — … ?** » d'une restitution ou
+ * d'un `DECISIONS.md`, sous `forge\` et `output\` (profondeur 6, sans `node_modules` ni `.git`). Le 19/10/2026, un ledger né vide
+ * a accepté D-68 à D-71, déjà posées à l'humain le 02/10 dans trois restitutions. Une mention en prose (« voir D-90 ») ne compte
+ * pas : seule la tête de la décision affichée est un numéro pris. Un numéro de trop laisse un trou, ce qui n'est pas une erreur.
+ */
+const TETE_DECISION = /^>\s*\*\*D-(\d{1,4})\s+[—–-]/gm;
+export function numerosAffiches(produit) {
+  let max = 0, fichiers = 0;
+  const parcourir = (d, prof) => {
+    if (prof > 6 || !existsSync(d)) return;
+    let es; try { es = readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const e of es) {
+      if (e.name === "node_modules" || e.name === ".git") continue;
+      const p = join(d, e.name);
+      if (e.isDirectory()) { parcourir(p, prof + 1); continue; }
+      if (!/\.md$/i.test(e.name)) continue;
+      let t; try { t = readFileSync(p, "utf8"); } catch { continue; }
+      let vu = false;
+      for (const m of t.matchAll(TETE_DECISION)) { max = Math.max(max, Number(m[1])); vu = true; }
+      if (vu) fichiers++;
+    }
+  };
+  parcourir(join(produit, "forge"), 0);
+  parcourir(join(produit, "output"), 0);
+  const dec = join(produit, "DECISIONS.md");
+  if (existsSync(dec)) for (const m of readFileSync(dec, "utf8").matchAll(TETE_DECISION)) max = Math.max(max, Number(m[1]));
+  return { max, fichiers };
+}
+
+/** L'écrivain du ledger de ce produit : `forge\ledger.py` s'il existe (pile Python), sinon `ledger.mjs` de forge-agents sous la racine du parc. */
+export function ecrivainDeLedger(produit, racineParc = process.env.FORGE_ROOT || dirname(PILOT)) {
+  const py = join(produit, "forge", "ledger.py");
+  if (existsSync(py)) return { sorte: "python", chemin: py };
+  const mjs = join(racineParc, "factory-forge-agents", ".claude", "skills", "forge-agents", "scripts", "ledger.mjs");
+  if (existsSync(mjs)) return { sorte: "node", chemin: mjs };
+  return null;
+}
+
+// ---- LE REGISTRE COMMUN DU POSTE, PAR PRODUIT (TF-1911, D-83 (a) du 26/10/2026) ---------------------------------------------
+//
+// LE FAIT : les 18 et 19/10/2026, trois collisions chez un même produit (D-155, D-156, D-159, RT-137, RT-131, RT-139), chacune entre ARBRES
+// DE TRAVAIL d'un même dépôt : le ledger d'un produit vit dans chaque arbre (`forge\ledger.jsonl`), une réservation faite dans l'un est
+// invisible des autres, et l'humain a répondu « 159a » à deux questions différentes.
+//
+// LA DÉCISION HUMAINE (D-83 (a)) : « Un registre commun par produit et par poste. La réservation s'écrit sous verrou dans un fichier partagé
+// par tous les arbres de travail du même dépôt sur ce poste (rangé dans le dossier git commun, jamais versionné), et le contrôle de fin de
+// tour refuse un numéro déjà pris là ; ne couvre pas deux postes différents. »
+//
+// OÙ : `<git rev-parse --git-common-dir>/forge-decisions.jsonl`, verrou `forge-decisions.jsonl.lock` à côté. Le dossier git commun est celui
+// que partagent tous les `git worktree` d'un dépôt ; il n'est pas dans l'arbre de travail, donc jamais versionné, jamais poussé.
+// Le journal du produit (`forge\ledger.jsonl`) reste la trace versionnée : le registre commun s'AJOUTE, il ne le remplace pas.
+// CE QUE CELA NE COUVRE PAS : deux postes (chacun a son dossier git) ; un produit qui n'est pas un dépôt git (le registre est alors
+// indisponible, la réservation se fait comme avant et le DIT) ; un numéro pris SANS l'outil (écrit à la main au ledger).
+export const REGISTRE_COMMUN_NOM = "forge-decisions.jsonl";
+/** Verrou du registre commun : sa section contient l'écrivain du ledger (un processus Python ou Node, de 0,1 à 1 s). Périmé au-delà de 30 s ;
+ *  la fenêtre d'attente (800 × 50 ms = 40 s) dépasse ce délai, pour qu'un verrou mort soit repris PAR l'appel qui l'attendait. */
+export const VERROU_COMMUN = { essais: 800, pauseMs: 50, perimeMs: 30_000 };
+
+/** Le dossier git commun du dépôt qui porte `dossier` (partagé par tous ses arbres de travail), ou la raison pour laquelle il n'y en a pas. */
+export function dossierGitCommun(dossier) {
+  const env = { ...process.env }; for (const k of ["GIT_DIR", "GIT_COMMON_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"]) delete env[k];
+  const r = spawnSync("git", ["rev-parse", "--git-common-dir"], { encoding: "utf8", cwd: dossier, env });
+  if (r.error) return { ok: false, raison: `git introuvable ou illisible (${r.error.code || r.error.message})` };
+  const sortie = String(r.stdout || "").trim();
+  if (r.status !== 0 || !sortie) return { ok: false, raison: `${resolve(dossier)} n'est pas dans un dépôt git (${String(r.stderr || "").trim().slice(0, 120) || "git rev-parse a échoué"})` };
+  return { ok: true, dossier: resolve(dossier, sortie) };
+}
+
+/** Le registre commun d'un produit : { disponible, raison, fichier, existe, entrees, numeros, max, illisibles }. Une ligne illisible est ignorée, comptée. */
+export function lireRegistreCommun(produit) {
+  const g = dossierGitCommun(produit);
+  if (!g.ok) return { disponible: false, raison: g.raison, fichier: null, existe: false, entrees: [], numeros: new Set(), max: 0, illisibles: 0 };
+  return { disponible: true, raison: null, ...lireRegistrePilot(join(g.dossier, REGISTRE_COMMUN_NOM)) };
+}
+
+/**
+ * TF-2694 (RP-224 de Produit-79, 20/11/2026) : LE LEDGER DE L'ORIGINE COMPTE POUR LE PROCHAIN NUMÉRO. Le 20/11/2026, un arbre en retard de 387 commits sur `origin/main` (avance rapide bloquée par les
+ * recopies d'héritage) a proposé D-990 en lisant son seul ledger local (seq 1181) alors que l'origine portait D-997 et la seq 1242. Le relevé : la branche amont de l'arbre (`@{u}`), un `git fetch` de son
+ * dépôt distant (lecture seule ; il échoue sans bloquer, et la sortie le dit), le nombre de commits d'origine que l'arbre n'a pas, et les numéros D-N que `forge/ledger.jsonl` et `forge/hors-run.jsonl`
+ * y portent (`git show <amont>:<fichier>`, sans toucher à l'arbre). `fetch: false` (ou FORGE_SANS_FETCH=1) lit l'état local de la branche amont sans l'actualiser : il peut dater.
+ * Rend { disponible, raison?, ref, fetch, retard, max, numeros }. Sans branche amont (dépôt sans origine, branche locale) : disponible false, max 0 — le calcul reste celui d'avant.
+ */
+export function numerosDeLOrigine(produit, { fetch = process.env.FORGE_SANS_FETCH !== "1", delaiMs = 20_000 } = {}) {
+  const env = { ...process.env, GIT_TERMINAL_PROMPT: "0" }; for (const k of ["GIT_DIR", "GIT_COMMON_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"]) delete env[k];
+  const git = (...args) => spawnSync("git", args, { encoding: "utf8", cwd: produit, env, timeout: delaiMs });
+  const vide = (raison) => ({ disponible: false, raison, ref: null, fetch: null, retard: null, max: 0, numeros: new Set() });
+  const amont = git("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}");
+  if (amont.error) return vide(`git introuvable ou illisible (${amont.error.code || amont.error.message})`);
+  if (amont.status !== 0) return vide("aucune branche amont (dépôt sans origine, ou branche locale) : le numéro ne tient compte que de l'arbre");
+  const ref = String(amont.stdout).trim();
+  let fetchDit = fetch ? null : "non joué (FORGE_SANS_FETCH ou --sans-fetch) : l'état de la branche amont peut dater";
+  if (fetch) {
+    const f = git("fetch", "--quiet", ref.split("/")[0]);
+    fetchDit = f.status === 0 ? "fait" : `ÉCHOUÉ (${String(f.stderr || f.error?.message || `sortie ${f.status}`).trim().slice(0, 120)}) : l'état de la branche amont peut dater`;
+  }
+  const retard = Number(String(git("rev-list", "--count", `HEAD..${ref}`).stdout).trim());
+  const numeros = new Set();
+  for (const f of ["forge/ledger.jsonl", HORS_RUN_FICHIER]) {
+    const s = git("show", `${ref}:${f}`);
+    if (s.status !== 0) continue;
+    for (const l of String(s.stdout).split(/\r?\n/)) {
+      if (!l.trim()) continue;
+      let e; try { e = JSON.parse(l); } catch { continue; }
+      for (const m of JSON.stringify(e).matchAll(D_NUMERO)) numeros.add(String(Number(m[1])));
+    }
+  }
+  return { disponible: true, ref, fetch: fetchDit, retard: Number.isFinite(retard) ? retard : null, max: [...numeros].reduce((m, n) => Math.max(m, Number(n)), 0), numeros };
+}
+const HORS_RUN_FICHIER = "forge/hors-run.jsonl";
+
+/**
+ * TF-2704 (RETOUR du porteur du 15/11/2026, factory-site, seq 326) : « on a déjà dit qu'il n'y avait pas besoin de clé API pour le mode --bare de b ». L'option (b) de D-227 proposait une clé
+ * d'API que D-73 (a) avait retirée. LES DÉCISIONS DÉJÀ TRANCHÉES DU MÊME OBJET SE RELISENT AVANT QUE LES OPTIONS S'ÉCRIVENT : cette lecture rend, pour une question à réserver, les décisions déjà
+ * répondues dont le libellé lui ressemble (la part des mots du plus court retrouvée dans l'autre, `SEUIL_VOISINE`) avec leur réponse. Au pilot : les `decision` du registre qui portent une entrée `reponse`
+ * (lettres). Chez un produit : les `decisions_posees` d'une entrée `question_humain` que suit une `reponse_humain` qui les nomme (le texte du champ `reponse`, `choix` ou `resume` quand il existe).
+ * LIMITE DITE : ni le registre ni le ledger ne consignent les options ni celle que la réponse retire ; la lecture rend la décision tranchée et sa réponse, c'est à la session de relire et de ne pas
+ * reproposer une option retirée sans motif écrit. Rien n'est refusé : aucune donnée structurée ne dit quelle option est retirée.
+ * Rend [{ id: "D-73", question, reponse, ressemblance }], les plus proches d'abord, `max` au plus.
+ */
+export const SEUIL_VOISINE = 0.34;
+export function decisionsVoisinesTranchees({ question, produit = null, registre = REGISTRE_PILOT, max = 5, seuil = SEUIL_VOISINE }) {
+  const candidates = [];
+  if (produit) {
+    const fichier = join(produit, "forge", "ledger.jsonl");
+    const entrees = [];
+    if (existsSync(fichier)) for (const l of readFileSync(fichier, "utf8").split(/\r?\n/)) { if (!l.trim()) continue; try { entrees.push(JSON.parse(l)); } catch { /* illisible : ignorée */ } }
+    entrees.forEach((e, i) => {
+      if (e?.type !== "question_humain" || !e.decisions_posees || typeof e.decisions_posees !== "object" || Array.isArray(e.decisions_posees)) return;
+      for (const [k, q] of Object.entries(e.decisions_posees)) {
+        const m = /^D-(\d{1,4})$/.exec(String(k).trim()); if (!m) continue;
+        const id = `D-${Number(m[1])}`, re = new RegExp(`(?<![\\p{L}\\p{N}_])D-?\\s*${Number(m[1])}(?![\\p{N}])`, "iu");
+        const rep = entrees.find((x, j) => j > i && x?.type === "reponse_humain" && re.test(JSON.stringify(x)));
+        if (rep) candidates.push({ id, question: String(q), reponse: String(rep.reponse ?? rep.choix ?? rep.resume ?? "répondue, texte de la réponse non consigné").replace(/\s+/g, " ").slice(0, 160) });
+      }
+    });
+  } else {
+    const reg = lireRegistrePilot(registre);
+    const derniere = new Map(); for (const e of reg.entrees) derniere.set(e.n, e);
+    for (const r of reponsesDuRegistre(registre)) { const d = derniere.get(r.n); if (d) candidates.push({ id: `D-${r.n}`, question: String(d.question), reponse: r.lettres.length ? `lettre(s) ${r.lettres.join(", ")}` : "répondue, lettre non consignée" }); }
+  }
+  const vus = new Set();
+  return candidates.map((c) => ({ ...c, ressemblance: Number(ressemblance(question, c.question).toFixed(2)) }))
+    .filter((c) => c.ressemblance >= seuil && !vus.has(c.id) && vus.add(c.id))
+    .sort((a, b) => b.ressemblance - a.ressemblance).slice(0, max);
+}
+
+/** Le prochain numéro libre chez un produit : l'UNION du registre commun, du ledger du produit (toute entrée qui nomme D-N), de celui de l'ORIGINE (TF-2694) et du plancher. Lecture seule hors `git fetch`. */
+export function prochainChezProduit({ produit, plancher = 0, origine = numerosDeLOrigine(produit) }) {
+  const ledger = numerosDuLedger(produit);
+  const commun = lireRegistreCommun(produit);
+  const affiches = numerosAffiches(produit);
+  return { n: Math.max(ledger.max, commun.max, affiches.max, origine.max, plancher) + 1, ledger, commun, affiches, origine };
+}
+
+/** Réserve le prochain numéro libre chez un produit et l'inscrit à son `forge\ledger.jsonl`, par l'écrivain du produit, sous un verrou propre à la réservation.
+ *  Depuis TF-1911 : le numéro se calcule aussi sur le registre commun du poste, où la réservation s'inscrit AVANT le ledger, sous le verrou de ce registre. */
+export function reserverChezProduit({ produit, question, plancher = 0, racineParc, ecrivain = null, fetch }) {
+  const q = controlerQuestion(question);
+  if (!q.ok) throw new Error(q.raison);
+  // TF-2694 : le ledger de l'origine relève le plancher (relevé avant les verrous : un `git fetch` ne se joue pas verrou pris).
+  const origine = numerosDeLOrigine(produit, fetch === undefined ? {} : { fetch });
+  const ledger = join(produit, "forge", "ledger.jsonl");
+  // TF-2223 : hors run (aucun ledger de run), la réservation s'inscrit au journal hors run, sans écrivain de ledger — ledger.mjs refuse
+  // d'ouvrir un journal autrement que par run_open. Le prochain lot de retours le compile.
+  const horsRun = !existsSync(ledger);
+  const w = horsRun ? null : (ecrivain || ecrivainDeLedger(produit, racineParc));
+  if (!horsRun && !w) throw new Error("écrivain du ledger introuvable : ni forge/ledger.py chez le produit, ni ledger.mjs de forge-agents sous la racine du parc (node bootstrap.mjs --pull dans le pilot)");
+  const g = dossierGitCommun(produit);
+  const fichierCommun = g.ok ? join(g.dossier, REGISTRE_COMMUN_NOM) : null;
+  const section = () => reserverSousVerrous({ produit, q, plancher: Math.max(plancher, origine.max), w, ledger, fichierCommun, horsRun });
+  // Le verrou du registre commun est pris EN PREMIER, celui du produit ensuite : toujours dans cet ordre, donc sans interblocage.
+  const r = fichierCommun ? sousVerrou(fichierCommun + ".lock", section, VERROU_COMMUN) : section();
+  const resume = { ref: origine.ref, fetch: origine.fetch, retard: origine.retard, plus_grand: origine.max, ...(origine.raison ? { raison: origine.raison } : {}) };
+  return fichierCommun ? { ...r, registre_commun: fichierCommun, origine: resume } : { ...r, registre_commun: null, registre_commun_indisponible: g.raison, origine: resume };
+}
+
+/** Une entrée au journal hors run, sous le verrou de `forge/ledger.py` (`<journal>.lock`) : seq après le plus grand déjà pris, ts non décroissant. */
+function ecrireHorsRun(produit, entree) {
+  const journal = join(produit, "forge", HORS_RUN_NOM);
+  return sousVerrou(journal + ".lock", () => {
+    const deja = existsSync(journal) ? readFileSync(journal, "utf8").split(/\r?\n/).filter((l) => l.trim()).map((l) => JSON.parse(l)) : [];
+    const seq = deja.reduce((m, x) => Math.max(m, x.seq || 0), 0) + 1;
+    let ts = new Date().toISOString().replace(/\.\d+Z$/, "Z");
+    if (deja.length && ts < deja[deja.length - 1].ts) ts = deja[deja.length - 1].ts;
+    const brut = existsSync(journal) ? readFileSync(journal, "utf8") : "";
+    // D-218 (b), item I1 : la ligne porte la session qui l'écrit, comme celles que `forge/ledger.py` écrit au même journal.
+    writeFileSync(journal, brut + (brut && !brut.endsWith("\n") ? "\n" : "") + JSON.stringify({ seq, ts, type: entree.type, hors_run: true, ...session(null), ...entree.champs }) + "\n", "utf8");
+    return journal;
+  });
+}
+
+function reserverSousVerrous({ produit, q, plancher, w, ledger, fichierCommun, horsRun = false }) {
+  // Verrou PROPRE à la réservation : ceux de `ledger.py` et de `ledger.mjs` (`<ledger>.lock`) sont pris par l'écrivain lui-même, dans la section qui suit.
+  return sousVerrou(join(produit, "forge", "decisions.lock"), () => {
+    const avant = numerosDuLedger(produit);
+    const commun = fichierCommun ? lireRegistrePilot(fichierCommun) : { max: 0 };
+    const n = Math.max(avant.max, commun.max, numerosAffiches(produit).max, plancher) + 1;
+    const id = "D-" + n;
+    const decisions = { [id]: q.question };
+    if (fichierCommun) {
+      // Le registre commun d'abord : si l'écrivain du ledger refuse ensuite, le numéro reste pris (un trou n'est pas une erreur) ; l'inverse laisserait un numéro affiché et libre.
+      const entree = { type: "decision", n, question: q.question, date: aujourdhui(), ts: new Date().toISOString(), ...session(null), arbre: resolve(produit), origine: "reservation" };
+      const contenu = existsSync(fichierCommun) ? readFileSync(fichierCommun, "utf8") : "";
+      appendFileSync(fichierCommun, (contenu && !contenu.endsWith("\n") ? "\n" : "") + JSON.stringify(entree) + "\n", "utf8");
+    }
+    let r;
+    if (horsRun) {
+      const journal = ecrireHorsRun(produit, { type: "question_humain", champs: { decisions_posees: decisions, reservee_par: "reserver-decision.mjs" } });
+      const apres = numerosDuLedger(produit);
+      if (!apres.numeros.has(String(n))) throw new Error(`${id} n'apparaît pas au journal hors run après l'écriture : l'inscription n'est pas prouvée`);
+      return { id, n, question: q.question, registre: journal, ecrit_par: "reserver-decision.mjs (journal hors run, aucun ledger de run)" };
+    }
+    if (w.sorte === "python") {
+      r = spawnSync("python", [w.chemin, "question_humain", "--decisions_posees", JSON.stringify(decisions), "--reservee_par", "reserver-decision.mjs"], { encoding: "utf8", env: { ...process.env, PYTHONUTF8: "1" }, cwd: produit });
+    } else {
+      const payload = join(dirname(ledger), `.reservation-${process.pid}.json`);
+      writeFileSync(payload, JSON.stringify({ type: "question_humain", decisions_posees: decisions, reservee_par: "reserver-decision.mjs" }), "utf8");
+      try { r = spawnSync(process.execPath, [w.chemin, "append", ledger, "--fichier", payload], { encoding: "utf8", cwd: produit }); }
+      finally { try { unlinkSync(payload); } catch { /* déjà absent */ } }
+    }
+    if (r.status !== 0) throw new Error(`l'écrivain du ledger (${w.sorte}) a refusé l'inscription (exit ${r.status})${fichierCommun ? ` ; ${id} reste pris au registre commun du poste, un trou n'est pas une erreur` : ""} : ${(r.stderr || r.stdout || "").trim().slice(0, 300)}`);
+    const apres = numerosDuLedger(produit);
+    if (!apres.numeros.has(String(n))) throw new Error(`${id} n'apparaît pas au ledger après l'écriture : l'inscription n'est pas prouvée`);
+    return { id, n, question: q.question, registre: ledger, ecrit_par: w.sorte === "python" ? "forge/ledger.py du produit" : "ledger.mjs de forge-agents" };
+  });
+}
+
+/** Les numéros pris plusieurs fois pour des questions différentes (hors collisions déjà déclarées `collision: true`). */
+export function doublonsDuRegistre(reg) {
+  const par = new Map();
+  // Une reformulation (même décision, libellé réécrit) n'est pas une seconde décision sous le même numéro.
+  for (const e of reg.entrees.filter((x) => x.origine !== "reformulation")) { if (!par.has(e.n)) par.set(e.n, []); par.get(e.n).push(e); }
+  const sorties = [];
+  for (const [n, es] of par) if (es.length > 1 && es.some((e) => !e.collision)) sorties.push({ n, questions: es.map((e) => e.question) });
+  return sorties;
+}

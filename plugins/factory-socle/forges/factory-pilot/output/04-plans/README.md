@@ -1,0 +1,274 @@
+# output\04-plans\
+
+<!-- Généré par scripts\readme-dossiers.mjs : seul le bloc RÔLE se rédige à la main ; la table
+     se régénère à chaque ajout, modification ou suppression (hook PostToolUse, recette I4).
+     Ne pas éditer la table — modifier le dossier, relancer le script. -->
+
+## Rôle
+
+<!-- ROLE:DEBUT -->
+Plans stratégiques, synthèses de mandat et de campagne (format `gabarits\RESTITUTION.md`), notes de migration — livrables R-4 datés. Mois en cours à la racine, mois clos en `AAAA-MM\` ; un nom qui dépasserait le plafond de chemin de R-4 y est raccourci, l'ancien nom consigné à `references\RENOMMAGES-LIVRABLES.jsonl` (`node scripts\ranger-dossiers.mjs`, décision « 1b » du 16/10/2026).
+<!-- ROLE:FIN -->
+
+## Contenu
+
+Contenu du dossier à la dernière régénération : chaque élément avec son type, sa taille et sa nature, les sous-dossiers pointant vers leur propre README.
+
+| Élément | Type | Taille | Titre / nature |
+|---|---|---|---|
+| [`2026-08\`](2026-08/README.md) | dossier (39 fichiers) | — | Livrables de la famille `04-plans\` du mois clos 2026-08, classés par `node scripts\ranger-dossiers.mjs` ; le mois en cours reste à la racine de la famille, où … |
+| [`2026-09\`](2026-09/README.md) | dossier (176 fichiers) | — | Livrables de la famille `04-plans\` du mois clos 2026-09, classés par `node scripts\ranger-dossiers.mjs` ; le mois en cours reste à la racine de la famille, où … |
+| [`old\`](old/README.md) | dossier (2 fichiers) | — | Versions remplacées des plans et prompts de `output\04-plans\`, gardées pour trace (règle 7 des règles du projet). Une session y déplace par `git mv` l'ancienne… |
+| [`plateforme-pentest-gate-a-20261102\`](plateforme-pentest-gate-a-20261102/README.md) | dossier (10 fichiers) | — | Dossier de conception Gate A (option O3, décision humaine D-146 a du 02/11/2026) de la plateforme de pentest autorisé automatisé étudiée dans `output/03-etudes/… |
+| `Factory - Dossier - Mise a jour des competences - 20261121l.md` | fichier | 72,3 Ko | Plan de mise à jour des compétences de la Factory, rattrapage des produits compris |
+| `Factory - Fiche - Produit plateforme de pentest autorise a construire pour Client-A - 20261103a.md` | fichier | 14,6 Ko | Factory — Fiche produit : plateforme de pentest autorisé automatisé, à construire pour Cli |
+| `Factory - Note - Oeil critique des process a travailler - 20261020l.md` | fichier | 14,7 Ko | Note — un œil critique sur les process de la Factory : le sujet, ce qui est mesuré, ce qui |
+| `Factory - Prompt - Activation du releve des couts chez un produit - 20261105h.md` | fichier | 2,0 Ko | Prompt — activer le relevé des coûts dans un produit (05/11/2026) |
+| `Factory - Prompt - Bases de donnees de dev et qualification dans les forges - 20261029a.md` | fichier | 8,3 Ko | Prompt — Inventorier ce que les forges savent faire des bases de développement et de quali |
+| `Factory - Prompt - Competences Cloudflare GitHub Supabase dans les forges - 20261028a.md` | fichier | 10,1 Ko | Prompt — Inventorier les fonctionnalités de Cloudflare, GitHub et Supabase pour en tirer l |
+| `Factory - Prompt - Competences OpenAI et Gemini dans la Factory - 20261103i.md` | fichier | 16,5 Ko | Prompt — Décider s'il faut des compétences OpenAI et Gemini dans la Factory, et lesquelles |
+| `Factory - Prompt - Competences Supabase dans les forges - 20261016b.md` | fichier | 10,0 Ko | Prompt — Ajouter les compétences Supabase aux forges, sur le modèle d'Azure et de Databric |
+| `Factory - Prompt - Competences Supabase dans les forges - 20261016b.md.boucle.json` | fichier | 3,2 Ko | JSON |
+| `Factory - Prompt - Plan de mise a jour des competences - 20261121j.md` | fichier | 14,5 Ko | Plan de mise à jour des compétences de la Factory, rattrapage des produits compris |
+| `Factory - Prompt - Serie d animations de la Factory - 20261109g.md` | fichier | 14,9 Ko | Série d'animations « La Factory en action » : cadrage et cinq épisodes |
+| `Factory - Prompt - Skill make-it-better et page de versions - 20261102g.md` | fichier | 22,1 Ko | Prompt — construire le skill make-it-better et sa page de versions |
+| `Factory - Prompt - Suivi des agents toutes les 15 minutes - 20261112e.md` | fichier | 15,2 Ko | Prompt — Suivi des agents toutes les 15 minutes |
+| `Factory - Prompt - Suivi des agents toutes les 15 minutes - 20261112g.md` | fichier | 15,3 Ko | Prompt — Suivi des agents toutes les 15 minutes |
+| `Factory - Prompt - Tri des sujets Claude et IA des favoris TikTok et skill - 20261102c.md` | fichier | 14,5 Ko | markdown |
+| `Factory - Revue - Prompt mise a jour competences passé au crible L99 - 20261121g.md` | fichier | 39,7 Ko | Prompt « plan de mise à jour des compétences » passé au crible L99 |
+| `Factory - Revue - Prompt mise a jour competences passé au crible L99 - 20261121g.md.boucle.json` | fichier | 15,7 Ko | JSON |
+| `Factory - Revue hebdomadaire - Propositions D-114 a D-119 - 20261102a.md` | fichier | 11,1 Ko | Revue hebdomadaire des propositions — 2026-11-02 |
+| `Factory - Revue hebdomadaire - Propositions D-81 a D-84 - 20261026r.md` | fichier | 8,9 Ko | Revue hebdomadaire des propositions — 2026-10-26 |
+| `Factory - Revue hebdomadaire - Propositions D-91 et bases de donnees - 20261029d.md` | fichier | 3,6 Ko | Revue hebdomadaire des propositions — 2026-10-29 |
+| `Factory - Revue Hebdomadaire - Sept propositions D-41 a D-47 - 20261001f.md` | fichier | 11,9 Ko | Revue hebdomadaire des propositions — 2026-10-01 |
+| `Factory - Synthese Conseil - Audit complet route vers forge-tests - 20261015b.md` | fichier | 8,4 Ko | Synthèse Conseil — pourquoi « audit complet » part encore vers forge-tests, et comment le  |
+| `Factory - Synthese Conseil - Bases de donnees de dev et qualification - 20261029c.md` | fichier | 6,5 Ko | Synthèse Conseil — bases de développement et de qualification dans les forges, prompt 2026 |
+| `Factory - Synthese Conseil - Boucle L99 jusqu a un score etudiee - 20261016f.md` | fichier | 7,1 Ko | Synthèse Conseil — faire tourner L99 en boucle jusqu'à un score, étude d'opportunité (16/1 |
+| `Factory - Synthese Conseil - Competences Cloudflare GitHub Supabase - 20261028a.md` | fichier | 6,8 Ko | Synthèse Conseil — compétences Cloudflare, GitHub et Supabase identifiées, 17 propositions |
+| `Factory - Synthese Conseil - Competences OpenAI et Gemini - 20261103n.md` | fichier | 10,3 Ko | Synthèse Conseil — compétences OpenAI et Gemini dans la Factory : oui, 3 à construire, 1 d |
+| `Factory - Synthese Conseil - D-173 appliquee au prompt de suivi des couts - 20261105c.md` | fichier | 4,2 Ko | Synthèse Conseil — décision D-173 (b) appliquée au prompt de suivi des temps et des coûts  |
+| `Factory - Synthese Conseil - D-177 charge suivie en 3 indicateurs - 20261105f.md` | fichier | 3,5 Ko | Synthèse Conseil — décision D-177 consignée : la charge des produits se suit en 3 indicate |
+| `Factory - Synthese Conseil - Decisions a traiter en detail - 20261017a.md` | fichier | 24,9 Ko | Synthèse Conseil — 12 décisions à trancher, une qualification de noms et 4 gestes humains  |
+| `Factory - Synthese Conseil - Detail de l'etude d'une etape de revue de code - 20261103h.md` | fichier | 4,0 Ko | Synthèse Conseil — détail de l'étude d'une étape de revue de code (03/11/2026) |
+| `Factory - Synthese Conseil - Elements a traiter du tri TikTok et options - 20261102o.md` | fichier | 18,8 Ko | Synthèse Conseil — éléments à traiter du tri TikTok et options (02/11/2026) |
+| `Factory - Synthese Conseil - Etude apprentissage des erreurs - 20261104g.md` | fichier | 9,6 Ko | Synthèse Conseil — étude « Claude Code apprend de ses erreurs », lancée sur votre « A2 » ( |
+| `Factory - Synthese Conseil - Etude suivi des temps et couts rendue - 20261105e.md` | fichier | 8,6 Ko | Synthèse Conseil — prompt corrigé puis étude « suivi des temps et des coûts par produit »  |
+| `Factory - Synthese Conseil - Flotte d agents analyse critique - 20261018b.md` | fichier | 11,1 Ko | Synthèse Conseil — la flotte d'agents tient par ses gardes, pas par sa définition : 15 éca |
+| `Factory - Synthese Conseil - Format des decisions auto-portantes - 20261017b.md` | fichier | 10,4 Ko | Synthèse Conseil — trois formats pour qu'une décision se comprenne et se tranche sans rien |
+| `Factory - Synthese Conseil - Integration des competences de clip video - 20261110c.md` | fichier | 6,3 Ko | Synthèse Conseil — Intégration des compétences de clip vidéo dans la Factory (10/11/2026,  |
+| `Factory - Synthese Conseil - Liste des TODOs et retours ouverts - 20261015h.md` | fichier | 9,1 Ko | Synthèse Conseil — 41 sujets ouverts au registre publié, aucun retour en attente (15/10/20 |
+| `Factory - Synthese Conseil - Parcours d accueil complete par des exemples - 20261121f.md` | fichier | 5,0 Ko | Synthèse Conseil — parcours d'accueil des nouveaux utilisateurs, étude complétée par des e |
+| `Factory - Synthese Conseil - Parcours d accueil des nouveaux utilisateurs - 20261121d.md` | fichier | 7,4 Ko | Synthèse Conseil — parcours d'accueil des nouveaux utilisateurs de la Factory, 21/11/2026 |
+| `Factory - Synthese Conseil - Parcours d accueil niveau suivi et note sur 100 - 20261121i.md` | fichier | 6,1 Ko | Synthèse Conseil — parcours d'accueil : niveau qui suit l'utilisateur, niveau annoncé ou r |
+| `Factory - Synthese Conseil - Plan Mode pour organiser les chantiers - 20261121c.md` | fichier | 7,5 Ko | Synthèse Conseil — étude d'opportunité du Plan Mode pour organiser les chantiers, 21/11/20 |
+| `Factory - Synthese Conseil - Prompt aide aux nouveaux venus passe au crible L99 - 20261121a.md` | fichier | 5,9 Ko | Synthèse Conseil — prompt « aide aux nouveaux utilisateurs de la Factory » passé au crible |
+| `Factory - Synthese Conseil - Prompt apprentissage des erreurs passe au crible L99 - 20261104f.md` | fichier | 6,1 Ko | Synthèse Conseil — prompt d'étude « Claude Code apprend de ses erreurs » passé au crible L |
+| `Factory - Synthese Conseil - Prompt bases de donnees passe au crible L99 - 20261029b.md` | fichier | 10,3 Ko | Synthèse Conseil — prompt sur les bases de développement et de qualification passé au crib |
+| `Factory - Synthese Conseil - Prompt Cloudflare GitHub Supabase passe au crible L99 - 20261028a.md` | fichier | 8,3 Ko | Synthèse Conseil — prompt Cloudflare, GitHub et Supabase passé au crible L99, version a dé |
+| `Factory - Synthese Conseil - Prompt competences OpenAI et Gemini passe au crible L99 - 20261103j.md` | fichier | 7,8 Ko | Synthèse Conseil — prompt « compétences OpenAI et Gemini » passé au crible L99, aucune déc |
+| `Factory - Synthese Conseil - Prompt make-it-better avec Word et PDF - 20261102h.md` | fichier | 7,8 Ko | Synthèse Conseil — prompt make-it-better avec Word et PDF, 1 décision attendue (02/11/2026 |
+| `Factory - Synthese Conseil - Prompt mise a jour competences passe au crible L99 - 20261121h.md` | fichier | 8,6 Ko | Synthèse Conseil — prompt du plan de mise à jour des compétences passé au crible L99 (21/1 |
+| `Factory - Synthese Conseil - Prompt serie d animations passe au crible L99 - 20261109f.md` | fichier | 7,5 Ko | markdown |
+| `Factory - Synthese Conseil - Prompt skill make-it-better passe au crible L99 - 20261102f.md` | fichier | 10,6 Ko | Synthèse Conseil — prompt du skill make-it-better passé au crible L99, 2 décisions attendu |
+| `Factory - Synthese Conseil - Prompt suivi d avancement des agents passe au crible L99 - 20261112f.md` | fichier | 10,4 Ko | Synthèse Conseil — prompt « suivi d'avancement des agents » passé au crible L99 (analyse d |
+| `Factory - Synthese Conseil - Prompt suivi des temps et couts passe au crible L99 - 20261104h.md` | fichier | 9,2 Ko | Synthèse Conseil — prompt « suivre temps, délais, charges, jetons et coûts des produits »  |
+| `Factory - Synthese Conseil - Prompt Supabase passe au crible L99 - 20261016c.md` | fichier | 6,5 Ko | Synthèse Conseil — prompt Supabase passé au crible L99, version b déposée (16/10/2026) |
+| `Factory - Synthese Conseil - Prompt tri TikTok et skill passe au crible L99 - 20261102d.md` | fichier | 12,1 Ko | Synthèse Conseil — prompt de tri des favoris TikTok et de skill passé au crible L99 (02/11 |
+| `Factory - Synthese Conseil - Skill PDF de la Factory - 20261030a.md` | fichier | 8,7 Ko | Synthèse Conseil — skill PDF de la Factory, étude rendue, 1 décision attendue (30/10/2026) |
+| `Factory - Synthese Conseil - Sujets traitables maintenant - 20261015k.md` | fichier | 8,7 Ko | Synthèse Conseil — 4 sujets traitables tout de suite, 2 sur un mot de vous, le reste atten |
+| `Factory - Synthese Etude - Relecteur d intention tous travaux - 20261018i.md` | fichier | 8,5 Ko | Synthèse Étude — la relecture d'intention étendue à tous les travaux : deux points de rele |
+| `Factory - Synthese Etude - Relecteur d intention verdict O4 - 20261018g.md` | fichier | 9,0 Ko | Synthèse Étude — un relecteur d'intention voit les dérives à condition d'avoir une consign |
+| `Factory - Synthese L99 - Oeil critique des process prompt reecrit - 20261020e.md` | fichier | 16,2 Ko | Synthèse L99 — le prompt « un œil critique sur les process de la Factory » est analysé et  |
+| `Factory - Synthese L99 - Oeil critique global des process prompt reecrit - 20261020i.md` | fichier | 17,2 Ko | Synthèse L99 — le prompt « un œil critique global sur les process, et 10 scénarios » est a |
+| `Factory - Synthese L99 - Relecteur critique d intention prompt reecrit - 20261018e.md` | fichier | 13,6 Ko | Synthèse L99 — le prompt « relecteur critique qui garde l'intention » est analysé et réécr |
+| `Factory - Synthese Mandat - A-1 a A-8 du reste a faire - 20261019k.md` | fichier | 13,3 Ko | Synthèse Mandat — A-1 à A-8 du reste à faire, traités le 19/10/2026 au soir |
+| `Factory - Synthese Mandat - A-1 et A-2 indices du 19-10 et revue hebdomadaire - 20261026s.md` | fichier | 14,1 Ko | Synthèse Mandat — A-1 et A-2 : indices du 19/10 levés, revue hebdomadaire rendue (26/10/20 |
+| `Factory - Synthese Mandat - A1 A2 A3 de la mi-journee du 13-11 - 20261113g.md` | fichier | 5,0 Ko | markdown |
+| `Factory - Synthese Mandat - A1 A2 A3 de la nuit du 12-11 - 20261112k.md` | fichier | 7,8 Ko | markdown |
+| `Factory - Synthese Mandat - A1 A2 A3 du 12-11 au soir - 20261112i.md` | fichier | 5,2 Ko | markdown |
+| `Factory - Synthese Mandat - A1 A2 A3 du matin du 13-11 - 20261113e.md` | fichier | 6,1 Ko | markdown |
+| `Factory - Synthese Mandat - A1 A2 faites A3 en cours - 20261026h.md` | fichier | 5,3 Ko | Synthèse Mandat — A-1 et A-2 faites, A-3 en cours : barrière outillée, pilot publié, premi |
+| `Factory - Synthese Mandat - A1 et A2 de l apres-midi du 13-11 - 20261113h.md` | fichier | 5,4 Ko | markdown |
+| `Factory - Synthese Mandat - Accueil des lots au sas un ingere quatre refuses - 20261004a.md` | fichier | 9,9 Ko | Synthèse Mandat — votre décision D-56 est exécutée : le sas est vide, 1 lot sur 5 est entr |
+| `Factory - Synthese Mandat - Accueil du sas et trois lots ingeres - 20261012a.md` | fichier | 10,3 Ko | Synthèse Mandat — 4 lots du sas accueillis, 3 ingérés au registre (7 candidats), publicati |
+| `Factory - Synthese Mandat - Actions A-1 a A-4 du 14-11 executees - 20261114c.md` | fichier | 6,8 Ko | Synthèse Mandat — Actions A-1, A-3 et A-4 exécutées, la lettre de D-108 demandée (14/11/20 |
+| `Factory - Synthese Mandat - Actions du Plan Mode executees - 20261121k.md` | fichier | 8,5 Ko | Synthèse Mandat — actions A1, A2, A4 et A5 de l'étude du Plan Mode exécutées, A3 en attent |
+| `Factory - Synthese Mandat - Affichage double corrige revue - 20261001e.md` | fichier | 9,9 Ko | Synthèse Mandat — affichage double de la réponse corrigé, et revue hebdomadaire accélérée  |
+| `Factory - Synthese Mandat - Appel de preuve Gemini et cadence mensuelle des modeles - 20261104d.md` | fichier | 5,6 Ko | Synthèse Mandat — appel de preuve du générateur d'images et contrôle mensuel des modèles t |
+| `Factory - Synthese Mandat - Archives classees en sous-dossiers - 20261016h.md` | fichier | 9,0 Ko | Synthèse Mandat — archives d'input et d'output classées en sous-dossiers (16/10/2026) |
+| `Factory - Synthese Mandat - Audit complet vers forge-audit - 20261015c.md` | fichier | 7,0 Ko | Synthèse Mandat — « audit complet » ouvre désormais forge-audit, chez tous les produits (1 |
+| `Factory - Synthese Mandat - Bases de donnees de dev et qualification construites - 20261029e.md` | fichier | 8,9 Ko | Synthèse Mandat — bases de développement et de qualification : 3 compétences construites,  |
+| `Factory - Synthese Mandat - Boucle de correction en place - 20261018n.md` | fichier | 9,6 Ko | Synthèse Mandat — seuil relevé à 4 millions, boucle de correction et relecteur renforcé en |
+| `Factory - Synthese Mandat - Boucle de correction publiee - 20261018o.md` | fichier | 6,1 Ko | Synthèse Mandat — boucle de correction, relecteur renforcé et seuil de 4 millions enregist |
+| `Factory - Synthese Mandat - Boussole construite lots L01 a L06 - 20261121m.md` | fichier | 9,5 Ko | Synthèse Mandat — boussole de l'utilisateur construite, les 6 lots, 21/11/2026 |
+| `Factory - Synthese Mandat - Campagne A1 et tri A2 du 12-11 - 20261112c.md` | fichier | 7,8 Ko | markdown |
+| `Factory - Synthese Mandat - Campagne A2 du 10-11 - 20261110b.md` | fichier | 13,6 Ko | markdown |
+| `Factory - Synthese Mandat - Campagne A2 sur les 21 candidats - 20261102n.md` | fichier | 20,8 Ko | Synthèse Mandat — 21 candidats instruits, 14 corrigés et publiés, 6 décisions pour vous (0 |
+| `Factory - Synthese Mandat - Campagne D-41 - 20261019e.md` | fichier | 13,5 Ko | Synthèse Mandat — campagne D-41 (a), suites des études des favoris TikTok, 19/10/2026 |
+| `Factory - Synthese Mandat - Campagne D-55 socle des pages - 20261003b.md` | fichier | 11,7 Ko | Synthèse Mandat — votre décision D-55 (a) est exécutée : les 8 améliorations des pages de  |
+| `Factory - Synthese Mandat - Campagne du matin reprise et close - 20261013h.md` | fichier | 9,6 Ko | Synthèse Mandat — campagne du matin reprise et close, 2 restes avancés (13/10/2026) |
+| `Factory - Synthese Mandat - Campagne du registre, 50 sujets clos - 20261012c.md` | fichier | 12,5 Ko | Synthèse Mandat — campagne du 12/10 sur 86 sujets du registre : 50 clos, 35 en cours avec  |
+| `Factory - Synthese Mandat - Campagne sur les 38 candidats - 20261029h.md` | fichier | 6,8 Ko | Synthèse Mandat — campagne sur les 38 candidats du registre (29/10/2026) |
+| `Factory - Synthese Mandat - Campagne TODOs et retours - 20261014a.md` | fichier | 9,9 Ko | Synthèse Mandat — tous les retours et sujets décidés traités, forges et pilot publiés, pro |
+| `Factory - Synthese Mandat - Campagne TODOs et retours - 20261015a.md` | fichier | 11,8 Ko | Synthèse Mandat — retours du 14/10 traités, deux vagues de corrections publiées, produits  |
+| `Factory - Synthese Mandat - Campagne TODOs et retours - 20261015e.md` | fichier | 13,7 Ko | Synthèse Mandat — retours du 15/10 traités, 80 sujets corrigés, 6 forges publiées, pilot e |
+| `Factory - Synthese Mandat - Campagne TODOs et retours - 20261015f.md` | fichier | 4,4 Ko | Synthèse Mandat — vos trois décisions appliquées, pilot publié, campagne du 15/10 close (1 |
+| `Factory - Synthese Mandat - Campagne TODOs et retours - 20261015g.md` | fichier | 7,1 Ko | Synthèse Mandat — reprise entre postes câblée, 3 sujets clos, publication du pilot à décid |
+| `Factory - Synthese Mandat - Cible oeil critique retravaillee - 20261026e.md` | fichier | 11,0 Ko | Synthèse Mandat — cible d'œil critique retravaillée : diagnostic 20261026a produit (26/10/ |
+| `Factory - Synthese Mandat - Commande publiee verte et reprise reseau - 20261013i.md` | fichier | 7,1 Ko | Synthèse Mandat — commande d'installation publiée et verte sur poste neuf, reprise réseau  |
+| `Factory - Synthese Mandat - Competences Cloudflare GitHub Supabase construites - 20261028a.md` | fichier | 10,2 Ko | Synthèse Mandat — compétences Cloudflare, GitHub et Supabase construites dans 6 forges et  |
+| `Factory - Synthese Mandat - Competences OpenAI et Gemini construites - 20261103r.md` | fichier | 8,9 Ko | Synthèse Mandat — compétences OpenAI et Gemini construites dans 3 forges et au pilot, D-16 |
+| `Factory - Synthese Mandat - Competences Supabase dans les forges - 20261016g.md` | fichier | 9,1 Ko | Synthèse Mandat — Supabase outillé dans quatre forges et au pilot, publication du pilot à  |
+| `Factory - Synthese Mandat - Conseil avant arbitrage instruit - 20261020f.md` | fichier | 6,5 Ko | Synthèse Mandat — conseil de cinq agents avant un arbitrage : étude instruite (20/10/2026) |
+| `Factory - Synthese Mandat - Correctif d'ouverture reporte et applique - 20261013b.md` | fichier | 8,0 Ko | Synthèse Mandat — correctif d'ouverture reporté sur la base actuelle et appliqué, recette  |
+| `Factory - Synthese Mandat - D-108 (b) appliquee aux forges ops et design - 20261114d.md` | fichier | 5,5 Ko | Synthèse Mandat — D-108 (b) appliquée aux forges ops et design (14/11/2026) |
+| `Factory - Synthese Mandat - D-208 appliquee - 20261112d.md` | fichier | 4,1 Ko | markdown |
+| `Factory - Synthese Mandat - D-209 appliquee - 20261112h.md` | fichier | 3,2 Ko | Synthèse Mandat — D-209 appliquée au prompt de suivi des agents, 12/11/2026 |
+| `Factory - Synthese Mandat - D-214 et actions A-2 a A-7 executees - 20261114b.md` | fichier | 8,6 Ko | Synthèse Mandat — D-214 (a) et actions A-2 à A-7 exécutées (14/11/2026) |
+| `Factory - Synthese Mandat - D-41 D-43 D-44 executees - 20261019f.md` | fichier | 9,4 Ko | Synthèse Mandat — D-41, D-43 et D-44 exécutées le 19/10/2026 au soir |
+| `Factory - Synthese Mandat - D-45 b executee - 20261019h.md` | fichier | 6,0 Ko | Synthèse Mandat — D-45 (b) exécutée, le 19/10/2026 au soir |
+| `Factory - Synthese Mandat - D-45 expliquee - 20261019g.md` | fichier | 5,8 Ko | Synthèse Mandat — D-45 reposée en clair, le 19/10/2026 au soir |
+| `Factory - Synthese Mandat - D-74 executee conventions client - 20261026g.md` | fichier | 3,9 Ko | Synthèse Mandat — D-74 exécutée : conventions du client chargées à l'ouverture de ses prod |
+| `Factory - Synthese Mandat - D-79 c enregistree - 20261026n.md` | fichier | 2,8 Ko | Synthèse Mandat — D-79 (c) enregistrée : T4 entière part dès la fusion du compte rendu all |
+| `Factory - Synthese Mandat - D-79 detaillee - 20261026m.md` | fichier | 5,7 Ko | Synthèse Mandat — D-79 détaillée : contrôle audit et data seul, ou T4 entière après T2 (26 |
+| `Factory - Synthese Mandat - Decisions 125a et 126a du tri TikTok - 20261102j.md` | fichier | 9,8 Ko | Synthèse Mandat — réponses 125a et 126a sur le tri des favoris TikTok (02/11/2026) |
+| `Factory - Synthese Mandat - Decisions 191 a 193 appliquees - 20261110e.md` | fichier | 5,8 Ko | markdown |
+| `Factory - Synthese Mandat - Decisions 36a et 37a executees et publiees - 20261001c.md` | fichier | 21,3 Ko | Factory — Synthèse de mandat — D-36 et D-37 exécutées, 18 candidatures closes — 01/10/2026 |
+| `Factory - Synthese Mandat - Decisions 49 50 51 en cours - 20261002a.md` | fichier | 19,6 Ko | Synthèse Mandat — vos décisions D-49, D-50 et D-51 sont exécutées ou en cours ; la campagn |
+| `Factory - Synthese Mandat - Decisions 58 a 60 executees et publiees - 20261012b.md` | fichier | 5,4 Ko | Synthèse Mandat — vos décisions D-58, D-59 et D-60 (a) sont exécutées : Produit-79 au regi |
+| `Factory - Synthese Mandat - Decisions D-130 a D-135 construites - 20261102p.md` | fichier | 9,3 Ko | Synthèse Mandat — vos 6 réponses sont construites et publiées, et le premier rejeu réel a  |
+| `Factory - Synthese Mandat - Decisions D-194 a D-198 appliquees - 20261110c.md` | fichier | 14,3 Ko | Synthèse Mandat — Décisions D-194 à D-198 appliquées (10/11/2026) |
+| `Factory - Synthese Mandat - Decisions D-24 a D-28 executees - 20261018m.md` | fichier | 16,7 Ko | Synthèse Mandat — vos 5 décisions exécutées, 2 études rendues, 5 nouvelles décisions (18/1 |
+| `Factory - Synthese Mandat - Decisions D-29 a D-33 executees - 20261018p.md` | fichier | 8,1 Ko | Synthèse Mandat — vos décisions D-29 à D-33 exécutées, 5 sujets clos, aucune décision nouv |
+| `Factory - Synthese Mandat - Decisions D-49 a D-51 detaillees - 20261020b.md` | fichier | 7,6 Ko | Synthèse Mandat — D-49, D-50 et D-51 détaillées (20/10/2026) |
+| `Factory - Synthese Mandat - Decisions D-49 a D-51 executees - 20261020c.md` | fichier | 7,5 Ko | Synthèse Mandat — D-49, D-50 et D-51 exécutées selon l'option (a) (20/10/2026) |
+| `Factory - Synthese Mandat - Decisions posees seulement si ressort - 20261001h.md` | fichier | 10,7 Ko | Synthèse Mandat — seules les décisions qui vous reviennent vous sont posées, 42a exécutée  |
+| `Factory - Synthese Mandat - Depots prives hors d'acces non bloquants - 20261013e.md` | fichier | 6,5 Ko | Synthèse Mandat — dépôts privés hors d'accès non bloquants pour un poste tiers (13/10/2026 |
+| `Factory - Synthese Mandat - Depots prives silencieux confirmation - 20261013f.md` | fichier | 5,2 Ko | Synthèse Mandat — dépôts privés silencieux et confirmation d'installation en fin de comman |
+| `Factory - Synthese Mandat - Derogation A2 et A3 du 12-11 - 20261112b.md` | fichier | 5,5 Ko | markdown |
+| `Factory - Synthese Mandat - Deux chantiers fusionnes sur quatre - 20261026l.md` | fichier | 4,9 Ko | Synthèse Mandat — deux chantiers fusionnés sur quatre : décisions sans lettre et gestes de |
+| `Factory - Synthese Mandat - Douze decisions executees - 20261017d.md` | fichier | 17,4 Ko | Synthèse Mandat — vos 12 décisions exécutées, rien n'est encore publié (17/10/2026) |
+| `Factory - Synthese Mandat - Essai de l audit de securite de Cloudflare - 20261102l.md` | fichier | 6,4 Ko | Synthèse Mandat — essai de l'audit de sécurité de Cloudflare (02/11/2026) |
+| `Factory - Synthese Mandat - Essai de relecture d intention lance - 20261018j.md` | fichier | 11,3 Ko | Synthèse Mandat — l'essai de relecture d'intention est en place sur le poste, et la mesure |
+| `Factory - Synthese Mandat - Essai du conseil de cinq agents - 20261020g.md` | fichier | 6,7 Ko | Synthèse Mandat — essai du conseil de cinq agents joué, D-53 (a) exécutée (20/10/2026) |
+| `Factory - Synthese Mandat - Essai publie et boucle de correction - 20261018l.md` | fichier | 12,6 Ko | Synthèse Mandat — l'essai est publié ; les alertes ne corrigent encore rien d'elles-mêmes, |
+| `Factory - Synthese Mandat - Essai unslop dans oracle-slop - 20261109b.md` | fichier | 7,8 Ko | Synthèse Mandat — essai unslop dans oracle-slop (09/11/2026) |
+| `Factory - Synthese Mandat - Essais de MarkItDown et du skill de logo - 20261103d.md` | fichier | 8,0 Ko | Synthèse Mandat — essais de MarkItDown et du skill de logo (03/11/2026) |
+| `Factory - Synthese Mandat - Etude d'une etape de revue de code - 20261103m.md` | fichier | 7,3 Ko | Synthèse Mandat — étude d'une étape de revue de code (03/11/2026) |
+| `Factory - Synthese Mandat - Etude opportunite pages HTML et indicateurs - 20261003a.md` | fichier | 10,2 Ko | Synthèse Mandat — la remontée sur les pages HTML et les indicateurs est instruite ; l'étud |
+| `Factory - Synthese Mandat - Etude Opus 5.5 jouee enregistrement local - 20261001g.md` | fichier | 17,8 Ko | Synthèse de mandat : vos décisions D-1 (a), D-2 (a) et D-3 (a) sont exécutées, l'étude du  |
+| `Factory - Synthese Mandat - Etude RSI et SSL dans la Factory - 20261001d.md` | fichier | 10,8 Ko | Synthèse Mandat — étude d'opportunité sur l'auto-amélioration récursive et l'apprentissage |
+| `Factory - Synthese Mandat - Etudes des favoris TikTok - 20261019d.md` | fichier | 8,9 Ko | Synthèse Mandat — études d'opportunité tirées des favoris TikTok, 19/10/2026 |
+| `Factory - Synthese Mandat - Extrait de production anonymise admis et outille - 20261029f.md` | fichier | 6,9 Ko | Synthèse Mandat — extrait de production anonymisé : règle écrite, outil construit et publi |
+| `Factory - Synthese Mandat - Favicon du produit de pentest en thème sombre - 20261103g.md` | fichier | 3,6 Ko | Synthèse Mandat — favicon du produit de pentest en thème sombre (03/11/2026) |
+| `Factory - Synthese Mandat - Favori TikTok ecoute et tri complete - 20261109d.md` | fichier | 6,0 Ko | Synthèse Mandat — favori TikTok écouté et tri complété (09/11/2026) |
+| `Factory - Synthese Mandat - Flotte d agents nommee et mesuree - 20261018c.md` | fichier | 12,3 Ko | Synthèse Mandat — D-19 (a) exécutée : 5 agents nommés, un rappel à chaque délégation, un r |
+| `Factory - Synthese Mandat - Flotte d agents publiee - 20261018d.md` | fichier | 5,3 Ko | Synthèse Mandat — D-20 (a) exécutée : la flotte d'agents est enregistrée et publiée, et la |
+| `Factory - Synthese Mandat - Format B applique aux decisions - 20261017c.md` | fichier | 28,5 Ko | Synthèse Mandat — format B appliqué aux décisions, et les 12 décisions ouvertes réécrites  |
+| `Factory - Synthese Mandat - Fusion des postes et lot Produit-12 ingere - 20261015d.md` | fichier | 13,1 Ko | Synthèse Mandat — retours et sujets de ce poste, après fusion avec l'autre poste (15/10/20 |
+| `Factory - Synthese Mandat - Installateur publie commande Windows - 20261013g.md` | fichier | 8,1 Ko | Synthèse Mandat — installateur publié, commande Windows fiabilisée après mesure sur l'adre |
+| `Factory - Synthese Mandat - Installation sans question banniere - 20261013d.md` | fichier | 12,0 Ko | Synthèse Mandat — installation de la factory sans question, avec une bannière finale d'opé |
+| `Factory - Synthese Mandat - Kit du logo du produit de pentest - 20261103f.md` | fichier | 7,7 Ko | Synthèse Mandat — kit du logo du produit de pentest (03/11/2026) |
+| `Factory - Synthese Mandat - L99 agent nocturne et skill VS Code - 20261021a.md` | fichier | 9,8 Ko | Synthèse Mandat — prompt de l'agent nocturne amélioré : skill dans VS Code, liste de modif |
+| `Factory - Synthese Mandat - L99 cible oeil critique retravaillee - 20261026c.md` | fichier | 10,8 Ko | Synthèse Mandat — prompt « retravaille la cible » analysé : contrôles par forge et par cap |
+| `Factory - Synthese Mandat - Largeur des gabarits de lecture corrigee - 20261103e.md` | fichier | 5,0 Ko | Synthèse Mandat — les 18 gabarits de lecture tiennent la règle de largeur, D-154 exécutée  |
+| `Factory - Synthese Mandat - Lot de retours Produit-86 du 12-11 traite - 20261113f.md` | fichier | 7,8 Ko | Synthèse Mandat — lot de retours Produit-86 du 12/11 traité, oracle-dast 0.3.0, 13/11/2026 |
+| `Factory - Synthese Mandat - Lots refuses remontes et fusion des postes - 20261121p.md` | fichier | 7,1 Ko | Synthèse Mandat — A3 (lots refusés remontés au producteur) et A4 (publication après fusion |
+| `Factory - Synthese Mandat - Lots refuses traites huit corrections - 20261004b.md` | fichier | 7,4 Ko | Synthèse Mandat — votre décision D-57 (a) est exécutée : les 2 lots de Produit-02 sont ent |
+| `Factory - Synthese Mandat - Mode boucle L99 construit et publie - 20261016i.md` | fichier | 6,5 Ko | Synthèse Mandat — mode « L99 boucle » construit, publié et exercé une première fois (16/10 |
+| `Factory - Synthese Mandat - Moment de la revue de code dans la mise en production - 20261103q.md` | fichier | 3,2 Ko | Synthèse Mandat — moment de la revue de code dans la mise en production (03/11/2026) |
+| `Factory - Synthese Mandat - Note oeil critique remise - 20261020m.md` | fichier | 4,8 Ko | Synthèse Mandat — la note de travail sur l'œil critique des process est remise, prête à êt |
+| `Factory - Synthese Mandat - Oeil critique continu propose - 20261021b.md` | fichier | 10,7 Ko | Synthèse Mandat — vos réponses 61a, 62a et 63a appliquées, proposition d'œil critique du 2 |
+| `Factory - Synthese Mandat - Oeil critique des process etudie et premier cycle - 20261020h.md` | fichier | 11,0 Ko | Synthèse Mandat — l'œil critique des process est étudié, son premier cycle explique les 19 |
+| `Factory - Synthese Mandat - Oeil critique du 29-10 au 05-11 - 20261110a.md` | fichier | 24,5 Ko | Synthèse Mandat — Œil critique du poste, première moitié de la période due (10/11/2026) |
+| `Factory - Synthese Mandat - Oeil critique et architecture etat au 26-10 - 20261026a.md` | fichier | 11,6 Ko | Synthèse Mandat — œil critique et architecture de la Factory : état au 26/10/2026 |
+| `Factory - Synthese Mandat - Oeil critique global des process etudie - 20261020j.md` | fichier | 10,4 Ko | Synthèse Mandat — l'œil critique global des process est étudié : 10 périmètres, 7 leviers, |
+| `Factory - Synthese Mandat - Oeil critique global releve des appels - 20261020k.md` | fichier | 5,2 Ko | Synthèse Mandat — l'étude de l'œil critique global reçoit le relevé des appels : aucun pro |
+| `Factory - Synthese Mandat - Oeil critique premiere analyse du poste - 20261026i.md` | fichier | 16,4 Ko | Synthèse Mandat — œil critique, première analyse du poste : 6 automatiques faites, 5 majeu |
+| `Factory - Synthese Mandat - Oeil critique recommandations affichees - 20261026j.md` | fichier | 18,7 Ko | Synthèse Mandat — œil critique, première analyse du poste : recommandations affichées (26/ |
+| `Factory - Synthese Mandat - Oeil critique T1 a T4 detaillees et catalogue - 20261026b.md` | fichier | 17,7 Ko | Synthèse Mandat — transformations T1 à T4 détaillées, et un catalogue à la place du plafon |
+| `Factory - Synthese Mandat - Opus 5.5 Medium defaut prouve 2 profils - 20261001a.md` | fichier | 8,6 Ko | Synthèse Mandat — Opus 5.5 en effort medium est le défaut des conversations neuves, prouvé |
+| `Factory - Synthese Mandat - Ouverture session correctif arrete - 20261013a.md` | fichier | 9,9 Ko | Synthèse Mandat — correctif d'ouverture arrêté sur une base qui a bougé, 2 candidatures in |
+| `Factory - Synthese Mandat - Ouverture session reparee chez 19 produits - 20261013c.md` | fichier | 9,3 Ko | Synthèse Mandat — ouverture de session VS Code : correctif repris, propagé aux 19 produits |
+| `Factory - Synthese Mandat - Parc et Drive synchronises - 20261115e.md` | fichier | 5,7 Ko | Synthèse Mandat — parc aligné sur GitHub, sauvegardes Drive vérifiées (15/11/2026) |
+| `Factory - Synthese Mandat - Parc et Drive synchronises - 20261121b.md` | fichier | 7,5 Ko | Synthèse Mandat — parc aligné sur GitHub, miroir Drive du pilot à jour (21/11/2026) |
+| `Factory - Synthese Mandat - Pilot pousse sur GitHub - 20261026u.md` | fichier | 2,5 Ko | Synthèse Mandat — pilot poussé sur GitHub, aligné à 17:15 (26/10/2026) |
+| `Factory - Synthese Mandat - Pilot publie apres reconstruction - 20261016k.md` | fichier | 5,6 Ko | Synthèse Mandat — pilot publié après reconstruction sur le distant, décision « 2a » exécut |
+| `Factory - Synthese Mandat - Pilot publie T2 en cours - 20261026p.md` | fichier | 3,6 Ko | Synthèse Mandat — A-1 en partie, A-2 en attente : pilot publié avec trois chantiers, T2 en |
+| `Factory - Synthese Mandat - Plans classes par mois noms raccourcis - 20261016l.md` | fichier | 8,3 Ko | Synthèse Mandat — plans classés par mois, noms trop longs raccourcis (16/10/2026) |
+| `Factory - Synthese Mandat - Point d'etape de l'etude d'une revue de code - 20261103l.md` | fichier | 3,2 Ko | Synthèse Mandat — point d'étape de l'étude d'une revue de code (03/11/2026) |
+| `Factory - Synthese Mandat - Prompt cible oeil critique adapte a oeil-critique 1.1.0 - 20261026d.md` | fichier | 10,6 Ko | Synthèse Mandat — prompt « retravaille la cible » adapté au skill oeil-critique 1.1.0 (26/ |
+| `Factory - Synthese Mandat - Prompt d activation du releve des couts - 20261105i.md` | fichier | 5,7 Ko | Synthèse Mandat — prompt court pour activer le relevé des coûts dans un produit (05/11/202 |
+| `Factory - Synthese Mandat - Publication 48a du pilot et forge-agents - 20261001i.md` | fichier | 3,9 Ko | Synthèse Mandat — publication « 48a » faite : le pilot et forge-agents sont à jour sur Git |
+| `Factory - Synthese Mandat - Publication D-52 du pilot - 20261020d.md` | fichier | 4,1 Ko | Synthèse Mandat — D-52 exécutée, pilot publié jusqu'à 1855a4df (20/10/2026) |
+| `Factory - Synthese Mandat - Publication du pilot constatee - 20261104e.md` | fichier | 3,3 Ko | Synthèse Mandat — publication du pilot constatée, mes commits publiés sous de nouveaux num |
+| `Factory - Synthese Mandat - Publication du pilot et detail de D-182 et D-184 - 20261109c.md` | fichier | 7,8 Ko | Synthèse Mandat — publication du pilot et détail de D-182 et D-184 (09/11/2026) |
+| `Factory - Synthese Mandat - Publication du pilot sur A1 - 20261109e.md` | fichier | 2,3 Ko | Synthèse Mandat — publication du pilot sur A1 (09/11/2026) |
+| `Factory - Synthese Mandat - Publication et campagne de consigne - 20261017e.md` | fichier | 9,3 Ko | Synthèse Mandat — 4 dépôts publiés, skills recopiés, campagne de consigne jouée sans gagna |
+| `Factory - Synthese Mandat - Publication et charte unique actee - 20261012d.md` | fichier | 5,3 Ko | Synthèse Mandat — vos décisions D-61 (a), D-62 (a) et D-63 sont exécutées : 3 dépôts publi |
+| `Factory - Synthese Mandat - Quatre lots ingeres et premiere revue hebdomadaire - 20261001l.md` | fichier | 19,8 Ko | Synthèse Mandat — 4 lots de retours ingérés et première revue hebdomadaire rendue, 7 propo |
+| `Factory - Synthese Mandat - Quatrieme campagne close et publiee - 20261115c.md` | fichier | 7,2 Ko | Synthèse Mandat — quatrième campagne close et publiée (15/11/2026) |
+| `Factory - Synthese Mandat - Rangement des entrants dans input et output - 20261016d.md` | fichier | 5,9 Ko | Synthèse Mandat — rangement des entrants dans input et output (16/10/2026) |
+| `Factory - Synthese Mandat - Rappel des lecons et frictions du tour - 20261105b.md` | fichier | 7,4 Ko | Synthèse Mandat — rappel des leçons au geste et relevé des frictions du tour, sur D-172 (a |
+| `Factory - Synthese Mandat - Recette complete apres six travaux - 20261015m.md` | fichier | 6,1 Ko | Synthèse Mandat — recette complète du pilot jouée : 2 contrôles en défaut sur 221, aucun d |
+| `Factory - Synthese Mandat - Recette Terraform et revues datees - 20261016j.md` | fichier | 5,9 Ko | Synthèse Mandat — recette Terraform réparée, revue du mode boucle câblée à sa date (16/10/ |
+| `Factory - Synthese Mandat - Registre des mutants et index des dossiers corriges - 20261103o.md` | fichier | 8,8 Ko | Synthèse Mandat — les 3 restes de la campagne d'hier sont corrigés et publiés, le registre |
+| `Factory - Synthese Mandat - Rejeu arrete corrige et relance - 20261001n.md` | fichier | 9,6 Ko | Point d'étape : le rejeu tourne en version 2 ; un défaut de mon banc, vu sur les 7 premièr |
+| `Factory - Synthese Mandat - Rejeu joue effort high retenu sur 6 taches - 20261001k.md` | fichier | 18,3 Ko | Synthèse de mandat : le rejeu est joué en entier ; Opus 5.5 à l'effort high réussit les 6  |
+| `Factory - Synthese Mandat - Rejeu lance candidatures ouvertes etude enregistree - 20261001m.md` | fichier | 9,9 Ko | Point d'étape : vos décisions D-5 (a), D-6 (a) et D-7 (a) sont exécutées ; le rejeu de 38  |
+| `Factory - Synthese Mandat - Relecteur du lecteur vise construit - 20261013k.md` | fichier | 7,1 Ko | Synthèse Mandat — campagne du matin reprise et close, relecteur du lecteur visé construit  |
+| `Factory - Synthese Mandat - Releve des couts par session construit - 20261105g.md` | fichier | 6,8 Ko | Synthèse Mandat — relevé des temps, des jetons et de la charge à la fin de chaque session, |
+| `Factory - Synthese Mandat - Reponses 68a 69a 70a 73b executees - 20261026f.md` | fichier | 7,9 Ko | Synthèse Mandat — réponses « 68a, 69a, 70a, 73b » : registre à jour, T1 engagée, relecture |
+| `Factory - Synthese Mandat - Reponses 75 a 80 en cours - 20261026k.md` | fichier | 6,7 Ko | Synthèse Mandat — réponses 75c, 76c, 77b, 78c et 80b : quatre chantiers lancés, D-79 expli |
+| `Factory - Synthese Mandat - Reponses 81 a 84 en cours - 20261026t.md` | fichier | 8,3 Ko | Synthèse Mandat — réponses 81 à 84 : trois sur quatre livrées, la quatrième en constructio |
+| `Factory - Synthese Mandat - Reponses 81 a 84 executees et publiees - 20261026x.md` | fichier | 6,4 Ko | Synthèse Mandat — réponses 81 à 84 exécutées et publiées (26/10/2026) |
+| `Factory - Synthese Mandat - Reponses D-165 a D-169 appliquees - 20261105a.md` | fichier | 11,1 Ko | Synthèse Mandat — vos 5 réponses aux décisions D-165 à D-169 appliquées (05/11/2026) |
+| `Factory - Synthese Mandat - Reponses de la revue D-114 a D-119 construites - 20261102k.md` | fichier | 8,4 Ko | Synthèse Mandat — vos 6 réponses construites et publiées, 1 geste vous revient (02/11/2026 |
+| `Factory - Synthese Mandat - Reprise multi-poste fusionnee - 20261015i.md` | fichier | 4,7 Ko | Synthèse Mandat — reprise multi-poste construite, fusionnée avec l'autre poste, publicatio |
+| `Factory - Synthese Mandat - Reprise multi-poste prete a publier - 20261015j.md` | fichier | 9,5 Ko | Synthèse Mandat — vos réponses 1a, 2a et 3b exécutées, reprise multi-poste prête à publier |
+| `Factory - Synthese Mandat - Reprise reseau publiee, installation close - 20261013j.md` | fichier | 3,5 Ko | Synthèse Mandat — reprise réseau de l'installateur publiée, chantier d'installation sans q |
+| `Factory - Synthese Mandat - Reprise sur un autre poste - 20261115d.md` | fichier | 9,0 Ko | Synthèse Mandat — reprise sur un autre poste (15/11/2026) |
+| `Factory - Synthese Mandat - Reste a faire au 19-10 soir - 20261019j.md` | fichier | 7,9 Ko | Synthèse Mandat — ce qui reste à faire au pilot, le 19/10/2026 au soir |
+| `Factory - Synthese Mandat - Restes de campagne corriges et largeur des gabarits - 20261103b.md` | fichier | 10,4 Ko | Synthèse Mandat — 2 restes sur 3 corrigés et publiés, 1 décision pour la largeur des gabar |
+| `Factory - Synthese Mandat - Retours et sujets du poste traites - 20261014b.md` | fichier | 12,2 Ko | Synthèse Mandat — retours et sujets qui attendaient ce poste (14/10/2026) |
+| `Factory - Synthese Mandat - Retours et TODOs du 04-11 - 20261104a.md` | fichier | 17,6 Ko | Synthèse Mandat — retours du 03/11 ingérés, 23 sujets du registre clos (04/11/2026) |
+| `Factory - Synthese Mandat - Retours et TODOs du 05-11 - 20261105d.md` | fichier | 11,3 Ko | Synthèse Mandat — 5 lots de retours ingérés, 25 sujets du registre clos (05/11/2026) |
+| `Factory - Synthese Mandat - Retours et TODOs du 06-11 - 20261106a.md` | fichier | 9,6 Ko | Synthèse Mandat — 12 lots de retours ingérés, 34 sujets du registre clos (06/11/2026) |
+| `Factory - Synthese Mandat - Retours et TODOs du 06-11 seconde passe - 20261106b.md` | fichier | 13,2 Ko | Synthèse Mandat — 11 lots de retours ingérés, 44 sujets du registre clos (06/11/2026, seco |
+| `Factory - Synthese Mandat - Retours et TODOs du 09-11 - 20261109d.md` | fichier | 10,5 Ko | Synthèse Mandat — 14 sujets du registre clos, boîte des retours vide (09/11/2026) |
+| `Factory - Synthese Mandat - Retours et TODOs du 09-11 au soir - 20261109h.md` | fichier | 13,6 Ko | Synthèse Mandat — 10 lots reçus, 17 sujets clos, 82 candidats en attente de tri (09/11/202 |
+| `Factory - Synthese Mandat - Retours et TODOs du 14-11 - 20261114a.md` | fichier | 15,9 Ko | Synthèse Mandat — 45 sujets du registre clos, 4 lots ingérés ou refusés, une variable de p |
+| `Factory - Synthese Mandat - Retours et TODOs du 16-11 - 20261116a.md` | fichier | 16,7 Ko | Synthèse Mandat — 79 lots accueillis, 85 sujets corrigés et publiés dans 9 dépôts (16/11/2 |
+| `Factory - Synthese Mandat - Retours et TODOs du 22-11 - 20261122a.md` | fichier | 19,1 Ko | Synthèse Mandat — 19 lots accueillis, 88 sujets corrigés et publiés dans 8 dépôts (22/11/2 |
+| `Factory - Synthese Mandat - Retours et TODOs traites - 20261029g.md` | fichier | 10,2 Ko | Synthèse Mandat — retours du jour ingérés, 19 sujets du registre clos (29/10/2026) |
+| `Factory - Synthese Mandat - Revue D-114 a D-119 et restes de campagne - 20261102b.md` | fichier | 16,6 Ko | Synthèse Mandat — revue des 6 décisions posée, 6 restes de la campagne clos (02/11/2026) |
+| `Factory - Synthese Mandat - Revue de code proposee a la mise en production - 20261103p.md` | fichier | 8,3 Ko | Synthèse Mandat — revue de code proposée à la mise en production (03/11/2026) |
+| `Factory - Synthese Mandat - Sas traite onze lots ingeres deux attente - 20261001b.md` | fichier | 18,6 Ko | Factory — Synthèse de mandat — Sas traité, 11 lots ingérés, 2 en attente de décision — 01/ |
+| `Factory - Synthese Mandat - Seconde campagne du 14-11 close et publiee - 20261114e.md` | fichier | 7,8 Ko | Synthèse Mandat — seconde campagne du 14/11/2026 close et publiée |
+| `Factory - Synthese Mandat - Six travaux faits et onze fiches - 20261015l.md` | fichier | 47,6 Ko | Synthèse Mandat — six travaux faits, onze décisions instruites, publication du pilot en at |
+| `Factory - Synthese Mandat - Skill clip de presentation integre - 20261110d.md` | fichier | 5,6 Ko | Synthèse Mandat — Skill clip de présentation intégré à la Factory (10/11/2026, 21:16) |
+| `Factory - Synthese Mandat - Skill make-it-better construit - 20261102m.md` | fichier | 8,2 Ko | Synthèse Mandat — skill make-it-better construit et publié, test à lancer sur vos document |
+| `Factory - Synthese Mandat - Skill oeil-critique installe - 20261021c.md` | fichier | 6,3 Ko | Synthèse Mandat — skill oeil-critique créé et installé, 3 retraits faits (21/10/2026) |
+| `Factory - Synthese Mandat - Skill PDF construit - 20261030a.md` | fichier | 7,8 Ko | Synthèse Mandat — skill PDF de la Factory, construit et publié, aucune décision attendue ( |
+| `Factory - Synthese Mandat - Skills propages, menage, tri et alertes expliquees - 20261115a.md` | fichier | 8,5 Ko | Synthèse Mandat — skills propagés, ménage, tri et alertes expliquées (15/11/2026) |
+| `Factory - Synthese Mandat - Suites du tri TikTok et revues de code - 20261103c.md` | fichier | 14,4 Ko | Synthèse Mandat — suites du tri TikTok et revues de code (02 et 03/11/2026) |
+| `Factory - Synthese Mandat - Suivi des agents A1 et A2 - 20261113d.md` | fichier | 8,7 Ko | Synthèse Mandat — suivi des agents, 2 produits équipés et premier relevé d'usage, 13/11/20 |
+| `Factory - Synthese Mandat - Suivi des agents toutes les 15 minutes - 20261112j.md` | fichier | 13,6 Ko | Synthèse Mandat — suivi des agents toutes les 15 minutes, construit et prouvé, 12/11/2026 |
+| `Factory - Synthese Mandat - Sujets ouverts au 19-10 - 20261019a.md` | fichier | 9,2 Ko | Synthèse Mandat — sujets ouverts au 19/10/2026 |
+| `Factory - Synthese Mandat - Synchronisation avec GitHub - 20261019i.md` | fichier | 6,8 Ko | Synthèse Mandat — pilot aligné sur GitHub, 29 commits récupérés, rien à publier (19/10/202 |
+| `Factory - Synthese Mandat - Synchronisation des deux postes publiee - 20261020a.md` | fichier | 7,0 Ko | Synthèse Mandat — pilot fusionné avec GitHub et publié, numéros en collision renumérotés ( |
+| `Factory - Synthese Mandat - Synchronisation GitHub du 26-10 - 20261026q.md` | fichier | 4,5 Ko | Synthèse Mandat — pilot et forges alignés sur GitHub (26/10/2026) |
+| `Factory - Synthese Mandat - T2 fusionnee et publiee T4 lancee - 20261026v.md` | fichier | 8,0 Ko | Synthèse Mandat — T2 fusionnée et publiée, T4 lancée : quatre chantiers sur quatre en plac |
+| `Factory - Synthese Mandat - T4 fusionnee carte des forges en place - 20261026w.md` | fichier | 8,2 Ko | Synthèse Mandat — T4 fusionnée : carte des forges, 13 verdicts par demande et verrou « liv |
+| `Factory - Synthese Mandat - TODOs et retours du 18-10 - 20261018k.md` | fichier | 17,6 Ko | Synthèse Mandat — 4 lots reçus, 10 corrections faites et publiées, 5 décisions vous revien |
+| `Factory - Synthese Mandat - TODOs et retours du 19-10 - 20261019b.md` | fichier | 10,7 Ko | Synthèse Mandat — 7 lots reçus, 24 sujets traités, 20 corrections publiées, 4 décisions ex |
+| `Factory - Synthese Mandat - Todos et retours recette hebergee au vert - 20261001j.md` | fichier | 16,1 Ko | Synthèse Mandat — la recette hébergée du pilot repasse au vert, les 2 lots du jour attende |
+| `Factory - Synthese Mandat - TODOs et retours, publication cedee a la session d'origine - 20261015n.md` | fichier | 5,4 Ko | Synthèse Mandat — publication arrêtée avant envoi, la session d'origine publie elle-même l |
+| `Factory - Synthese Mandat - Tri A3 et boite d entree du 12-11 - 20261112a.md` | fichier | 6,3 Ko | markdown |
+| `Factory - Synthese Mandat - Tri des favoris TikTok - 20261019c.md` | fichier | 7,1 Ko | Synthèse Mandat — tri des favoris TikTok du 19/10/2026 |
+| `Factory - Synthese Mandat - Tri des favoris TikTok du 09-11 - 20261109a.md` | fichier | 9,7 Ko | Synthèse Mandat — tri des favoris TikTok du 09/11/2026 |
+| `Factory - Synthese Mandat - Tri TikTok et skill de tri - 20261102i.md` | fichier | 11,2 Ko | Synthèse Mandat — tri des favoris TikTok et skill de tri (02/11/2026) |
+| `Factory - Synthese Mandat - Trois chantiers fusionnes sur quatre - 20261026o.md` | fichier | 4,4 Ko | Synthèse Mandat — trois chantiers fusionnés sur quatre : écrits à un tiers rejoués au lieu |
+| `Factory - Synthese Mandat - Troisieme campagne et alertes des fixtures closes - 20261115b.md` | fichier | 7,8 Ko | Synthèse Mandat — troisième campagne et alertes des fixtures closes (15/11/2026) |
+
+_250 fichier(s), 4 sous-dossier(s)_

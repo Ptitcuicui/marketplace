@@ -1,0 +1,827 @@
+#!/usr/bin/env node
+/**
+ * relever-heritage.test.mjs — recette de `relever-heritage.mjs` (TF-0626).
+ *
+ * Les deux sens sur chaque promesse, sur une arborescence FABRIQUÉE : il trouve les produits par
+ * leur `forge\`, il n'accuse pas le pilot ni les forges, il distingue ABSENT de PÉRIMÉ — la
+ * distinction qui compte, un produit portant une copie périmée croyant être conforme — et il
+ * n'écrit RIEN chez les produits, ce qui est vérifié octet pour octet.
+ * Joué par `oracles\self-tests.mjs` (I2).
+ */
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readdirSync, statSync, readFileSync, existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { spawnSync } from "node:child_process";
+import { produitsDuParc, etatArtefact, relever, rendreMarkdown, attribuerDivergence, racineWebDeclaree, texteDesMotifs, copiesDuSocle } from "./relever-heritage.mjs";
+import { CARNET, CONDITION_SITE } from "./adopter-projet-existant.mjs";
+
+// TF-0957 — LES TABLES DE CE BANC SONT JETABLES, ET C'EST LUI QUI LES POSE.
+//
+// Le 08/09, les 46 bancs du dépôt ont été joués d'affilée avec FORGE_NOMS_INTERDITS et
+// FORGE_PRODUITS_PSEUDO pointant sur les tables RÉELLES du canal confidentiel. Ce banc n'en
+// posait pas : il héritait de l'environnement, ses produits jouets sont entrés dans la table de
+// PRODUCTION — neuf clés, « Produit-65 » à « Produit-73 » — et la porte de publication a ensuite
+// refusé le dépôt sur 81 constats, tous nés de noms inventés par des fixtures.
+//
+// Un banc qui hérite du référentiel de production ne s'éprouve pas : il l'abîme. Et les
+// sous-processus qu'il lance héritent de `process.env`, donc les poser ICI suffit à isoler
+// toute la chaîne, y compris `ingerer-lot.mjs` lancé plus bas.
+{
+  const _iso = mkdtempSync(join(tmpdir(), "relever-heritage-tables-"));
+  writeFileSync(join(_iso, "_noms-interdits.json"),
+    JSON.stringify({ noms: [], identifiants: [], sigles: [], pseudonymes: {} }), "utf8");
+  writeFileSync(join(_iso, "_produits-pseudonymes.json"), JSON.stringify({ produits: {} }), "utf8");
+  process.env.FORGE_NOMS_INTERDITS = join(_iso, "_noms-interdits.json");
+  process.env.FORGE_PRODUITS_PSEUDO = join(_iso, "_produits-pseudonymes.json");
+}
+
+
+const ICI = dirname(fileURLToPath(import.meta.url));
+
+let pass = 0, fail = 0;
+const check = (nom, fn) => {
+  try { fn(); console.log(`  [PASS] ${nom}`); pass++; }
+  catch (e) { console.error(`  [FAIL] ${nom} — ${e.message}`); fail++; }
+};
+const att = (cond, message) => { if (!cond) throw new Error(message); };
+
+const T = mkdtempSync(join(tmpdir(), "relever-heritage-"));
+try {
+  // Le PILOT de recette, qui porte les sources du contrat.
+  const pilot = join(T, "factory-pilot");
+  mkdirSync(join(pilot, "gabarits"), { recursive: true });
+  writeFileSync(join(pilot, "gabarits", "MODELE.md"), "contenu de reference\n", "utf8");
+  writeFileSync(join(pilot, "gabarits", "robots.txt"), "User-agent: *\n", "utf8");
+  const CONTRAT = { version: "9.9.9", artefacts: [
+    { mode: "copie_conforme", source: "gabarits/MODELE.md", cible: "forge/MODELE.md" },
+    { mode: "presence", source: "gabarits/robots.txt", cible: "robots.txt" },
+  ] };
+
+  // Une FORGE : elle ne reçoit pas l'héritage et ne doit jamais figurer au relevé.
+  mkdirSync(join(T, "factory-forge-tests", "forge"), { recursive: true });
+
+  // Un produit CONFORME : copie identique, plus le fichier de présence.
+  const conforme = join(T, "_Client", "produit-conforme");
+  mkdirSync(join(conforme, "forge"), { recursive: true });
+  writeFileSync(join(conforme, "forge", "MODELE.md"), "contenu de reference\n", "utf8");
+  writeFileSync(join(conforme, "robots.txt"), "User-agent: *\n", "utf8");
+
+  // Un produit PÉRIMÉ : il A le fichier, mais ce n'est plus le bon. Le cas qui compte.
+  const perime = join(T, "_Client", "produit-perime");
+  mkdirSync(join(perime, "forge"), { recursive: true });
+  writeFileSync(join(perime, "forge", "MODELE.md"), "vieille version\n", "utf8");
+
+  // Un produit VIDE : un `forge\` et rien d'autre.
+  const vide = join(T, "produit-vide");
+  mkdirSync(join(vide, "forge"), { recursive: true });
+
+  // ── TF-0851 / TF-0848 : LE DISQUE N'EST PAS L'HISTOIRE ────────────────────────────────────
+  // Un produit à dépôt RÉEL, dont l'artefact hérité est conforme sur le disque et traverse les
+  // trois états successifs : non suivi → suivi mais non commis → commis. Les trois se relèvent,
+  // et le contenu reste CONFORME dans les trois — c'est tout le propos : R-47 rendait le même
+  // verdict pour trois situations que `git status` distingue.
+  const versionne = join(T, "_Client", "produit-versionne");
+  mkdirSync(join(versionne, "forge"), { recursive: true });
+  writeFileSync(join(versionne, "forge", "MODELE.md"), "contenu de reference\n", "utf8");
+  writeFileSync(join(versionne, "robots.txt"), "User-agent: *\n", "utf8");
+  const gitP = (...a) => spawnSync("git", ["-C", versionne, "-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false", ...a], { encoding: "utf8" });
+  gitP("init", "-q", "-b", "main");
+  const ARTEFACT_MODELE = { mode: "copie_conforme", source: "gabarits/MODELE.md", cible: "forge/MODELE.md" };
+
+  check("cas rouge — TF-0851 — une recopie CONFORME mais NON SUIVIE par git est relevée « hors histoire », et le geste est nommé", () => {
+    const e = etatArtefact(versionne, ARTEFACT_MODELE, pilot);
+    att(e.etat === "conforme", `état « ${e.etat} » : le CONTENU est bien conforme, c'est le propos`);
+    att(e.histoire === "non_suivi", `histoire « ${e.histoire} » — ce poste l'a, le dépôt ne l'a pas, et rien ne le disait`);
+    att(/git add/.test(e.geste_git || ""), "le geste qui répare n'est pas nommé");
+  });
+
+  check("cas rouge — TF-0848 — la même copie, SUIVIE mais NON COMMISE, est relevée à part : une recopie n'est tenue qu'une fois commise", () => {
+    gitP("add", "forge/MODELE.md");
+    gitP("commit", "-q", "-m", "socle");
+    writeFileSync(join(versionne, "forge", "MODELE.md"), "vieille version\n", "utf8");
+    gitP("add", "forge/MODELE.md");
+    gitP("commit", "-q", "-m", "une version perimee entre dans l histoire");
+    writeFileSync(join(versionne, "forge", "MODELE.md"), "contenu de reference\n", "utf8");
+    const e = etatArtefact(versionne, ARTEFACT_MODELE, pilot);
+    att(e.etat === "conforme", `état « ${e.etat} » : le disque est conforme`);
+    att(e.histoire === "non_commis", `histoire « ${e.histoire} » — HEAD porte encore la version périmée, un git restore la ramènerait`);
+  });
+
+  check("TF-0851 borne — une fois COMMISE, la copie n'est plus signalée : le relevé ne crie pas sur un état tenu", () => {
+    gitP("add", "forge/MODELE.md");
+    gitP("commit", "-q", "-m", "la recopie entre dans l histoire");
+    const e = etatArtefact(versionne, ARTEFACT_MODELE, pilot);
+    att(e.histoire === "commis", `histoire « ${e.histoire} » — un artefact commis doit être muet`);
+  });
+
+  check("TF-0851 borne — un produit SANS dépôt git n'est pas jugé sur son histoire, jamais accusé", () => {
+    const e = etatArtefact(conforme, ARTEFACT_MODELE, pilot);
+    att(e.etat === "conforme", `état « ${e.etat} »`);
+    att(e.histoire === undefined, `histoire « ${e.histoire} » relevée sur un répertoire sans dépôt — il n'y a pas d'histoire où entrer`);
+  });
+
+  check("les produits sont trouvés par leur `forge`, à un et deux niveaux", () => {
+    const p = produitsDuParc(T);
+    att(p.includes(conforme), "un produit à deux niveaux n'est pas trouvé");
+    att(p.includes(vide), "un produit à un niveau n'est pas trouvé");
+  });
+
+  check("le pilot et les forges ne sont JAMAIS relevés — ils ne reçoivent pas l'héritage", () => {
+    const p = produitsDuParc(T);
+    att(!p.some((x) => x.includes("factory-pilot")), "le pilot figure au relevé");
+    att(!p.some((x) => x.includes("factory-forge-tests")), "une forge figure au relevé");
+  });
+
+  check("cas rouge — TF-1592 — un fichier personnalisé qui ne porte pas le MOTIF exigé (mode presence_et_motif) est INCOMPLET, comme le juge R-47", () => {
+    const P = mkdtempSync(join(tmpdir(), "heritage-motif-"));
+    try {
+      mkdirSync(join(P, ".claude"), { recursive: true });
+      const A = { mode: "presence_et_motif", source: "gabarits/settings-produit.json", cible: ".claude/settings.json",
+        motif_exige: "forge/hooks/factory.mjs publication-hebergee" };
+      writeFileSync(join(P, ".claude", "settings.json"), '{"hooks":{"Stop":[{"command":"node forge/hooks/factory.mjs restitution"}]}}', "utf8");
+      const rouge = etatArtefact(P, A, P);
+      att(rouge.etat === "incomplet", `fichier sans le motif : état « ${rouge.etat} » au lieu de « incomplet »`);
+      att((rouge.motifs_absents || []).includes(A.motif_exige), "le motif manquant n'est pas nommé");
+      writeFileSync(join(P, ".claude", "settings.json"), '{"hooks":{"PreToolUse":[{"command":"node forge/hooks/factory.mjs publication-hebergee"}]}}', "utf8");
+      const vert = etatArtefact(P, A, P);
+      att(vert.etat === "present", `fichier qui porte le motif : état « ${vert.etat} » au lieu de « present »`);
+    } finally { rmSync(P, { recursive: true, force: true }); }
+  });
+
+  check("TF-1635 — une LISTE de motifs exigés : chaque motif absent est nommé, le fichier qui les porte tous est present", () => {
+    const P = mkdtempSync(join(tmpdir(), "heritage-motifs-"));
+    try {
+      mkdirSync(join(P, ".claude"), { recursive: true });
+      const A = { mode: "presence_et_motif", source: "gabarits/settings-produit.json", cible: ".claude/settings.json",
+        motif_exige: ["forge/hooks/factory.mjs publication-hebergee", "factory.mjs ouverture --sans-readme --contexte-json"] };
+      writeFileSync(join(P, ".claude", "settings.json"), '{"c":["node forge/hooks/factory.mjs publication-hebergee","node forge/hooks/factory.mjs ouverture --sans-readme"]}', "utf8");
+      const rouge = etatArtefact(P, A, P);
+      att(rouge.etat === "incomplet", `hook d'ouverture synchrone : état « ${rouge.etat} » au lieu de « incomplet »`);
+      att(JSON.stringify(rouge.motifs_absents) === JSON.stringify([A.motif_exige[1]]), `motifs absents mal nommés : ${JSON.stringify(rouge.motifs_absents)}`);
+      writeFileSync(join(P, ".claude", "settings.json"), '{"c":["node forge/hooks/factory.mjs publication-hebergee","node forge/hooks/factory.mjs ouverture --sans-readme --contexte-json"]}', "utf8");
+      att(etatArtefact(P, A, P).etat === "present", "fichier qui porte les 2 motifs non reconnu");
+    } finally { rmSync(P, { recursive: true, force: true }); }
+  });
+
+  // TF-1756 (15/10/2026) — LES MOTIFS EXIGÉS DU CÂBLAGE SE DÉRIVENT DU GABARIT. Le contrat n'exigeait que
+  // 2 des 7 hooks du gabarit : restitution, page-html, ecriture, droits-accordes, lexique pouvaient manquer
+  // sans constat. Vert : chaque commande `forge/hooks/factory.mjs <nom>` du VRAI gabarit est exigée par le
+  // VRAI contrat ; un produit qui en déclare une sous `_hooks_factory_exclus` la tient (écart déclaré).
+  // Rouge : un settings qui câble tout sauf `restitution` est incomplet, et le motif manquant est nommé.
+  check("TF-1756 — chaque hook du gabarit settings-produit est exigé par HERITAGE.json ; exclusion déclarée tenue, oubli incomplet", () => {
+    const racine = join(dirname(fileURLToPath(import.meta.url)), "..");
+    const gabarit = JSON.parse(readFileSync(join(racine, "gabarits", "settings-produit.json"), "utf8"));
+    const contrat = JSON.parse(readFileSync(join(racine, "gabarits", "HERITAGE.json"), "utf8"));
+    const A = contrat.artefacts.find((a) => a.cible === ".claude/settings.json");
+    const exiges = [].concat(A.motif_exige);
+    const commandes = Object.values(gabarit.hooks).flat().flatMap((g) => g.hooks || []).map((h) => String(h.command));
+    // TF-1903 (21/10/2026) : le gabarit écrit le lanceur ancré entre guillemets ; le motif se lit sans le guillemet fermant.
+    const factory = commandes.filter((c) => /forge\/hooks\/factory\.mjs"?\s+[\w-]+/.test(c));
+    att(factory.length >= 9, `${factory.length} commande(s) du lanceur reconnue(s) au gabarit, 9 au moins attendues`);
+    const nonExiges = factory.filter((c) => !exiges.some((m) => texteDesMotifs(c).includes(m)));
+    att(!nonExiges.length, `commande(s) du gabarit non exigée(s) : ${nonExiges.join(" ; ")}`);
+    const P = mkdtempSync(join(tmpdir(), "heritage-derive-"));
+    try {
+      mkdirSync(join(P, ".claude"), { recursive: true });
+      // Vert d'abord : le gabarit lui-même, tel qu'il est posé chez un produit, tient tous les motifs.
+      writeFileSync(join(P, ".claude", "settings.json"), readFileSync(join(racine, "gabarits", "settings-produit.json"), "utf8"), "utf8");
+      const vert = etatArtefact(P, A, P);
+      att(vert.etat === "present", `le gabarit posé tel quel : état « ${vert.etat} », absents ${JSON.stringify(vert.motifs_absents)}`);
+      const sansRestitution = commandes.filter((c) => !/factory\.mjs"? restitution/.test(c));
+      writeFileSync(join(P, ".claude", "settings.json"), JSON.stringify({ c: sansRestitution }), "utf8");
+      const rouge = etatArtefact(P, A, P);
+      att(rouge.etat === "incomplet" && (rouge.motifs_absents || []).some((m) => /restitution/.test(m)), `oubli de restitution : état « ${rouge.etat} », absents ${JSON.stringify(rouge.motifs_absents)}`);
+      writeFileSync(join(P, ".claude", "settings.json"), JSON.stringify({ _hooks_factory_exclus: [{ commande: "forge/hooks/factory.mjs restitution", motif: "essai" }], c: sansRestitution }), "utf8");
+      att(etatArtefact(P, A, P).etat === "present", "une exclusion déclarée n'est pas tenue pour un motif présent");
+    } finally { rmSync(P, { recursive: true, force: true }); }
+  });
+
+  check("un PRODUIT de l'écosystème (factory-marketing) est relevé : le préfixe factory ne fait pas une forge", () => {
+    const P = mkdtempSync(join(tmpdir(), "heritage-eco-"));
+    try {
+      mkdirSync(join(P, "factory-marketing", "forge"), { recursive: true });
+      mkdirSync(join(P, "factory-pilot", "forge"), { recursive: true });
+      mkdirSync(join(P, "factory-forge-tests", "forge"), { recursive: true });
+      const p = produitsDuParc(P);
+      att(p.some((x) => x.endsWith("factory-marketing")), "le produit factory-marketing n'est pas relevé");
+      att(p.length === 1, `le pilot ou une forge figure au relevé (${p.length} trouvés)`);
+    } finally { rmSync(P, { recursive: true, force: true }); }
+  });
+
+  check("on ne descend pas SOUS un produit : ses sous-dossiers ne sont pas des produits", () => {
+    const dedans = join(conforme, "sous-module");
+    mkdirSync(join(dedans, "forge"), { recursive: true });
+    att(!produitsDuParc(T).includes(dedans), "un sous-dossier d'un produit a été relevé");
+  });
+
+  check("cas rouge — ABSENT et PÉRIMÉ sont distingués — c'est toute l'utilité du relevé", () => {
+    const bon = etatArtefact(conforme, CONTRAT.artefacts[0], pilot);
+    att(bon.etat === "conforme", `état « ${bon.etat} » au lieu de conforme`);
+    const vieux = etatArtefact(perime, CONTRAT.artefacts[0], pilot);
+    att(vieux.etat === "divergent", `état « ${vieux.etat} » au lieu de divergent`);
+    att(vieux.empreinte_pilot && vieux.empreinte_produit && vieux.empreinte_pilot !== vieux.empreinte_produit,
+      "le divergent ne montre pas les deux empreintes qui le prouvent");
+    const rien = etatArtefact(vide, CONTRAT.artefacts[0], pilot);
+    att(rien.etat === "absent", `état « ${rien.etat} » au lieu de absent`);
+  });
+
+  check("un artefact en mode `presence` n'est pas comparé — exiger l'identité serait faux", () => {
+    writeFileSync(join(perime, "robots.txt"), "tout autre contenu, et c'est LÉGITIME\n", "utf8");
+    const r = etatArtefact(perime, CONTRAT.artefacts[1], pilot);
+    att(r.etat === "present", `état « ${r.etat} » : un mode presence ne juge que l'existence`);
+  });
+
+  check("le relevé compte juste et classe le plus dégradé en tête", () => {
+    const lignes = relever(T, CONTRAT, pilot);
+    const parNom = Object.fromEntries(lignes.map((l) => [l.produit, l]));
+    att(parNom["produit-vide"].absents === 2, `produit vide : ${parNom["produit-vide"].absents} absents au lieu de 2`);
+    att(parNom["_Client/produit-conforme"].absents === 0, "le produit conforme est compté en défaut");
+    att(parNom["_Client/produit-perime"].divergents === 1, "le périmé n'est pas compté divergent");
+    att(lignes[0].absents + lignes[0].divergents >= lignes[lignes.length - 1].absents + lignes[lignes.length - 1].divergents,
+      "le classement ne met pas le plus dégradé en tête");
+  });
+
+  check("AUCUNE écriture chez les produits — vérifié par empreinte de l'arborescence", () => {
+    const empreinte = (d) => readdirSync(d, { withFileTypes: true, recursive: true })
+      .map((e) => `${e.parentPath || e.path}|${e.name}|${e.isFile() ? statSync(join(e.parentPath || e.path, e.name)).size : "d"}`)
+      .sort().join("\n");
+    const avant = empreinte(join(T, "_Client"));
+    relever(T, CONTRAT, pilot);
+    rendreMarkdown(relever(T, CONTRAT, pilot), CONTRAT, T, 3);
+    att(empreinte(join(T, "_Client")) === avant, "le relevé a modifié l'arborescence d'un produit");
+  });
+
+  check("le relevé DÉCLARE ce qu'il ne voit pas — l'exhaustivité ne se suppose pas", () => {
+    const md = rendreMarkdown(relever(T, CONTRAT, pilot), CONTRAT, T, 3);
+    att(/NON RELEV/.test(md), "le rendu ne déclare pas sa limite");
+    att(/Aucune écriture/.test(md), "le rendu ne dit pas qu'il n'écrit rien chez les produits");
+    att(/PÉRIMÉ/.test(md), "le rendu ne distingue pas visuellement un fichier périmé d'un absent");
+  });
+  // ---- LE TROISIEME ETAT (TF-0654) ----------------------------------------------------------
+  //
+  // « robots.txt absent, gravité majeur » était FAUX sur un produit réel : le fichier vivait en
+  // `site/robots.txt` et répondait 200 en production — la racine WEB de ce produit n'est pas la
+  // racine de son dépôt. La sonde ne connaissait que deux lectures, « il manque » ou « l'absence
+  // est légitime », et aucune des deux n'était vraie.
+  check("un artefact trouvé AILLEURS est `hors_racine`, et le relevé DIT où", () => {
+    const produit = join(T, "_ClientWeb");
+    mkdirSync(join(produit, "forge"), { recursive: true });
+    mkdirSync(join(produit, "site"), { recursive: true });
+    writeFileSync(join(produit, "site", "robots.txt"), "User-agent: *\n", "utf8");
+    const artefact = { cible: "robots.txt", source: "gabarits/web/robots.txt", mode: "presence" };
+    const etat = etatArtefact(produit, artefact, pilot);
+    att(etat.etat === "hors_racine", `état « ${etat.etat} » au lieu de hors_racine`);
+    att(etat.trouve_a === "site/robots.txt", `le relevé ne dit pas OÙ : « ${etat.trouve_a} »`);
+  });
+
+  check("BORNE — introuvable partout reste ABSENT : le troisième état n'absout rien", () => {
+    const produit = join(T, "_ClientNu");
+    mkdirSync(join(produit, "forge"), { recursive: true });
+    const etat = etatArtefact(produit, { cible: "robots.txt", source: "gabarits/web/robots.txt", mode: "presence" }, pilot);
+    att(etat.etat === "absent", `état « ${etat.etat} » au lieu de absent`);
+  });
+
+  // ---- TF-1471 (28/09/2026, campagne D-32 (a)) — LE `conditionnel` DU CONTRAT, ENFIN LU --------
+  //
+  // `robots.txt` et `llms.txt` portent `conditionnel: "produit à surface web"` dans
+  // gabarits\HERITAGE.json depuis l'origine ; ce relevé ne le lisait pas, et comptait les deux
+  // ABSENT, gravité majeur, même chez un projet DÉCLARÉ documentaire (type_projet, TF-1439) —
+  // alors que R-27 (oracle-conformite-projet.mjs) les tient déjà pour SANS_OBJET au même endroit.
+  const ARTEFACT_SITE = { cible: "robots.txt", source: "gabarits/web/robots.txt", mode: "presence", conditionnel: CONDITION_SITE };
+  const ecrireCarnetDocumentaire = (produit) => {
+    mkdirSync(join(produit, "forge", "travaux"), { recursive: true });
+    writeFileSync(join(produit, ...CARNET.split("/")),
+      "---\ntype_projet: documentaire\n---\n\n## Type de projet : documentaire\n", "utf8");
+  };
+
+  check("TF-1471 — un artefact `conditionnel` est SANS_OBJET chez un projet DÉCLARÉ documentaire, sans signal de code ni de site", () => {
+    const produit = join(T, "_ClientDocumentaire");
+    mkdirSync(join(produit, "forge"), { recursive: true });
+    ecrireCarnetDocumentaire(produit);
+    const etat = etatArtefact(produit, ARTEFACT_SITE, pilot);
+    att(etat.etat === "sans_objet", `état « ${etat.etat} » au lieu de sans_objet — le type_projet déclaré n'est pas lu`);
+    att(/documentaire/.test(etat.motif || ""), "le motif ne dit pas pourquoi l'artefact n'est pas dû");
+  });
+
+  check("TF-1471 borne — la déclaration documentaire ne vaut que CONFRONTÉE : un signal de code la contredit, l'artefact reste ABSENT", () => {
+    const produit = join(T, "_ClientFauxDocumentaire");
+    mkdirSync(join(produit, "forge"), { recursive: true });
+    ecrireCarnetDocumentaire(produit);
+    writeFileSync(join(produit, "app.js"), "// du code réel\n", "utf8");
+    const etat = etatArtefact(produit, ARTEFACT_SITE, pilot);
+    att(etat.etat === "absent", `état « ${etat.etat} » : une déclaration documentaire contredite par du code ne doit RIEN exempter`);
+  });
+
+  check("TF-1471 borne — sans `conditionnel` déclaré au contrat, un projet documentaire reste jugé comme avant", () => {
+    const produit = join(T, "_ClientDocumentaireSansConditionnel");
+    mkdirSync(join(produit, "forge"), { recursive: true });
+    ecrireCarnetDocumentaire(produit);
+    const etat = etatArtefact(produit, { cible: "forge/MODELE.md", source: "gabarits/MODELE.md", mode: "copie_conforme" }, pilot);
+    att(etat.etat === "absent", `état « ${etat.etat} » : un artefact SANS conditionnel ne doit jamais être exempté par type_projet`);
+  });
+
+  // TF-1699 (15/10/2026) — le type « service » (sans site public) exempte les artefacts de site
+  // comme R-27, MÊME avec du code ; un fichier de site le contredit.
+  const ecrireCarnetService = (produit) => {
+    mkdirSync(join(produit, "forge", "travaux"), { recursive: true });
+    writeFileSync(join(produit, ...CARNET.split("/")), "---\ntype_projet: service\n---\n\n## Type de projet : service sans site public\n", "utf8");
+  };
+  check("TF-1699 — un artefact de site est SANS_OBJET chez un service déclaré, code compris", () => {
+    const produit = join(T, "_ClientService");
+    mkdirSync(join(produit, "forge"), { recursive: true });
+    ecrireCarnetService(produit);
+    writeFileSync(join(produit, "server.py"), "print(1)\n", "utf8");
+    const etat = etatArtefact(produit, ARTEFACT_SITE, pilot);
+    att(etat.etat === "sans_objet" && /service/.test(etat.motif || ""), `état « ${etat.etat} » (${etat.motif || ""}) : le type service n'est pas lu`);
+  });
+  check("TF-1699 borne — un service qui porte un fichier de site (sitemap.xml) : l'artefact reste ABSENT", () => {
+    const produit = join(T, "_ClientFauxService");
+    mkdirSync(join(produit, "forge"), { recursive: true });
+    ecrireCarnetService(produit);
+    writeFileSync(join(produit, "sitemap.xml"), "<urlset/>\n", "utf8");
+    const etat = etatArtefact(produit, ARTEFACT_SITE, pilot);
+    att(etat.etat === "absent", `état « ${etat.etat} » : un service contredit par un fichier de site ne doit rien exempter`);
+  });
+
+  check("le relevé compte les exemptions à part, ni manque ni conforme", () => {
+    const produit = join(T, "_ClientDocumentaireCompte");
+    mkdirSync(join(produit, "forge"), { recursive: true });
+    ecrireCarnetDocumentaire(produit);
+    const CONTRAT_SITE = { version: "9.9.9", artefacts: [ARTEFACT_SITE] };
+    const lignes = relever(T, CONTRAT_SITE, pilot);
+    const l = lignes.find((x) => x.produit === "_ClientDocumentaireCompte");
+    att(l.exemptes === 1, `${l.exemptes} exempté(s) au lieu de 1`);
+    att(l.absents === 0, "une exemption est comptée en défaut (absents)");
+    att(l.conformes === 0, "une exemption est comptée conforme — elle ne l'est pas, rien n'est présent");
+  });
+
+  // ---- UN SOCLE SE VERIFIE, IL NE SE SUPPOSE PAS (TF-0649) -----------------------------------
+  //
+  // La règle 10 du socle énumérait ses exclusions de `.gitignore` en PROSE depuis le 06/08. Un
+  // produit ne l'enfreignait pas : il ne la rencontrait jamais. Et ce relevé rendait « présent »
+  // pour tout mode autre que `copie_conforme`, quand l'oracle de conformité, lui, vérifiait les
+  // motifs — deux consommateurs du même contrat, deux verdicts sur le même fichier.
+  const ARTEFACT_MOTIFS = {
+    cible: ".gitignore", source: "gabarits/gitignore-produit", mode: "presence_et_motifs",
+    motifs_exiges: ["__pycache__/", "node_modules/", "!forge/**"],
+  };
+
+  check("un fichier qui porte tous les motifs du socle est PRESENT", () => {
+    const produit = join(T, "_ClientIgnore");
+    mkdirSync(join(produit, "forge"), { recursive: true });
+    writeFileSync(join(produit, ".gitignore"),
+      "# le socle\n__pycache__/\nnode_modules/\n!forge/**\n\n# et ce que ce produit ajoute\n.cache/\n", "utf8");
+    const etat = etatArtefact(produit, ARTEFACT_MOTIFS, pilot);
+    att(etat.etat === "present", `état « ${etat.etat} » : un socle complet doit passer, et le produit garde le droit d'ajouter les siens`);
+  });
+
+  check("un motif du socle qui manque rend INCOMPLET, et les manquants sont NOMMÉS", () => {
+    const produit = join(T, "_ClientIgnorePartiel");
+    mkdirSync(join(produit, "forge"), { recursive: true });
+    writeFileSync(join(produit, ".gitignore"), "__pycache__/\n", "utf8");
+    const etat = etatArtefact(produit, ARTEFACT_MOTIFS, pilot);
+    att(etat.etat === "incomplet", `état « ${etat.etat} » au lieu de incomplet`);
+    att((etat.motifs_absents || []).join(",") === "node_modules/,!forge/**",
+      `les motifs absents ne sont pas nommés : ${JSON.stringify(etat.motifs_absents)}`);
+  });
+
+  check("BORNE — un motif en COMMENTAIRE ne protège rien, et ne compte pas", () => {
+    // Sans cette borne, un `.gitignore` qui MENTIONNE `node_modules/` dans une phrase passerait
+    // pour conforme — un vert obtenu sur du texte, jamais sur une exclusion.
+    const produit = join(T, "_ClientIgnoreCommente");
+    mkdirSync(join(produit, "forge"), { recursive: true });
+    writeFileSync(join(produit, ".gitignore"),
+      "__pycache__/\n# node_modules/ sera ajouté plus tard\n!forge/**\n", "utf8");
+    const etat = etatArtefact(produit, ARTEFACT_MOTIFS, pilot);
+    att(etat.etat === "incomplet", `état « ${etat.etat} » : un motif commenté a été compté comme actif`);
+    att((etat.motifs_absents || []).includes("node_modules/"), "le motif commenté n'est pas signalé absent");
+  });
+
+  // ── TF-0882 : un motif COUVERT PAR PLUS LARGE est TENU ────────────────────────────────────
+  // Mesuré le 06/09 chez un produit ancien : `*.oracles*.json` et `*.oracles*.jsonl` couvraient
+  // strictement les trois motifs de sidecars exigés, comptés « 3 absents sur 6 » ; trois lignes
+  // redondantes ont été écrites à côté des deux qui faisaient le travail.
+  const ARTEFACT_SIDECARS = {
+    cible: ".gitignore", source: "gabarits/gitignore-produit", mode: "presence_et_motifs",
+    motifs_exiges: ["*.oracles.json", "*.oracles-cache.json", "*.oracles-historique.jsonl", "!forge/**"],
+  };
+
+  check("TF-0882 — trois graphies exactes COUVERTES par deux motifs plus larges → PRESENT, aucune ligne redondante à écrire", () => {
+    const produit = join(T, "_ClientIgnoreLarge");
+    mkdirSync(join(produit, "forge"), { recursive: true });
+    writeFileSync(join(produit, ".gitignore"), "*.oracles*.json\n*.oracles*.jsonl\n!forge/**\n", "utf8");
+    const etat = etatArtefact(produit, ARTEFACT_SIDECARS, pilot);
+    att(etat.etat === "present", `état « ${etat.etat} » : ${JSON.stringify(etat.motifs_absents)} — une protection équivalente est comptée absente`);
+  });
+
+  check("TF-0882 borne — un motif que RIEN ne couvre reste absent, et une NÉGATION exige sa graphie exacte", () => {
+    const produit = join(T, "_ClientIgnoreLargePartiel");
+    mkdirSync(join(produit, "forge"), { recursive: true });
+    // `*.oracles*.json` couvre les deux graphies `.json`, rien ne couvre le `.jsonl`, et la
+    // négation ne se couvre jamais : dans un `.gitignore`, c'est l'ORDRE qui décide (TF-0850).
+    writeFileSync(join(produit, ".gitignore"), "*.oracles*.json\n", "utf8");
+    const etat = etatArtefact(produit, ARTEFACT_SIDECARS, pilot);
+    att(etat.etat === "incomplet", `état « ${etat.etat} » au lieu de incomplet`);
+    att((etat.motifs_absents || []).join(",") === "*.oracles-historique.jsonl,!forge/**",
+      `les absents attendus sont le .jsonl et la négation : ${JSON.stringify(etat.motifs_absents)}`);
+  });
+
+  check("BORNE — les dossiers d'archives et de dépendances ne sont JAMAIS fouillés", () => {
+    // Sans cette borne, un `robots.txt` traînant dans `node_modules` ou `old/` ferait passer le
+    // produit pour « hors racine » — un vert obtenu sur une copie de quelque chose.
+    const produit = join(T, "_ClientBruit");
+    mkdirSync(join(produit, "forge"), { recursive: true });
+    mkdirSync(join(produit, "node_modules", "un-paquet"), { recursive: true });
+    writeFileSync(join(produit, "node_modules", "un-paquet", "robots.txt"), "x\n", "utf8");
+    mkdirSync(join(produit, "old"), { recursive: true });
+    writeFileSync(join(produit, "old", "robots.txt"), "x\n", "utf8");
+    const etat = etatArtefact(produit, { cible: "robots.txt", source: "gabarits/web/robots.txt", mode: "presence" }, pilot);
+    att(etat.etat === "absent", `état « ${etat.etat} » : un fichier d'archive ou de dépendance a été pris pour la surface servie`);
+  });
+
+  check("TF-0710 — une copie conforme sous l'ALIAS de transition n'est pas un défaut", () => {
+    const produit = join(T, "_Client", "produit-alias");
+    mkdirSync(join(produit, "forge"), { recursive: true });
+    writeFileSync(join(produit, "forge", "ANCIEN.md"), "contenu de reference\n", "utf8");
+    const etat = etatArtefact(produit, { mode: "copie_conforme", source: "gabarits/MODELE.md",
+      cible: "forge/NOUVEAU.md", alias_accepte: "forge/ANCIEN.md" }, pilot);
+    att(etat.etat === "conforme", `état « ${etat.etat} » — le parc entier serait force de migrer le jour de la publication`);
+    att(!etat.alias_perime, "un alias SEUL n'est pas périmé : il EST la copie du produit (TF-0710)");
+  });
+
+  // ── TF-0881 : l'alias qui SURVIT à côté de la cible canonique ─────────────────────────────
+  // Mesure du 06/09 chez TROIS produits anciens : l'ancien gabarit (62 lignes du 14/08, sans
+  // obligation de classe) restait à côté du nouveau (180 lignes), R-47 rendait PASS — seul faux
+  // vert du lot — et trois lots d'un de ces produits citaient encore l'ancien nom.
+  check("TF-0881 — l'alias PÉRIMÉ (la cible canonique existe ET l'ancien fichier aussi) est relevé, le geste de retrait nommé", () => {
+    const produit = join(T, "_Client", "produit-deux-noms");
+    mkdirSync(join(produit, "forge"), { recursive: true });
+    writeFileSync(join(produit, "forge", "NOUVEAU.md"), "contenu de reference\n", "utf8");
+    writeFileSync(join(produit, "forge", "ANCIEN.md"), "le gabarit du 14/08, 62 lignes\n", "utf8");
+    const etat = etatArtefact(produit, { mode: "copie_conforme", source: "gabarits/MODELE.md",
+      cible: "forge/NOUVEAU.md", alias_accepte: "forge/ANCIEN.md" }, pilot);
+    att(etat.etat === "conforme", `état « ${etat.etat} » : la cible canonique EST conforme, c'est le propos — le faux vert vient de l'autre fichier`);
+    att(etat.alias_perime === "forge/ANCIEN.md", `alias périmé non relevé (« ${etat.alias_perime} ») — un gabarit périmé qu'aucun contrôle ne regarde reste lu et cité`);
+    att(/git rm/.test(etat.geste_alias || ""), "le geste de retrait n'est pas nommé, et le produit est le seul à pouvoir le faire");
+  });
+
+  check("TF-0710 borne — un alias DIVERGENT reste un divergent : l'alias accepte le nom, pas la dérive", () => {
+    const produit = join(T, "_Client", "produit-alias-perime");
+    mkdirSync(join(produit, "forge"), { recursive: true });
+    writeFileSync(join(produit, "forge", "ANCIEN.md"), "vieux contenu\n", "utf8");
+    const etat = etatArtefact(produit, { mode: "copie_conforme", source: "gabarits/MODELE.md",
+      cible: "forge/NOUVEAU.md", alias_accepte: "forge/ANCIEN.md" }, pilot);
+    att(etat.etat === "divergent", `état « ${etat.etat} » — un alias périmé est passé pour conforme`);
+  });
+
+  // ── TF-0793 — LA RACINE WEB DÉCLARÉE SE LIT (ce que TF-0654 promettait sans le tenir) ──
+  const ROBOTS = { cible: "robots.txt", source: "gabarits/web/robots.txt", mode: "presence" };
+  const declarer = (produit, valeur) => {
+    mkdirSync(join(produit, "docs", "projet"), { recursive: true });
+    writeFileSync(join(produit, "docs", "projet", "PARAMETRAGE.md"),
+      `---\nrole: miroir de la configuration\n${valeur === null ? "" : `racine_web: ${valeur}\n`}verifie_le: 2026-09-01\n---\n\n# Paramétrage\n`, "utf8");
+  };
+
+  check("TF-0793 — un artefact trouvé SOUS la racine web déclarée est PRÉSENT, et la racine est nommée", () => {
+    const produit = join(T, "_ClientRacineWeb", "declare");
+    mkdirSync(join(produit, "forge"), { recursive: true });
+    mkdirSync(join(produit, "site"), { recursive: true });
+    writeFileSync(join(produit, "site", "robots.txt"), "User-agent: *\n", "utf8");
+    declarer(produit, "site");
+    const etat = etatArtefact(produit, ROBOTS, pilot);
+    att(etat.etat === "present", `état « ${etat.etat} » : la déclaration a été faite et n'est pas lue — le défaut même de TF-0793`);
+    att(etat.sous_racine_web === "site", `la racine web sous laquelle l'artefact a été trouvé n'est pas nommée : ${JSON.stringify(etat)}`);
+  });
+
+  check("TF-0793 borne — SANS déclaration, le même fichier reste HORS RACINE : rien n'est deviné", () => {
+    const produit = join(T, "_ClientRacineWeb", "non-declare");
+    mkdirSync(join(produit, "forge"), { recursive: true });
+    mkdirSync(join(produit, "site"), { recursive: true });
+    writeFileSync(join(produit, "site", "robots.txt"), "User-agent: *\n", "utf8");
+    declarer(produit, null);
+    const etat = etatArtefact(produit, ROBOTS, pilot);
+    att(etat.etat === "hors_racine", `état « ${etat.etat} » : la racine web a été devinée au lieu d'être lue`);
+  });
+
+  check("TF-0793 borne — une racine déclarée où le fichier MANQUE ne rend pas présent", () => {
+    const produit = join(T, "_ClientRacineWeb", "declare-vide");
+    mkdirSync(join(produit, "forge"), { recursive: true });
+    mkdirSync(join(produit, "site"), { recursive: true });
+    declarer(produit, "site");
+    const etat = etatArtefact(produit, ROBOTS, pilot);
+    att(etat.etat === "absent", `état « ${etat.etat} » : la déclaration ne vaut pas présence`);
+  });
+
+  check("TF-0793 — la déclaration se lit dans le frontmatter seulement, et sous ses formes usuelles", () => {
+    const produit = join(T, "_ClientRacineWeb", "formes");
+    mkdirSync(join(produit, "docs", "projet"), { recursive: true });
+    writeFileSync(join(produit, "docs", "projet", "PARAMETRAGE.md"), "---\r\nracine_web: \"./public/\"\r\n---\r\n\r\nracine_web: pas-ici\r\n", "utf8");
+    att(racineWebDeclaree(produit) === "public", `lu « ${racineWebDeclaree(produit)} » au lieu de « public »`);
+    const sans = join(T, "_ClientRacineWeb", "sans-frontmatter");
+    mkdirSync(join(sans, "docs", "projet"), { recursive: true });
+    writeFileSync(join(sans, "docs", "projet", "PARAMETRAGE.md"), "# Paramétrage\n\nracine_web: site\n", "utf8");
+    att(racineWebDeclaree(sans) === null, "une ligne hors frontmatter a été prise pour une déclaration");
+  });
+
+  // ── TF-1821 (15/10/2026) — LE GABARIT DES LOTS ET LE RÉFÉRENTIEL DES CLASSES PASSENT PAR RELAIS ──
+  // Le fait : depuis TF-1759, le juge du lot est un relais chez le produit, mais le gabarit
+  // (`gabarits/RETOURS-FORGES.md`, 7 versions du 15/09 au 15/10) et le référentiel des classes
+  // (`todo/CLASSES.json`, 27 versions sur la même période) restaient des COPIES : chaque version du
+  // pilot, recopiée à l'ouverture, laissait le produit conforme sur le disque et divergent de HEAD
+  // (constat du lot Produit-64 20261015e, RT-64). Le relevé le DISAIT (TF-0848, « non commis ») ;
+  // il ne pouvait pas l'empêcher de revenir. Le cas joue le VRAI contrat sur un pilot et un produit
+  // jetables : le produit commet son héritage, le pilot publie une classe et une ligne de gabarit,
+  // l'ouverture remet à niveau — et l'histoire du produit doit rester tenue.
+  {
+    const CONTRAT_REEL = JSON.parse(readFileSync(join(ICI, "..", "gabarits", "HERITAGE.json"), "utf8"));
+    const VIVANTS = { "forge/retours/GABARIT-LOT-RETOURS.md": "gabarits/RETOURS-FORGES.md", "forge/retours/CLASSES.json": "todo/CLASSES.json" };
+    const entrees = CONTRAT_REEL.artefacts.filter((a) => a.cible in VIVANTS);
+    const P = join(T, "tf1821");
+    const pilotJ = join(P, "factory-pilot");
+    const produit = join(P, "_Client", "produit-relais");
+    const copier = (rel, vers) => { mkdirSync(dirname(join(vers, rel)), { recursive: true }); writeFileSync(join(vers, rel), readFileSync(join(ICI, "..", rel), "utf8"), "utf8"); };
+    for (const rel of new Set([...Object.values(VIVANTS), ...entrees.map((a) => a.source)])) copier(rel, pilotJ);
+    mkdirSync(join(produit, "forge"), { recursive: true });
+    const gitR = (...a) => spawnSync("git", ["-C", produit, "-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false", ...a], { encoding: "utf8" });
+    // La remise à niveau de l'ouverture (oracles/hook-ouverture.mjs) : une copie conforme qui diffère est recopiée.
+    const ouvrir = () => {
+      for (const a of entrees) {
+        if (a.mode !== "copie_conforme") continue;
+        const src = readFileSync(join(pilotJ, a.source), "utf8");
+        const dst = join(produit, a.cible);
+        let avant = null; try { avant = readFileSync(dst, "utf8"); } catch { /* absent */ }
+        if (avant !== src) { mkdirSync(dirname(dst), { recursive: true }); writeFileSync(dst, src, "utf8"); }
+      }
+    };
+    gitR("init", "-q", "-b", "main");
+    ouvrir();
+    gitR("add", "-A");
+    gitR("commit", "-q", "-m", "heritage commis");
+    // Le pilot publie : une classe de plus, une ligne de gabarit de plus.
+    const cl = JSON.parse(readFileSync(join(pilotJ, "todo", "CLASSES.json"), "utf8"));
+    cl.classes.push({ cle: "classe-de-recette-tf1821", famille: cl.familles[0].cle, libelle: "recette TF-1821" });
+    writeFileSync(join(pilotJ, "todo", "CLASSES.json"), JSON.stringify(cl, null, 1), "utf8");
+    writeFileSync(join(pilotJ, "gabarits", "RETOURS-FORGES.md"), readFileSync(join(pilotJ, "gabarits", "RETOURS-FORGES.md"), "utf8") + "\nRègle publiée après le commit du produit (recette TF-1821).\n", "utf8");
+    ouvrir();
+
+    check("cas rouge — TF-1821 — une version neuve du gabarit des lots ou des classes au pilot ne laisse pas le produit divergent de HEAD", () => {
+      att(entrees.length === 2, `le contrat déclare ${entrees.length} des 2 artefacts attendus (${Object.keys(VIVANTS).join(", ")})`);
+      for (const a of entrees) {
+        const e = etatArtefact(produit, a, pilotJ);
+        att(e.etat === "conforme", `${a.cible} : état « ${e.etat} » après la remise à niveau`);
+        att(e.histoire === "commis", `${a.cible} : histoire « ${e.histoire} » — chaque version du pilot (${VIVANTS[a.cible]}) le fait dériver de HEAD jusqu'au prochain commit du produit ; source au contrat : ${a.source}`);
+      }
+    });
+
+    check("TF-1821 borne — le relais mène au référentiel VIVANT du pilot, et ne recopie pas son contenu", () => {
+      for (const a of entrees) {
+        const texte = readFileSync(join(produit, a.cible), "utf8");
+        att(texte.includes(VIVANTS[a.cible]), `${a.cible} ne nomme pas ${VIVANTS[a.cible]}, le fichier du pilot à lire`);
+        att(!texte.includes("classe-de-recette-tf1821") && !texte.includes("recette TF-1821"), `${a.cible} porte le contenu publié : c'est une copie, pas un relais`);
+        att(existsSync(join(ICI, "..", VIVANTS[a.cible])), `${VIVANTS[a.cible]} n'existe pas au pilot : le relais mènerait nulle part`);
+      }
+    });
+  }
+
+  // ── TF-0711 — L'ATTRIBUTION D'UNE DIVERGENCE SE MESURE DANS L'HISTORIQUE GIT DU PILOT ──
+  // Les trois sens, joués contre le VRAI dépôt du pilot : une copie qui correspond à une version
+  // publiée accuse le pilot (qui a avancé) ; une copie modifiée accuse le produit ; un pilot
+  // sans historique rend « inconnu » dit, jamais deviné.
+  const PILOT_REEL = join(ICI, "..");
+
+  check("TF-0711 — une copie égale à une version PUBLIÉE : « le pilot a avancé », datée, sans faute produit", () => {
+    const log = spawnSync("git", ["-C", PILOT_REEL, "log", "-n", "5", "--format=%H", "--", "gabarits/RETOURS-FORGES.md"], { encoding: "utf8" });
+    const revs = (log.stdout || "").split("\n").filter(Boolean);
+    att(revs.length >= 2, "historique trop court pour jouer le cas");
+    const ancienne = spawnSync("git", ["-C", PILOT_REEL, "show", `${revs[1]}:gabarits/RETOURS-FORGES.md`],
+      { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 }).stdout;
+    const cause = attribuerDivergence("gabarits/RETOURS-FORGES.md", ancienne, PILOT_REEL);
+    att(cause.qui === "pilot", `attribution « ${cause.qui} » — une version publiée n'est pas reconnue`);
+    // TF-0849 : la phrase NOMME ce qu'elle mesure. Elle disait « version publiée le X » là où
+    // elle mesure « état porté par le COMMIT du X » — et elle rendait systématiquement la date la
+    // plus RÉCENTE des deux, exactement le sens qui pousse à croire sa copie fraîche. L'assertion
+    // suit la correction : ce qui est exigé reste une date, mais dite pour ce qu'elle est.
+    att(/PAR LE COMMIT du \d{4}-\d{2}-\d{2}/.test(cause.detail), "la date du commit n'est pas dite");
+    att(/pas la version que le fichier déclare/.test(cause.detail),
+      "le message ne distingue pas la date du COMMIT de la version DÉCLARÉE — c'est cette confusion qui a fait lire deux dates pour un même fichier le 06/09");
+  });
+
+  check("TF-0849 — quand l'artefact DÉCLARE une version, le message cite les DEUX côtés", () => {
+    // Le cas fondateur, rejoué sur la forme qui l'a produit : un JSON à champs `version` et
+    // `date`. Le produit lisait « version publiée le 05/09 » pour un fichier qui déclarait
+    // 1.0.0 du 03/09, pendant que le lot de travaux écrivait « version du 03/09 ».
+    const log = spawnSync("git", ["-C", PILOT_REEL, "log", "-n", "5", "--format=%H", "--", "todo/CLASSES.json"], { encoding: "utf8" });
+    const revs = (log.stdout || "").split("\n").filter(Boolean);
+    att(revs.length >= 2, "historique trop court pour jouer le cas");
+    const ancienne = spawnSync("git", ["-C", PILOT_REEL, "show", `${revs[1]}:todo/CLASSES.json`],
+      { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 }).stdout;
+    const cause = attribuerDivergence("todo/CLASSES.json", ancienne, PILOT_REEL);
+    att(cause.qui === "pilot", `attribution « ${cause.qui} »`);
+    att(/versions DÉCLARÉES/.test(cause.detail), `le message ne cite aucune version déclarée : ${cause.detail}`);
+    att(/votre copie : \d+\.\d+\.\d+/.test(cause.detail), `la version de la COPIE n'est pas citée : ${cause.detail}`);
+    att(/pilot : \d+\.\d+\.\d+/.test(cause.detail), `la version du PILOT n'est pas citée : ${cause.detail}`);
+  });
+
+  check("TF-0711 — une copie MODIFIÉE côté produit est attribuée au produit, avec la garde « ne pas écraser »", () => {
+    const courante = spawnSync("git", ["-C", PILOT_REEL, "show", "HEAD:gabarits/RETOURS-FORGES.md"],
+      { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 }).stdout;
+    const cause = attribuerDivergence("gabarits/RETOURS-FORGES.md", courante + "\nmodif locale du produit\n", PILOT_REEL);
+    att(cause.qui === "produit", `attribution « ${cause.qui} » — une modification locale est passée pour une version du pilot`);
+    att(/ne pas écraser/.test(cause.detail), "la garde contre l'écrasement aveugle manque");
+  });
+
+  check("TF-0711 borne — un pilot SANS git rend « inconnu », dit plutôt que deviné", () => {
+    const cause = attribuerDivergence("gabarits/MODELE.md", "x", pilot);
+    att(cause.qui === "inconnu", `attribution « ${cause.qui} » sur un dépôt sans historique`);
+  });
+
+  // ── TF-2408 — UN NOM DE HOOK PRÉSENT AU PRODUIT ET ABSENT DU GABARIT SE SIGNALE, IL NE S'ÉCRASE PAS ──
+  // Le fait : le 10/11/2026, la recopie de gabarits/hooks-factory.mjs a retiré chez un produit le nom `fichiers-env` que l'autre poste lui avait posé ;
+  // le hook de sécurité sautait en exit 0. Rouge : la copie qui déclare un nom qu'aucune version du gabarit ne déclare le NOMME, et dit que la recopier
+  // le retirerait. Vert : une copie périmée aux noms connus, ou à un nom que le gabarit a retiré depuis, n'est pas signalée comme un retrait de hook.
+  check("TF-2408 rouge — une copie du lanceur qui déclare un nom de hook qu'aucune version du gabarit ne déclare : la cause le NOMME, dit que la recopier le retirerait, et garde « ne pas écraser »", () => {
+    const courante = spawnSync("git", ["-C", PILOT_REEL, "show", "HEAD:gabarits/hooks-factory.mjs"], { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 }).stdout;
+    const copie = courante.replace(/(const NOMS = new Set\(\[[^\]]*)\]\)/, "$1, \"hook-pose-par-le-produit\"])");
+    att(copie !== courante, "témoin mal construit : le lanceur d'essai ne diffère pas du gabarit");
+    const cause = attribuerDivergence("gabarits/hooks-factory.mjs", copie, PILOT_REEL);
+    att(cause.qui === "produit", `attribution « ${cause.qui} »`);
+    att(JSON.stringify(cause.noms_hors_gabarit) === "[\"hook-pose-par-le-produit\"]", `noms_hors_gabarit : ${JSON.stringify(cause.noms_hors_gabarit)}`);
+    att(/« hook-pose-par-le-produit »/.test(cause.detail) && /RETIRERAIT/.test(cause.detail) && /Ne pas écraser/.test(cause.detail), `message : ${cause.detail}`);
+    const sansNom = attribuerDivergence("gabarits/hooks-factory.mjs", courante + "\n// modif locale du produit\n", PILOT_REEL);
+    att(sansNom.qui === "produit" && sansNom.noms_hors_gabarit === undefined && /ne pas écraser sans lire/.test(sansNom.detail), "une modification locale sans nom de hook neuf garde le message d'avant");
+  });
+  check("TF-2408 vert — un nom de hook que le gabarit a RETIRÉ depuis (présent dans son historique) n'est pas signalé, un nom jamais publié l'est ; une copie égale à une version publiée accuse le pilot", () => {
+    const pilotH = join(T, "tf2408");
+    mkdirSync(join(pilotH, "gabarits"), { recursive: true });
+    const g = (...a) => spawnSync("git", ["-C", pilotH, "-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false", ...a], { encoding: "utf8" });
+    g("init", "-q", "-b", "main");
+    const lanceur = (noms) => `// lanceur\nconst NOMS = new Set([${noms.map((n) => `"${n}"`).join(", ")}]);\nexport {};\n`;
+    writeFileSync(join(pilotH, "gabarits", "hooks-factory.mjs"), lanceur(["a", "b", "c"]), "utf8"); g("add", "-A"); g("commit", "-q", "-m", "v1 : trois hooks");
+    writeFileSync(join(pilotH, "gabarits", "hooks-factory.mjs"), lanceur(["a", "b"]), "utf8"); g("add", "-A"); g("commit", "-q", "-m", "v2 : c retiré");
+    const retire = attribuerDivergence("gabarits/hooks-factory.mjs", lanceur(["a", "b", "c"]) + "// modif locale\n", pilotH);
+    att(retire.qui === "produit" && retire.noms_hors_gabarit === undefined, `un nom retiré par le gabarit est signalé : ${JSON.stringify(retire)}`);
+    const inconnu = attribuerDivergence("gabarits/hooks-factory.mjs", lanceur(["a", "b", "x"]) + "// modif locale\n", pilotH);
+    att(JSON.stringify(inconnu.noms_hors_gabarit) === "[\"x\"]", `un nom jamais publié n'est pas signalé : ${JSON.stringify(inconnu)}`);
+    const ancienne = attribuerDivergence("gabarits/hooks-factory.mjs", lanceur(["a", "b", "c"]), pilotH);
+    att(ancienne.qui === "pilot", `une copie égale à la version 1 n'accuse pas le pilot : ${JSON.stringify(ancienne)}`);
+  });
+  // ---- TF-2184 (06/11/2026) : LE RELEVÉ DU PARC NE LANCE PAS UN `git` PAR QUESTION --------------
+  // Le 05/11, 92 s pour 31 produits sous charge, environ 1 838 sous-processus : `ls-files` + `diff` par
+  // artefact et par produit, et `git log` + jusqu'à 30 `git show` par copie divergente. Le banc compte les
+  // commandes `git` réellement lancées (GIT_TRACE, une ligne « built-in » par commande) sur un parc jetable
+  // de 4 produits sous git, 6 artefacts en copie conforme, 3 copies divergentes d'une MÊME source ; il exige
+  // aussi que les VERDICTS soient ceux d'avant (qui a bougé, état dans l'histoire).
+  {
+    const P = join(T, "tf2184");
+    const pilotG = join(P, "factory-pilot");
+    const SOURCES = ["A", "B", "C", "D", "E", "F"].map((x) => `gabarits/${x}.md`);
+    const contrat = { version: "9.9.9", artefacts: SOURCES.map((s) => ({ mode: "copie_conforme", source: s, cible: `forge/${s.split("/")[1]}` })) };
+    const gitIn = (dir, ...a) => spawnSync("git", ["-C", dir, "-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false", ...a], { encoding: "utf8" });
+    mkdirSync(join(pilotG, "gabarits"), { recursive: true });
+    gitIn(pilotG, "init", "-q", "-b", "main");
+    const versionDe = (s, n) => `${s} version ${n}\n`;
+    for (let n = 1; n <= 3; n++) {
+      for (const s of SOURCES) writeFileSync(join(pilotG, s), versionDe(s, n), "utf8");
+      gitIn(pilotG, "add", "-A"); gitIn(pilotG, "commit", "-q", "-m", `version ${n}`);
+    }
+    const fabriquer = (nom, texteDe, commis = true) => {
+      const d = join(P, nom);
+      mkdirSync(join(d, "forge"), { recursive: true });
+      for (const s of SOURCES) writeFileSync(join(d, "forge", s.split("/")[1]), texteDe(s), "utf8");
+      gitIn(d, "init", "-q", "-b", "main");
+      if (commis) { gitIn(d, "add", "-A"); gitIn(d, "commit", "-q", "-m", "socle"); }
+      return d;
+    };
+    fabriquer("retard-1", (s) => versionDe(s, 1));
+    fabriquer("retard-2", (s) => versionDe(s, 2));
+    fabriquer("modifie", (s) => `${s} modifié par le produit\n`);
+    fabriquer("a-jour", (s) => versionDe(s, 3), false);
+    const trace = join(T, "tf2184-git.trace");
+    const compter = () => {
+      writeFileSync(trace, "", "utf8");
+      process.env.GIT_TRACE = trace;
+      let lignes;
+      try { lignes = relever(P, contrat, pilotG); } finally { delete process.env.GIT_TRACE; }
+      const cmds = readFileSync(trace, "utf8").split(/\r?\n/).filter((l) => /built-in: git /.test(l));
+      return { lignes, cmds };
+    };
+    const { lignes, cmds } = compter();
+    const par = (nom) => lignes.find((l) => l.produit === nom);
+
+    check("cas rouge — TF-2184 — le relevé lance au plus 2 commandes git par produit (histoire) et 2 par source du pilot (historique)", () => {
+      const borne = 2 * lignes.length + 2 * SOURCES.length;
+      att(lignes.length === 4, `${lignes.length} produits relevés, 4 attendus`);
+      att(cmds.length <= borne, `${cmds.length} commandes git lancées, plus que la borne ${borne} (2 × ${lignes.length} produits + 2 × ${SOURCES.length} sources) — une commande par artefact refait le défaut`);
+    });
+
+    check("TF-2184 — l'historique d'une source n'est lu qu'une fois, quel que soit le nombre de produits en retard sur elle", () => {
+      const logs = cmds.filter((c) => /built-in: git 'log'|built-in: git log/.test(c));
+      att(logs.length === SOURCES.length, `${logs.length} lectures d'historique pour ${SOURCES.length} sources`);
+    });
+
+    check("TF-2184 vert — les verdicts sont inchangés : le retard est attribué au pilot, la modification au produit, la copie à jour est conforme", () => {
+      for (const nom of ["retard-1", "retard-2"]) {
+        const l = par(nom);
+        att(l.divergents === 6, `${nom} : ${l.divergents} divergents, 6 attendus`);
+        for (const a of l.artefacts) att(a.cause?.qui === "pilot", `${nom}/${a.cible} : attribution « ${a.cause?.qui} », « pilot » attendu`);
+        att(l.artefacts.every((a) => a.histoire === "commis"), `${nom} : état dans l'histoire inattendu`);
+      }
+      const m = par("modifie");
+      att(m.artefacts.every((a) => a.etat === "divergent" && a.cause?.qui === "produit"), "la copie modifiée n'est pas attribuée au produit");
+      const j = par("a-jour");
+      att(j.conformes === 6 && j.divergents === 0, `copie à jour : ${j.conformes} conformes, ${j.divergents} divergents`);
+      att(j.artefacts.every((a) => a.histoire === "non_suivi"), "copies à jour d'un dépôt sans commit : « non_suivi » attendu");
+      att(/PAR LE COMMIT du \d{4}-\d{2}-\d{2}/.test(par("retard-1").artefacts[0].cause.detail), "la date du commit n'est pas citée");
+    });
+  }
+
+  // ---- TF-1867 (18/10/2026) : l'écrivain de ledger Python entre à l'héritage, copie conforme -----
+  // Avant, gabarits/ledger.py n'était déclaré nulle part (0 occurrence au contrat) : la copie d'un produit
+  // numérotait `len(dejà) + 1` et aucune ouverture ne la remettait à niveau (13 seq en double, RT-127).
+  const LEDGER_GABARIT = readFileSync(join(PILOT_REEL, "gabarits", "ledger.py"), "utf8");
+  const LEDGER_CONTRAT = JSON.parse(readFileSync(join(PILOT_REEL, "gabarits", "HERITAGE.json"), "utf8"))
+    .artefacts.find((a) => a.cible === "forge/ledger.py");
+  const LEDGER_PERIME = LEDGER_GABARIT.replace('seq = max((x["seq"] for x in dejà), default=0) + 1', "seq = len(dejà) + 1");
+  const produitLedger = (texte) => {
+    const d = mkdtempSync(join(tmpdir(), "heritage-ledger-"));
+    mkdirSync(join(d, "forge"), { recursive: true });
+    if (texte !== null) writeFileSync(join(d, "forge", "ledger.py"), texte, "utf8");
+    return d;
+  };
+  check("TF-1867 — le contrat déclare forge/ledger.py en copie conforme de gabarits/ledger.py", () => {
+    att(LEDGER_CONTRAT, "forge/ledger.py n'est pas déclaré à gabarits/HERITAGE.json");
+    att(LEDGER_CONTRAT.mode === "copie_conforme" && LEDGER_CONTRAT.source === "gabarits/ledger.py", `mode ${LEDGER_CONTRAT.mode}, source ${LEDGER_CONTRAT.source}`);
+    att(LEDGER_PERIME !== LEDGER_GABARIT, "la chirurgie de la copie périmée n'a rien changé : le test ne vise plus le calcul du seq");
+  });
+  check("TF-1867 rouge — une copie qui numérote len(dejà)+1 est relevée DIVERGENTE ; absente, ABSENTE", () => {
+    const perime = produitLedger(LEDGER_PERIME), absent = produitLedger(null);
+    try {
+      const e = etatArtefact(perime, LEDGER_CONTRAT, PILOT_REEL);
+      att(e.etat === "divergent", `copie périmée relevée « ${e.etat} »`);
+      att(etatArtefact(absent, LEDGER_CONTRAT, PILOT_REEL).etat === "absent", "copie absente non relevée absente");
+    } finally { rmSync(perime, { recursive: true, force: true }); rmSync(absent, { recursive: true, force: true }); }
+  });
+  check("TF-1867 vert — la remise à niveau remplace la copie périmée et le produit est relevé CONFORME ; une copie à jour l'est d'emblée", () => {
+    const perime = produitLedger(LEDGER_PERIME), ajour = produitLedger(LEDGER_GABARIT);
+    try {
+      const r = spawnSync(process.execPath, [join(ICI, "recopier-heritage.mjs"), perime], { encoding: "utf8" });
+      att(r.status === 0, `recopie : exit ${r.status} ${r.stderr}`);
+      att(/\[COPIÉ  \] forge\/ledger\.py/.test(r.stdout), `la recopie ne dit pas avoir remis forge/ledger.py à niveau : ${r.stdout.slice(0, 200)}`);
+      att(etatArtefact(perime, LEDGER_CONTRAT, PILOT_REEL).etat === "conforme", "relevé non conforme après la recopie");
+      att(readFileSync(join(perime, "forge", "ledger.py"), "utf8").replace(/\r\n/g, "\n") === LEDGER_GABARIT.replace(/\r\n/g, "\n"), "copie différente du gabarit");
+      att(etatArtefact(ajour, LEDGER_CONTRAT, PILOT_REEL).etat === "conforme", "une copie à jour est relevée autrement que conforme");
+    } finally { rmSync(perime, { recursive: true, force: true }); rmSync(ajour, { recursive: true, force: true }); }
+  });
+
+  // ── TF-2668 (16/11/2026) : LES COPIES DU SOCLE FAITES À L'ENDROIT DU CHOIX DU PRODUIT ─────────────────────────────────────────
+  // Le 16/11, la copie `scripts/apdlb/gabarit.html` d'un produit datait d'avant `color-scheme` (TF-2384) et rien ne la comparait au socle.
+  const DECL = { noms_de_copie: "^(gabarit|boilerplate|squelette)([-_.].*)?\\.html$", extensions: [".html"], reconnaissance: ["factory-theme", "S-G1 (1/4"] };
+  const SOCLE_HTML = "<!DOCTYPE html>\n<html lang=\"fr\">\n<head>\n<!-- S-G1 (1/4) -->\n<script>var k = 'factory-theme';</script>\n<style>\n:root { color-scheme: light; }\n[data-theme=dark] { color-scheme: dark; }\n</style>\n</head>\n<body></body>\n</html>\n";
+  const PERIME_HTML = SOCLE_HTML.replace(":root { color-scheme: light; }\n", "").replace("[data-theme=dark] { color-scheme: dark; }\n", "");
+  const produitCopies = (fichiers) => {
+    const d = mkdtempSync(join(tmpdir(), "copies-socle-"));
+    for (const [rel, texte] of Object.entries(fichiers)) { mkdirSync(join(d, ...rel.split("/").slice(0, -1)), { recursive: true }); writeFileSync(join(d, ...rel.split("/")), texte, "utf8"); }
+    return d;
+  };
+  check("rouge — TF-2668 : une copie du boilerplate datée d'avant le socle est trouvée et dite PÉRIMÉE, avec les lignes que le socle porte et qu'elle n'a pas", () => {
+    const d = produitCopies({ "scripts/apdlb/gabarit.html": PERIME_HTML });
+    try {
+      const r = copiesDuSocle(d, DECL, SOCLE_HTML);
+      att(r.length === 1 && r[0].chemin === "scripts/apdlb/gabarit.html" && r[0].etat === "perimee", `copie non signalée : ${JSON.stringify(r)}`);
+      att(r[0].manquantes.length === 2 && r[0].manquantes.every((l) => /color-scheme/.test(l)), `lignes manquantes : ${JSON.stringify(r[0].manquantes)}`);
+    } finally { rmSync(d, { recursive: true, force: true }); }
+  });
+  check("vert — TF-2668 : une copie à l'identique (CRLF compris) est à jour, une copie qui n'ajoute que des lignes est personnalisée, aucune n'est signalée", () => {
+    const d = produitCopies({
+      "scripts/a/gabarit.html": SOCLE_HTML.replaceAll("\n", "\r\n"),
+      "scripts/b/boilerplate-produit.html": SOCLE_HTML.replace("</style>", "body { margin: 0; }\n</style>"),
+    });
+    try {
+      const r = copiesDuSocle(d, DECL, SOCLE_HTML);
+      const etat = Object.fromEntries(r.map((c) => [c.chemin, c.etat]));
+      att(etat["scripts/a/gabarit.html"] === "a_jour" && etat["scripts/b/boilerplate-produit.html"] === "personnalisee" && r.length === 2, `états : ${JSON.stringify(etat)}`);
+    } finally { rmSync(d, { recursive: true, force: true }); }
+  });
+  check("vert — TF-2668 : une page INSTANCIÉE (nom sans gabarit), un fichier sans les marqueurs et un dossier d'entrée ou de sortie ne sont pas pris pour des copies", () => {
+    const d = produitCopies({
+      "site/accueil.html": PERIME_HTML,
+      "scripts/gabarit-mail.html": "<html><body>gabarit de courriel sans rapport</body></html>",
+      "output/gabarit.html": PERIME_HTML,
+      "node_modules/x/gabarit.html": PERIME_HTML,
+    });
+    try { att(copiesDuSocle(d, DECL, SOCLE_HTML).length === 0, "une page non copie du socle a été relevée"); }
+    finally { rmSync(d, { recursive: true, force: true }); }
+  });
+  check("TF-2668 — le référentiel déclare la copie du boilerplate, et la déclaration retrouve le nom de copie du produit du retour", () => {
+    const contrat = JSON.parse(readFileSync(join(ICI, "..", "gabarits", "HERITAGE.json"), "utf8"));
+    const c = (contrat.copies_du_socle || []).find((x) => /boilerplate\.html$/.test(x.source));
+    att(c && c.resolution === "socle-de-page" && c.reconnaissance.length >= 2, `déclaration absente ou incomplète : ${JSON.stringify(c)}`);
+    att(new RegExp(c.noms_de_copie, "i").test("gabarit.html"), "le nom de la copie du retour (scripts/apdlb/gabarit.html) n'est pas reconnu");
+  });
+} finally {
+  try { rmSync(T, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); } catch { /* verrou toléré */ }
+}
+
+console.log(`\nrelever-heritage (TF-0626) : ${pass} PASS, ${fail} FAIL`);
+process.exit(fail ? 1 : 0);

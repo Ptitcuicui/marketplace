@@ -1,0 +1,80 @@
+# Run de version (produit existant) — détail opérationnel
+
+Référence chargée à la demande depuis le noyau `CLAUDE.md` (TF-0053).
+
+Le cycle post-production n'est pas improvisé : c'est un **run de version** (retour RS-6 du
+premier produit réel). Entrant : les retours consignés au ledger du run précédent
+(`type: retour`, source `production` ou `produit`) + un brief delta. Le ledger du run N est
+l'entrée du run N+1 — même projet, nouveau `run_open` chaîné (champ `run_precedent`,
+contrôle R-19 de l'oracle de conformité).
+
+Le `run_open` porte `schema_ledger: "1.1"` et `forges_mobilisees`, comme tout run
+(`references\ETAPES-RUN.md`, D-18 (a) du 26/09/2026) — un run de version n'est pas une
+exception au schéma du journal.
+
+**Champs du `run_open` d'un parcours ouvert après un autre run** (tout `run_open` qui n'est pas
+le premier du produit, quelle que soit la voie qui l'ouvre) : `versions_forges` (objet non vide,
+clés en nom de dépôt complet, R-19) et **`run_precedent`** (l'identifiant du run qui précède —
+R-19 refuse un run de version qui ne le porte pas : « les runs se chaînent »). Un `run_precedent`
+omis à l'ouverture ne se répare JAMAIS en réécrivant l'entrée (R-42 l'interdit) : il se rectifie
+PAR AJOUT, comme `versions_forges` (TF-0709, TF-0801) — `{type: "rectification_run_open",
+seq_vise: <seq du run_open>, champ: "run_precedent", valeur: "<run précédent>", cause: "…"}`
+(TF-1454).
+
+Au rattrapage, corriger aussi les **références au nom courant du pilot** dans les chemins
+absolus de PROMPT-PRODUIT/CLAUDE.md — fait d'époque : le renommage `forge-steering` →
+`forge-pilot` du 09/08 (TF-0062) prescrivait une jonction de compatibilité « à ne supprimer
+qu'après rattrapage » ; elle a disparu avant preuve (dette D-14, soldée le 17/08 par TF-0332).
+Depuis le 17/08, PAS de jonction : un chemin périmé échoue fort et déclenche le rattrapage —
+le critère rejouable (`git grep`) remplace la béquille silencieuse. Le run de version commence par le **rattrapage du socle** : `oracle-conformite-projet` sur le
+projet, chaque FAIL corrigé (c'est ainsi que les produits antérieurs aux règles se mettent en
+conformité — jamais en masse silencieuse hors run). Son entrant inclut les lots de
+`forge\retours\` non encore traités.
+
+**Produit importé** (dépôt repris, jamais passé par un run — TF-0086) : le rattrapage est un
+mode explicite, pas un correctif au fil de l'eau — créer `docs\projet\` complet depuis
+`gabarits\docs-projet\` (8 fichiers ; FONCTIONNEL rédigé depuis le code, chaque affirmation
+datée ; MODELE-DONNEES **extrait du schéma réel constaté** — migrations/ORM/DDL cités en
+provenance, R-26 —, ARCHITECTURE relevée de l'arborescence et des flux observés, puis les
+2 vues régénérées), reconstruire `.env.example` depuis le code (R-13) AVANT que R-22 ne juge
+la parité, puis dérouler l'oracle. Consigné au ledger comme `rattrapage_import`.
+
+Le brief delta déclare le **plus haut niveau ISTO** qu'il touche (I, S, T ou O) : c'est lui qui
+dit quelle part de l'aval se rejoue (`references\INTENTION.md`, section « Quand la cascade
+change »). Une intention touchée se revalide avant toute exigence.
+
+Le brief delta porte aussi sa section **Délégation aux agents**, dans la forme de `PROMPT-PRODUIT.md` : ce que l'orchestrateur
+garde, l'agent nommé de chaque activité de chaque étape rejouée (ou « session seule » avec son motif), et la condition des
+écritures en parallèle (arbres `git worktree` disjoints ; une racine de session en minuscule interdit l'isolation, TF-2443).
+Le fait : le brief d'un refresh à 4 lots, 15 clips et 15 animations ne nommait aucun agent, et la conception a été tenue par la
+session seule, sans une seule invocation au ledger (TF-2547, 14/11/2026).
+
+Étapes rejouées **en delta** :
+- **conception** : exigences nouvelles/modifiées dans `EXIGENCES.json` (ids retirés via
+  `identifiants_retires`, jamais réaffectés), oracles rejoués sur le référentiel entier ; la
+  cascade du produit mise à jour en place (éléments retirés marqués, entrée d'historique portant
+  le niveau touché) et `oracles\oracle-cascade-isto.mjs` rejoué en entier ;
+- **design** : seuls les écrans touchés, oracles sur les artefacts modifiés ;
+- **development** : delta sous les mêmes gates (ruff, pytest, traçabilité des exigences du
+  delta) ;
+- **tests** : **campagne forge-tests complète** (jamais en delta — la régression ne se voit qu'en entier) ;
+- **MEP** : staging + qualif populée + GO, comme un premier run (M-4 avec un vrai N-1 cette
+  fois).
+
+## Une vue nouvelle ne se code pas sans maquette VALIDÉE (TF-0780 — 02/09/2026)
+
+**Le fait.** Sept vues d'une console de données ont été définies par un tableau
+question / dimensions / mesures / action écrit par la session, puis codées, puis livrées — rien n'a
+été montré au destinataire avant production, et le compagnon visuel n'a pas été offert « au motif
+de l'autonomie ». Trois livraisons, trois refus, dont « on n'y comprend absolument rien ».
+
+**La règle.** Un run de version qui touche une INTERFACE (vue, écran, page de données, console)
+passe par l'étape design en delta (§ 3 des étapes de run) et porte au ledger une entrée
+« maquette_validee » — fichier de la maquette, qui l'a validée, date — AVANT la première ligne de
+code de la vue. Sans cette entrée, l'oracle d'état de forge refuse le run (règle portée par
+quality-oracles, TF-0780). Une maquette n'est pas un luxe offert au destinataire : c'est le seul
+moment où le refus coûte une image et non trois livraisons.
+
+**Ce que la règle n'exige pas.** Une vue reprise à l'identique (correctif sans changement de
+structure) n'a pas de maquette à faire valider ; la ledger le dit par une entrée « vue_inchangee »
+avec le motif.

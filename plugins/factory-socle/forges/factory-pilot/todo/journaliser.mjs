@@ -1,0 +1,395 @@
+#!/usr/bin/env node
+/**
+ * journaliser.mjs — écrit des événements au registre TODO-FORGE en STAMPANT leur horodatage.
+ *
+ * Pourquoi cet outil existe (TF-0413, 20/08/2026). Les événements composés à la main dans
+ * `TODO.jsonl` portaient un `ts` inventé : mesuré en rapprochant chaque commit du dernier `ts`
+ * qu'il ajoute, +449, +386, +353, +314, +308, +299, +259, +190, +180, +173 minutes d'AVANCE sur
+ * six jours — aucun en retard. Les événements écrits par l'outillage (`ingerer-lot.mjs`)
+ * collaient au commit à la minute près. La cause n'est donc pas une horloge : c'est la
+ * composition à la main d'un champ que seule une machine peut remplir honnêtement.
+ * `oracle-todo` R11 CONSTATE le défaut ; ce script en supprime la CAUSE. Les deux se cumulent
+ * — le contrôle ne remplace pas l'outil, et l'outil ne dispense pas du contrôle.
+ *
+ * Ce qu'il refuse, et pourquoi : un événement qui porte déjà un `ts`. Accepter « sauf si tu
+ * insistes » rendrait l'outil contournable par la voie la plus commode, c'est-à-dire par celle
+ * qui a produit le défaut. L'heure d'un fait rapporté (décision prise hier, correction d'avant-
+ * hier) est une DONNÉE : elle se consigne dans `date_decision`, `date_correction`, ou tout
+ * champ nommé — jamais dans `ts`, qui est l'heure de CONSIGNATION.
+ *
+ * Usage :
+ *   node todo\journaliser.mjs --fichier <evenements.json> [--registre <TODO.jsonl>] [--essai]
+ *
+ *   <evenements.json> : un objet, ou un tableau d'objets, SANS champ `ts`.
+ *   --essai : affiche ce qui serait écrit, n'écrit rien.
+ *
+ * Garanties :
+ *   · horodatages strictement croissants au sein d'un même lot (millisecondes réelles) ;
+ *   · écriture ATOMIQUE au sens du verdict : si `oracle-todo` passait avant et échoue après,
+ *     le fichier est remis exactement dans son état d'origine et le rapport dit pourquoi ;
+ *   · le registre n'est jamais laissé à moitié écrit — la taille d'origine est reprise.
+ *
+ * Sortie : JSON {outil, ecrits[], verdict_avant, verdict_apres, message} · exit 0 / 1.
+ */
+import { readFileSync, writeFileSync, appendFileSync, existsSync, statSync, truncateSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { spawnSync } from "node:child_process";
+
+const ICI = dirname(fileURLToPath(import.meta.url));
+const args = process.argv.slice(2);
+const valeur = (nom) => { const i = args.indexOf(nom); return i >= 0 ? args[i + 1] : null; };
+const ESSAI = args.includes("--essai");
+const fichier = valeur("--fichier");
+const REGISTRE = valeur("--registre") || join(ICI, "TODO.jsonl");
+const ORACLE = join(ICI, "oracle-todo.mjs");
+
+function sortir(code, corps) {
+  process.stdout.write(JSON.stringify({ outil: "journaliser", ...corps }, null, 1) + "\n");
+  process.exit(code);
+}
+
+/**
+ * TF-0621 (25/08) — LE CONTRÔLE PASSE SUR LE CHEMIN D'ÉCRITURE, parce que c'est le seul endroit
+ * qu'on ne peut pas oublier de traverser.
+ *
+ * LE FAIT : la même classe d'octet a mordu SEPT fois en une journée. Un chemin Windows écrit dans
+ * une chaîne Python non brute voit son antislash avalé par l'échappement — `\f` devient un SAUT DE
+ * PAGE, `\a` une CLOCHE, `\r` un RETOUR CHARIOT, `\t` une TABULATION, `\n` un SAUT DE LIGNE. Trois
+ * de ces morsures ont été ÉCRITES dans ce registre, d'où les vues `TODO.md` et `TODO.html` sont
+ * générées : un octet de contrôle dans un chemin affiché ne se voit pas, se copie-colle en silence,
+ * et rend le chemin introuvable pour qui le réessaie.
+ *
+ * CE QUI A LAISSÉ PASSER, et c'est le cœur du sujet :
+ *   · le SyntaxWarning de Python est un signal INVERSÉ — il parle sur les échappements NON reconnus
+ *     (`\d` de `\dev`), donc les cas INOFFENSIFS, et se tait sur les reconnus, donc les destructeurs.
+ *     Un avertissement qui parle quand tout va bien apprend à être ignoré (motif que R-33 bis donne pour le verdict websec) ;
+ *   · `oracle-pieges-regex` P3 existe exactement pour cette classe et ne l'a pas vue : sa portée
+ *     s'arrête aux fichiers de CODE. Le registre est une DONNÉE, et c'est la donnée qui alimente le
+ *     livrable lu par l'humain. Une exclusion nommée dans un contrôle signale une cause non traitée (N-13) ;
+ *   · un garde de rédaction a rendu VERT sur une ligne de tableau coupée en deux : il excluait le
+ *     saut de ligne, légitime dans un document mais DESTRUCTEUR dans une ligne de tableau ;
+ *   · et la septième n'a été attrapée par aucun mécanisme — le garde existait et n'a pas été appelé.
+ *
+ * D'OÙ LE PRÉDICAT, qui n'est pas « pas d'octet de contrôle » mais deux clauses :
+ *   1. aucun octet de contrôle, `\n` compris comme SEULE exception — la tabulation en fait donc
+ *      partie, et c'est voulu : dans ce registre elle n'a aucun emploi légitime et elle est
+ *      exactement la forme qu'a prise la septième morsure ;
+ *   2. aucun `\n` À L'INTÉRIEUR d'une ligne de tableau. Une ligne qui ouvre par `|` et ne ferme pas
+ *      par `|` est une ligne coupée : c'est la forme mesurée, et elle est invisible autrement.
+ *
+ * Le refus tombe AVANT toute écriture, et il nomme l'octet, son échappement d'origine et la parade
+ * (`chr(92)` plutôt qu'un antislash littéral) — un refus sans sa parade se contourne au hasard.
+ */
+const OCTETS = new Map([
+  [0x07, ["\\a", "CLOCHE"]], [0x08, ["\\b", "RETOUR ARRIÈRE"]], [0x09, ["\\t", "TABULATION"]],
+  [0x0b, ["\\v", "TABULATION VERTICALE"]], [0x0c, ["\\f", "SAUT DE PAGE"]], [0x0d, ["\\r", "RETOUR CHARIOT"]],
+]);
+
+export function octetsFautifs(evenement) {
+  const constats = [];
+  const visiter = (valeur, chemin) => {
+    if (typeof valeur === "string") {
+      for (let i = 0; i < valeur.length; i += 1) {
+        const c = valeur.charCodeAt(i);
+        if (c < 0x20 && c !== 0x0a) {
+          const [ech, nom] = OCTETS.get(c) || ["?", `octet 0x${c.toString(16)}`];
+          constats.push(`${chemin} porte un ${nom} (0x${c.toString(16).padStart(2, "0")}) au rang ${i} — ` +
+            `c'est un \`${ech}\` né d'un antislash avalé par l'échappement. Parade : composer l'antislash ` +
+            "par `chr(92)`, jamais en littéral dans une chaîne non brute");
+        }
+      }
+      // Clause 2 : un `\n` qui coupe une ligne de tableau. Une ligne qui OUVRE par `|` doit FERMER
+      // par `|` — sinon les cellules suivantes sont perdues, et le tableau rendu porte deux formes.
+      for (const [n, ligne] of valeur.split("\n").entries()) {
+        const nue = ligne.trim();
+        if (nue.startsWith("|") && !nue.endsWith("|")) {
+          constats.push(`${chemin} porte une ligne de tableau COUPÉE (segment ${n + 1} : « ${nue.slice(0, 60)} ») — ` +
+            "elle ouvre par `|` et ne ferme pas par `|`, donc un saut de ligne l'a tranchée et ses " +
+            "cellules suivantes sont perdues. Un saut de ligne est légitime dans un document et " +
+            "destructeur dans une ligne de tableau : c'est pourquoi la clause 1 ne suffit pas");
+        }
+      }
+      return;
+    }
+    if (Array.isArray(valeur)) { valeur.forEach((v, i) => visiter(v, `${chemin}[${i}]`)); return; }
+    if (valeur && typeof valeur === "object") {
+      for (const [k, v] of Object.entries(valeur)) visiter(v, chemin ? `${chemin}.${k}` : k);
+    }
+  };
+  visiter(evenement, "");
+  return constats;
+}
+
+/**
+ * A-11 (décision humaine D-5 (a), 22/09/2026) — UNE CRÉATION DÉSIGNE SA CLASSE, ICI COMME AILLEURS.
+ *
+ * L'ASYMÉTRIE MESURÉE. `ingerer-lot.mjs` REFUSE, depuis le 03/09, tout retour d'un lot qui ne
+ * nomme pas une classe de `todo\CLASSES.json` — rejet atomique, registre intact. Ce script-ci,
+ * lui, écrivait une création sans classe sans rien dire. Or c'est le script du PILOT : le pilot
+ * était donc le seul producteur exempté de la règle qu'il impose à tous les autres. La revue des
+ * candidatures du 22/09 a chiffré le résultat — 8 candidatures ouvertes sans aucune classe, toutes
+ * écrites par cette porte, et invisibles au compteur des classes sans juge qui sert d'indicateur.
+ *
+ * POURQUOI LA PORTE PLUTÔT QU'UN CONTRÔLE DE PLUS. Un constat a posteriori laisse le trou se
+ * recreuser entre deux passages ; une porte fermée ne se recreuse pas. C'est le même raisonnement
+ * qui a mis le garde des octets sur le chemin d'écriture plutôt que dans un oracle (TF-0621) :
+ * le chemin d'écriture est le seul endroit qu'on ne peut pas oublier de traverser.
+ *
+ * LA MÊME SORTIE QUE POUR UN LOT, ET C'EST VOULU. Quand aucune clé ne convient, la clé réservée
+ * `classe-a-creer` est admise à la condition que l'événement porte `classe_proposee`
+ * {cle, famille, libelle} — famille du référentiel, clé qui n'existe pas encore. Sans cette
+ * sortie, la porte n'aurait eu que deux issues : inventer une classe qui fausse le compte des
+ * récidives, ou ne rien consigner. Les deux sont pires que le défaut qu'elle ferme (TF-1128).
+ *
+ * CE QU'ELLE NE JUGE PAS : les événements `maj` et `ingestion`, qui n'ouvrent pas d'item et dont
+ * la classe est portée par la création ; et la JUSTESSE de la classe déclarée — cette porte
+ * vérifie qu'une clé existe, elle ne relit pas le fond.
+ */
+const CLE_A_CREER = "classe-a-creer";
+const CLASSES_PATH = valeur("--classes") || join(ICI, "CLASSES.json");
+const RACINE = valeur("--racine") || join(ICI, "..");
+
+/** Les natures reconnues, hors classe de défaut (décision humaine D-16 (a) du 22/09/2026). */
+export const NATURES = new Set(["opportunite"]);
+
+export function classeFautive(evenement, referentiel) {
+  if (!evenement || evenement.ev !== "creation") return null;
+
+  // UN ITEM QUI N'EST PAS UN DÉFAUT NE PORTE PAS DE CLASSE DE DÉFAUT. La classe est une classe de
+  // défaut — les 18 familles du référentiel n'en décrivent pas d'autre — et le compteur des
+  // récidives repose là-dessus. Un item d'étude d'opportunité demande de CONSTRUIRE ; lui donner
+  // une classe reviendrait à écrire qu'un manque de fonctionnalité est une faute. Les deux champs
+  // sont donc mutuellement exclusifs : l'un ou l'autre, jamais les deux, jamais aucun.
+  if (evenement.nature !== undefined && evenement.nature !== null && String(evenement.nature).trim() !== "") {
+    const nature = String(evenement.nature).trim();
+    if (!NATURES.has(nature)) {
+      return `création ${evenement.id || "(sans id)"} : nature « ${nature} » inconnue — natures admises : ` +
+        `${[...NATURES].join(", ")}. Une nature nouvelle se pose en doctrine (references/TODO-FORGE.md), jamais au fil d'un événement`;
+    }
+    if (evenement.classe !== undefined && evenement.classe !== null && String(evenement.classe).trim() !== "") {
+      return `création ${evenement.id || "(sans id)"} porte À LA FOIS une nature « ${nature} » et une classe ` +
+        `« ${evenement.classe} » — les deux s'excluent : la classe désigne un DÉFAUT, la nature désigne ce qui n'en est pas un`;
+    }
+    return null;
+  }
+
+  if (!referentiel) {
+    return `référentiel de classes illisible (${CLASSES_PATH}) — une création ne s'écrit pas sans lui, ` +
+      "pas plus qu'un lot ne s'ingère sans lui";
+  }
+  const cles = new Set((referentiel.classes || []).map((c) => String(c.cle)));
+  const familles = new Set((referentiel.familles || []).map((f) => String(f.cle)));
+  const brute = evenement.classe;
+
+  if (brute === undefined || brute === null || String(brute).trim() === "") {
+    return `création ${evenement.id || "(sans id)"} SANS classe — toute création désigne une clé de ` +
+      `${CLASSES_PATH} (${cles.size} clés, champ "cle" du tableau "classes" ; elles se rangent en familles, ` +
+      `qui ne sont PAS des clés : ${[...familles].join(", ")}). Si aucune ne ` +
+      `convient, porter "classe": "${CLE_A_CREER}" avec "classe_proposee": {"cle", "famille", "libelle"} — ` +
+      "la classe se crée dans le référentiel, datée et sourcée, jamais au fil d'un événement. Et si l'item " +
+      `n'est PAS un défaut — une opportunité à construire —, porter "nature": "opportunite" et aucune classe`;
+  }
+
+  const cle = String(brute);
+  if (cle === CLE_A_CREER) {
+    const p = evenement.classe_proposee && typeof evenement.classe_proposee === "object" ? evenement.classe_proposee : {};
+    const manque = ["cle", "famille", "libelle"].filter((k) => !p[k] || !String(p[k]).trim());
+    if (manque.length) {
+      return `création ${evenement.id || "(sans id)"} porte « ${CLE_A_CREER} » sans classe_proposee complète — ` +
+        `manque ${manque.join(", ")}`;
+    }
+    if (cles.has(String(p.cle))) {
+      return `création ${evenement.id || "(sans id)"} : la classe proposée « ${p.cle} » EXISTE déjà au ` +
+        `référentiel — la porter directement dans "classe", sans passer par « ${CLE_A_CREER} »`;
+    }
+    if (!familles.has(String(p.famille))) {
+      return `création ${evenement.id || "(sans id)"} : famille « ${p.famille} » inconnue — familles du ` +
+        `référentiel : ${[...familles].join(", ")}`;
+    }
+    return null;
+  }
+
+  // TF-2764 (21/11/2026) : une clé de FAMILLE portée comme classe. Mesuré : 17 lignes de 11 lots
+  // le faisaient, et les « clés proches » rendues étaient sans rapport (« lot-forme » appariée à
+  // « l99-forme-sortie » par la sous-chaîne de « plateforme »). Le refus nomme l'erreur et les
+  // classes de cette famille, seules candidates sensées.
+  const familleDe = new Set([...familles, ...(referentiel.classes || []).map((c) => String(c.famille))]);
+  if (!cles.has(cle) && familleDe.has(cle)) {
+    const membres = (referentiel.classes || []).filter((c) => String(c.famille) === cle).map((c) => String(c.cle));
+    return `création ${evenement.id || "(sans id)"} : « ${cle} » est une FAMILLE du référentiel, pas une clé de ` +
+      `classe — choisir l'une des ${membres.length} classe(s) de cette famille : ${membres.join(", ") || "(aucune)"} ; ` +
+      `si aucune ne convient, porter "classe": "${CLE_A_CREER}" avec "classe_proposee": {"cle", "famille": "${cle}", "libelle"}`;
+  }
+
+  if (!cles.has(cle)) {
+    const mots = cle.split("-").filter((m) => m.length > 3);
+    const proches = [...cles].filter((k) => mots.some((m) => k.includes(m))).slice(0, 5);
+    return `création ${evenement.id || "(sans id)"} : classe « ${cle} » inconnue du référentiel — ` +
+      `clés proches : ${proches.length ? proches.join(", ") : "(aucune)"} ; si aucune ne convient, porter ` +
+      `"classe": "${CLE_A_CREER}" avec "classe_proposee": {"cle", "famille", "libelle"}`;
+  }
+  return null;
+}
+
+/**
+ * TF-1248 (02/10/2026) — UNE ÉTUDE CITÉE PAR UNE DÉCISION EXISTE AU MOMENT OÙ LA DÉCISION S'ÉCRIT.
+ *
+ * LE FAIT, mesuré le 20/09/2026 : quatre événements de décision du 14/09 (TF-1018, TF-1084,
+ * TF-1070, TF-1079) citent chacun une étude sous `output\03-etudes\`, chaque fois avec la mention
+ * « oracle-etude-opportunite PASS » — et aucun des quatre fichiers n'existe sur le disque ni dans
+ * l'historique git, sous aucune des deux histoires fusionnées. Deux agents de campagne ont dû
+ * travailler sur le TEXTE de la décision, faute de pouvoir lire la pièce qui la fonde.
+ *
+ * CE QUE CE GARDE VÉRIFIE, ET CE QU'IL NE VÉRIFIE PAS : une décision (`maj`, `statut: "decide"`)
+ * dont un champ cite un chemin `output[/\]03-etudes[/\]….md` doit, AU MOMENT OÙ ELLE S'ÉCRIT,
+ * désigner un fichier qui EXISTE sur le disque ET qui est SUIVI par git — sans quoi la pièce
+ * pourrait n'avoir jamais été commise, ou avoir disparu entre l'instruction et la décision. Il ne
+ * rejuge jamais la JUSTESSE de l'étude, seulement sa présence opposable.
+ */
+export function etudeCiteeIntrouvable(evenement, racine = RACINE) {
+  if (!evenement || evenement.ev !== "maj" || evenement.statut !== "decide") return null;
+  const motifs = [];
+  for (const [champ, v] of Object.entries(evenement)) {
+    if (typeof v !== "string") continue;
+    for (const m of v.matchAll(/output[\\/]03-etudes[\\/][^\s)"'»]+\.md/g)) {
+      motifs.push({ champ, chemin: m[0].replaceAll("\\", "/") });
+    }
+  }
+  const constats = [];
+  for (const { champ, chemin } of motifs) {
+    const abs = join(racine, chemin);
+    if (!existsSync(abs)) {
+      constats.push(`${champ} cite ${chemin} — introuvable sur le disque (racine : ${racine})`);
+      continue;
+    }
+    const suivi = spawnSync("git", ["-C", racine, "ls-files", "--error-unmatch", "--", chemin], { encoding: "utf8" });
+    if (suivi.status !== 0) {
+      constats.push(`${champ} cite ${chemin} — présent sur le disque mais NON SUIVI par git : rien ne le garantirait après ce commit`);
+    }
+  }
+  return constats.length ? constats : null;
+}
+
+// Le garde des octets est EXPORTÉ pour être joué sur le corpus réel avant livraison (N-23), et un
+// module dont l'import déclenche la ligne de commande n'est pas importable. La partie CLI ne
+// s'exécute donc que si ce fichier est le point d'entrée — même idiome que les oracles du dépôt.
+const lanceEnDirect = process.argv[1]
+  && fileURLToPath(import.meta.url).toLowerCase().replaceAll("\\", "/")
+     === process.argv[1].toLowerCase().replaceAll("\\", "/");
+if (!lanceEnDirect) { /* importé pour `octetsFautifs` : rien d'autre ne doit se produire */ }
+else {
+
+if (!fichier) sortir(1, { message: "usage : node journaliser.mjs --fichier <evenements.json> [--registre <f>] [--classes <f>] [--essai]" });
+if (!existsSync(fichier)) sortir(1, { message: `fichier d'événements introuvable : ${fichier}` });
+
+let entrants;
+try { entrants = JSON.parse(readFileSync(fichier, "utf8")); }
+catch (e) { sortir(1, { message: `événements illisibles : ${e.message}` }); }
+if (!Array.isArray(entrants)) entrants = [entrants];
+if (!entrants.length) sortir(1, { message: "aucun événement à journaliser" });
+
+// Refus AVANT toute écriture : un lot qui contient un `ts` n'est pas écrit à moitié.
+const porteurs = entrants.map((e, i) => (e && e.ts !== undefined ? i : -1)).filter((i) => i >= 0);
+if (porteurs.length) {
+  sortir(1, {
+    message: `${porteurs.length} événement(s) portent déjà un \`ts\` (rang ${porteurs.join(", ")}) — refusé, ` +
+      "aucune écriture. `ts` est l'heure de CONSIGNATION : elle est stampée ici. L'heure d'un " +
+      "fait rapporté est une donnée — `date_decision`, `date_correction`, ou un champ nommé (TF-0413)",
+  });
+}
+
+// Refus AVANT toute écriture, comme celui du `ts` : un lot qui porte un octet fautif n'est pas
+// écrit à moitié. Le rang de l'événement est nommé, sinon le lecteur cherche dans tout le lot.
+const fautifs = entrants.flatMap((e, i) => octetsFautifs(e).map((c) => `rang ${i} — ${c}`));
+if (fautifs.length) {
+  sortir(1, {
+    message: `${fautifs.length} octet(s) de contrôle ou ligne(s) de tableau coupée(s) — refusé, aucune écriture. ` +
+      "Le registre alimente `TODO.md` et `TODO.html` : un octet invisible y devient un chemin " +
+      "introuvable, et une ligne de tableau coupée y perd ses cellules (TF-0621, classe payée sept " +
+      `fois le 25/08). Constats : ${fautifs.join(" · ")}`,
+  });
+}
+
+// Refus AVANT toute écriture, troisième du même ordre : une création sans classe reconnue ferme
+// la porte que `ingerer-lot.mjs` ferme déjà pour les lots (A-11, D-5 (a) du 22/09/2026).
+let REF_CLASSES = null;
+try { REF_CLASSES = JSON.parse(readFileSync(CLASSES_PATH, "utf8")); }
+catch { /* laissé null : `classeFautive` le dit, avec le chemin, plutôt que de le taire */ }
+const sansClasse = entrants
+  .map((e, i) => { const c = classeFautive(e, REF_CLASSES); return c ? `rang ${i} — ${c}` : null; })
+  .filter(Boolean);
+if (sansClasse.length) {
+  sortir(1, {
+    message: `${sansClasse.length} création(s) sans classe reconnue — refusé, aucune écriture. Un lot entrant ` +
+      "ne s'ingère pas sans classe depuis le 03/09 ; le pilot s'en exemptait, et la revue du 22/09 a " +
+      "compté 8 candidatures ouvertes sans aucune classe, invisibles au compteur des classes sans juge. " +
+      `Constats : ${sansClasse.join(" · ")}`,
+  });
+}
+
+// Refus AVANT toute écriture, quatrième du même ordre : une décision qui cite une étude
+// introuvable ou non suivie ne s'écrit pas — le lecteur qui la rouvrira n'aurait rien à lire
+// (TF-1248, 02/10/2026 : quatre décisions du 14/09 citant une étude disparue sans aucun constat).
+const etudesIntrouvables = entrants
+  .flatMap((e, i) => (etudeCiteeIntrouvable(e) || []).map((c) => `rang ${i} — ${c}`));
+if (etudesIntrouvables.length) {
+  sortir(1, {
+    message: `${etudesIntrouvables.length} étude(s) citée(s) introuvable(s) ou non suivie(s) — refusé, aucune ` +
+      "écriture. Une décision qui s'appuie sur une étude ne s'écrit pas sans elle : retrouver le fichier, le " +
+      `commettre, ou retirer la citation si l'étude n'a jamais existé. Constats : ${etudesIntrouvables.join(" · ")}`,
+  });
+}
+
+const verdict = (f) => {
+  const r = spawnSync(process.execPath, [ORACLE, f], { encoding: "utf8" });
+  try { return JSON.parse(r.stdout || "{}").verdict || "ILLISIBLE"; } catch { return "ILLISIBLE"; }
+};
+
+/**
+ * La clé réservée est NORMALISÉE à l'écriture, dans la forme que `ingerer-lot.mjs` écrit déjà :
+ * `classe: null` plus `classe_a_creer` {cle, famille, libelle}. Écrire la clé réservée telle
+ * quelle produirait une classe hors référentiel, et `oracle-todo` R13 la refuserait — mesuré :
+ * l'écriture partait, l'oracle la rejetait, le registre était repris à l'octet près. Les deux
+ * écrivains produisent donc la MÊME forme, ce qui est tout l'objet de cette porte.
+ */
+const normaliser = (e) => {
+  if (!e || e.ev !== "creation" || String(e.classe) !== CLE_A_CREER) return e;
+  const { classe_proposee: p, ...reste } = e;
+  return { ...reste, classe: null, classe_a_creer: { cle: p.cle, famille: p.famille, libelle: p.libelle } };
+};
+
+// Horodatages stampés, strictement croissants au sein du lot.
+let dernier = 0;
+const lignes = entrants.map((brut) => {
+  const e = normaliser(brut);
+  let t = Date.now();
+  if (t <= dernier) t = dernier + 1;
+  dernier = t;
+  return JSON.stringify({ ...e, ts: new Date(t).toISOString() });
+});
+
+if (ESSAI) sortir(0, { message: "essai — rien écrit", ecrits: lignes });
+
+const avant = verdict(REGISTRE);
+const taille = existsSync(REGISTRE) ? statSync(REGISTRE).size : 0;
+appendFileSync(REGISTRE, lignes.join("\n") + "\n", "utf8");
+const apres = verdict(REGISTRE);
+
+if (avant === "PASS" && apres !== "PASS") {
+  truncateSync(REGISTRE, taille);
+  sortir(1, {
+    verdict_avant: avant, verdict_apres: apres, ecrits: [],
+    message: `le registre passait et ne passe plus (${apres}) — écriture ANNULÉE, fichier repris à ${taille} octets. ` +
+      "Jouer `node todo\\oracle-todo.mjs` pour lire le constat, corriger les événements, recommencer",
+  });
+}
+
+sortir(0, {
+  verdict_avant: avant, verdict_apres: apres,
+  ecrits: lignes.map((l) => { const o = JSON.parse(l); return `${o.ts} ${o.id || "?"} ${o.ev || "?"} ${o.statut || ""}`.trim(); }),
+  message: `${lignes.length} événement(s) journalisé(s) dans ${REGISTRE}` +
+    (avant !== "PASS" ? ` — ATTENTION : le registre était déjà ${avant} avant cette écriture` : ""),
+});
+
+}

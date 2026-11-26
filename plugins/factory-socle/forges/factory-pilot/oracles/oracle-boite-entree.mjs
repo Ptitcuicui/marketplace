@@ -1,0 +1,1020 @@
+#!/usr/bin/env node
+/**
+ * oracle-boite-entree.mjs — la boîte d'entrée des retours produits est-elle vide de travail
+ * non pris ?
+ *
+ * Pourquoi il existe. Le 14/08, un lot `Produit-10 - RETOURS - 20260814b` (5 candidatures) est
+ * resté dans `input\00-retours\` sans être ingéré, pendant qu'un autre lot du même jour l'était.
+ * Rien ne l'a signalé. Il a été découvert par hasard, en listant les fichiers non suivis avant
+ * de poser un tag. Le noyau prescrit de consulter le TODO-FORGE à l'ouverture de tout run ; il
+ * ne prescrivait nulle part de vérifier que la boîte est vide — or un registre à jour ne dit
+ * rien de ce qui n'y est jamais entré.
+ *
+ * C'est la même classe de défaut que la consigne RESTITUTION v1 (écrite, citée par aucun run)
+ * et que `ruff` dans forge-tests (configuré, exécuté par aucun pas) : un dispositif qui existe
+ * sans être joué. Ici le dispositif manquait tout court.
+ *
+ * Règles (binaires) :
+ *   B1  tout sidecar `*.tf.jsonl` du répertoire porte une empreinte présente en événement
+ *       `ingestion` du registre — sinon il n'a jamais été pris ;
+ *   B2  un sidecar dont le NOM a été ingéré mais dont l'empreinte a changé a été édité APRÈS
+ *       son ingestion : le registre et le fichier ne disent plus la même chose ;
+ *   B3  un lot `*.md` sans aucun sidecar est ingérable par aucun canal — invisible par
+ *       construction, quel que soit le soin qu'on met à regarder la boîte.
+ *   B6  (R-45, 21/08) un lot daté du 21/08 ou après DIT ce qu'il n'a pas remonté : section
+ *       « Remarques restées au produit » présente, et sous elle un verdict de généralisation
+ *       par remarque — ou la phrase déclarant qu'aucune n'est restée. Ce qu'un produit corrige
+ *       chez lui sans le remonter emporte la CLASSE du défaut avec lui. B6 CONSTATE ce qui
+ *       attend dans la boîte ; `ingerer-lot.mjs` REFUSE à l'entrée — les deux se cumulent,
+ *       un lot ingéré part en old et B6 ne le voit plus.
+ *   B8  (TF-0908, 08/09) un lot non ingéré depuis plus de 24 h n'attend plus son tour : il est
+ *       OUBLIÉ. B1 et B3 disent QUOI n'est pas entré ; B8 dit DEPUIS QUAND, et c'est cette
+ *       ancienneté que le hook d'ouverture du pilot rend bloquante. Six lots déposés le 07/09,
+ *       zéro ingéré, un producteur qui écrit « remonté » — la remise est un dépôt de fichier,
+ *       l'ingestion un geste de session que rien ne déclenchait.
+ *   B10 (TF-1215, 13/10) une PIÈCE JOINTE annoncée par un lot se nomme d'après lui,
+ *       `<base du lot> - PJ - <libellé>.<extension>`, et n'est alors ni un lot sans sidecar (B3), ni
+ *       un lot sans sections R-45/R-46 (B6, B7). Elle exige que son lot existe, dans la boîte ou
+ *       dans `old\` s'il est ingéré ; sans lui elle est ORPHELINE (rouge). La convention vaut pour
+ *       toute extension : la même remise n'est plus jugée selon son extension.
+ *   B9  (TF-1198, 19/09) le SAS d'arrivée `_arrivee\`, ignoré par git et hors de B1-B8, est
+ *       compté : un lot qui y attend se DIT (avertissement), au-delà de 24 h c'est un OUBLI (FAIL).
+ *       Six lots y ont attendu deux jours sous un PASS. Le constat ne porte jamais un nom de lot :
+ *       il est réel, et c'est ce que le sas protège.
+ *
+ * Ce qu'il ne juge PAS : la valeur des candidatures, la justesse d'un retour, l'opportunité
+ * de les traiter. Il dit qu'un travail est arrivé et n'a pas été pris, jamais s'il le mérite.
+ *
+ * Canal d'échappement respecté : `old\` est hors périmètre — un lot déjà traité par un autre
+ * canal y part sans ingestion, c'est la convention du mode opératoire (references\TODO-FORGE.md).
+ *
+ * Usage : node oracle-boite-entree.mjs [<repertoire>] [--registre <TODO.jsonl>]
+ *         node oracle-boite-entree.mjs --self-test
+ * Exit : 0 PASS · 1 FAIL · 2 non jugeable.
+ */
+import { createHash } from "node:crypto";
+import { appendFileSync, existsSync, readFileSync, readdirSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, statSync, utimesSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { tmpdir, hostname } from "node:os";
+import { spawnSync } from "node:child_process";
+import { empreinteFichier, empreinteBinaire } from "../scripts/lib-empreinte.mjs";
+import { emetteurDuNom } from "../scripts/ranger-dossiers.mjs";
+import { verifier as verifierFormeLot } from "../gabarits/oracle-lot-retours.mjs";   // B9 (TF-2559) : le juge de forme des lots du sas
+import { INDICE, JOUR_INDICE } from "./lib-indice-nom.mjs";
+
+const VERSION = "1.0.0";
+const ORACLE = "oracle-boite-entree";
+const ICI = dirname(fileURLToPath(import.meta.url));
+const NON_JUGE = [
+  "la VALEUR des candidatures d'un lot — cet oracle dit qu'un travail est arrivé sans être pris, jamais s'il le mérite",
+  "les lots remis par un canal autre que le répertoire (message, dépôt frère) — il ne voit que ce qui est déposé",
+  "le contenu de `old\\`, canal d'échappement documenté pour un lot déjà traité ailleurs",
+  "les boîtes d'entrée des AUTRES postes (TF-1214) : un dépôt non suivi par git ne voyage pas, et cet oracle ne juge que le poste où il tourne — la sortie porte `poste` pour que la synthèse dise sur quel poste le constat vaut",
+  "B10 juge l'existence du lot dont la pièce jointe porte le nom, jamais que ce lot la CITE dans son texte",
+  "B8 mesure l'ancienneté sur la date du FICHIER (mtime), jamais sur la date portée par son nom : un lot recopié ou renommé repart à zéro. C'est assumé — la question posée est « depuis quand attend-il À CET ENDROIT », pas « depuis quand a-t-il été écrit »",
+];
+
+// AU NIVEAU MODULE, ET CE N'EST PAS UN DÉTAIL DE STYLE : posée dans une fonction, cette constante
+// est tombée DEUX FOIS dans la zone morte temporelle d'un bloc qui la précédait — l'erreur avalée
+// par un `catch`, l'ensemble des dérogations vide, et le contrôle rendait FAIL en croyant avoir lu
+// le registre. Muet, pas faux : le pire état d'un contrôle. Une constante lue par plusieurs blocs
+// se déclare là où aucun ordre d'exécution ne peut la prendre de court.
+const RE_LIGNES = new RegExp(String.fromCharCode(92) + "r?" + String.fromCharCode(92) + "n");
+
+const SUFFIXE_SIDECAR = ".tf.jsonl";
+const SUFFIXE_NORMALISE = ".normalise.tf.jsonl";
+
+// Fins de ligne normalisées en LF AVANT hachage (TF-0253) : git peut réécrire un sidecar en
+// CRLF au checkout (core.autocrlf) sans qu'aucun octet de contenu n'ait changé. Une empreinte
+// prise sur les octets bruts diverge alors de celle consignée à l'ingestion (LF), et B1/B2
+// signalent un travail non pris ou édité là où rien n'a bougé — 12 faux positifs constatés le
+// 14/08 pour zéro édition réelle. Normaliser ici rend la comparaison indifférente à la fin de
+// ligne, tout en laissant B2 détecter une VRAIE édition (le contenu normalisé diffère toujours).
+// TF-0615 : la normalisation passe par la fonction PARTAGEE. Le raisonnement ci-dessus est
+// intact — il est simplement joue par du code qui ne vit plus ici.
+const empreinte = (chemin) => empreinteFichier(chemin);
+
+// Compatibilité TF-0253 : les ingestions ANTÉRIEURES à la normalisation ont consigné le
+// sha des octets BRUTS (CRLF compris). Sans cette forme, la migration créait le faux
+// positif inverse — constaté le 15/08 sur `Produit-10 - RETOURS - 20260814b` : fichier
+// identique bit à bit à son commit, B2 levé quand même. Un fichier est donc couvert si
+// SON empreinte normalisée OU son empreinte brute est au registre — une vraie édition
+// ne matche ni l'une ni l'autre.
+// TF-0615 : `empreinteBinaire` porte ce role dans la fonction partagee, et son nom DIT
+// qu'elle ne normalise rien — ce qui est exactement l'usage de compatibilite voulu ici.
+const empreinteBrute = (chemin) => empreinteBinaire(chemin);
+
+function couvert(parSha, chemin) {
+  return parSha.has(empreinte(chemin)) || parSha.has(empreinteBrute(chemin));
+}
+
+// ---- B8 (TF-0908, 08/09/2026) — DEPUIS QUAND, ET PAS SEULEMENT QUOI ---------------------------
+//
+// B1 et B3 répondent à « ce lot est-il entré ? ». Elles ont toujours répondu juste — et pourtant,
+// le 07/09, SIX lots d'un même produit ont été déposés et ZÉRO ingéré : `grep -c` sur le registre
+// et sur l'archive rendait 0 / 0. Le producteur, lui, écrivait « remonté » dans ses synthèses,
+// et l'humain a fini par mesurer la même chose autrement : « remonté plusieurs fois, toujours
+// pas traité ». *La remise est un dépôt de fichier ; l'ingestion est un geste de session que
+// rien ne déclenchait.*
+//
+// B8 répond à une AUTRE question, et c'est ce qui la distingue de B1 : **depuis combien de
+// temps**. Un lot déposé il y a dix minutes attend son tour, c'est normal ; un lot déposé il y a
+// plus de 24 heures a été OUBLIÉ, et la différence entre les deux ne se lit nulle part dans un
+// constat B1. C'est cette ancienneté que le hook d'ouverture rend BLOQUANTE — un constat qu'on
+// relit chaque matin sans jamais le traiter est un constat qui ne protège plus (motif que R-33 bis donne pour le verdict websec).
+//
+// L'horloge est celle du FICHIER (mtime), pas celle du nom : un lot renommé ou recopié repart
+// à zéro, et c'est voulu — on mesure depuis quand il attend À CET ENDROIT, pas depuis quand il
+// a été écrit chez le produit.
+const SEUIL_OUBLI_H = 24;
+const ageHeures = (chemin) => {
+  try { return (Date.now() - statSync(chemin).mtimeMs) / 3600000; }
+  catch { return null; } // fichier illisible : on ne devine pas une ancienneté
+};
+
+/** Les ingestions déjà consignées, par empreinte ET par nom de fichier. */
+function ingestions(registre) {
+  const archive = join(dirname(registre), "TODO-ARCHIVE.jsonl");
+  const lignes = [registre, archive]
+    .filter((f) => existsSync(f))
+    .flatMap((f) => readFileSync(f, "utf8").split("\n"))
+    .filter((l) => l.trim());
+  const parShaSet = new Set();
+  const parNom = new Set();
+  for (const ligne of lignes) {
+    let e;
+    try { e = JSON.parse(ligne); } catch { continue; }
+    if (e.ev !== "ingestion") continue;
+    if (e.lot_sha) parShaSet.add(e.lot_sha);
+    if (e.fichier) parNom.add(String(e.fichier).split(/[\\/]/).pop());
+  }
+  return { parSha: parShaSet, parNom };
+}
+
+// Les dépôts d'insatisfaction déjà entrés au registre du circuit (TF-0287), par nom de
+// fichier ET par dossier — le registre porte l'un ou l'autre selon la voie de dépôt.
+function depotsInsatisfaction(registreIns) {
+  const vus = new Set();
+  if (!existsSync(registreIns)) return vus;
+  for (const ligne of readFileSync(registreIns, "utf8").split("\n")) {
+    if (!ligne.trim()) continue;
+    let e; try { e = JSON.parse(ligne); } catch { continue; }
+    if (e.ev !== "depot") continue;
+    for (const champ of [e.dossier, e.fichier]) {
+      if (champ) vus.add(String(champ).split(/[\\/]/).filter(Boolean).pop());
+    }
+  }
+  return vus;
+}
+
+const PREFIXE_INS = "INSATISFACTION - ";
+
+// TF-0364 (18/08/2026) — le canal de REMISE D'ARTEFACT. Le registre réclame parfois un objet
+// que la forge n'a pas : le 18/08, TF-0326 a demandé le skill `pilote-de-mission`, introuvable
+// dans les 15 dépôts. L'humain l'a remis en déposant un `.skill` à plat dans `input\` — et ça
+// a marché, parce qu'une session était là pour faire le lien. Rien dans les fichiers ne relie
+// la remise à l'item qui la réclamait : `oracle-boite-entree` ne voyait pas ce fichier (B3 ne
+// juge que les `.md`), aucun nommage ne s'appliquait, et le lien n'existait que dans une
+// conversation. Fermer la session le perdait.
+//
+// Le canal est donc nommé, et le partage des rôles suit celui des insatisfactions (TF-0287) :
+// **l'humain dépose le fichier, il n'écrit AUCUN protocole**. C'est le pilot qui, en traitant
+// la remise, écrit le sidecar `<fichier>.remise.json` — `{ "repond_a": "TF-xxxx", "provenance":
+// "…", "date": "AAAA-MM-JJ" }`. B5 dénonce la remise qui n'a pas reçu ce sidecar : un artefact
+// arrivé et non rattaché est un travail que la prochaine session ne saura pas relier.
+// Notices de dossier — ce qui EXPLIQUE un canal, jamais ce qui y est remis. Deux noms
+// coexistent et c'est un fait, pas un choix : `LISEZMOI.md` est le nom historique, écrit à la
+// main ; `README.md` est DÉPOSÉ dans chaque sous-dossier d'`input\` par
+// `scripts\readme-dossiers.mjs` (hook PostToolUse, commit 63af797). Le jour où le second est
+// apparu, B3 et B5 l'ont pris pour un lot sans sidecar : l'oracle que le noyau exige à
+// l'ouverture de TOUT run est sorti en FAIL quoi qu'il arrive — et un gate toujours rouge
+// cesse d'être lu, ce que B1-B5 existaient précisément pour empêcher (TF-0443, RA-5 du lot
+// Produit-03 20260821b ; incident fondateur du 14/08).
+// La liste est une DONNÉE : un nom de notice de plus s'ajoute ici, pas dans une condition.
+const NOTICES_DE_DOSSIER = new Set(["LISEZMOI.md", "README.md"]);
+
+// TF-1215 (13/10/2026) — LA PIÈCE JOINTE D'UN LOT A UNE FORME NOMMÉE. Le 14/09, une étude annoncée par
+// son lot (« ce fichier, son sidecar, l'étude jointe ») a rendu quatre rouges (B3, B6, B7, B8) : l'oracle
+// ne connaissait que le lot et la notice, et la seule sortie était de la ranger dans old, loin du lot
+// qui la cite. Convention : `<base du lot> - PJ - <libellé>.<extension>`, la base étant celle du lot
+// (`<projet> - RETOURS - AAAAMMJJ<indice>`). Le nom DÉRIVE du lot : il suffit de le lire pour retrouver
+// le lot, et B10 vérifie que ce lot existe.
+// TF-2685 : l'indice du nom vient de `lib-indice-nom.mjs` (« za » à « zz » compris), jamais réécrit ici.
+const RE_PIECE_JOINTE = new RegExp(`^(.+ - RETOURS - ${JOUR_INDICE}) - PJ - .+\\.[A-Za-z0-9]+$`);
+const RE_LOT_DU_SAS = new RegExp(`^.+ - RETOURS - ${JOUR_INDICE}\\.md$`, "i");
+const pieceJointe = (nom) => RE_PIECE_JOINTE.exec(nom);
+
+const CANAL_ARTEFACTS = "03-artefacts";
+const SUFFIXE_REMISE = ".remise.json";
+
+function remisesOrphelines(repertoire) {
+  if (!existsSync(repertoire)) return [];
+  const fichiers = readdirSync(repertoire, { withFileTypes: true })
+    .filter((d) => d.isFile()).map((d) => d.name);
+  const orphelines = [];
+  for (const nom of fichiers) {
+    if (nom.endsWith(SUFFIXE_REMISE) || NOTICES_DE_DOSSIER.has(nom)) continue;
+    const sidecar = nom + SUFFIXE_REMISE;
+    if (!fichiers.includes(sidecar)) { orphelines.push({ nom, motif: "aucun sidecar" }); continue; }
+    let decl;
+    try { decl = JSON.parse(readFileSync(join(repertoire, sidecar), "utf8")); }
+    catch { orphelines.push({ nom, motif: `${sidecar} illisible` }); continue; }
+    const manquants = ["repond_a", "provenance", "date"].filter((c) => !String(decl[c] || "").trim());
+    if (manquants.length) orphelines.push({ nom, motif: `${sidecar} sans ${manquants.join(", ")}` });
+    else if (!/^TF-\d{4}$/.test(String(decl.repond_a).trim())) {
+      orphelines.push({ nom, motif: `repond_a « ${decl.repond_a} » n'est pas un id TF-xxxx` });
+    }
+  }
+  return orphelines;
+}
+
+function juger(repertoire, registre, registreIns = join(ICI, "..", "insatisfactions", "REGISTRE.jsonl")) {
+  const findings = [];
+  if (!existsSync(repertoire)) {
+    return { verdict: "SKIP", findings, motif: `répertoire absent : ${repertoire}` };
+  }
+  const fichiers = readdirSync(repertoire, { withFileTypes: true })
+    .filter((d) => d.isFile())
+    .map((d) => d.name);
+  const { parSha, parNom } = ingestions(registre);
+  const sidecars = fichiers.filter((f) => f.endsWith(SUFFIXE_SIDECAR));
+
+  for (const nom of sidecars) {
+    if (couvert(parSha, join(repertoire, nom))) continue;
+
+    // Un sidecar BRUT au format produit se normalise avant ingestion : c'est le dérivé qui
+    // porte l'empreinte consignée. Le brut est donc couvert par son normalisé — sans quoi
+    // l'oracle réclamerait éternellement l'ingestion d'un fichier dont le travail est fait.
+    if (!nom.endsWith(SUFFIXE_NORMALISE)) {
+      const derive = nom.slice(0, -SUFFIXE_SIDECAR.length) + SUFFIXE_NORMALISE;
+      if (sidecars.includes(derive) && couvert(parSha, join(repertoire, derive))) continue;
+    }
+
+    const age = ageHeures(join(repertoire, nom));
+    findings.push(
+      parNom.has(nom)
+        ? { regle: "B2", statut: "FAIL", ou: nom, depuis_h: age === null ? null : Number(age.toFixed(1)),
+            message: "sidecar ÉDITÉ après son ingestion — le registre porte ce nom, mais plus ce contenu ; ce qui a été ajouté depuis n'est entré nulle part" }
+        : { regle: "B1", statut: "FAIL", ou: nom, depuis_h: age === null ? null : Number(age.toFixed(1)),
+            message: "sidecar JAMAIS ingéré — le travail est arrivé et n'a pas été pris (`node todo/ingerer-lot.mjs <fichier>`)"
+              + (age === null ? "" : ` ; déposé depuis ${age < 1 ? "moins d'une heure" : `${age.toFixed(0)} h`}`) },
+    );
+  }
+
+  for (const nom of fichiers.filter((f) => f.endsWith(".md"))) {
+    // Un dépôt d'insatisfaction n'a PAS de sidecar, et c'est voulu (TF-0287) : l'humain
+    // dépose une phrase et des captures, l'instruction produira le reste. B3 le
+    // réclamerait à tort — le circuit naîtrait avec son propre faux positif, la maladie
+    // même que l'étude 20260815e documente. B4 prend le relais ci-dessous.
+    if (nom.startsWith(PREFIXE_INS)) continue;
+    // Une notice de dossier n'est pas un lot : elle explique le canal, elle n'y est pas remise.
+    if (NOTICES_DE_DOSSIER.has(nom)) continue;
+    // Une pièce jointe n'est pas un lot : B10 juge qu'elle a le sien (TF-1215).
+    if (pieceJointe(nom)) continue;
+    const base = nom.slice(0, -3);
+    if (sidecars.some((s) => s.startsWith(base))) continue;
+    const ageMd = ageHeures(join(repertoire, nom));
+    findings.push({ regle: "B3", statut: "FAIL", ou: nom, depuis_h: ageMd === null ? null : Number(ageMd.toFixed(1)),
+      message: "lot remis SANS sidecar — aucun canal ne peut l'ingérer, il est invisible par construction (`node todo/normaliser-lot.mjs` ou sidecar à réclamer au produit)"
+        + (ageMd === null ? "" : ` ; déposé depuis ${ageMd < 1 ? "moins d'une heure" : `${ageMd.toFixed(0)} h`}`) });
+  }
+
+  // GÉNÉRALISÉ À TOUTE RÈGLE (24/08, second passage). Le premier jet ne lisait les dérogations que
+  // pour R-46 : quatre lots ingérés le même jour sous une dérogation couvrant R-45 ET R-46 laissaient
+  // donc B6 rouge, alors que le sujet était tranché et tracé. Un contrôle qui ne reconnaît la
+  // décision que sur l'une des deux règles qu'elle nomme est un contrôle qui lit à moitié.
+  // LU DANS LE REGISTRE ET DANS L'ARCHIVE (02/09/2026, payé le jour même) : quand les items d'un
+  // lot dérogé sont archivés, `archiver.mjs` emporte l'événement d'ingestion qui porte la dérogation
+  // avec eux — et ce contrôle, qui ne lisait que le registre actif, rallumait B6/B7 sur un lot
+  // tranché six jours plus tôt. Même lecture que B1/B2 (`ingestions()`), qui lisent déjà les deux.
+  // Et les DEUX séparateurs de chemin : un `fichier` consigné avec des antislashs donnait pour
+  // base le chemin entier, donc une dérogation qui ne couvrait jamais son lot.
+  const derogesPar = new Map();      // règle -> ensemble de lots dérogés
+  const sourcesDerog = [registre, join(dirname(registre), "TODO-ARCHIVE.jsonl")];
+  for (const ligne of sourcesDerog.flatMap((f) => { try { return readFileSync(f, "utf8").split(RE_LIGNES); } catch { return []; } })) {
+    if (!ligne.trim() || !ligne.includes('"ingestion"')) continue;
+    let e = null;
+    try { e = JSON.parse(ligne); } catch { continue; }
+    const regles = e?.derogation?.regles || [];
+    if (!regles.length) continue;
+    const base = String(e.fichier || "").split(/[\\/]/).pop().replace(/\.tf\.jsonl$/, "");
+    if (!base) continue;
+    for (const r of regles) {
+      if (!derogesPar.has(r)) derogesPar.set(r, new Set());
+      derogesPar.get(r).add(base);
+    }
+  }
+
+  // B6 (R-45, 21/08) — un lot remis DIT ce qu'il n'a pas remonté.
+  //
+  // Le fait qui la fait naître : un lot du 20/08 écrivait « Le lot ne remonte pas ces défauts,
+  // qui appartiennent au produit ». Le tri était honnête, le raisonnement juste — et invisible.
+  // Les défauts de forme les plus coûteux de l'écosystème (largeur de lecture, tableaux
+  // illisibles au mobile, états vides absents) ont tous commencé leur vie comme « un défaut de
+  // ce livrable-là ». Ce qui se perd n'est pas le défaut, c'est sa CLASSE.
+  //
+  // Ce que B6 exige : la section « Remarques restées au produit », et sous elle soit un verdict
+  // de généralisation par remarque, soit la phrase qui déclare qu'il n'y en a aucune. Une
+  // section vide se lit comme un oubli, et l'omission ne vaut pas décision.
+  //
+  // Ce que B6 NE juge PAS : la JUSTESSE du verdict. Qu'une remarque soit vraiment non
+  // généralisable relève d'un jugement, pas d'une mesure — l'oracle exige que le raisonnement
+  // soit ÉCRIT, jamais qu'il soit bon.
+  //
+  // Entrée en vigueur DATÉE, comme R10 : les lots antérieurs au seuil sont une antériorité
+  // déclarée. Un contrôle qui met en échec tout l'existant se fait désactiver (motif que R-33 bis donne pour le verdict websec).
+  const SEUIL_B6 = "20260821";
+  const RE_DATE_LOT = new RegExp(`(\\d{8})${INDICE}?\\.md$`, "i");
+  const SECTION_B6 = /^##\s+Remarques\s+rest[ée]es?\s+au\s+produit\s*$/im;
+  const VERDICT_B6 = /g[ée]n[ée]ralisab/i;
+  const AUCUNE_B6 = /aucune\s+remarque\s+n['’]est\s+rest[ée]e?\s+au\s+produit/i;
+  let b6 = true;
+  for (const nom of fichiers.filter((f) => f.endsWith(".md"))) {
+    if (nom.startsWith(PREFIXE_INS) || NOTICES_DE_DOSSIER.has(nom) || pieceJointe(nom)) continue;
+    const date = RE_DATE_LOT.exec(nom);
+    if (!date || date[1] < SEUIL_B6) continue; // antériorité déclarée
+    let texte = "";
+    try { texte = readFileSync(join(repertoire, nom), "utf8"); } catch { continue; }
+    if ((derogesPar.get("R-45") || new Set()).has(nom.replace(/\.md$/, ""))) {
+      findings.push({ regle: "B6", statut: "SANS_OBJET", ou: nom,
+        message: "lot INCOMPLET au sens de R-45, mais ingéré sous DÉROGATION tracée au registre " +
+          "(décision humaine, motif écrit) — la règle reste vraie pour tout autre lot, et le rouge de " +
+          "celui-ci s'éteint parce que le sujet est tranché, pas parce qu'il est oublié" });
+      continue;
+    }
+    if (!SECTION_B6.test(texte)) {
+      findings.push({ regle: "B6", statut: "FAIL", ou: nom,
+        message: "lot sans section « Remarques restées au produit » — ce qu'un produit corrige chez lui sans le remonter emporte la CLASSE du défaut avec lui (gabarit `gabarits\\RETOURS-FORGES.md`, R-45)" });
+      b6 = false;
+      continue;
+    }
+    const corps = texte.split(SECTION_B6)[1] || "";
+    const suite = corps.split(/^## /m)[0] || "";
+    if (!VERDICT_B6.test(suite) && !AUCUNE_B6.test(suite)) {
+      findings.push({ regle: "B6", statut: "FAIL", ou: nom,
+        message: "section « Remarques restées au produit » présente mais SANS verdict de généralisation, ni déclaration qu'aucune remarque n'est restée — une section vide se lit comme un oubli, l'omission ne vaut pas décision (R-45)" });
+      b6 = false;
+    }
+  }
+  if (b6 && fichiers.some((f) => f.endsWith(".md") && RE_DATE_LOT.test(f) && RE_DATE_LOT.exec(f)[1] >= SEUIL_B6)) {
+    findings.push({ regle: "B6", statut: "PASS", ou: "-",
+      message: "tout lot postérieur au 21/08 déclare ce qu'il n'a pas remonté" });
+  }
+
+  // B7 (R-46, 22/08) — un lot remis DIT ce que ses documents ont coûté au gabarit.
+  //
+  // R-45 a rendu due la remontée de ce qu'un projet corrige CHEZ LUI. B7 est son pendant côté
+  // LIVRABLES : ce qui a manqué, gêné ou dû être ajouté à la main dans un document produit à
+  // partir d'un gabarit de la bibliothèque. C'est le seul canal par lequel un gabarit
+  // s'améliore — il ne vieillit pas en s'usant, il vieillit parce que la réalité des projets le
+  // dépasse et que personne ne le dit.
+  //
+  // Ce que B7 exige : la section « Retours sur les documents produits », et sous elle soit un
+  // retour portant le couple gabarit + version, soit la phrase déclarant qu'aucun document n'a
+  // été produit depuis un gabarit. Même patron que B6, et pour la même raison : une section
+  // vide se lit comme un oubli.
+  //
+  // Ce que B7 NE juge PAS : la valeur du retour. Qu'un manque signalé mérite de changer le
+  // gabarit est une décision humaine au registre, jamais une mesure d'oracle.
+  // UNE DÉROGATION TRACÉE ÉTEINT LE ROUGE DE SON LOT, ET D'AUCUN AUTRE (24/08). L'ingestion sait
+  // déjà refuser un lot non conforme, et le contourner sur décision humaine avec un motif écrit
+  // qu'elle inscrit au registre. Mais ce contrôle-ci relisait le FICHIER, jamais la décision : le
+  // lot restait rouge à chaque ouverture de session, indéfiniment, alors que le sujet était tranché
+  // et la trace posée. Un rouge permanent sur un sujet clos est du bruit, et le bruit finit par
+  // masquer un vrai défaut — c'est la raison même pour laquelle la dérogation existe.
+  //
+  // Ce qui n'est PAS affaibli : la règle reste vraie pour tout autre lot, y compris le suivant du
+  // même produit. La dérogation est nominative — elle nomme un fichier, une règle et un motif.
+  // Déclaré AVANT la boucle qui s'en sert : posé après, il tombait dans la zone morte
+  // temporelle, l'erreur était avalée par le `catch` du même bloc, et l'ensemble restait VIDE.
+  // Le contrôle rendait donc FAIL en croyant avoir lu les dérogations — muet, pas faux : le
+  // pire état pour un contrôle. Trouvé en le jouant sur le lot réel.
+  const SEUIL_B7 = "20260822";
+  const SECTION_B7 = /^##\s+Retours\s+sur\s+les\s+documents\s+produits\s*$/im;
+  const VERDICT_B7 = /gd-[a-z-]+|version[_ ]du[_ ]gabarit/i;
+  const AUCUN_B7 = /aucun\s+document\s+produit\s+depuis\s+un\s+gabarit/i;
+  let b7 = true;
+  for (const nom of fichiers.filter((f) => f.endsWith(".md"))) {
+    if (nom.startsWith(PREFIXE_INS) || NOTICES_DE_DOSSIER.has(nom) || pieceJointe(nom)) continue;
+    const date = RE_DATE_LOT.exec(nom);
+    if (!date || date[1] < SEUIL_B7) continue; // antériorité déclarée
+    let texte = "";
+    try { texte = readFileSync(join(repertoire, nom), "utf8"); } catch { continue; }
+    if ((derogesPar.get("R-46") || new Set()).has(nom.replace(/\.md$/, ""))) {
+      findings.push({ regle: "B7", statut: "SANS_OBJET", ou: nom,
+        message: "lot INCOMPLET au sens de R-46, mais ingéré sous DÉROGATION tracée au registre " +
+          "(décision humaine, motif écrit) — la règle reste vraie pour tout autre lot, et le rouge " +
+          "de celui-ci s'éteint parce que le sujet est tranché, pas parce qu'il est oublié" });
+      continue;
+    }
+    if (!SECTION_B7.test(texte)) {
+      findings.push({ regle: "B7", statut: "FAIL", ou: nom,
+        message: "lot sans section « Retours sur les documents produits » — ce qu'un document a coûté au gabarit (section manquante, champ non prévu, ajout à la main) est le seul canal par lequel la bibliothèque s'améliore (gabarit `gabarits\\RETOURS-FORGES.md`, R-46)" });
+      b7 = false;
+      continue;
+    }
+    const suite = (texte.split(SECTION_B7)[1] || "").split(/^## /m)[0] || "";
+    if (!VERDICT_B7.test(suite) && !AUCUN_B7.test(suite)) {
+      findings.push({ regle: "B7", statut: "FAIL", ou: nom,
+        message: "section « Retours sur les documents produits » présente mais SANS retour rattaché à un gabarit (id `gd-…` ou version du gabarit), ni déclaration qu'aucun document n'en est issu — un retour qui ne nomme pas sa source ne s'applique à rien (R-46)" });
+      b7 = false;
+    }
+  }
+  if (b7 && fichiers.some((f) => f.endsWith(".md") && RE_DATE_LOT.test(f) && RE_DATE_LOT.exec(f)[1] >= SEUIL_B7)) {
+    findings.push({ regle: "B7", statut: "PASS", ou: "-",
+      message: "tout lot postérieur au 22/08 dit ce que ses documents ont coûté au gabarit" });
+  }
+
+  // B4 (TF-0287) — un dépôt d'insatisfaction qui n'est pas entré au registre du circuit
+  // n'est vu par personne : même maladie que B1, autre canal. Ce qui est exigé n'est pas
+  // un sidecar, c'est un identifiant INS et une instruction à venir.
+  const deposes = depotsInsatisfaction(registreIns);
+  for (const nom of fichiers.filter((f) => f.startsWith(PREFIXE_INS) && f.endsWith(".md"))) {
+    if (deposes.has(nom) || deposes.has(nom.slice(0, -3))) continue;
+    findings.push({ regle: "B4", statut: "FAIL", ou: nom,
+      message: "insatisfaction déposée JAMAIS entrée au registre — elle n'a ni identifiant INS, ni instruction, et un « toujours pas » ne pourra se rattacher à rien (`insatisfactions\\REGISTRE.jsonl`, événement depot)" });
+  }
+
+  // B5 (TF-0364) — une remise d'artefact non rattachée à son item. Le répertoire est frère de
+  // celui des lots : on le juge depuis le même passage, sinon il faudrait s'en souvenir.
+  const canal = join(repertoire, "..", CANAL_ARTEFACTS);
+  for (const { nom, motif } of remisesOrphelines(canal)) {
+    findings.push({ regle: "B5", statut: "FAIL", ou: nom,
+      message: `remise d'artefact NON RATTACHÉE (${motif}) — un objet réclamé par le registre `
+        + `est arrivé sans que rien ne dise à quel item il répond : la prochaine session verra `
+        + `un fichier orphelin. Écrire ${nom}${SUFFIXE_REMISE} avec repond_a / provenance / date` });
+  }
+
+  // B10 (TF-1215) — UNE PIÈCE JOINTE A SON LOT. Le lot existe dans la boîte, ou dans `old\` s'il est
+  // déjà ingéré (le lot part en old à l'ingestion, la pièce peut y rester en attente d'être rangée).
+  const pieces = fichiers.filter((f) => pieceJointe(f));
+  let orphelines = 0;
+  for (const nom of pieces) {
+    const lot = pieceJointe(nom)[1] + ".md";
+    // `old\<émetteur>\` compte aussi : la boîte y classe ses lots ingérés depuis le 16/10/2026.
+    if (fichiers.includes(lot) || existsSync(join(repertoire, "old", lot))
+      || existsSync(join(repertoire, "old", emetteurDuNom(lot), lot))) continue;
+    orphelines++;
+    const age = ageHeures(join(repertoire, nom));
+    findings.push({ regle: "B10", statut: "FAIL", ou: nom, depuis_h: age === null ? null : Number(age.toFixed(1)),
+      message: `pièce jointe ORPHELINE — son nom annonce le lot « ${lot} », qui n'est ni dans la boîte ni dans old\\ ; une pièce sans son lot ne se rattache à rien (remettre le lot, ou renommer la pièce d'après le sien : \`<base du lot> - PJ - <libellé>.<extension>\`)`
+        + (age === null ? "" : ` ; déposée depuis ${age < 1 ? "moins d'une heure" : `${age.toFixed(0)} h`}`) });
+  }
+  if (pieces.length && !orphelines) {
+    findings.push({ regle: "B10", statut: "PASS", ou: "-", message: `${pieces.length} pièce(s) jointe(s), chacune rattachée à son lot` });
+  }
+
+  // B8 (TF-0908) — L'ANCIENNETÉ, la question que B1 et B3 ne posent pas. Elle se calcule sur les
+  // constats DÉJÀ rendus : rien n'est relu, rien n'est jugé deux fois — B8 ne dit pas qu'un lot
+  // n'est pas entré (B1/B3 le disent), elle dit qu'il attend depuis trop longtemps.
+  const oublies = findings.filter((f) => (f.regle === "B1" || f.regle === "B3" || f.regle === "B10")
+    && f.statut === "FAIL" && typeof f.depuis_h === "number" && f.depuis_h > SEUIL_OUBLI_H);
+  if (!oublies.length) {
+    findings.push({ regle: "B8", statut: "PASS", ou: "-",
+      message: `aucun lot non ingéré depuis plus de ${SEUIL_OUBLI_H} h — ce qui attend dans la boîte y est arrivé récemment` });
+  } else {
+    const plusVieux = Math.max(...oublies.map((f) => f.depuis_h));
+    findings.push({ regle: "B8", statut: "FAIL", ou: "-", depuis_h: Number(plusVieux.toFixed(1)),
+      message: `${oublies.length} lot(s) attendent depuis plus de ${SEUIL_OUBLI_H} h (le plus ancien : ${plusVieux.toFixed(0)} h) — `
+        + `${oublies.slice(0, 6).map((f) => f.ou).join(", ")}${oublies.length > 6 ? ", …" : ""}. `
+        + "Un travail remonté qui n'entre pas au registre est un travail que le producteur croit remonté et que personne ne traite "
+        + "(mesuré le 07/09 : six lots déposés, zéro item). À jouer AVANT tout autre travail : `node todo/ingerer-lot.mjs <fichier>` "
+        + "pour chacun (un lot sans sidecar passe d'abord par `node todo/normaliser-lot.mjs`)" });
+  }
+
+  // B9 (TF-1198, 19/09/2026) — LE SAS D'ARRIVÉE EST HORS DE TOUT, DONC PERSONNE NE LE REGARDE.
+  //
+  // LE FAIT : le 19/09, six lots des 17 et 18/09 attendaient dans `_arrivee\` — douze fichiers, huit
+  // demandes — pendant que ce contrôle rendait PASS et que le relevé d'ouverture annonçait « aucun
+  // lot non ingéré depuis plus de 24 h ». Rien n'était faux : le sas est IGNORÉ par git (c'est sa
+  // raison d'être, un lot y séjourne sous son nom réel) et il était hors du périmètre de B1 à B8,
+  // qui ne lisent que la racine suivie. Un lot remis selon le protocole était donc invisible tant
+  // qu'une session ne listait pas le dossier à la main.
+  //
+  // L'INVARIANT : un lot REMIS est un lot VU. Le sas n'est pas un lieu de séjour, c'est un passage ;
+  // ce qui y attend depuis moins de `SEUIL_OUBLI_H` heures se DIT sans bloquer (il vient d'arriver),
+  // ce qui y attend depuis plus longtemps est un OUBLI, au même seuil et pour la même raison que B8.
+  // CE QUE LE CONSTAT NE FAIT JAMAIS : imprimer le nom d'un lot du sas. Ce nom est réel, et ce
+  // rapport entre dans des restitutions versionnées — le compte et l'âge suffisent à agir.
+  const sasArrivee = join(repertoire, "_arrivee");
+  let auSas = [];
+  try { auSas = readdirSync(sasArrivee).filter((n) => /\.tf\.jsonl$/i.test(n)); } catch { /* sas absent : l'état d'un clone frais */ }
+  if (!auSas.length) {
+    findings.push({ regle: "B9", statut: "PASS", ou: "-", message: "sas d'arrivée vide — l'état normal" });
+  } else {
+    const ages = auSas.map((n) => { try { return (Date.now() - statSync(join(sasArrivee, n)).mtimeMs) / 3600000; } catch { return 0; } });
+    const plusVieux = Math.max(...ages);
+    const oubli = plusVieux > SEUIL_OUBLI_H;
+    // TF-2559 (14/11/2026) : le juge de forme des lots (`gabarits\oracle-lot-retours.mjs`) joue AUSSI sur ceux du sas, comptés et jamais
+    // nommés. Deux lots de produits y attendaient avec 4 sections absentes chacun, et seule l'ingestion, des jours plus tard, les refusait.
+    const reglesEnForme = [], lotsEnForme = [];
+    for (const n of readdirSync(sasArrivee).filter((f) => RE_LOT_DU_SAS.test(f) && !pieceJointe(f))) {
+      let r = null;
+      try { r = verifierFormeLot(join(sasArrivee, n)); } catch { /* un lot que le juge ne lit pas n'est pas compté ici */ }
+      if (r && r.verdict === "FAIL") { lotsEnForme.push(n); reglesEnForme.push(...(r.constats || []).filter((c) => c.statut === "FAIL").map((c) => c.regle)); }
+    }
+    findings.push({ regle: "B9", statut: oubli ? "FAIL" : "AVERTISSEMENT", ou: "_arrivee", depuis_h: Number(plusVieux.toFixed(1)), forme_fail: lotsEnForme.length,
+      message: `${auSas.length} lot(s) au sas d'arrivée, le plus ancien depuis ${plusVieux.toFixed(0)} h — `
+        + (oubli ? `au-delà de ${SEUIL_OUBLI_H} h ce n'est plus une arrivée, c'est un OUBLI : le producteur croit son travail remonté et personne ne le traite. `
+          : "ils attendent leur accueil. ")
+        + (lotsEnForme.length ? `${lotsEnForme.length} d'entre eux rendent FAIL au juge de forme (${[...new Set(reglesEnForme)].join(", ")}) : refusés à l'ingestion tels quels, `
+          + "à faire corriger par le produit ; `node todo/accueillir-lot.mjs` les juge à l'arrivée et les nomme, pseudonymisés. " : "")
+        + "À jouer : `node todo/accueillir-lot.mjs` (pseudonymise et déplace), puis `node todo/ingerer-lot.mjs <sidecar>` pour chacun. "
+        + "Les noms ne sont pas imprimés ici : ils sont réels, et c'est ce que le sas protège" });
+  }
+
+  const vues = new Set(findings.map((f) => f.regle));
+  for (const [regle, message] of [
+    ["B1", `${sidecars.length} sidecar(s) présent(s), tous ingérés`],
+    ["B2", "aucun sidecar édité après ingestion"],
+    ["B3", "aucun lot sans sidecar"],
+    ["B10", "aucune pièce jointe à juger"],
+    ["B5", existsSync(canal)
+      ? "toute remise d'artefact est rattachée à son item"
+      : `aucune remise à juger (canal ${CANAL_ARTEFACTS} absent)`],
+  ]) {
+    if (!vues.has(regle)) findings.push({ regle, statut: "PASS", message });
+  }
+  findings.sort((a, b) => a.regle.localeCompare(b.regle) || (a.statut === "FAIL" ? -1 : 1));
+  return { verdict: findings.some((f) => f.statut === "FAIL") ? "FAIL" : "PASS", findings };
+}
+
+// ---- TF-2339 (10/11/2026) · UN VERDICT QUI ENTRE AU LEDGER D'UN PRODUIT NE PORTE QUE DES COMPTES -----------------------
+// Le 11/09/2026, le verdict de cet oracle (joué à l'ouverture d'un run, R-35) a été consigné au ledger d'un produit, fichier suivi par git, avec « trois sidecars déposés et jamais
+// ingérés » désignés par leur nom : des noms de produits d'autres dépôts, que la porte de publication refuse (C5 sur 14 commits). `findings[].ou` porte ces noms, utiles au pilot qui
+// traite la boîte, nuisibles dans le journal d'un autre dépôt. Ce compte est la seule forme à consigner ailleurs que chez le pilot : verdict, nombre de constats par règle, et une
+// phrase ; aucun nom de fichier, aucun chemin.
+function compteLedger({ verdict, findings }) {
+  const parRegle = {};
+  for (const f of findings || []) if (f.statut === "FAIL") parRegle[f.regle] = (parRegle[f.regle] || 0) + 1;
+  const regles = Object.keys(parRegle).sort();
+  return { verdict, constats_par_regle: parRegle,
+    texte: regles.length ? regles.map((r) => `${parRegle[r]} constat${parRegle[r] > 1 ? "s" : ""} ${r}`).join(", ") : "aucun constat" };
+}
+
+// ---- self-test : chaque règle prouvée dans les DEUX sens -------------------------------------
+function selfTest() {
+  const base = mkdtempSync(join(tmpdir(), "boite-"));
+  const reg = join(base, "TODO.jsonl");
+  const boite = join(base, "00-retours");
+  mkdirSync(boite);
+
+  const ingere = join(boite, "PRODUIT - RETOURS - 20260101a.tf.jsonl");
+  writeFileSync(ingere, '{"titre":"x"}\n');
+  writeFileSync(join(boite, "PRODUIT - RETOURS - 20260101a.md"), "# lot\n");
+  writeFileSync(reg, JSON.stringify({
+    ev: "ingestion", lot_sha: empreinte(ingere), fichier: "PRODUIT - RETOURS - 20260101a.tf.jsonl",
+  }) + "\n");
+
+  const cas = [];
+  const vert = juger(boite, reg);
+  cas.push(["vert  — boîte à jour", vert.verdict === "PASS", vert.verdict]);
+
+  // B1 : un sidecar neuf, jamais ingéré (le défaut réel du 14/08).
+  const neuf = join(boite, "AUTRE - RETOURS - 20260101a.tf.jsonl");
+  writeFileSync(neuf, '{"titre":"jamais pris"}\n');
+  let r = juger(boite, reg);
+  cas.push(["B1    — sidecar jamais ingéré", r.findings.some((f) => f.regle === "B1" && f.statut === "FAIL"), r.verdict]);
+
+  // Contre-épreuve du normalisé : le brut est couvert par son dérivé ingéré, pas réclamé deux fois.
+  const norm = join(boite, "AUTRE - RETOURS - 20260101a.normalise.tf.jsonl");
+  writeFileSync(norm, '{"titre":"normalise"}\n');
+  writeFileSync(reg, readFileSync(reg, "utf8") + JSON.stringify({ ev: "ingestion", lot_sha: empreinte(norm), fichier: "AUTRE - RETOURS - 20260101a.normalise.tf.jsonl" }) + "\n");
+  r = juger(boite, reg);
+  cas.push(["B1 bis— brut couvert par son normalisé", !r.findings.some((f) => f.statut === "FAIL" && f.ou.startsWith("AUTRE")), r.verdict]);
+
+  // B2 : un sidecar déjà ingéré, puis complété — le nom est connu, le contenu ne l'est plus.
+  writeFileSync(ingere, '{"titre":"x"}\n{"titre":"ajoute apres coup"}\n');
+  r = juger(boite, reg);
+  cas.push(["B2    — sidecar édité après ingestion", r.findings.some((f) => f.regle === "B2" && f.statut === "FAIL"), r.verdict]);
+
+  // B3 : un lot déposé sans sidecar.
+  writeFileSync(join(boite, "ORPHELIN - RETOURS - 20260101a.md"), "# lot sans sidecar\n");
+  r = juger(boite, reg);
+  cas.push(["B3    — lot sans sidecar", r.findings.some((f) => f.regle === "B3" && f.statut === "FAIL"), r.verdict]);
+
+  // CRLF (TF-0253) : un sidecar ingéré en LF, réécrit en CRLF par git au checkout — contenu
+  // inchangé. VERT attendu : la normalisation avant hachage ne doit PAS lever B1/B2.
+  const crlfContenu = '{"titre":"a"}\n{"titre":"b"}\n';
+  const crlf = join(boite, "CRLF - RETOURS - 20260101a.tf.jsonl");
+  writeFileSync(crlf, crlfContenu);
+  writeFileSync(reg, readFileSync(reg, "utf8") + JSON.stringify({
+    ev: "ingestion", lot_sha: empreinte(crlf), fichier: "CRLF - RETOURS - 20260101a.tf.jsonl",
+  }) + "\n");
+  writeFileSync(crlf, crlfContenu.replace(/\n/g, "\r\n")); // git réécrit en CRLF, contenu identique
+  r = juger(boite, reg);
+  cas.push(["CRLF  — vert : réécrit en CRLF, contenu identique", !r.findings.some((f) => f.statut === "FAIL" && f.ou === "CRLF - RETOURS - 20260101a.tf.jsonl"), r.verdict]);
+
+  // Contre-épreuve rouge : sous la même réécriture CRLF, une VRAIE édition doit rester détectée
+  // (la normalisation neutralise la fin de ligne, jamais un octet de contenu différent).
+  writeFileSync(crlf, crlfContenu.replace(/\n/g, "\r\n") + '{"titre":"ajoute apres coup"}\r\n');
+  r = juger(boite, reg);
+  cas.push(["CRLF  — rouge : édition réelle sous CRLF toujours détectée", r.findings.some((f) => f.regle === "B2" && f.statut === "FAIL" && f.ou === "CRLF - RETOURS - 20260101a.tf.jsonl"), r.verdict]);
+
+  // Héritage (complément TF-0253, cas réel du 15/08) : une ingestion d'AVANT la
+  // normalisation a consigné le sha des octets bruts d'un fichier CRLF. VERT attendu
+  // tant que le fichier n'a pas bougé ; une vraie édition reste ROUGE (aucune des deux
+  // formes ne matche plus).
+  const legacyContenu = '{"titre":"legacy"}\r\n';
+  const legacy = join(boite, "LEGACY - RETOURS - 20260101a.tf.jsonl");
+  writeFileSync(legacy, legacyContenu);
+  writeFileSync(reg, readFileSync(reg, "utf8") + JSON.stringify({
+    ev: "ingestion", lot_sha: empreinteBrute(legacy), fichier: "LEGACY - RETOURS - 20260101a.tf.jsonl",
+  }) + "\n");
+  r = juger(boite, reg);
+  cas.push(["HÉRIT — vert : sha brut d'avant TF-0253, fichier intact", !r.findings.some((f) => f.statut === "FAIL" && f.ou === "LEGACY - RETOURS - 20260101a.tf.jsonl"), r.verdict]);
+  writeFileSync(legacy, legacyContenu + '{"titre":"ajoute"}\r\n');
+  r = juger(boite, reg);
+  cas.push(["HÉRIT — rouge : édition réelle d'un lot hérité détectée", r.findings.some((f) => f.regle === "B2" && f.statut === "FAIL" && f.ou === "LEGACY - RETOURS - 20260101a.tf.jsonl"), r.verdict]);
+
+  // TF-0443 (RA-5, 21/08) — la NOTICE générée d'un dossier n'est pas un lot. `README.md` est
+  // déposé dans chaque sous-dossier d'`input\` par `scripts\readme-dossiers.mjs` ; le jour où
+  // il est apparu, B3 et B5 l'ont pris pour un lot sans sidecar et l'oracle est devenu rouge
+  // par construction. Les deux sens sont prouvés ici : la notice passe, un VRAI lot sans
+  // sidecar échoue toujours — sans quoi le correctif aurait pu éteindre la règle.
+  const notice = join(boite, "README.md");
+  writeFileSync(notice, "# 00-retours — lots de retours des produits\n");
+  r = juger(boite, reg);
+  cas.push(["B3 ter— la notice générée README.md n'est PAS un lot sans sidecar",
+    !r.findings.some((f) => f.ou === "README.md"), r.verdict]);
+
+  const lotNu = join(boite, "VRAI - RETOURS - 20260101z.md");
+  writeFileSync(lotNu, "# lot sans sidecar, malgré la notice présente\n");
+  r = juger(boite, reg);
+  cas.push(["B3 quater— un VRAI lot sans sidecar échoue toujours, notice ou pas",
+    r.findings.some((f) => f.regle === "B3" && f.statut === "FAIL" && f.ou === "VRAI - RETOURS - 20260101z.md"),
+    r.verdict]);
+  rmSync(lotNu);
+  rmSync(notice);
+
+  // B6 (R-45, 21/08) — un lot remis DIT ce qu'il n'a pas remonté. Les deux bornes sont prouvées
+  // avec les deux sens : sans elles, la règle mettrait en échec tout lot déjà remis.
+  const lotNeuf = join(boite, "PROD - RETOURS - 20260821a.md");
+  const sidecarNeuf = join(boite, "PROD - RETOURS - 20260821a.tf.jsonl");
+  writeFileSync(sidecarNeuf, '{"titre":"x"}\n');
+  writeFileSync(reg, readFileSync(reg, "utf8") + JSON.stringify({
+    ev: "ingestion", lot_sha: empreinte(sidecarNeuf), fichier: "PROD - RETOURS - 20260821a.tf.jsonl",
+  }) + "\n");
+  writeFileSync(lotNeuf, "# lot\n\n## pilot\n\ntable\n");
+  r = juger(boite, reg);
+  cas.push(["B6    — lot du 21/08 sans section « Remarques restées au produit »",
+    r.findings.some((f) => f.regle === "B6" && f.statut === "FAIL"), r.verdict]);
+
+  writeFileSync(lotNeuf, "# lot\n\n## Remarques restées au produit\n\n(rien)\n");
+  r = juger(boite, reg);
+  cas.push(["B6 bis— section présente mais SANS verdict : une section vide se lit comme un oubli",
+    r.findings.some((f) => f.regle === "B6" && f.statut === "FAIL"), r.verdict]);
+
+  writeFileSync(lotNeuf, "# lot\n\n## Remarques restées au produit\n\nAucune remarque n'est restée au produit — vérifié le 2026-08-21.\n");
+  r = juger(boite, reg);
+  cas.push(["B6 ter— déclaration explicite qu'aucune remarque n'est restée : PASS",
+    !r.findings.some((f) => f.regle === "B6" && f.statut === "FAIL"), r.verdict]);
+
+  const lotAncien = join(boite, "PROD - RETOURS - 20260819a.md");
+  const sidecarAncien = join(boite, "PROD - RETOURS - 20260819a.tf.jsonl");
+  writeFileSync(sidecarAncien, '{"titre":"x"}\n');
+  writeFileSync(reg, readFileSync(reg, "utf8") + JSON.stringify({
+    ev: "ingestion", lot_sha: empreinte(sidecarAncien), fichier: "PROD - RETOURS - 20260819a.tf.jsonl",
+  }) + "\n");
+  writeFileSync(lotAncien, "# lot ancien, sans la section\n");
+  r = juger(boite, reg);
+  cas.push(["B6 quater— lot ANTÉRIEUR au seuil : antériorité déclarée, jamais réécrite (motif que R-33 bis donne pour le verdict websec)",
+    !r.findings.some((f) => f.regle === "B6" && f.ou === "PROD - RETOURS - 20260819a.md"), r.verdict]);
+  rmSync(lotNeuf); rmSync(sidecarNeuf); rmSync(lotAncien); rmSync(sidecarAncien);
+
+  // B7 (R-46, 22/08) — un lot dit ce que ses documents ont coûté au gabarit. Mêmes quatre sens
+  // que B6, et la même borne datée : un contrôle qui met l'existant en échec se fait désactiver.
+  const lotDoc = join(boite, "PROD - RETOURS - 20260822a.md");
+  const sidecarDoc = join(boite, "PROD - RETOURS - 20260822a.tf.jsonl");
+  writeFileSync(sidecarDoc, '{"titre":"x"}\n');
+  writeFileSync(reg, readFileSync(reg, "utf8") + JSON.stringify({
+    ev: "ingestion", lot_sha: empreinte(sidecarDoc), fichier: "PROD - RETOURS - 20260822a.tf.jsonl",
+  }) + "\n");
+  const AVEC_B6 = "\n\n## Remarques restées au produit\n\nAucune remarque n'est restée au produit — vérifié le 2026-08-22.\n";
+
+  writeFileSync(lotDoc, "# lot\n\n## pilot\n\ntable\n" + AVEC_B6);
+  r = juger(boite, reg);
+  cas.push(["B7    — lot du 22/08 sans section « Retours sur les documents produits »",
+    r.findings.some((f) => f.regle === "B7" && f.statut === "FAIL"), r.verdict]);
+
+  writeFileSync(lotDoc, "# lot\n" + AVEC_B6 + "\n## Retours sur les documents produits\n\n(rien)\n");
+  r = juger(boite, reg);
+  cas.push(["B7 bis— section présente mais SANS retour rattaché à un gabarit",
+    r.findings.some((f) => f.regle === "B7" && f.statut === "FAIL"), r.verdict]);
+
+  writeFileSync(lotDoc, "# lot\n" + AVEC_B6 + "\n## Retours sur les documents produits\n\nAucun document produit depuis un gabarit de la bibliothèque sur ce lot.\n");
+  r = juger(boite, reg);
+  cas.push(["B7 ter— déclaration explicite qu'aucun document n'en est issu : PASS",
+    !r.findings.some((f) => f.regle === "B7" && f.statut === "FAIL"), r.verdict]);
+
+  writeFileSync(lotDoc, "# lot\n" + AVEC_B6 + "\n## Retours sur les documents produits\n\n| Doc | Gabarit | Manque |\n|---|---|---|\n| DEX | gd-dossier-exploitation 1.0.0 | pas de section décommissionnement |\n");
+  r = juger(boite, reg);
+  cas.push(["B7 quater— un retour NOMMANT son gabarit (gd-…) : PASS",
+    !r.findings.some((f) => f.regle === "B7" && f.statut === "FAIL"), r.verdict]);
+
+  const lotAvant = join(boite, "PROD - RETOURS - 20260820z.md");
+  const sidecarAvant = join(boite, "PROD - RETOURS - 20260820z.tf.jsonl");
+  writeFileSync(sidecarAvant, '{"titre":"x"}\n');
+  writeFileSync(reg, readFileSync(reg, "utf8") + JSON.stringify({
+    ev: "ingestion", lot_sha: empreinte(sidecarAvant), fichier: "PROD - RETOURS - 20260820z.tf.jsonl",
+  }) + "\n");
+  writeFileSync(lotAvant, "# lot d'avant la règle, sans aucune des deux sections\n");
+  r = juger(boite, reg);
+  cas.push(["B7 quinquies— lot ANTÉRIEUR au seuil : antériorité déclarée (motif que R-33 bis donne pour le verdict websec)",
+    !r.findings.some((f) => (f.regle === "B7" || f.regle === "B6") && f.ou === "PROD - RETOURS - 20260820z.md"),
+    r.verdict]);
+  // PLACÉ APRÈS LES AUTRES CAS B7, ET CE DÉTAIL EST LA MOITIÉ DU TEST : la dérogation s'écrit
+  // dans le registre du bac d'essai, donc elle vaut pour tous les jugements SUIVANTS du même
+  // lot. Posé avant, ce cas éteignait « B7 bis » — un test qui casse le test d'à côté.
+
+  // B7 sexies (24/08) — LA DÉROGATION TRACÉE éteint le rouge de SON lot, et d'aucun autre. Sans ce
+  // cas, la branche neuve serait passée sans preuve ; et son premier jet était MUET — la constante
+  // du motif de lignes était déclarée APRÈS la boucle qui s'en sert, l'erreur était avalée par le
+  // `catch` du même bloc, et l'ensemble des dérogations restait vide. Le contrôle rendait donc FAIL
+  // en croyant avoir lu les dérogations : muet, pas faux, ce qui est le pire état d'un contrôle.
+  writeFileSync(lotDoc, "# lot\n\n## pilot\n\ntable\n" + AVEC_B6);
+  appendFileSync(reg, JSON.stringify({
+    ev: "ingestion", lot_sha: "x", fichier: "PROD - RETOURS - 20260822a.tf.jsonl",
+    derogation: { regles: ["R-46"], motif: "motif ecrit, decision humaine tracee", decision: "humaine" },
+  }) + "\n");
+  r = juger(boite, reg);
+  // B6 sous DÉROGATION (24/08, second passage) : la lecture ne reconnaissait que R-46, si bien que
+  // quatre lots ingérés sous une dérogation nommant R-45 ET R-46 laissaient B6 rouge. Un contrôle qui
+  // ne reconnaît la décision que sur l'une des deux règles qu'elle nomme lit à moitié.
+  writeFileSync(lotDoc, "# lot\n\n## Retours sur les documents produits\n\ngd-x v1\n");
+  appendFileSync(reg, JSON.stringify({
+    ev: "ingestion", lot_sha: "y", fichier: "PROD - RETOURS - 20260822a.tf.jsonl",
+    derogation: { regles: ["R-45"], motif: "motif ecrit, decision humaine tracee", decision: "humaine" },
+  }) + "\n");
+  r = juger(boite, reg);
+  cas.push(["B6 bis— lot sans « Remarques restées au produit » mais DÉROGÉ : SANS_OBJET, pas FAIL",
+    r.findings.some((f) => f.regle === "B6" && f.statut === "SANS_OBJET")
+    && !r.findings.some((f) => f.regle === "B6" && f.statut === "FAIL"), r.verdict]);
+
+  cas.push(["B7 sexies— le MÊME lot, ingéré sous dérogation tracée : SANS_OBJET, pas FAIL",
+    r.findings.some((f) => f.regle === "B7" && f.statut === "SANS_OBJET"), r.verdict]);
+  cas.push(["B7 septies— et il ne reste AUCUN B7 en FAIL sur ce lot",
+    !r.findings.some((f) => f.regle === "B7" && f.statut === "FAIL"), r.verdict]);
+
+  // B6/B7 octies (02/09) — la dérogation vit dans l'ARCHIVE : ses items sont clos, l'événement
+  // d'ingestion les a suivis, et le lot reste tranché. Le jour où ce cas a été écrit, deux règles
+  // se sont rallumées sur un lot dérogé le 27/08 parce que ses deux items venaient d'être archivés.
+  const lotArch = join(boite, "PROD - RETOURS - 20260823a.md"), sidecarArch = join(boite, "PROD - RETOURS - 20260823a.tf.jsonl");
+  writeFileSync(sidecarArch, '{"titre":"archive"}\n');
+  writeFileSync(lotArch, "# lot\n\n## pilot\n\ntable\n");
+  appendFileSync(join(dirname(reg), "TODO-ARCHIVE.jsonl"), JSON.stringify({
+    ev: "ingestion", lot_sha: empreinte(sidecarArch), fichier: "input\\00-retours\\PROD - RETOURS - 20260823a.tf.jsonl",
+    derogation: { regles: ["R-45", "R-46"], motif: "motif ecrit, decision humaine tracee", decision: "humaine" },
+  }) + "\n");
+  r = juger(boite, reg);
+  cas.push(["B6/B7 octies— dérogation lue dans l'ARCHIVE (et chemin à antislashs) : aucun FAIL sur ce lot",
+    !r.findings.some((f) => (f.regle === "B6" || f.regle === "B7") && f.statut === "FAIL" && f.ou === "PROD - RETOURS - 20260823a.md"), r.verdict]);
+  rmSync(lotArch); rmSync(sidecarArch);
+  rmSync(lotDoc); rmSync(sidecarDoc); rmSync(lotAvant); rmSync(sidecarAvant);
+
+  // B4 (TF-0287) : un dépôt d'insatisfaction n'a pas de sidecar — B3 doit se taire, B4
+  // doit exiger l'entrée au registre du circuit. Les deux sens sont prouvés ici.
+  const regIns = join(base, "REGISTRE-INS.jsonl");
+  const depotIns = join(boite, "INSATISFACTION - site - 20260101a.md");
+  writeFileSync(depotIns, "le menu est compresse\n");
+  writeFileSync(regIns, "");
+  r = juger(boite, reg, regIns);
+  const surIns = (f) => f.ou === "INSATISFACTION - site - 20260101a.md";
+  cas.push(["B4    — insatisfaction déposée, jamais au registre",
+    r.findings.some((f) => f.regle === "B4" && f.statut === "FAIL" && surIns(f)), r.verdict]);
+  cas.push(["B4 bis— B3 se TAIT sur un dépôt d'insatisfaction (pas de sidecar : c'est voulu)",
+    !r.findings.some((f) => f.regle === "B3" && surIns(f)), r.verdict]);
+  writeFileSync(regIns, JSON.stringify({
+    ev: "depot", ts: "2026-01-01T10:00:00Z", id: "INS-0001", produit: "site",
+    fichier: "INSATISFACTION - site - 20260101a.md", resume: "le menu est compresse",
+  }) + "\n");
+  r = juger(boite, reg, regIns);
+  cas.push(["B4    — vert : dépôt entré au registre, plus rien à dire",
+    !r.findings.some((f) => f.statut === "FAIL" && surIns(f)), r.verdict]);
+
+  // B5 (TF-0364) : une remise d'artefact non rattachée à son item. Cinq sens, parce que les
+  // cinq façons de rater le rattachement se ressemblent et qu'une seule prouverait peu.
+  const artefacts = join(base, CANAL_ARTEFACTS);
+  mkdirSync(artefacts);
+  const surB5 = (f, nom) => f.regle === "B5" && f.statut === "FAIL" && f.ou === nom;
+
+  writeFileSync(join(artefacts, "un-skill.skill"), "PK-archive-factice");
+  r = juger(boite, reg, regIns);
+  cas.push(["B5    — artefact remis SANS sidecar de remise",
+    surB5(r.findings.find((f) => f.regle === "B5") || {}, "un-skill.skill"), r.verdict]);
+
+  writeFileSync(join(artefacts, "un-skill.skill" + SUFFIXE_REMISE), "{ pas du JSON");
+  r = juger(boite, reg, regIns);
+  cas.push(["B5    — sidecar de remise ILLISIBLE (un contrôle ne se désarme pas en le cassant)",
+    r.findings.some((f) => surB5(f, "un-skill.skill") && /illisible/.test(f.message)), r.verdict]);
+
+  writeFileSync(join(artefacts, "un-skill.skill" + SUFFIXE_REMISE),
+    JSON.stringify({ repond_a: "TF-0326", date: "2026-01-01" }));
+  r = juger(boite, reg, regIns);
+  cas.push(["B5    — champ manquant NOMMÉ (provenance), jamais un « mal formé » anonyme",
+    r.findings.some((f) => surB5(f, "un-skill.skill") && /provenance/.test(f.message)), r.verdict]);
+
+  writeFileSync(join(artefacts, "un-skill.skill" + SUFFIXE_REMISE),
+    JSON.stringify({ repond_a: "le ticket de Sébastien", provenance: "x", date: "2026-01-01" }));
+  r = juger(boite, reg, regIns);
+  cas.push(["B5    — `repond_a` qui n'est pas un id TF-xxxx : rattachement invérifiable",
+    r.findings.some((f) => surB5(f, "un-skill.skill") && /TF-xxxx/.test(f.message)), r.verdict]);
+
+  writeFileSync(join(artefacts, "un-skill.skill" + SUFFIXE_REMISE),
+    JSON.stringify({ repond_a: "TF-0326", provenance: "remis par l humain", date: "2026-01-01" }));
+  writeFileSync(join(artefacts, "LISEZMOI.md"), "# notice du canal");
+  r = juger(boite, reg, regIns);
+  cas.push(["B5    — vert : remise rattachée, et la NOTICE du canal n'est pas une remise",
+    !r.findings.some((f) => f.regle === "B5" && f.statut === "FAIL"), r.verdict]);
+
+  // B8 (TF-0908) — L'ANCIENNETÉ, dans ses DEUX sens, sur le MÊME lot. Seule la date du fichier
+  // change entre les deux mesures : c'est ce qui prouve que la règle lit bien l'horloge et pas
+  // autre chose. Le cas du 07/09 est reproduit tel quel — un lot déposé, jamais ingéré.
+  const oublie = join(boite, "OUBLIE - RETOURS - 20260101a.tf.jsonl");
+  writeFileSync(oublie, '{"titre":"depose et jamais pris"}\n');
+  const surB8 = (f) => f.regle === "B8";
+  r = juger(boite, reg, regIns);
+  cas.push(["B8    — vert : un lot déposé à l'instant attend son tour, ce n'est pas un oubli",
+    r.findings.some((f) => surB8(f) && f.statut === "PASS"), r.verdict]);
+  const vieux = (Date.now() - 30 * 3600000) / 1000; // 30 h, au-delà du seuil de 24 h
+  utimesSync(oublie, vieux, vieux);
+  r = juger(boite, reg, regIns);
+  const f8 = r.findings.find(surB8);
+  cas.push(["B8    — rouge : le même lot, déposé il y a 30 h, est un OUBLI et non une file d'attente",
+    !!f8 && f8.statut === "FAIL" && /30 h/.test(f8.message), r.verdict]);
+  cas.push(["B8 bis— le constat NOMME le lot et la commande qui le fait entrer",
+    !!f8 && f8.statut === "FAIL" && /OUBLIE - RETOURS/.test(f8.message) && /ingerer-lot\.mjs/.test(f8.message), r.verdict]);
+
+  // B9 (TF-1198, 19/09) — LE SAS D'ARRIVÉE, dans ses TROIS sens. Boîte neuve, pour que rien des
+  // cas précédents ne pèse sur le verdict : seul le sas change entre les trois passages.
+  const boite9 = join(base, "b9", "00-retours");
+  mkdirSync(boite9, { recursive: true });
+  const reg9 = join(base, "b9", "TODO.jsonl");
+  writeFileSync(reg9, "");
+  const surB9 = (f) => f.regle === "B9";
+  r = juger(boite9, reg9, regIns);
+  cas.push(["B9    — sas absent ou vide : l'état normal, PASS",
+    r.findings.some((f) => surB9(f) && f.statut === "PASS") && r.verdict === "PASS", r.verdict]);
+  const sas = join(boite9, "_arrivee");
+  mkdirSync(sas);
+  writeFileSync(join(sas, "README.md"), "# sas\n");
+  const auSas = join(sas, "NomReelDuClient - RETOURS - 20260917a.tf.jsonl");
+  writeFileSync(auSas, '{"titre":"x"}\n');
+  writeFileSync(join(sas, "NomReelDuClient - RETOURS - 20260917a.md"), "# lot\n");
+  r = juger(boite9, reg9, regIns);
+  let f9 = r.findings.find(surB9);
+  cas.push(["B9 bis— un lot arrivé à l'instant au sas est DIT sans bloquer : il attend son accueil",
+    !!f9 && f9.statut === "AVERTISSEMENT" && r.verdict === "PASS" && /1 lot/.test(f9.message), r.verdict]);
+  utimesSync(auSas, vieux, vieux);
+  r = juger(boite9, reg9, regIns);
+  f9 = r.findings.find(surB9);
+  cas.push(["B9 ter— le même lot, au sas depuis 30 h, est un OUBLI : FAIL, la commande d'accueil nommée",
+    !!f9 && f9.statut === "FAIL" && r.verdict === "FAIL" && /30 h/.test(f9.message) && /accueillir-lot\.mjs/.test(f9.message), r.verdict]);
+  cas.push(["B9 quater— le constat ne porte JAMAIS le nom réel du lot : le sas existe pour qu'il ne sorte pas",
+    !!f9 && !/NomReelDuClient/.test(JSON.stringify(r)), r.verdict]);
+  // B9 (TF-2559, 14/11/2026) — LE JUGE DE FORME SUR LES LOTS DU SAS. Rouge : le lot du sas, sans les sections R-45 et R-46, est DIT
+  // rendre FAIL au juge de forme, règles et compte nommés, sans son nom. Vert : un lot qui les porte n'est pas accusé.
+  cas.push(["B9 quinquies— un lot du sas qui rend FAIL au juge de forme est DIT (compte et règles), sans nom de lot",
+    !!f9 && f9.forme_fail === 1 && /1 d'entre eux rendent FAIL au juge de forme \(R-45, R-46/.test(f9.message) && !/NomReelDuClient/.test(JSON.stringify(r)), r.verdict]);
+  const boite9v = join(base, "b9v", "00-retours");
+  mkdirSync(join(boite9v, "_arrivee"), { recursive: true });
+  const reg9v = join(base, "b9v", "TODO.jsonl");
+  writeFileSync(reg9v, "");
+  writeFileSync(join(boite9v, "_arrivee", "NomReelBis - RETOURS - 20260824a.tf.jsonl"), '{"titre":"x"}\n');
+  writeFileSync(join(boite9v, "_arrivee", "NomReelBis - RETOURS - 20260824a.md"),
+    "# lot\n\n## Remarques restées au produit\n\nAucune remarque n'est restée au produit.\n\n## Retours sur les documents produits\n\nAucun document produit depuis un gabarit sur ce lot.\n");
+  r = juger(boite9v, reg9v, regIns);
+  const f9v = r.findings.find(surB9);
+  cas.push(["B9 sexies— vert : un lot conforme au sas n'est pas accusé, B9 reste un simple avertissement d'accueil",
+    !!f9v && f9v.forme_fail === 0 && f9v.statut === "AVERTISSEMENT" && !/juge de forme/.test(f9v.message), r.verdict]);
+
+  // B10 (TF-1215, 13/10/2026) — LA PIÈCE JOINTE D'UN LOT, dans ses DEUX sens. Le cas fondateur du 14/09 :
+  // une étude annoncée par son lot rendait B3, B6, B7 et B8 sur une remise conforme. Boîte neuve.
+  const boite10 = join(base, "b10", "00-retours");
+  mkdirSync(join(boite10, "old"), { recursive: true });
+  const reg10 = join(base, "b10", "TODO.jsonl");
+  writeFileSync(reg10, "");
+  const LOT10 = "Produit-61 - RETOURS - 20260909b";
+  writeFileSync(join(boite10, `${LOT10}.md`), "# lot\n");
+  writeFileSync(join(boite10, `${LOT10}.tf.jsonl`), '{"titre":"x"}\n');
+  writeFileSync(join(boite10, `${LOT10} - PJ - Etude.md`), "# étude jointe, sans sections de lot\n");
+  writeFileSync(join(boite10, `${LOT10} - PJ - Rapport d audit.html`), "<p>rapport</p>");
+  const surPj = (f) => /- PJ -/.test(String(f.ou));
+  r = juger(boite10, reg10, regIns);
+  cas.push(["B10   — vert : une pièce jointe (.md et .html) de son lot n'est NI un lot sans sidecar (B3), NI sans sections (B6, B7), NI orpheline",
+    !r.findings.some((f) => f.statut === "FAIL" && surPj(f)) && r.findings.some((f) => f.regle === "B10" && f.statut === "PASS" && /2 pièce/.test(f.message)), r.verdict]);
+  writeFileSync(join(boite10, "Produit-99 - RETOURS - 20260909a - PJ - Etude.md"), "# étude sans lot\n");
+  r = juger(boite10, reg10, regIns);
+  cas.push(["B10 bis— rouge : une pièce jointe dont le LOT n'existe pas est ORPHELINE, et le message nomme le lot attendu",
+    r.findings.some((f) => f.regle === "B10" && f.statut === "FAIL" && surPj(f) && /Produit-99 - RETOURS - 20260909a\.md/.test(f.message)), r.verdict]);
+  writeFileSync(join(boite10, "Produit-98 - RETOURS - 20260909a - PJ - Etude.md"), "# étude, lot déjà ingéré\n");
+  writeFileSync(join(boite10, "old", "Produit-98 - RETOURS - 20260909a.md"), "# lot ingéré\n");
+  r = juger(boite10, reg10, regIns);
+  cas.push(["B10 ter— vert : le lot est dans old\\ (ingéré), la pièce n'est pas orpheline",
+    !r.findings.some((f) => f.regle === "B10" && f.statut === "FAIL" && /Produit-98/.test(f.ou)), r.verdict]);
+  cas.push(["B10 quater— contre-épreuve : un .md SANS la convention reste un lot sans sidecar (B3)",
+    (() => { writeFileSync(join(boite10, "Etude libre - RETOURS - 20260909c.md"), "# lot sans sidecar\n"); return juger(boite10, reg10, regIns).findings.some((f) => f.regle === "B3" && f.statut === "FAIL" && f.ou === "Etude libre - RETOURS - 20260909c.md"); })(), r.verdict]);
+  const orpheline = join(boite10, "Produit-99 - RETOURS - 20260909a - PJ - Etude.md");
+  utimesSync(orpheline, vieux, vieux);
+  r = juger(boite10, reg10, regIns);
+  cas.push(["B10 quinquies— une pièce orpheline déposée il y a 30 h compte dans B8 : c'est un OUBLI, pas une file d'attente",
+    r.findings.some((f) => f.regle === "B8" && f.statut === "FAIL" && /Produit-99 - RETOURS - 20260909a - PJ - Etude\.md/.test(f.message)), r.verdict]);
+
+  // TF-2685 (22/11/2026) — LE 28e LOT D'UN JOUR PORTE UN INDICE « za » : B6 le sautait sans le dire (la date ne se lisait pas), B10 ne
+  // lui rattachait pas sa pièce jointe, et le sas ne le jugeait pas au juge de forme. Rouge d'abord (B6, B10), vert ensuite.
+  const boite85 = join(base, "b2685", "00-retours");
+  mkdirSync(join(boite85, "old"), { recursive: true });
+  const reg85 = join(base, "b2685", "TODO.jsonl");
+  writeFileSync(reg85, "");
+  const LOT85 = "Produit-61 - RETOURS - 20261115za";
+  writeFileSync(join(boite85, `${LOT85}.md`), "# lot du 28e rang, sans la section « Remarques restées au produit »\n");
+  writeFileSync(join(boite85, `${LOT85}.tf.jsonl`), '{"titre":"x"}\n');
+  writeFileSync(join(boite85, `${LOT85} - PJ - Etude.md`), "# étude jointe au lot za\n");
+  r = juger(boite85, reg85, regIns);
+  cas.push(["TF-2685 rouge — un lot à indice « za » sans section R-45 est jugé par B6 (il était sauté sans le dire)",
+    r.findings.some((f) => f.regle === "B6" && f.statut === "FAIL" && f.ou === `${LOT85}.md`), r.verdict]);
+  cas.push(["TF-2685 vert — la pièce jointe d'un lot « za » est rattachée à son lot (B10 PASS), ni orpheline ni lot sans sidecar",
+    r.findings.some((f) => f.regle === "B10" && f.statut === "PASS" && /1 pièce/.test(f.message)) && !r.findings.some((f) => f.statut === "FAIL" && f.ou === `${LOT85} - PJ - Etude.md`), r.verdict]);
+  writeFileSync(join(boite85, "Produit-61 - RETOURS - 20261115zb - PJ - Etude.md"), "# étude sans lot\n");
+  r = juger(boite85, reg85, regIns);
+  cas.push(["TF-2685 rouge — la pièce jointe d'un lot « zb » absent est ORPHELINE et le message nomme le lot attendu",
+    r.findings.some((f) => f.regle === "B10" && f.statut === "FAIL" && /Produit-61 - RETOURS - 20261115zb\.md/.test(f.message)), r.verdict]);
+  writeFileSync(join(boite85, `${LOT85}.md`), "# lot\n\n## Remarques restées au produit\n\nAucune remarque n'est restée au produit — vérifié le 2026-11-15.\n");
+  r = juger(boite85, reg85, regIns);
+  cas.push(["TF-2685 vert — le lot « za » qui porte sa section n'est plus refusé par B6",
+    !r.findings.some((f) => f.regle === "B6" && f.statut === "FAIL" && f.ou === `${LOT85}.md`), r.verdict]);
+
+  // TF-1214 (13/10/2026) — LE POSTE QUI JUGE SE DIT : la sortie du CLI porte `poste`, et le non-jugé nomme
+  // les autres postes. Joué par le CLI réel, sur la boîte vide du sas (b9), comme le hook d'ouverture le lance.
+  const cli = spawnSync(process.execPath, [fileURLToPath(import.meta.url), boite9, "--registre", reg9], { encoding: "utf8" });
+  let sortieCli = null;
+  try { sortieCli = JSON.parse(cli.stdout.slice(cli.stdout.indexOf("{"))); } catch { /* vérifié ci-dessous */ }
+  cas.push(["POSTE — la sortie du CLI nomme le poste qui juge (hostname) et le non-jugé dit que les AUTRES postes ne sont pas vus",
+    !!sortieCli && sortieCli.poste === hostname() && sortieCli.poste.length > 0
+      && sortieCli.non_juge.some((m) => /AUTRES postes/.test(m)), String(cli.status)]);
+
+  // TF-1830 (17/10/2026) — LE RÉPERTOIRE PASSÉ SEUL EST CELUI QUI EST JUGÉ. Sans `--registre`, le filtre
+  // `a !== args[iReg + 1]` valait `a !== args[0]` et écartait le répertoire lui-même : l'usage documenté
+  // `node oracle-boite-entree.mjs <repertoire>` jugeait `input\00-retours` à sa place, sans rien dire.
+  // Joué par le CLI réel dans les deux ordres d'arguments.
+  const cibleDuCli = (argv) => {
+    const r = spawnSync(process.execPath, [fileURLToPath(import.meta.url), ...argv], { encoding: "utf8" });
+    try { return JSON.parse(r.stdout.slice(r.stdout.indexOf("{"))).cible; } catch { return null; }
+  };
+  cas.push(["TF-1830 — rouge corrigé : le répertoire passé SEUL, sans --registre, est celui qui est jugé",
+    cibleDuCli([boite9]) === resolve(boite9), String(cibleDuCli([boite9]))]);
+  cas.push(["TF-1830 bis — --registre en PREMIER argument est lu, et le répertoire qui suit est jugé",
+    cibleDuCli(["--registre", reg9, boite9]) === resolve(boite9), String(cibleDuCli(["--registre", reg9, boite9]))]);
+
+  // TF-2339 (10/11/2026) — LE COMPTE POUR LE LEDGER D'UN PRODUIT NE PORTE AUCUN NOM. Fautif : le 11/09/2026, un verdict de cet oracle a été consigné au ledger SUIVI d'un produit avec
+  // les noms de fichiers des sidecars d'autres dépôts (des noms de produits) ; la porte de publication le refusait ensuite (C5, 14 commits). Conforme : `--pour-ledger` ne rend que le
+  // verdict et des comptes par règle, sans nom de fichier ni chemin ; un verdict PASS dit « aucun constat ».
+  const bl = join(base, "boite-ledger");
+  mkdirSync(bl);
+  writeFileSync(join(bl, "NOMREEL - RETOURS - 20260911a.tf.jsonl"), '{"titre":"x"}\n');
+  const regVide = join(base, "TODO-vide.jsonl");
+  writeFileSync(regVide, "");
+  const rl = juger(bl, regVide);
+  const cl = compteLedger(rl);
+  cas.push(["TF-2339 rouge — la sortie complète nomme le sidecar (la raison d'être du compte)", JSON.stringify(rl.findings).includes("NOMREEL"), rl.verdict]);
+  cas.push(["TF-2339 vert — le compte pour le ledger dit le verdict et « 1 constat B1 », sans le nom du sidecar ni un chemin",
+    cl.verdict === "FAIL" && /1 constat B1/.test(cl.texte) && !JSON.stringify(cl).includes("NOMREEL") && !/[\\/]/.test(JSON.stringify(cl)), JSON.stringify(cl).slice(0, 80)]);
+  cas.push(["TF-2339 vert — une boîte à jour : « aucun constat », verdict PASS", compteLedger(vert).verdict === "PASS" && /aucun constat/.test(compteLedger(vert).texte), compteLedger(vert).texte]);
+  const sortieLedger = spawnSync(process.execPath, [fileURLToPath(import.meta.url), bl, "--registre", regVide, "--pour-ledger"], { encoding: "utf8" });
+  cas.push(["TF-2339 — le CLI --pour-ledger n'imprime ni le nom du sidecar ni le répertoire jugé",
+    sortieLedger.status === 1 && /1 constat B1/.test(sortieLedger.stdout) && !/NOMREEL|boite-ledger/.test(sortieLedger.stdout), String(sortieLedger.status)]);
+
+  let ok = 0;
+  for (const [nom, tenu, verdict] of cas) {
+    console.log(`  [${tenu ? "OK    " : "ECHEC "}] ${nom} (verdict ${verdict})`);
+    if (tenu) ok += 1;
+  }
+  console.log(`self-test : ${ok}/${cas.length}`);
+  return ok === cas.length ? 0 : 1;
+}
+
+// ---- entrée -----------------------------------------------------------------------------------
+const args = process.argv.slice(2);
+if (args.includes("--self-test")) process.exit(selfTest());
+
+// TF-1830 : sans `--registre`, iReg vaut -1 et `args[iReg + 1]` désignait le répertoire lui-même ; et un
+// `--registre` posé en premier (indice 0) était ignoré. La valeur du drapeau est écartée par sa POSITION.
+const iReg = args.indexOf("--registre");
+const registre = resolve(iReg >= 0 ? args[iReg + 1] : join(ICI, "..", "todo", "TODO.jsonl"));
+const cible = resolve(args.find((a, i) => !a.startsWith("--") && (iReg < 0 || i !== iReg + 1)) ?? join(ICI, "..", "input", "00-retours"));
+
+const { verdict, findings, motif } = juger(cible, registre);
+// TF-2339 (10/11/2026) : `--pour-ledger` rend le seul compte, sans nom de fichier ni chemin — la forme qui s'écrit au ledger d'un produit (suivi par git).
+if (args.includes("--pour-ledger")) {
+  process.stdout.write(JSON.stringify({ oracle: ORACLE, version: VERSION, ...compteLedger({ verdict, findings }) }, null, 1) + "\n");
+  process.exit(verdict === "FAIL" ? 1 : verdict === "SKIP" ? 2 : 0);
+}
+// TF-1214 (13/10/2026) — LE POSTE QUI JUGE SE DIT. Un fichier non suivi par git ne voyage pas : le 14/09,
+// quinze dépôts déposés sur un poste sont restés invisibles jusqu'à 61 h au pilot qui travaillait depuis
+// l'autre, et chacun des deux postes rendait un verdict sûr de lui. Le relevé croisé des boîtes de tous
+// les postes demanderait un canal que ni git ni cet oracle n'ont ; à défaut, le verdict porte le nom du
+// poste où il vaut, pour que l'ouverture et la synthèse ne le lisent pas comme celui du parc.
+const poste = hostname();
+process.stdout.write(JSON.stringify({ oracle: ORACLE, version: VERSION, poste, cible, verdict, motif, findings, non_juge: NON_JUGE }, null, 1) + "\n");
+process.exit(verdict === "FAIL" ? 1 : verdict === "SKIP" ? 2 : 0);

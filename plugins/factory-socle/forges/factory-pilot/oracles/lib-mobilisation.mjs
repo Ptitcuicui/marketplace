@@ -1,0 +1,590 @@
+/**
+ * lib-mobilisation.mjs — la carte des forges et les verdicts de mobilisation (T4, TF-1949, décisions humaines D-69 (a) et
+ * D-79 (c) du 26/10/2026).
+ *
+ * LE FAIT : sur 10 produits clos ou publiés, 2 portaient leurs 4 livrables de forge ; un produit s'est déclaré complet sans
+ * exigences, design ni tests ; sur 7 jours, aucune trace de forge-audit sur une douzaine de demandes d'audit, aucune de
+ * forge-data sur les demandes de données (diagnostic 20261026a, section d, T4). Une forge que rien n'oblige à nommer s'oublie.
+ *
+ * CE MODULE porte la seule lecture de `references/CARTE-FORGES.json` (donnée datée et sourcée, loi n° 4) : la liste fermée des
+ * 13 forges, les types de demande de la carte (7 au départ, 10 depuis D-99 (b)), les forges privilégiées de chacun et les livrables exigés quand une
+ * forge est mobilisée. La carte PRIVILÉGIE, elle ne fige pas : chaque forge reçoit un verdict motivé à chaque demande.
+ * Consommateurs : `scripts/verifier-carte-forges.mjs` (le juge de la carte) ; `scripts/mobiliser.mjs` (l'écrivain de la trace
+ * `forge/mobilisation.jsonl` chez le produit, une ligne par demande, et de la ligne d'écran « Je mobilise : … ») ;
+ * `oracles/oracle-synthese.mjs` (S85 et S86, le verrou « livré » : les livrables des forges mobilisées de la dernière demande).
+ */
+import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, statSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { sessionCourante } from "./lib-session.mjs";
+
+const ICI = dirname(fileURLToPath(import.meta.url));
+export const CHEMIN_CARTE = join(ICI, "..", "references", "CARTE-FORGES.json");
+
+/** Les 13 forges, liste fermée (consigne de TF-1949) : une forge de plus ou de moins dans la carte est un défaut de la carte. */
+export const FORGES = Object.freeze(["conception", "design", "development", "tests", "ops", "agents", "agents-security",
+  "seo-geo", "organization", "audit", "data", "observability", "websec"]);
+
+/** Les signaux du profil d'un produit (diagnostic 20261026a, section d, A5). */
+export const SIGNAUX_PROFIL = Object.freeze(["domaine_public", "page_indexable", "donnees_personnelles", "agents", "mise_en_production"]);
+
+/** La carte lue, ou { erreur } quand elle est absente ou illisible : une carte manquante ne se devine pas. */
+export function lireCarte(chemin = CHEMIN_CARTE) {
+  if (!existsSync(chemin)) return { erreur: `carte des forges introuvable : ${chemin}` };
+  try { return { carte: JSON.parse(readFileSync(chemin, "utf8").replace(/^﻿/, "")) }; }
+  catch (e) { return { erreur: `carte des forges illisible (${chemin}) : ${e.message}` }; }
+}
+
+const relatif = (c) => typeof c === "string" && c.trim() !== "" && !/^(?:[a-z]:|[\\/])/i.test(c) && !/(?:^|[\\/])\.\.(?:[\\/]|$)/.test(c);
+
+/**
+ * Juge la forme de la carte. Rend une liste de constats { regle, statut, message } ; aucun FAIL = carte conforme.
+ *   CF1 daté et sourcé (loi n° 4) : schema, version, date AAAA-MM-JJ, source, règle ;
+ *   CF2 les 13 forges, ni plus ni moins, chacune avec son dépôt, son rôle et ses livrables par défaut (ou le motif de n'en avoir aucun) ;
+ *   CF3 chaque livrable a un libellé, une source et des chemins RELATIFS au produit ; chaque livrable déclaré sert au moins une fois ;
+ *   CF4 chaque type de demande a un identifiant unique, un libellé et des forges privilégiées prises parmi les 13 ; ses livrables
+ *       exigés ne visent que ses forges privilégiées et que des livrables déclarés ;
+ *   CF5 les signaux de profil d'une forge sont pris dans la liste fermée de SIGNAUX_PROFIL.
+ */
+export function validerCarte(carte) {
+  const constats = [];
+  const ko = (regle, message) => constats.push({ regle, statut: "FAIL", message });
+  const ok = (regle, message) => constats.push({ regle, statut: "PASS", message });
+  if (!carte || typeof carte !== "object") { ko("CF1", "la carte n'est pas un objet JSON"); return constats; }
+
+  const manquesCF1 = [];
+  if (carte.schema !== "pilot/carte-forges@1") manquesCF1.push(`schema « pilot/carte-forges@1 » (lu : ${JSON.stringify(carte.schema)})`);
+  if (!/^\d+\.\d+\.\d+$/.test(String(carte.version || ""))) manquesCF1.push("version semver");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(carte.date || ""))) manquesCF1.push("date AAAA-MM-JJ");
+  if (!String(carte.source || "").trim()) manquesCF1.push("source");
+  if (!String(carte.regle || "").trim()) manquesCF1.push("règle");
+  manquesCF1.length ? ko("CF1", `carte non datée ou non sourcée (loi n° 4) — manque : ${manquesCF1.join(", ")}`)
+    : ok("CF1", `carte ${carte.version} du ${carte.date}, sourcée`);
+
+  const livrables = carte.livrables && typeof carte.livrables === "object" ? carte.livrables : {};
+  const forges = carte.forges && typeof carte.forges === "object" ? carte.forges : {};
+  const enTrop = Object.keys(forges).filter((f) => !FORGES.includes(f));
+  const absentes = FORGES.filter((f) => !(f in forges));
+  const manquesCF2 = [];
+  for (const f of FORGES.filter((x) => x in forges)) {
+    const e = forges[f] || {};
+    if (!String(e.depot || "").trim()) manquesCF2.push(`${f} : dépôt`);
+    if (!String(e.role || "").trim()) manquesCF2.push(`${f} : rôle`);
+    if (!Array.isArray(e.livrables)) manquesCF2.push(`${f} : liste de livrables`);
+    else if (!e.livrables.length && !String(e.motif_sans_livrable || "").trim()) manquesCF2.push(`${f} : aucun livrable et aucun motif`);
+    for (const id of Array.isArray(e.livrables) ? e.livrables : []) if (!(id in livrables)) manquesCF2.push(`${f} : livrable « ${id} » non déclaré`);
+    // TF-2044 : une question posée à la forge est un texte lisible, sans `<` ni `>` (le motif qui la porte reste reconnu comme gabarit).
+    if ("question" in e && (typeof e.question !== "string" || !e.question.trim() || /[<>]/.test(e.question))) manquesCF2.push(`${f} : question vide ou contenant < ou >`);
+  }
+  (enTrop.length || absentes.length || manquesCF2.length)
+    ? ko("CF2", [absentes.length && `forge(s) absente(s) : ${absentes.join(", ")}`, enTrop.length && `forge(s) hors des 13 : ${enTrop.join(", ")}`,
+      manquesCF2.length && manquesCF2.join(" ; ")].filter(Boolean).join(" — "))
+    : ok("CF2", "les 13 forges, chacune avec son dépôt, son rôle et ses livrables");
+
+  const types = Array.isArray(carte.types) ? carte.types : [];
+  const utilises = new Set(Object.values(forges).flatMap((e) => (Array.isArray(e?.livrables) ? e.livrables : [])));
+  const manquesCF4 = [];
+  const vus = new Set();
+  if (!types.length) manquesCF4.push("aucun type de demande");
+  for (const t of types) {
+    const id = String(t?.id || "");
+    if (!id) { manquesCF4.push("un type sans identifiant"); continue; }
+    if (vus.has(id)) manquesCF4.push(`${id} : identifiant en double`);
+    vus.add(id);
+    if (!String(t.libelle || "").trim()) manquesCF4.push(`${id} : libellé`);
+    const priv = Array.isArray(t.forges_privilegiees) ? t.forges_privilegiees : [];
+    if (!priv.length) manquesCF4.push(`${id} : aucune forge privilégiée`);
+    for (const f of priv) if (!FORGES.includes(f)) manquesCF4.push(`${id} : forge privilégiée inconnue « ${f} »`);
+    for (const [f, ids] of Object.entries(t.livrables_exiges || {})) {
+      if (!priv.includes(f)) manquesCF4.push(`${id} : livrables exigés pour « ${f} », qui n'est pas privilégiée par ce type`);
+      for (const l of Array.isArray(ids) ? ids : [ids]) {
+        if (!(l in livrables)) manquesCF4.push(`${id} : livrable « ${l} » non déclaré`);
+        utilises.add(l);
+      }
+    }
+  }
+  manquesCF4.length ? ko("CF4", manquesCF4.join(" ; ")) : ok("CF4", `${types.length} type(s) de demande, forges privilégiées et livrables exigés cohérents`);
+
+  const manquesCF3 = [];
+  for (const [id, l] of Object.entries(livrables)) {
+    if (!String(l?.libelle || "").trim()) manquesCF3.push(`${id} : libellé`);
+    if (!String(l?.source || "").trim()) manquesCF3.push(`${id} : source`);
+    const chemins = Array.isArray(l?.chemins) ? l.chemins : [];
+    if (!chemins.length) manquesCF3.push(`${id} : aucun chemin`);
+    for (const c of chemins) if (!relatif(c)) manquesCF3.push(`${id} : chemin non relatif au produit « ${c} »`);
+    if (!utilises.has(id)) manquesCF3.push(`${id} : déclaré mais exigé nulle part`);
+  }
+  manquesCF3.length ? ko("CF3", manquesCF3.join(" ; ")) : ok("CF3", `${Object.keys(livrables).length} livrable(s), chacun sourcé, à chemins relatifs, exigé au moins une fois`);
+
+  const manquesCF5 = [];
+  for (const [f, e] of Object.entries(forges)) for (const s of Array.isArray(e?.signaux) ? e.signaux : [])
+    if (!SIGNAUX_PROFIL.includes(s)) manquesCF5.push(`${f} : signal inconnu « ${s} »`);
+  manquesCF5.length ? ko("CF5", manquesCF5.join(" ; ")) : ok("CF5", "signaux de profil pris dans la liste fermée");
+  return constats;
+}
+
+// ---- LES 13 VERDICTS D'UNE DEMANDE (item 2 de TF-1949) -------------------------------------------------------------------------
+// À chaque demande chez un produit, chacune des 13 forges reçoit « mobilisee » ou « ecartee », AVEC son motif : une forge
+// mobilisée a aussi le sien, ce qui empêche de tout cocher pour ne rien oublier (diagnostic 20261026a, section d, T4).
+
+export const CHEMIN_TRACE = join("forge", "mobilisation.jsonl");
+export const CHEMIN_PROFIL = join("forge", "PROFIL.json");
+export const SCHEMA_TRACE = "forge/mobilisation@1";
+
+/** Les types de la carte désignés par leurs identifiants, ou { inconnus } : un type hors de la carte ne se devine pas. */
+export function typesDe(carte, ids) {
+  const connus = new Map((carte.types || []).map((t) => [t.id, t]));
+  const inconnus = ids.filter((id) => !connus.has(id));
+  return inconnus.length ? { inconnus, connus: [...connus.keys()] } : { types: ids.map((id) => connus.get(id)) };
+}
+
+/** Les forges privilégiées d'une demande : l'union de celles de ses types, dans l'ordre des 13. */
+export const privilegiees = (types) => FORGES.filter((f) => types.some((t) => (t.forges_privilegiees || []).includes(f)));
+
+const sansAccent = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
+/** « mobilisée », « Mobilisee » → « mobilisee » ; toute autre valeur reste telle quelle et sera refusée. */
+export const normaliserVerdict = (v) => { const n = sansAccent(v); return n === "mobilisee" || n === "ecartee" ? n : String(v ?? ""); };
+
+/** Un motif tient s'il dit quelque chose : 3 mots au moins, aucun gabarit « <…> » resté en place. */
+const motifVide = (m) => { const t = String(m || "").trim(); return !t || /<[^>]*>/.test(t) || t.split(/\s+/).filter(Boolean).length < 3; };
+
+/** Juge les verdicts d'une demande ; rend la liste des refus (vide = conforme) et les verdicts normalisés. */
+export function validerVerdicts(verdicts) {
+  const refus = [];
+  const v = verdicts && typeof verdicts === "object" ? verdicts : {};
+  const inconnues = Object.keys(v).filter((f) => !FORGES.includes(f));
+  if (inconnues.length) refus.push(`forge(s) hors des 13 : ${inconnues.join(", ")} (attendu : ${FORGES.join(", ")})`);
+  const absentes = FORGES.filter((f) => !(f in v));
+  if (absentes.length) refus.push(`${absentes.length} forge(s) sans verdict : ${absentes.join(", ")} — chacune des 13 reçoit « mobilisee » ou « ecartee » avec son motif`);
+  const normalises = {};
+  for (const f of FORGES.filter((x) => x in v)) {
+    const e = v[f] && typeof v[f] === "object" ? v[f] : {};
+    const verdict = normaliserVerdict(e.verdict);
+    if (verdict !== "mobilisee" && verdict !== "ecartee") refus.push(`${f} : verdict « ${e.verdict ?? ""} » (attendu « mobilisee » ou « ecartee »)`);
+    if (motifVide(e.motif)) refus.push(`${f} : motif absent, trop court (3 mots au moins) ou resté au gabarit « <…> » — une forge ${verdict === "mobilisee" ? "mobilisée" : "écartée"} dit pourquoi`);
+    normalises[f] = { verdict, motif: String(e.motif || "").trim() };
+    // TF-2221 : `livrables_inchanges` { <livrable>: <motif> } déclare, pour une forge mobilisée, un livrable exigé que la demande ne touche pas.
+    // TF-2778 : `livrables_sans_objet` { <livrable>: <motif> } déclare un livrable exigé qui n'a pas d'objet chez CE produit et n'existe donc pas (un livrable
+    // jamais créé ne peut pas être déclaré inchangé). Même forme, mêmes refus.
+    for (const [champ, dit] of [["livrables_inchanges", "inchangé"], ["livrables_sans_objet", "sans objet"]]) {
+      if (!(champ in e)) continue;
+      const li = e[champ];
+      if (!li || typeof li !== "object" || Array.isArray(li)) refus.push(`${f} : ${champ} doit être un objet { livrable: motif }`);
+      else if (verdict === "ecartee" && Object.keys(li).length) refus.push(`${f} : ${champ} sur une forge écartée — une forge écartée n'exige aucun livrable`);
+      else {
+        const gardes = {};
+        for (const [id, m] of Object.entries(li)) {
+          if (motifVide(m)) refus.push(`${f} : livrable ${dit} « ${id} » sans motif (3 mots au moins, aucun gabarit « <…> ») — dis pourquoi ${champ === "livrables_inchanges" ? "la demande ne le touche pas" : "il n'a pas d'objet chez ce produit"}`);
+          else gardes[id] = String(m).trim();
+        }
+        if (Object.keys(gardes).length) normalises[f][champ] = gardes;
+      }
+    }
+  }
+  return { refus, verdicts: normalises };
+}
+
+/** TF-2221 : les livrables déclarés inchangés, et (TF-2778) sans objet, doivent être exigés de leur forge par la demande ; rend la liste des refus (vide = conforme). */
+export function refusInchanges(carte, types, verdicts) {
+  const exiges = new Map(livrablesExiges(carte, { types: types.map((t) => t.id), verdicts }).map((x) => [x.forge, x.livrables]));
+  const refus = [];
+  for (const [champ, dit] of [["livrables_inchanges", "inchangé"], ["livrables_sans_objet", "sans objet chez ce produit"]])
+    for (const f of FORGES) for (const id of Object.keys(verdicts[f]?.[champ] || {}))
+      if (!(exiges.get(f) || []).includes(id))
+        refus.push(`${f} : « ${id} » est déclaré ${dit} mais cette demande ne l'exige pas de ${f}${exiges.get(f)?.length ? ` (exigés : ${exiges.get(f).join(", ")})` : " (aucun livrable exigé)"}`);
+  return refus;
+}
+
+// D-99 (b) du 29/10/2026 — ÉCARTER OPS, WEBSEC OU DATA D'UNE DEMANDE QUI LES VISE EXIGE UN FAIT MESURÉ. Le fait, relevé par l'œil
+// critique du 29/10 sur 7 lots de sessions : 20 demandes sur 62 sans une forge attendue (ops 8, websec ou agents-security 7, data 5),
+// le plus souvent écartée d'un « hors carte » ou d'un « hors mandat ». Une forge est visée quand le type de la demande la privilégie
+// ou que le résumé de la demande la nomme par son sujet. Un fait mesuré est un nombre, un chemin ou une commande citée : c'est tout ce
+// que le contrôle lit, il ne juge pas que le fait soit vrai.
+export const FORGES_A_ECART_MOTIVE = Object.freeze(["ops", "websec", "data"]);
+const SUJET_DE_LA_FORGE = {
+  ops: /d[ée]ploi|mise en production|\bmep\b|ci\s*\/\s*cd|qualification|staging|h[ée]bergement/i,
+  websec: /s[ée]curit[ée]|authentification|\brls\b|\bsaml\b|vuln[ée]rabilit|secops/i,
+  data: /donn[ée]es personnelles|\bdpo\b|\brgpd\b|anonymis|pseudonymis|registre des traitements/i,
+};
+const FAIT_MESURE = /\d|[\w.-]+\/[\w.-]+|`[^`]+`/;
+
+/** Les refus D-99 (b) : une forge de la liste, visée par la demande, écartée sans un fait mesuré dans son motif. */
+export function ecartsSansFait(types, verdicts, demande) {
+  const priv = privilegiees(types);
+  return FORGES_A_ECART_MOTIVE.filter((f) => verdicts[f]?.verdict === "ecartee"
+      && (priv.includes(f) || SUJET_DE_LA_FORGE[f].test(String(demande || "")))
+      && !FAIT_MESURE.test(verdicts[f].motif))
+    .map((f) => `${f} : la demande la vise, et son écart ne cite aucun fait mesuré (« ${verdicts[f].motif} ») — mobilise-la, ou cite un nombre, un chemin ou une commande qui montre qu'elle ne sert pas (D-99 (b))`);
+}
+
+const court = (s, n = 90) => { const t = String(s).replace(/\s+/g, " ").trim(); return t.length > n ? `${t.slice(0, n - 1)}…` : t; };
+
+/** La seule ligne que l'écran montre : les forges mobilisées, puis celles qui sortent de la carte, ajoutées ou écartées, avec leur motif. */
+export function ligneEcran(types, verdicts) {
+  const priv = privilegiees(types);
+  const mobilisees = FORGES.filter((f) => verdicts[f]?.verdict === "mobilisee");
+  const ajoutees = mobilisees.filter((f) => !priv.includes(f)).map((f) => `+ ${f} (${court(verdicts[f].motif)})`);
+  const ecartees = priv.filter((f) => verdicts[f]?.verdict === "ecartee").map((f) => `− ${f} (${court(verdicts[f].motif)})`);
+  const hors = [...ajoutees, ...ecartees];
+  return `Je mobilise : ${mobilisees.length ? mobilisees.join(", ") : "aucune forge"} (carte : ${types.map((t) => t.libelle).join(" + ")}).`
+    + (hors.length ? ` Hors carte : ${hors.join(" ; ")}.` : "");
+}
+
+/** Le squelette à remplir : les forges privilégiées et celles qu'un signal du profil désigne sont proposées mobilisées, les autres
+ *  écartées ; chaque motif reste au gabarit « <…> » et l'écrivain le refuse tant qu'il n'est pas écrit. */
+export function squelette(carte, types, profil) {
+  const priv = privilegiees(types);
+  const verdicts = {};
+  for (const f of FORGES) {
+    const signaux = ((carte.forges || {})[f]?.signaux || []).filter((s) => profil && profil[s] === true);
+    // TF-2044 : la carte peut poser à une forge la question à laquelle répondre avant de l'écarter (design : le sens ou la source
+    // d'un texte affiché, pas les fichiers touchés) ; le motif à écrire la porte, sans `<` ni `>` pour rester un gabarit refusé.
+    const question = String((carte.forges || {})[f]?.question || "").trim();
+    verdicts[f] = priv.includes(f)
+      ? { verdict: "mobilisee", motif: "<motif : ce que cette forge apporte à la demande, ou passer à « ecartee » en disant pourquoi>" }
+      : signaux.length
+        ? { verdict: "mobilisee", motif: `<motif : le profil porte ${signaux.join(", ")} ; dire ce que la forge apporte, ou passer à « ecartee » en disant pourquoi>` }
+        : { verdict: "ecartee", motif: question
+          ? `<motif : pourquoi cette forge ne sert pas cette demande — répondre d'abord à « ${question} »>`
+          : "<motif : pourquoi cette forge ne sert pas cette demande>" };
+  }
+  return verdicts;
+}
+
+/** « domaine_public=oui,page_indexable=non,… » → { domaine_public: true, … } ; rend { erreur } si un signal manque ou est inconnu. */
+export function lireProfilTexte(texte) {
+  const profil = {};
+  for (const morceau of String(texte || "").split(/[,;]/).map((s) => s.trim()).filter(Boolean)) {
+    const [cle, val] = morceau.split("=").map((s) => sansAccent(s));
+    if (!SIGNAUX_PROFIL.includes(cle)) return { erreur: `signal de profil inconnu « ${cle} » (attendu : ${SIGNAUX_PROFIL.join(", ")})` };
+    if (!["oui", "non", "true", "false"].includes(val)) return { erreur: `${cle} : valeur « ${val ?? ""} » (attendu oui ou non)` };
+    profil[cle] = val === "oui" || val === "true";
+  }
+  const manquants = SIGNAUX_PROFIL.filter((s) => !(s in profil));
+  return manquants.length ? { erreur: `signal(aux) de profil non déclaré(s) : ${manquants.join(", ")}` } : { profil };
+}
+
+/** Le profil déclaré du produit (forge/PROFIL.json), ou { erreur } : il se déclare une fois, il ne se devine pas. */
+export function lireProfil(produit) {
+  const chemin = join(produit, CHEMIN_PROFIL);
+  if (!existsSync(chemin)) return { erreur: `profil du produit non déclaré (${CHEMIN_PROFIL} absent)` };
+  let j;
+  try { j = JSON.parse(readFileSync(chemin, "utf8").replace(/^﻿/, "")); } catch (e) { return { erreur: `${CHEMIN_PROFIL} illisible : ${e.message}` }; }
+  const signaux = j && typeof j.signaux === "object" ? j.signaux : j;
+  const manquants = SIGNAUX_PROFIL.filter((s) => typeof signaux?.[s] !== "boolean");
+  return manquants.length ? { erreur: `${CHEMIN_PROFIL} ne déclare pas en oui/non : ${manquants.join(", ")}` }
+    : { profil: Object.fromEntries(SIGNAUX_PROFIL.map((s) => [s, signaux[s]])) };
+}
+
+/** Déclare (ou revoit) le profil du produit : forge/PROFIL.json, daté. Les clés qu'il n'écrit pas restent (TF-2211 : `controles_produit`). */
+export function ecrireProfil(produit, profil, maintenant = new Date()) {
+  mkdirSync(join(produit, "forge"), { recursive: true });
+  const chemin = join(produit, CHEMIN_PROFIL);
+  let avant = {};
+  try {
+    const j = JSON.parse(readFileSync(chemin, "utf8").replace(/^﻿/, ""));
+    // Un profil à plat (signaux à la racine) garde ses autres clés ; ses signaux passent sous `signaux`.
+    if (j && typeof j === "object" && !Array.isArray(j)) avant = Object.fromEntries(Object.entries(j).filter(([k]) => !SIGNAUX_PROFIL.includes(k)));
+  } catch { /* absent ou illisible : rien à garder */ }
+  writeFileSync(chemin, JSON.stringify({ ...avant, schema: "forge/profil@1", date: maintenant.toISOString().slice(0, 10),
+    source: "déclaré par scripts/mobiliser.mjs --profil (diagnostic 20261026a, section d, A5)", signaux: profil }, null, 2) + "\n", "utf8");
+}
+
+/** L'identifiant de la session qui écrit ou qui restitue, ou null quand rien ne l'identifie. D-218 (b), items I1 et I4 (15/11/2026) : par la
+ *  source unique de `lib-session.mjs`, `FORGE_SESSION_ID` posée par le hook SessionStart de la session, sinon `CLAUDE_CODE_SESSION_ID`,
+ *  qu'une session enfant hérite de sa mère. L'identifiant reste entier : `derniereDemande` compare les lignes à lui (TF-2045). */
+export const sessionDe = (env = process.env) => sessionCourante({ env }).id;
+
+/** La ligne de trace d'une demande, prête à être ajoutée à forge/mobilisation.jsonl. */
+export function ligneDeTrace({ carte, types, profil, verdicts, demande = null, maintenant = new Date(), session = sessionDe() }) {
+  const priv = privilegiees(types);
+  return {
+    // TF-2045 (02/11/2026) : deux sessions d'un produit écrivent le même fichier ; l'identifiant dit laquelle a écrit la ligne.
+    ts: maintenant.toISOString(), schema: SCHEMA_TRACE, session: session || null, demande: demande ? String(demande).trim() : null,
+    type: types.map((t) => t.id).join("+"), types: types.map((t) => t.id), profil,
+    carte: { version: carte.version, date: carte.date },
+    verdicts: Object.fromEntries(FORGES.map((f) => [f, { ...verdicts[f], privilegiee: priv.includes(f) }])),
+    mobilisees: FORGES.filter((f) => verdicts[f].verdict === "mobilisee"),
+    ligne: ligneEcran(types, verdicts),
+  };
+}
+
+// ---- LE VERROU « LIVRÉ » (item 3 de TF-1949) ----------------------------------------------------------------------------------
+// Avant « livré », les livrables de chaque forge MOBILISÉE à la dernière demande sont présents chez le produit. Non rétroactif :
+// seule la dernière ligne de la trace compte, et la trace n'existe que depuis la mise en service de l'écrivain.
+
+/** Ce que dit chaque repli de `derniereDemande`, pour l'écran et pour le constat. */
+export const REPLI_DIT = Object.freeze({
+  ancienne: "cette session n'a écrit aucune ligne ; la dernière ligne SANS identifiant de session (écrite avant le 02/11/2026) est jugée, faute de savoir qui l'a écrite",
+  "session-non-identifiee": "aucune session n'est identifiée (FORGE_SESSION_ID et CLAUDE_CODE_SESSION_ID absents, pas de --session) ; la dernière ligne du fichier est jugée, quelle que soit sa session",
+});
+
+/**
+ * La dernière demande tracée chez le produit : { existe, chemin, lignes, illisibles, derniere, session, repli, autres_sessions } ;
+ * `derniere` est null sans ligne lisible.
+ *
+ * TF-2045 (02/11/2026) : deux sessions d'un produit écrivent `forge/mobilisation.jsonl`, et la dernière ligne du fichier peut être celle
+ * de l'autre. Avec `session` (celle qui restitue), la demande jugée est la DERNIÈRE LIGNE DE CETTE SESSION. Repli déclaré, dans `repli` :
+ *   · « ancienne » : la session n'a écrit aucune ligne, mais des lignes d'avant l'identifiant (sans champ `session`) existent ; la dernière
+ *     d'entre elles est jugée, faute de savoir qui l'a écrite ;
+ *   · « session-non-identifiee » : aucune session n'est connue (`session` null, jeu à la main) ; la dernière ligne du fichier est jugée,
+ *     comme avant.
+ * Une session qui n'a rien écrit, et pour qui il n'existe aucune ligne ancienne, n'a pas de demande : `derniere` est null, et
+ * `autres_sessions` compte les lignes lisibles d'autres sessions, que l'appelant dit sans les juger à sa place.
+ */
+export function derniereDemande(produit, session = null) {
+  const chemin = join(produit, CHEMIN_TRACE);
+  if (!existsSync(chemin)) return { existe: false, chemin, lignes: 0, illisibles: 0, derniere: null, session: session || null, repli: null, autres_sessions: 0 };
+  const lues = [];
+  let lignes = 0, illisibles = 0;
+  for (const l of readFileSync(chemin, "utf8").split(/\r?\n/)) {
+    if (!l.trim()) continue;
+    lignes += 1;
+    try { const o = JSON.parse(l); if (o && o.verdicts && typeof o.verdicts === "object") lues.push(o); else illisibles += 1; }
+    catch { illisibles += 1; }
+  }
+  const dernierDe = (liste) => (liste.length ? liste[liste.length - 1] : null);
+  let derniere, repli = null;
+  if (!session) { derniere = dernierDe(lues); repli = lues.length ? "session-non-identifiee" : null; }
+  else {
+    const siennes = lues.filter((o) => o.session === session);
+    const anciennes = lues.filter((o) => !o.session);
+    if (siennes.length) derniere = dernierDe(siennes);
+    else if (anciennes.length) { derniere = dernierDe(anciennes); repli = "ancienne"; }
+    else derniere = null;
+  }
+  const autres = session ? lues.filter((o) => o.session && o.session !== session).length : 0;
+  // TF-2277 (06/11/2026) : déclarer un livrable inchangé exige une NOUVELLE ligne (TF-2221), qui portait une nouvelle heure de demande : les livrables
+  // produits depuis la demande d'origine devenaient périmés. Une ligne qui amende la MÊME demande (même session, même type, même texte non vide) garde
+  // l'heure de la première de la suite consécutive : `depuis`. Une autre demande, une autre session ou une demande sans texte repartent de leur heure.
+  if (derniere) {
+    const pool = !session ? lues : (lues.filter((o) => o.session === session).length ? lues.filter((o) => o.session === session) : lues.filter((o) => !o.session));
+    const norme = (o) => String(o.demande || "").toLowerCase().replace(/\s+/g, " ").trim();
+    let i = pool.lastIndexOf(derniere), origine = derniere;
+    while (i > 0 && norme(derniere) && pool[i - 1].session === derniere.session && pool[i - 1].type === derniere.type && norme(pool[i - 1]) === norme(derniere)) { i -= 1; origine = pool[i]; }
+    if (origine !== derniere && origine.ts) derniere = { ...derniere, depuis: origine.ts };
+  }
+  return { existe: true, chemin, lignes, illisibles, derniere, session: session || null, repli, autres_sessions: autres };
+}
+
+/** Les livrables exigés par une ligne de trace : pour chaque forge mobilisée, ceux des types qui la privilégient (ou ses livrables par
+ *  défaut quand un type la privilégie sans en nommer) ; une forge qu'aucun type ne privilégie exige ses livrables par défaut. */
+export function livrablesExiges(carte, ligne) {
+  const ids = Array.isArray(ligne?.types) ? ligne.types : String(ligne?.type || "").split("+");
+  const types = ids.map((id) => (carte.types || []).find((t) => t.id === id)).filter(Boolean);
+  const exiges = [];
+  for (const f of FORGES) {
+    if (normaliserVerdict(ligne?.verdicts?.[f]?.verdict) !== "mobilisee") continue;
+    const parDefaut = (carte.forges || {})[f]?.livrables || [];
+    const privilegiants = types.filter((t) => (t.forges_privilegiees || []).includes(f));
+    const livrables = new Set(privilegiants.length ? privilegiants.flatMap((t) => (t.livrables_exiges || {})[f] ?? parDefaut) : parDefaut);
+    exiges.push({ forge: f, livrables: [...livrables] });
+  }
+  return exiges;
+}
+
+const IGNORES = new Set(["node_modules", ".git", ".venv", "__pycache__"]);
+const lister = (d) => { try { return readdirSync(d, { withFileTypes: true }); } catch { return []; } };
+const motifSegment = (s) => new RegExp(`^${s.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".")}$`, "i");
+
+const heureDe = (p) => { try { return statSync(p).mtimeMs; } catch { return 0; } };
+
+/**
+ * Le fichier du produit le plus RÉCEMMENT écrit parmi ceux qui répondent à un chemin de la carte (`*` dans un segment, `**` sur plusieurs,
+ * 8 niveaux au plus), ou null. TF-2188 et TF-2205 (05/11/2026) : `trouver` rendait le premier fichier dans l'ordre du dossier ; avec deux
+ * dossiers datés (`forge/audit/20261030/` et `.../20261104/`) ou deux `rapport-*.json`, le plus ancien masquait le rapport du jour et le
+ * produit recevait MANQUE « périmé » pour toujours. À heure égale, le dernier dans l'ordre des chemins l'emporte (les dossiers datés montent).
+ */
+export function trouver(produit, chemin) {
+  const segments = String(chemin).split(/[\\/]+/).filter(Boolean);
+  const reponses = new Set();
+  const parcourir = (dossier, i, profondeur) => {
+    if (i === segments.length) { reponses.add(dossier); return; }
+    const s = segments[i];
+    if (s === "**") {
+      parcourir(dossier, i + 1, profondeur);
+      if (profondeur >= 8) return;
+      for (const e of lister(dossier)) if (e.isDirectory() && !IGNORES.has(e.name)) parcourir(join(dossier, e.name), i, profondeur + 1);
+      return;
+    }
+    if (!/[*?]/.test(s)) {
+      const p = join(dossier, s);
+      if (!existsSync(p)) return;
+      if (i < segments.length - 1) { try { if (!statSync(p).isDirectory()) return; } catch { return; } }
+      parcourir(p, i + 1, profondeur);
+      return;
+    }
+    const re = motifSegment(s);
+    for (const e of lister(dossier)) {
+      if (!re.test(e.name) || (i < segments.length - 1 && !e.isDirectory())) continue;
+      parcourir(join(dossier, e.name), i + 1, profondeur);
+    }
+  };
+  parcourir(produit, 0, 0);
+  let meilleur = null;
+  for (const p of [...reponses].sort()) { const h = heureDe(p); if (!meilleur || h >= meilleur.h) meilleur = { p, h }; }
+  return meilleur ? meilleur.p : null;
+}
+
+// ---- LE STANDARD D'AUDIT QUE LE CLIENT PUBLIE (TF-2144, RT-44 du 04/11/2026) ---------------------------------------------------
+// Le fait : le 04/11/2026, un audit complet a été rendu DEUX fois par forge-audit générique, avec un tenant fabriqué (185 contraintes),
+// alors que le client publie son propre standard (prompt et modèle POC-to-Prod, tenant à 260 contraintes, porte
+// `verifier-rapport-audit.mjs`) ; la porte du client rend NON CONFORME (5 anomalies) le rapport que forge-audit déclarait diffusable.
+// Ni le routage du lexique ni le CLAUDE.md du produit ne désignaient ce standard. Désormais le routage le LIT d'abord, et la mobilisation
+// de forge-audit exige la sortie de SA porte (un livrable de plus au verrou « livré »). Lecture seule : rien n'est exécuté ici.
+//
+// Où se publie un standard : dans le PROJET COMMUN du client (le dossier `_<client>` qui contient le produit, à sa racine ou un niveau
+// dessous, celui qui porte `CONVENTIONS-CLIENT.md`). Deux formes, la déclarée prime :
+//   · `STANDARD-AUDIT.json` { "porte": "<chemin relatif au projet commun>", "prompt", "modele", "tenant" } ;
+//   · sinon, le `verifier-rapport-audit.mjs` que le projet commun contient (8 niveaux de dossier au plus, hors node_modules, .git, old),
+//     et les lignes de `CONVENTIONS-CLIENT.md` qui parlent d'audit.
+export const STANDARD_AUDIT_DEPUIS = "2026-11-05";
+const racineDuParc = () => process.env.FORGE_ROOT || join(ICI, "..", "..");
+const NOM_PORTE_CLIENT = "verifier-rapport-audit.mjs";
+export const PREUVE_PORTE_CLIENT = join("forge", "audit", "*", "porte-client.txt");
+
+/** Le dossier `_<client>` qui contient `chemin` sous la racine du parc, ou null (un produit hors client n'a pas de standard à lire). */
+export function dossierClientDe(chemin, racine = racineDuParc()) {
+  if (!chemin) return null;
+  const rel = relative(resolve(racine), resolve(chemin));
+  if (!rel || rel.startsWith("..") || isAbsolute(rel)) return null;
+  const segments = rel.split(/[\\/]/).filter(Boolean);
+  return segments.length > 1 && segments[0].startsWith("_") ? join(resolve(racine), segments[0]) : null;
+}
+
+const SANS_PORTE = new Set(["node_modules", ".git", ".venv", "__pycache__", "old"]);
+function chercherPorte(dossier, profondeur = 0) {
+  if (profondeur > 8) return null;
+  const entrees = lister(dossier);
+  if (entrees.some((e) => e.isFile() && e.name.toLowerCase() === NOM_PORTE_CLIENT)) return join(dossier, NOM_PORTE_CLIENT);
+  for (const e of entrees) if (e.isDirectory() && !SANS_PORTE.has(e.name)) { const r = chercherPorte(join(dossier, e.name), profondeur + 1); if (r) return r; }
+  return null;
+}
+
+/**
+ * Le standard d'audit publié par le client du produit désigné (`chemin`), sans rien exécuter. Rend toujours un objet :
+ * { client, projet_commun, source ("declare" | "detecte" | null), porte (chemin absolu | null), prompt, modele, tenant, conventions[], refus[] }.
+ * `client` null : le produit n'est pas sous un dossier `_<client>`. `porte` null : le client ne publie aucune porte. Un refus nomme une
+ * déclaration inutilisable (porte absente du disque, chemin qui sort du projet commun) : elle est dite, jamais contournée en silence.
+ */
+export function standardClientAudit(chemin, racine = racineDuParc()) {
+  const vide = { client: null, projet_commun: null, source: null, porte: null, prompt: null, modele: null, tenant: null, conventions: [], refus: [] };
+  const client = dossierClientDe(chemin, racine);
+  if (!client) return vide;
+  const sortie = { ...vide, client: basename(client) };
+  const communs = [client, ...lister(client).filter((e) => e.isDirectory()).map((e) => join(client, e.name))]
+    .filter((d) => existsSync(join(d, "CONVENTIONS-CLIENT.md")) || existsSync(join(d, "STANDARD-AUDIT.json")));
+  for (const commun of communs) {
+    sortie.projet_commun = sortie.projet_commun || commun;
+    const conv = join(commun, "CONVENTIONS-CLIENT.md");
+    if (existsSync(conv)) {
+      try { for (const l of readFileSync(conv, "utf8").split(/\r?\n/)) if (/audit/i.test(l) && l.trim()) sortie.conventions.push(l.trim().slice(0, 320)); } catch { /* illisible : sans ces lignes */ }
+    }
+    const decl = join(commun, "STANDARD-AUDIT.json");
+    if (existsSync(decl)) {
+      let j = null;
+      try { j = JSON.parse(readFileSync(decl, "utf8").replace(/^﻿/, "")); } catch (e) { sortie.refus.push(`${decl} illisible : ${e.message}`); }
+      if (j && typeof j === "object") {
+        for (const c of ["prompt", "modele", "tenant"]) if (typeof j[c] === "string" && j[c].trim()) sortie[c] = j[c].trim();
+        if (typeof j.porte === "string" && j.porte.trim()) {
+          const abs = resolve(commun, j.porte.trim());
+          const dedans = relative(resolve(commun), abs);
+          if (!dedans || dedans.startsWith("..") || isAbsolute(dedans)) sortie.refus.push(`${decl} : la porte « ${j.porte} » sort du projet commun`);
+          else if (!existsSync(abs)) sortie.refus.push(`${decl} : la porte « ${j.porte} » est absente du disque`);
+          else { sortie.porte = abs; sortie.source = "declare"; }
+        }
+      }
+    }
+    if (!sortie.porte) { const p = chercherPorte(commun); if (p) { sortie.porte = p; sortie.source = "detecte"; } }
+    if (sortie.porte) { sortie.projet_commun = commun; break; }
+  }
+  sortie.conventions = [...new Set(sortie.conventions)].slice(0, 5);
+  return sortie;
+}
+
+/** L'état de la preuve de la porte du client : la sortie de sa porte, enregistrée sous forge/audit/<date>/porte-client.txt, fraîche et CONFORME. */
+function etatPorteClient(produit, std, seuil) {
+  const dossierAudit = join(produit, "forge", "audit");
+  let meilleur = null;
+  for (const e of lister(dossierAudit)) {
+    if (!e.isDirectory()) continue;
+    const f = join(dossierAudit, e.name, "porte-client.txt");
+    try { const mt = statSync(f).mtimeMs; if (!meilleur || mt > meilleur.mt) meilleur = { f, mt }; } catch { /* absent : suivant */ }
+  }
+  let frais = true, conforme = null;
+  if (meilleur) {
+    if (Number.isFinite(seuil)) frais = meilleur.mt >= seuil;
+    try { const t = readFileSync(meilleur.f, "utf8"); conforme = /CONFORME/.test(t) && !/NON\s+CONFORME/i.test(t); } catch { conforme = false; }
+  }
+  const nom = basename(std.porte);
+  return { forge: "audit", livrable: "porte-audit-client",
+    libelle: `porte du standard d'audit du client ${std.client} (${nom}) : sa sortie, enregistrée sous forge/audit/<AAAAMMJJ>/porte-client.txt, dit CONFORME${meilleur && conforme === false ? " — la dernière sortie lue dit NON CONFORME" : ""}`,
+    chemins: [PREUVE_PORTE_CLIENT.replace(/\\/g, "/")], present: !!meilleur && frais && conforme === true, trouve: meilleur ? meilleur.f : null,
+    perime: !!meilleur && !frais, ecrit_le: meilleur ? new Date(meilleur.mt).toISOString() : null, porte: std.porte, conforme };
+}
+
+/**
+ * Chaque livrable exigé par la ligne, présent (fichier trouvé ET écrit après la demande) ou manquant.
+ * TF-2136 : un fichier d'une demande antérieure (mtime < ts de la demande) ne compte pas comme livré —
+ * il est trouvé mais `perime`, donc rangé dans les manquants. mtime est l'heure d'écriture : un `git
+ * checkout` la réinitialise, aussi un livrable produit dans le tour la porte bien, c'est le cas visé.
+ */
+export function etatDesLivrables(produit, carte, ligne) {
+  // TF-2277 : une ligne qui amende la même demande porte `depuis`, l'heure de la première de la suite ; c'est elle qui date la demande.
+  const seuilTrace = ligne && (ligne.depuis || ligne.ts) ? Date.parse(ligne.depuis || ligne.ts) : NaN;
+  // TF-2778 : la trace s'écrit parfois en fin de run ; le ledger du produit atteste alors une ouverture plus ancienne, qui date la demande.
+  const ouverture = ouvertureAttestee(produit, ligne);
+  const seuil = ouverture && Number.isFinite(seuilTrace) && ouverture.t < seuilTrace ? ouverture.t : seuilTrace;
+  const etats = [];
+  for (const { forge, livrables } of livrablesExiges(carte, ligne)) for (const id of livrables) {
+    const l = (carte.livrables || {})[id] || { libelle: id, chemins: [] };
+    // TF-2264 (06/11/2026) : tous les motifs du livrable sont parcourus, le fichier le plus récent des DEUX gagne. Le premier motif qui répondait
+    // masquait un fichier frais du second (verdict de format : `output/**` ancien, `.oracles/output/**` frais) et la fraîcheur se jugeait sur l'ancien.
+    let trouve = null, hTrouve = -1;
+    for (const c of l.chemins || []) { const t = trouver(produit, c); if (!t) continue; const h = heureDe(t); if (!trouve || h >= hTrouve) { trouve = t; hTrouve = h; } }
+    let frais = true, ecritLe = null;
+    if (trouve && Number.isFinite(seuil)) {
+      try { ecritLe = statSync(trouve).mtimeMs; frais = ecritLe >= seuil; } catch { frais = false; }
+    }
+    // TF-2221 : un fichier présent mais écrit avant la demande compte quand la ligne de trace le déclare inchangé, avec son motif.
+    const m = ligne?.verdicts?.[forge]?.livrables_inchanges?.[id];
+    const inchange = trouve && !frais && !motifVide(m) ? String(m).trim() : null;
+    // TF-2778 : un livrable exigé qui n'existe pas et n'a pas d'objet chez ce produit se déclare « sans objet », avec son motif ; un livrable jamais créé n'est pas « inchangé ».
+    const so = ligne?.verdicts?.[forge]?.livrables_sans_objet?.[id];
+    const sansObjet = !trouve && !motifVide(so) ? String(so).trim() : null;
+    const present = (!!trouve && (frais || !!inchange)) || !!sansObjet;
+    etats.push({ forge, livrable: id, libelle: l.libelle, chemins: l.chemins || [], present, trouve,
+      perime: !!trouve && !frais && !inchange, inchange, sans_objet: sansObjet, ecrit_le: ecritLe != null ? new Date(ecritLe).toISOString() : null });
+  }
+  // TF-2144 : forge-audit mobilisée chez un produit d'un client qui publie une porte d'audit → la sortie de cette porte est exigée aussi.
+  // Non rétroactif : une demande tracée avant le 05/11/2026 n'est pas jugée sur ce livrable.
+  if (normaliserVerdict(ligne?.verdicts?.audit?.verdict) === "mobilisee" && String(ligne?.ts || "").slice(0, 10) >= STANDARD_AUDIT_DEPUIS) {
+    const std = standardClientAudit(produit);
+    if (std.porte) etats.push(etatPorteClient(produit, std, seuil));
+  }
+  return { etats, manquants: etats.filter((e) => !e.present), ouverture_attestee: ouverture && ouverture.t < seuilTrace ? { type: ouverture.type, ts: ouverture.ts } : null };
+}
+
+/**
+ * TF-2778 (RS-51 de Produit-12, 22/11/2026) : l'heure d'ouverture que le LEDGER du produit atteste pour la demande d'une ligne de trace. Une trace écrite en
+ * fin de run (à 19:40, pour une demande ouverte à 14:05) rendait périmés les livrables produits entre les deux, jugés contre l'heure de la trace. Le ledger
+ * porte l'ouverture : la plus récente des entrées `run_open` et `demande_humain` (celle de la session de la ligne quand elle la nomme) qui précèdent la ligne.
+ * Une nouvelle demande consignée au ledger fait remonter cette heure : le livrable d'avant elle reste périmé. Sans ledger, sans entrée ou sans ligne datée : null,
+ * le seuil reste l'heure de la trace. Limite dite : un run long sans `demande_humain` consignée date ses demandes de son ouverture.
+ */
+export function ouvertureAttestee(produit, ligne) {
+  const fichier = join(produit, "forge", "ledger.jsonl");
+  const fin = ligne?.ts ? Date.parse(ligne.ts) : NaN;
+  if (!Number.isFinite(fin) || !existsSync(fichier)) return null;
+  let meilleur = null;
+  for (const l of readFileSync(fichier, "utf8").split(/\r?\n/)) {
+    if (!l.trim()) continue;
+    let e; try { e = JSON.parse(l); } catch { continue; }
+    if (!e || (e.type !== "run_open" && e.type !== "demande_humain")) continue;
+    if (e.type === "demande_humain" && ligne.session && e.session && !String(ligne.session).startsWith(String(e.session))) continue;
+    const t = Date.parse(e.ts);
+    if (!Number.isFinite(t) || t > fin) continue;
+    if (!meilleur || t > meilleur.t) meilleur = { t, type: e.type, ts: e.ts };
+  }
+  return meilleur;
+}
