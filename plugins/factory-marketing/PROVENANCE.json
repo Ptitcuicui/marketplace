@@ -1,0 +1,17 @@
+{
+  "audit-seo-geo": {
+    "depot": "factory-forge-seo-geo",
+    "chemin": "skills/audit-seo-geo",
+    "commit": "720cc6feee6df70391e920d35e7f8753c2893fcc"
+  },
+  "animation-reseau": {
+    "depot": "factory-forge-agents",
+    "chemin": ".claude/skills/animation-reseau",
+    "commit": "200f72de09668324bc4d891922e1eff5e0d51e77"
+  },
+  "clip-de-presentation": {
+    "depot": "factory-forge-design",
+    "chemin": "skills/clip-de-presentation",
+    "commit": "d1665cc3747d4504d9e94051dc6ac4591754e370"
+  }
+}

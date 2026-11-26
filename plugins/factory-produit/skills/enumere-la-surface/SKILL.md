@@ -1,0 +1,143 @@
+---
+name: enumere-la-surface
+description: "Énumère mécaniquement la surface fonctionnelle d'un produit à concevoir — objets métier, rôles, parcours, points d'entrée, règles de gestion — depuis l'entrant qualifié, et produit un SURFACE.md où chaque élément porte un identifiant stable. Inverse le sens de la génération : on énumère d'abord ce qui existe, on rédige ensuite, pour que tout élément non couvert par une exigence soit un manque nommé et non une absence silencieuse. Use when / déclencher dès qu'il faut inventorier ce qu'un produit doit couvrir avant d'écrire des exigences, lister les objets métier, rôles ou parcours d'un CDC ou d'un dépôt existant, ou vérifier qu'une spécification n'oublie pas une partie du périmètre. Ne pas déclencher pour qualifier l'entrant lui-même (→ qualifie-l-entrant), pour rédiger les exigences (→ redige-les-exigences), ni pour énumérer la surface d'un produit déjà construit à des fins de test (→ Forge Tests, qui l'énumère depuis le code exécutable)."
+version: 1.5.1
+---
+
+# Énumère la surface
+
+Deuxième verbe. Il ne rédige rien, ne priorise rien : il **compte**.
+
+## Pourquoi ce verbe existe
+
+Le défaut fondateur documenté par Forge Tests : *« les tests restaient sur les premières
+pages, sans jamais atteindre les suivantes »*, par **biais de disponibilité du générateur** —
+on écrit depuis ce qu'on a sous les yeux.
+
+Une spécification souffre du même biais : on rédige des exigences pour les écrans auxquels on
+pense. La réponse est la même, appliquée en amont — **énumérer d'abord, rédiger ensuite,
+mesurer le ratio, nommer chaque élément non couvert**.
+
+C'est `oracle-surface` qui rend la règle exécutée plutôt que déclarée.
+
+## Ce que ce skill apporte en propre
+
+Qualification de l'entrant → `qualifie-l-entrant`.
+Rédaction → `redige-les-exigences`.
+Énumération depuis du **code exécutable** → Forge Tests, autre objet, autre outil.
+
+Reste en propre : l'énumération depuis un entrant **textuel ou partiel**, et l'attribution
+d'identifiants stables qui survivront jusqu'au champ `risque` de Forge Tests.
+
+## Quick start
+
+```
+0. Dossier       → forge/etapes/conception/ chez le produit : tous les artefacts ci-dessous
+                   y vivent (mobiliser.mjs --verifier du pilot n'accepte que ce chemin)
+1. Entrée        → ENTRANT.md, section 3 (extractible obtenu)
+2. Typologie     → references/typologie-surface.md, 5 types
+3. Implicite     → references/typologie-surface.md, « Surface implicite SaaS » : chaque
+                   candidat retenu ou écarté explicitement (SURFACE.md section 3, puis
+                   `ecarts_surface_implicite` du référentiel — oracle-surface S4 le juge) ;
+                   si un objet est un registre, inventaire ou catalogue : « Surface implicite
+                   d'un registre », trois candidats de plus (S5, avertissement)
+4. Identifiants  → S-01, S-02… stables, jamais réaffectés
+5. Artefact      → SURFACE.md + le tableau `surface[]` du référentiel
+6. Contrôle      → node oracles/oracle-surface.mjs EXIGENCES.json
+7. État          → ETAT.json (statut produit|bloque_question) → node oracles/oracle-etat.mjs
+```
+
+## Les cinq types d'élément
+
+Cinq types, fermés : tout ce que le produit expose entre dans l'un d'eux, et ce qui n'y entre
+pas n'est pas de la surface. Le tableau dit, pour chacun, ce qu'on énumère.
+
+| Type | Ce qu'on énumère | Exemple |
+|---|---|---|
+| `objet` | Les choses que le produit manipule | Demande d'absence, Solde |
+| `role` | Qui agit, avec quels droits apparents | Salarié, Responsable |
+| `parcours` | Une suite d'actions menant à un résultat | Déclaration d'une absence |
+| `point-entree` | Par où l'on entre : écran, endpoint, job, import | Écran d'accueil, batch de nuit |
+| `regle` | Une contrainte métier citée | Un solde ne devient pas négatif |
+
+## Les règles dures
+
+**Un élément, un identifiant, pour toujours.** Un élément retiré laisse son identifiant mort.
+Il n'est jamais réaffecté — c'est la condition pour que la traçabilité survive à une révision.
+
+**On énumère ce qui est dit, pas ce qui est probable.** Un objet métier absent de l'entrant
+n'entre pas dans la surface parce qu'il « existe toujours dans ce genre de produit ». S'il
+manque, c'est `ENTRANT.md` section 4 qui le porte, comme hors de portée.
+
+**Exception close : la surface implicite SaaS.** RC-3 (retour production) — un produit livré
+sans aide utilisateur ni onboarding, parce que personne ne les avait proposés et que le CDC ne
+les demandait pas. La règle ci-dessus reste vraie pour tout le reste ; une liste fermée et
+versionnée de candidats attendus par tout utilisateur final d'une application web est en plus
+proposée d'office en fin d'énumération, chacun retenu (→ exigence) ou écarté explicitement dans
+`SURFACE.md` section 3. Liste complète : `references/typologie-surface.md`, section « Surface
+implicite SaaS ». Un candidat peut porter une **condition d'applicabilité** plutôt qu'un
+simple type suggéré : la **page 404 par langue** (P-2 — patron éprouvé du pilot, TF-0804)
+n'est proposée que si le produit a une surface web, avec ses cinq critères d'acceptation ; le
+**lien public partageable (copie, QR)** et les **comptes d'essai vides** (TF-0874) visent les
+produits **multi-tenant** — un produit mono-tenant les écarte tous les deux, avec sa raison.
+Trois autres (TF-1908) sont conditionnels de la même façon : **traceurs et consentement**
+(le produit pose un traceur non exempté de consentement), **politique de confidentialité** (il
+collecte une donnée personnelle) et **aperçu de partage** (il a une page publique). Le
+**favicon** d'un document autoportant n'a pas la forme de celui d'un site ; la distinction est
+dans les critères d'acceptation de la typologie.
+Trois derniers (TF-2120) : **aide contextuelle de champ** (le produit a un champ de saisie non
+trivial), **filtre et tri des listes** (une liste de 8 éléments ou plus) et **garde de saisie**
+(un formulaire de saisie), chacun avec son critère vérifiable. Une aide réduite aux codes
+d'erreur ne satisfait plus le candidat « aide utilisateur ».
+
+**L'écart s'écrit dans le référentiel, pas seulement en prose (TF-0811).** La section 3 de
+`SURFACE.md` reste le lieu où l'écart se rédige ; elle est transcrite, sans reformulation, dans
+le champ racine `ecarts_surface_implicite` — `{ element, motif, decide_par, date }`, une entrée
+par candidat écarté, `element` pris dans les dix-neuf clés de la liste close. `oracle-surface`
+(règle **S4**) juge alors chaque candidat individuellement : présent → PASS, écarté avec un
+motif d'au moins vingt caractères → PASS imprimé « [ÉCARTÉ] », ni l'un ni l'autre → **FAIL**.
+Sans point d'entrée web énuméré, le bloc n'est pas dû et S4 rend un PASS motivé. C'est le seul
+endroit de la forge où l'oubli et la décision cessent de se ressembler. **Un écart est une
+décision humaine référencée (TF-2119)** : `decide_par` nomme l'humain et sa décision (identifiant
+`D-N`, entrée de ledger, ou citation humaine datée) ; « la session de build », un agent ou un
+build, ou un nom d'humain sans référence, font échouer S4.
+
+**Un registre a sa propre surface implicite (TF-1655).** Un produit qui tient un registre se
+décrit fiche par fiche, et les usages qui traversent les fiches ne sont écrits par personne. Le
+12/10/2026, un hub de 219 exigences n'en avait aucune pour lire une même information sur tous
+les projets, comparer des projets ou parcourir l'inventaire hiérarchique des ressources d'un
+projet ; 13 exigences sont entrées en run de version. Dès qu'un `objet` énuméré est un registre
+(registre, inventaire, catalogue, portefeuille, répertoire, annuaire, cartographie, parc), trois
+candidats sont proposés d'office : **vue transverse**, **comparaison d'éléments**, **inventaire
+hiérarchique**. Chacun est retenu ou écarté comme les dix-neuf autres, dans le même champ, avec
+ses clés `vue-transverse`, `comparaison`, `inventaire-hierarchique`. `oracle-surface` **S5** le
+juge en avertissement non bloquant : elle nomme le candidat manquant, l'exit ne change pas.
+Liste et critères : `references/typologie-surface.md`, « Surface implicite d'un registre ».
+
+**Deux natures d'élément rendent huit exigences DUES — dès l'énumération (TF-0376).** Un
+`point-entree` ou un `parcours` dont l'entrant dit qu'il est **asynchrone** (conversion, import,
+consolidation, file, job de nuit) porte quatre questions ouvertes : comment l'interface apprend
+la fin, quel est l'état terminal d'un échec, quel est le délai maximal, comment on reprend. Un
+élément qui repose sur une **authentification** (SSO, OIDC, SAML) en porte quatre autres : durée
+de la session applicative, renouvellement silencieux, détection d'expiration, restauration du
+contexte. Le noter ICI, au moment où l'élément est énuméré, est le premier endroit où l'oubli
+peut être vu — `oracle-ears` EA4/EA5 le constatera de toute façon à l'étape suivante, mais alors
+la surface sera déjà figée. Mesure : cinq des douze lacunes de spécification du cahier Approval
+tenaient à ces deux sujets seuls, dont un « bug critique » et une perte de brouillon — et le
+développeur avait implémenté exactement ce qui était écrit. Détail des huit questions :
+`redige-les-exigences/references/formulation.md`, section EA4/EA5.
+
+**Aucune exécution du produit analysé.** L'énumération se fait par lecture. On ne démarre
+aucun serveur, on ne lance aucun script du dépôt.
+
+## Surface vide
+
+Un entrant de type « idée » peut n'avoir aucune surface énumérable. C'est un cas légitime :
+`oracle-surface` le déclare `SANS_OBJET`, jamais `PASS`. Une surface vide sur un entrant de
+type « produit à reprendre » est en revanche un défaut d'énumération, pas une propriété.
+
+## Ce qui n'est jamais fait
+
+Compléter la surface par ce qui « manque évidemment ». Fusionner deux objets parce qu'ils se
+ressemblent. Réutiliser l'identifiant d'un élément supprimé. Produire un pourcentage de
+couverture sans la liste nominative de ce qui n'est pas couvert.

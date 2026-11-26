@@ -1,0 +1,12 @@
+{
+  "name": "factory-data",
+  "displayName": "Factory – Data",
+  "description": "Mallette data Factory : profilage d'un jeu de données, discipline de la donnée (assertions, lineage, restitution chiffrée sourcée, data contract, modèle Gold, migration de rapport, anonymisation mesurée), veille de dérive dans le temps.",
+  "author": {
+    "name": "Ptitcuicui"
+  },
+  "license": "MIT",
+  "dependencies": [
+    "factory-socle"
+  ]
+}

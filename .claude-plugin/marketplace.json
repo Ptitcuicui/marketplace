@@ -8,12 +8,44 @@
     {
       "name": "factory-socle",
       "source": "./plugins/factory-socle",
-      "description": "Socle commun Factory : contrôles qualité (oracles), pages HTML chartées, communication, amélioration de prompts, contre-expertise, pilotage de mission, boussole et accueil de la factory."
+      "description": "Socle commun Factory : contrôles qualité (oracles), pages HTML chartées, communication, système de marque, amélioration de prompts, contre-expertise, pilotage de mission, run de mandat, boussole et accueil de la factory."
     },
     {
       "name": "factory-avant-vente",
       "source": "./plugins/factory-avant-vente",
       "description": "Mallette conseil et avant-vente Factory : propales et revue de propale, réponse à appel d'offres, PowerPoint, Word et PDF chartés, schémas, revue de CV, plan d'amélioration, qualification des entrants.",
+      "dependencies": [
+        "factory-socle"
+      ]
+    },
+    {
+      "name": "factory-produit",
+      "source": "./plugins/factory-produit",
+      "description": "Mallette produit Factory : run complet et run de version, surface fonctionnelle, exigences et vues, critique et amélioration du design, direction artistique, intégration de modèles d'IA, déploiement et restauration sous GO humain.",
+      "dependencies": [
+        "factory-socle"
+      ]
+    },
+    {
+      "name": "factory-audit-securite",
+      "source": "./plugins/factory-audit-securite",
+      "description": "Mallette audit et sécurité Factory : audit applicatif et fiche sécurité (AuditCore), sécurité du site livré (exposition, dépendances, workflows, DAST autorisé), sécurité des agents IA, audit qualité des tests. Chaque audit part sur mandat explicite.",
+      "dependencies": [
+        "factory-socle"
+      ]
+    },
+    {
+      "name": "factory-data",
+      "source": "./plugins/factory-data",
+      "description": "Mallette data Factory : profilage d'un jeu de données, discipline de la donnée (assertions, lineage, restitution chiffrée sourcée, data contract, modèle Gold, migration de rapport, anonymisation mesurée), veille de dérive dans le temps.",
+      "dependencies": [
+        "factory-socle"
+      ]
+    },
+    {
+      "name": "factory-marketing",
+      "source": "./plugins/factory-marketing",
+      "description": "Mallette marketing Factory : étude SEO et GEO d'un site, animation de réseaux sociaux avec accord humain par lot, clip de présentation.",
       "dependencies": [
         "factory-socle"
       ]

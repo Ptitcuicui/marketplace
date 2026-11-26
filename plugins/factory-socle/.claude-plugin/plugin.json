@@ -1,7 +1,7 @@
 {
   "name": "factory-socle",
   "displayName": "Factory – Socle",
-  "description": "Socle commun Factory : contrôles qualité (oracles), pages HTML chartées, communication, amélioration de prompts, contre-expertise, pilotage de mission, boussole et accueil de la factory.",
+  "description": "Socle commun Factory : contrôles qualité (oracles), pages HTML chartées, communication, système de marque, amélioration de prompts, contre-expertise, pilotage de mission, run de mandat, boussole et accueil de la factory.",
   "author": {
     "name": "Ptitcuicui"
   },

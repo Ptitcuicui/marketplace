@@ -2,10 +2,10 @@
   "racine": "C:\\Users\\Ptitcuicui\\factory",
   "plugins": {
     "factory-socle": {
-      "skills": 11,
+      "skills": 13,
       "skills_hors_marketplace": {},
       "fichiers_de_code_avec_chemin_skill": 20,
-      "references_au_pilot": 440,
+      "references_au_pilot": 443,
       "chemins_c_dev": {
         "plugins\\factory-socle\\skills\\quality-oracles\\references\\registre-oracles.json": 1,
         "plugins\\factory-socle\\skills\\quality-oracles\\references\\registre-oracles.md": 2,
@@ -28,6 +28,34 @@
         "plugins\\factory-avant-vente\\skills\\factory-pptx\\scripts\\self-test.mjs": 1,
         "plugins\\factory-avant-vente\\skills\\factory-docx\\scripts\\oracle-docx.mjs": 1
       }
+    },
+    "factory-produit": {
+      "skills": 10,
+      "skills_hors_marketplace": {},
+      "fichiers_de_code_avec_chemin_skill": 0,
+      "references_au_pilot": 12,
+      "chemins_c_dev": {}
+    },
+    "factory-audit-securite": {
+      "skills": 4,
+      "skills_hors_marketplace": {},
+      "fichiers_de_code_avec_chemin_skill": 0,
+      "references_au_pilot": 4,
+      "chemins_c_dev": {}
+    },
+    "factory-data": {
+      "skills": 3,
+      "skills_hors_marketplace": {},
+      "fichiers_de_code_avec_chemin_skill": 0,
+      "references_au_pilot": 2,
+      "chemins_c_dev": {}
+    },
+    "factory-marketing": {
+      "skills": 3,
+      "skills_hors_marketplace": {},
+      "fichiers_de_code_avec_chemin_skill": 0,
+      "references_au_pilot": 4,
+      "chemins_c_dev": {}
     }
   }
 }

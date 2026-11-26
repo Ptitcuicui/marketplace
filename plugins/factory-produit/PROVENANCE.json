@@ -1,0 +1,52 @@
+{
+  "run-complet": {
+    "depot": "factory-forge-agents",
+    "chemin": ".claude/skills/run-complet",
+    "commit": "200f72de09668324bc4d891922e1eff5e0d51e77"
+  },
+  "run-version": {
+    "depot": "factory-forge-agents",
+    "chemin": ".claude/skills/run-version",
+    "commit": "200f72de09668324bc4d891922e1eff5e0d51e77"
+  },
+  "enumere-la-surface": {
+    "depot": "factory-forge-conception",
+    "chemin": "skills/enumere-la-surface",
+    "commit": "daa530881bd2f63f5fdbcecd596d201ebe1176f0"
+  },
+  "redige-les-exigences": {
+    "depot": "factory-forge-conception",
+    "chemin": "skills/redige-les-exigences",
+    "commit": "daa530881bd2f63f5fdbcecd596d201ebe1176f0"
+  },
+  "derive-les-vues": {
+    "depot": "factory-forge-conception",
+    "chemin": "skills/derive-les-vues",
+    "commit": "daa530881bd2f63f5fdbcecd596d201ebe1176f0"
+  },
+  "critique-le-design": {
+    "depot": "factory-forge-design",
+    "chemin": "skills/critique-le-design",
+    "commit": "d1665cc3747d4504d9e94051dc6ac4591754e370"
+  },
+  "ameliore-le-design": {
+    "depot": "factory-forge-design",
+    "chemin": "skills/ameliore-le-design",
+    "commit": "d1665cc3747d4504d9e94051dc6ac4591754e370"
+  },
+  "studio-de-direction": {
+    "depot": "factory-forge-design",
+    "chemin": "skills/studio-de-direction",
+    "commit": "d1665cc3747d4504d9e94051dc6ac4591754e370"
+  },
+  "integre-openai-gemini": {
+    "depot": "factory-forge-development",
+    "chemin": ".claude/skills/integre-openai-gemini",
+    "commit": "8cc1a5a65cd4f9d253f8b23e3607d0d1feb3ad83"
+  },
+  "deploie-et-restaure": {
+    "depot": "factory-forge-ops",
+    "chemin": "skills/deploie-et-restaure",
+    "commit": "c18f6567e0b1c2aab2d0a7f4e9c3767afc1b67f5"
+  }
+}

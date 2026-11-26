@@ -1,0 +1,466 @@
+#!/usr/bin/env python3
+"""Controle de parcours d'une maquette mono-fichier.
+
+Juge ce qui est decidable sur le fichier lui-meme : poids, autonomie reseau,
+bijection menu <-> ecrans, liens morts, bandeau de donnees de demonstration,
+presence des deux themes, respect du mouvement reduit, feuille d'impression,
+cible explicite de chaque CTA (C15), favicon inline, absence de datepicker maison.
+
+Ce qui exige un rendu reel (debordements, chevauchements, contraste, clavier)
+est declare non_juge et delegue a render_page.py du skill factory-page-html.
+
+Contrat de sortie commun : JSON sur stdout, exit 0 = PASS, 1 = FAIL, 2 = erreur.
+Usage : python check_maquette.py maquette.html [--max-mo 10] [--json-only]
+"""
+
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+
+PLAFOND_MO_DEFAUT = 10.0
+
+# oracles/oracle-motion.mjs, depuis skills/ameliore-le-design/scripts/
+ORACLE_MOTION = os.path.normpath(os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "oracles", "oracle-motion.mjs"))
+
+NON_JUGE = [
+    "balisage porte par un script MINIFIE (bibliotheque vendoree) - decape avant "
+    "scan de balisage (C2/C15) : un gabarit livre minifie echappe donc a ces deux "
+    "criteres, a couvrir par render_page.py sur le rendu reel",
+    "debordements et chevauchements (V1/V4) - deleguer a render_page.py",
+    "contraste WCAG mesure (V2) - deleguer a render_page.py sur les deux themes",
+    "navigation clavier reelle - parcours a executer",
+    "atteignabilite des etats vide/chargement/erreur - parcours a executer",
+    "qualite de la direction visuelle - jugement humain",
+    "delimitation fiable des ecrans pour la coherence CTA (C15) - approximee a "
+    "l'echelle du fichier, a confirmer par revue humaine",
+    "revocation du mouvement (C4) - DELEGUEE a oracles/oracle-motion.mjs R10, qui la "
+    "juge en regle bloquante avec ses fixtures : ce controle n'entretient pas un "
+    "second avis divergent (TF-0321)",
+    "craft du geste, bareme des tokens de mouvement et durees ecrites en dur "
+    "(oracle-motion R1-R9) - juges par cet oracle, non repris ici : seule la "
+    "question de la revocation remonte en C4",
+]
+
+
+def lire(chemin):
+    with open(chemin, "r", encoding="utf-8", errors="replace") as f:
+        return f.read()
+
+
+# Une balise fermante d'element de contenu : signe qu'un script porte un gabarit
+# HTML reel, et non du code que le scan de balisage lirait de travers.
+BALISE_FERMANTE = re.compile(
+    r"</(a|button|div|section|nav|ul|ol|li|p|span|header|footer|main|article|form|label)\s*>", re.I)
+
+
+def est_minifie(source):
+    """Source livree minifiee : au moins une ligne demesuree."""
+    return any(len(ligne) > 500 for ligne in source.splitlines())
+
+
+def decaper_hors_dom(html):
+    """HTML reduit a ce qui produit vraiment du DOM : commentaires retires, et
+    contenu des <script> non porteurs de balisage neutralise.
+
+    Le balisage se scanne sur le DOM ecrit, pas sur le code. Une bibliotheque
+    minifiee vendoree contient des sequences comme « e<a||void 0!==l&&e> » : lues
+    comme du balisage, elles ouvrent une fausse ancre qui avale le document
+    jusqu'a la premiere fermeture reelle - C15 se declenche a tort et C2 voit des
+    routes qui n'en sont pas (TF-0275, coute sur le run desk.example).
+
+    Le contenu d'un script n'est conserve que s'il porte une balise fermante de
+    contenu ET n'est pas minifie : un gabarit JS ecrit a la main produit du DOM
+    reel et doit rester juge (loi n. 1), une source minifiee ne le peut pas.
+
+    Un commentaire HTML n'est pas du DOM non plus et produit exactement le meme
+    faux positif : il est neutralise au meme titre.
+
+    Les sauts de ligne sont conserves pour ne pas decaler les reperes de position.
+    """
+    blancs = lambda s: re.sub(r"[^\n]", " ", s)
+
+    def neutraliser(m):
+        ouvrante, contenu, fermante = m.group(1), m.group(2), m.group(3)
+        if BALISE_FERMANTE.search(contenu) and not est_minifie(contenu):
+            return m.group(0)
+        return ouvrante + blancs(contenu) + fermante
+
+    sans_commentaires = re.sub(r"<!--.*?-->", lambda m: blancs(m.group(0)), html, flags=re.S)
+    return re.sub(r"(<script\b[^>]*>)(.*?)(</script\s*>)", neutraliser, sans_commentaires,
+                  flags=re.I | re.S)
+
+
+def ressources_externes(html):
+    """URLs absolues chargees par le document (hors ancres et liens de contenu)."""
+    trouvees = []
+    for attr in ("src", "href"):
+        for m in re.finditer(r'<(\w+)[^>]*\b%s\s*=\s*["\']([^"\']+)["\']' % attr, html, re.I):
+            balise, url = m.group(1).lower(), m.group(2).strip()
+            if attr == "href" and balise == "a":
+                continue  # lien de contenu, pas un chargement
+            if url.startswith(("http://", "https://", "//")):
+                trouvees.append("%s[%s=%s]" % (balise, attr, url[:80]))
+    return sorted(set(trouvees))
+
+
+def routes_declarees(html):
+    """Routes referencees par la navigation (href="#route")."""
+    return sorted({
+        m.group(1) for m in re.finditer(r'href\s*=\s*["\']#([A-Za-z0-9_\-/]+)["\']', html)
+        if m.group(1).lower() not in ("", "top", "main", "contenu")
+    })
+
+
+# TF-0835 (lot Produit-61, 05/09/2026). La valeur d'une route devait commencer par
+# `function`, `(` ou `ident =>` : une table qui REFERENCE des fonctions nommees --
+# « '#archives': rendreArchives » -- ne comptait aucune de ses routes, et C2 les
+# declarait toutes « sans ecran ». Le contournement etait d'ecrire « r => rendreArchives(r) »,
+# soit une indirection inutile ajoutee pour satisfaire le controle. Un identifiant est donc
+# admis, mais un identifiant SEULEMENT : une chaine, un nombre ou un litteral booleen reste
+# une valeur qui ne rend rien, et la route reste orpheline.
+_IDENT_ROUTE = r"(?!(?:true|false|null|undefined)\b)(?:async\s+)?[A-Za-z_$][\w$.]*"
+
+
+def routes_implementees(html):
+    """Routes que le code sait rendre : cles de table de routage ou id de section."""
+    cles = set(re.findall(
+        r'["\']#?([A-Za-z0-9_\-/]+)["\']\s*:\s*'
+        r'(?:function\b|\(|' + _IDENT_ROUTE + r'(?:\s*=>|(?=[\s,}\)])))', html))
+    cles |= set(re.findall(r'\bcase\s+["\']#?([A-Za-z0-9_\-/]+)["\']', html))
+    cles |= set(re.findall(r'\bid\s*=\s*["\']([A-Za-z0-9_\-/]+)["\']', html))
+    cles |= set(re.findall(r'data-route\s*=\s*["\']#?([A-Za-z0-9_\-/]+)["\']', html))
+    return cles
+
+
+def attributs(src_balise):
+    """Dict nom -> valeur des attributs `attr="valeur"` ou `attr='valeur'`."""
+    d = {}
+    for m in re.finditer(r"""([a-zA-Z_:][-\w:.]*)\s*=\s*(?:"([^"]*)"|'([^']*)')""", src_balise):
+        d[m.group(1).lower()] = m.group(2) if m.group(2) is not None else m.group(3)
+    return d
+
+
+def texte_visible(html_interne):
+    """Texte visible d'un element, tags internes retires, espaces normalises."""
+    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html_interne)).strip()
+
+
+def elements_interactifs(html):
+    """(tag, attrs, disabled, texte, position) pour chaque <button> et <a>.
+
+    Regex non recursive : suffisant tant que <button>/<a> ne s'imbriquent pas les
+    uns dans les autres, ce qui est la convention du gabarit (contrat-technique.md).
+    """
+    out = []
+    for m in re.finditer(r"<(button|a)\b([^>]*)>(.*?)</\1>", html, re.I | re.S):
+        src_attrs = m.group(2)
+        out.append({
+            "tag": m.group(1).lower(),
+            "attrs": attributs(src_attrs),
+            "disabled": bool(re.search(r"\bdisabled\b", src_attrs, re.I)),
+            "texte": texte_visible(m.group(3)),
+            "pos": m.start(),
+        })
+    return out
+
+
+def cible_de(element):
+    """Cible explicite d'un element interactif (C15), ou None si absente.
+
+    Convention : data-action="<verbe-objet>" en premier (elle nomme l'action
+    independamment du routage), sinon un href reel (ni "#" seul, ni javascript:),
+    sinon type="submit" pour un bouton de formulaire.
+    """
+    if element["disabled"]:
+        return "disabled"
+    attrs = element["attrs"]
+    action = (attrs.get("data-action") or "").strip()
+    if action:
+        return "data-action:%s" % action
+    href = (attrs.get("href") or "").strip()
+    if href and href != "#" and not href.lower().startswith("javascript:"):
+        return "href:%s" % href
+    if element["tag"] == "button" and (attrs.get("type") or "").strip().lower() == "submit":
+        return "submit"
+    return None
+
+
+def revocation_du_mouvement(chemin):
+    """C4 mouvement reduit : DELEGUE a oracle-motion R10 (TF-0321).
+
+    Le controle local etait un `grep prefers-reduced-motion` en avertissement. Deux
+    defauts : il validait un bloc qui ne neutralise rien (une revocation non cablee),
+    et il ne bloquait jamais. Plutot que d'entretenir un troisieme controle divergent
+    (oracle-motion R10, oracle-mobile M6, celui-ci), la question est posee a l'oracle
+    qui la juge, avec ses fixtures a double sens, et son verdict est repris en
+    BLOQUANT sous le critere C4.
+
+    Seule R10 est reprise : les neuf autres regles d'oracle-motion sont juges de
+    plein droit dans run-oracles-design, et les remonter ici elargirait ce controle
+    de parcours a un domaine qui n'est pas le sien.
+
+    Retourne (findings, motif_non_juge). Node absent ou sortie illisible => aucun
+    finding et un motif declare : un controle qui ne peut pas s'executer le dit, il
+    ne rend pas PASS par defaut.
+    """
+    if not os.path.exists(ORACLE_MOTION):
+        return [], ("revocation du mouvement (C4) - oracle-motion introuvable a %s : "
+                    "NON JUGEE, ni refusee ni validee" % ORACLE_MOTION)
+    try:
+        r = subprocess.run([  # noqa: S603 - chemin resolu, pas d'entree utilisateur
+            "node", ORACLE_MOTION, chemin, "--json-only"],
+            capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError) as e:
+        return [], ("revocation du mouvement (C4) - oracle-motion non executable "
+                    "(%s : %s) : NON JUGEE" % (type(e).__name__, e))
+    try:
+        sortie = json.loads((r.stdout or "").strip())
+    except ValueError:
+        return [], ("revocation du mouvement (C4) - sortie d'oracle-motion illisible "
+                    "(exit %s) : NON JUGEE" % r.returncode)
+    findings = []
+    for f in sortie.get("findings") or []:
+        if f.get("regle") != "R10":
+            continue
+        findings.append({
+            "critere": "C4", "gravite": "bloquant", "ou": f.get("where") or "motion",
+            "constat": "%s [oracle-motion R10]" % f.get("msg", "revocation du mouvement refusee"),
+        })
+    return findings, None
+
+
+def controler(chemin, plafond_mo):
+    findings = []
+    html = lire(chemin)
+    # Scan de balisage (C2 declare, C15) : sur le DOM ecrit, scripts decapes.
+    # Tout le reste (routage JS, bascule de theme, media queries) continue de se
+    # juger sur la source complete.
+    balisage = decaper_hors_dom(html)
+
+    # C3a - poids
+    taille_mo = os.path.getsize(chemin) / (1024 * 1024)
+    if taille_mo > plafond_mo:
+        findings.append({
+            "critere": "C3", "gravite": "bloquant", "ou": chemin,
+            "constat": "poids %.2f Mo > plafond %.1f Mo" % (taille_mo, plafond_mo),
+        })
+
+    # C3b - autonomie reseau
+    externes = ressources_externes(html)
+    if externes:
+        findings.append({
+            "critere": "C3", "gravite": "bloquant", "ou": chemin,
+            "constat": "%d ressource(s) externe(s) : %s" % (len(externes), ", ".join(externes[:5])),
+        })
+
+    # C2 - bijection menu <-> ecrans
+    declarees, implementees = routes_declarees(balisage), routes_implementees(html)
+    orphelines = [r for r in declarees if r not in implementees]
+    if orphelines:
+        findings.append({
+            "critere": "C2", "gravite": "bloquant", "ou": "navigation",
+            "constat": "route(s) annoncee(s) sans ecran : %s" % ", ".join(orphelines[:10]),
+        })
+    if not declarees:
+        findings.append({
+            "critere": "C2", "gravite": "avertissement", "ou": "navigation",
+            "constat": "aucune route hash detectee - parcours non verifiable par script",
+        })
+
+    # C16 - structure multi-ecrans au socle (TF-1776, lot Produit-83 du 15/10/2026).
+    # check_html juge la maquette comme une page : plus de trois h2 sans sommaire, L25
+    # bloquante ; un h1 par ecran, « il en faut exactement une ». L'issue existe au socle
+    # (TF-1626) : la navigation entre ecrans en barre d'onglets role="tablist", un onglet
+    # role="tab" par ecran qui vise sa section (aria-controls), un seul h1 dans le chrome.
+    # Avertissement ici, la regle bloquante vit au socle : ce controle l'annonce avant lui.
+    if len(declarees) >= 4 and not re.search(r'role\s*=\s*["\']tablist["\']', balisage, re.I):
+        findings.append({
+            "critere": "C16", "gravite": "avertissement", "ou": "navigation",
+            "constat": "%d ecrans navigues sans barre d'onglets role=\"tablist\" - check_html L25 "
+                       "refusera la maquette (sommaire exige au-dela de trois chapitres) ; "
+                       "geste : contrat-technique.md, Navigation entre ecrans" % len(declarees),
+        })
+    h1_maquette = len(re.findall(r"<h1[\s>]", balisage, re.I))
+    if h1_maquette > 1:
+        findings.append({
+            "critere": "C16", "gravite": "avertissement", "ou": "titres",
+            "constat": "%d <h1> dans le balisage - check_html exige un h1 unique : le titre de "
+                       "l'application dans le chrome, un h2 par ecran" % h1_maquette,
+        })
+
+    # C6 - bandeau de donnees de demonstration
+    if not re.search(r"d[ée]monstration|donn[ée]es fictives|non contractuel", html, re.I):
+        findings.append({
+            "critere": "C6", "gravite": "bloquant", "ou": chemin,
+            "constat": "aucune mention de donnees de demonstration",
+        })
+
+    # Deux themes
+    a_bascule = bool(re.search(r"data-theme|classList\.toggle\(\s*['\"]dark", html))
+    # R-30 du pilot (clair par defaut strict, amendement TF-0158) : le sombre se CHOISIT par la
+    # bascule et se declare sous [data-theme="dark"]. Un @media (prefers-color-scheme: dark) ne
+    # compte plus comme styles sombres (check_html G1 le refuse) et se signale (suite TF-1771).
+    css_actif = re.sub(r"/\*.*?\*/", " ", re.sub(r"<!--.*?-->", " ", html, flags=re.S), flags=re.S)
+    a_sombre = bool(re.search(r"\[data-theme\s*=\s*['\"]?dark", css_actif))
+    if not (a_bascule and a_sombre):
+        findings.append({
+            "critere": "C1", "gravite": "bloquant", "ou": "themes",
+            "constat": "theme sombre incomplet (bascule=%s, styles [data-theme=\"dark\"]=%s)" % (a_bascule, a_sombre),
+        })
+    if re.search(r"prefers-color-scheme\s*:\s*dark", css_actif):
+        findings.append({
+            "critere": "C1", "gravite": "avertissement", "ou": "themes",
+            "constat": "auto-sombre herite de l'OS : @media (prefers-color-scheme: dark) - R-30 (clair "
+                       "par defaut strict) le retire et check_html G1 le refuse ; declarer le sombre "
+                       "sous :root[data-theme=\"dark\"] seul",
+        })
+
+    # Plancher d'accessibilite decidable statiquement
+    # C4 mouvement reduit : plus de grep local, l'oracle qui juge le mouvement tranche.
+    findings_motion, motif_motion = revocation_du_mouvement(chemin)
+    findings.extend(findings_motion)
+    non_juge = (NON_JUGE + [motif_motion]) if motif_motion else NON_JUGE
+    if not re.search(r"@media\s+print", html):
+        findings.append({"critere": "C1", "gravite": "avertissement", "ou": "print",
+                         "constat": "feuille @media print absente"})
+    if not re.search(r'<html[^>]*\blang\s*=', html, re.I):
+        findings.append({"critere": "C4", "gravite": "avertissement", "ou": "<html>",
+                         "constat": "attribut lang absent"})
+    if not re.search(r'name\s*=\s*["\']viewport', html, re.I):
+        findings.append({"critere": "C1", "gravite": "bloquant", "ou": "<head>",
+                         "constat": "meta viewport absente - responsive impossible"})
+
+    # Breakpoints couverts
+    largeurs = {int(m) for m in re.findall(r"max-width\s*:\s*(\d+)px", html)}
+    if len(largeurs) < 2:
+        findings.append({"critere": "C1", "gravite": "avertissement", "ou": "css",
+                         "constat": "moins de 2 breakpoints detectes"})
+
+    # C15 - un CTA = une cible (RD-4, generalise)
+    elements = elements_interactifs(balisage)
+    sans_cible = [e for e in elements if cible_de(e) is None]
+    if sans_cible:
+        exemples = sorted({
+            "%s <%s>" % (e["texte"][:40] if e["texte"] else "(sans libelle)", e["tag"])
+            for e in sans_cible
+        })
+        findings.append({
+            "critere": "C15", "gravite": "bloquant", "ou": "cta",
+            "constat": "%d element(s) interactif(s) sans cible explicite "
+                       "(ni href reel, ni data-action, ni type=submit) : %s" % (
+                           len(sans_cible), ", ".join(exemples[:8])),
+        })
+
+    # Coherence "meme libelle => meme cible". Delimiter les ecrans exige un rendu
+    # reel (JS de routage non interprete ici) : approxime a l'echelle du fichier,
+    # donc en avertissement - une reutilisation legitime d'un libelle entre deux
+    # ecrans distincts s'y signalerait aussi, a trancher par revue humaine.
+    par_libelle = {}
+    for e in elements:
+        cible = cible_de(e)
+        if cible in (None, "disabled"):
+            continue
+        libelle = e["texte"].strip().lower()
+        if not libelle:
+            continue
+        par_libelle.setdefault(libelle, set()).add(cible)
+    incoherences = [
+        "« %s » -> %s" % (libelle, " / ".join(sorted(cibles)))
+        for libelle, cibles in par_libelle.items() if len(cibles) > 1
+    ]
+    if incoherences:
+        findings.append({
+            "critere": "C15", "gravite": "avertissement", "ou": "cta",
+            "constat": "libelle(s) identique(s) a cibles divergentes - verifier qu'il "
+                       "s'agit bien d'ecrans distincts, sinon incoherence a corriger : "
+                       "%s" % "; ".join(incoherences[:5]),
+        })
+
+    # RD-5 - favicon obligatoire, inline en data:
+    favicon = re.search(r'<link\b[^>]*\brel\s*=\s*["\'][^"\']*\bicon\b[^"\']*["\'][^>]*>', html, re.I)
+    if not favicon:
+        findings.append({
+            "critere": "C1", "gravite": "bloquant", "ou": "<head>",
+            "constat": "favicon absente - <link rel=\"icon\"> obligatoire, inline en data:",
+        })
+    else:
+        href_favicon = attributs(favicon.group(0)).get("href", "")
+        if not href_favicon.lower().startswith("data:"):
+            findings.append({
+                "critere": "C1", "gravite": "bloquant", "ou": "<head>",
+                "constat": "favicon non inline : href=%s (attendu data:...)" % href_favicon[:60],
+            })
+
+    # RD-5 - saisie de date : input type="date" natif, jamais de datepicker maison
+    if re.search(r"\b(datepicker|date-picker|flatpickr|pikaday|air-datepicker)\b", html, re.I):
+        findings.append({
+            "critere": "C1", "gravite": "bloquant", "ou": "saisie de date",
+            "constat": "datepicker maison detecte - input type=\"date\" natif obligatoire au MVP",
+        })
+    for m in re.finditer(r"<input\b([^>]*)>", html, re.I):
+        attrs_input = attributs(m.group(1))
+        type_input = (attrs_input.get("type") or "text").lower()
+        if type_input == "date":
+            continue
+        indices = " ".join(v for k, v in attrs_input.items() if k in ("id", "name", "placeholder", "aria-label") and v)
+        if re.search(r"\bdate\b", indices, re.I):
+            findings.append({
+                "critere": "C1", "gravite": "bloquant", "ou": "saisie de date",
+                "constat": "champ de date sans type=\"date\" natif (type=%s, indices=%s)" % (
+                    type_input, indices[:60]),
+            })
+
+    bloquants = [f for f in findings if f["gravite"] == "bloquant"]
+    return {
+        "outil": "check_maquette",
+        "fichier": os.path.basename(chemin),
+        "verdict": "FAIL" if bloquants else "PASS",
+        "mesures": {
+            "poids_mo": round(taille_mo, 2),
+            "plafond_mo": plafond_mo,
+            "routes_declarees": len(declarees),
+            "ressources_externes": len(externes),
+            "breakpoints": sorted(largeurs),
+            "cta_sans_cible": len(sans_cible),
+        },
+        "findings": findings,
+        "non_juge": non_juge,
+    }
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("fichier")
+    ap.add_argument("--max-mo", type=float, default=PLAFOND_MO_DEFAUT)
+    ap.add_argument("--json-only", action="store_true")
+    args = ap.parse_args()
+
+    if not os.path.isfile(args.fichier):
+        print(json.dumps({"verdict": "SKIP", "raison": "fichier introuvable: %s" % args.fichier}))
+        return 2
+
+    try:
+        rapport = controler(args.fichier, args.max_mo)
+    except Exception as exc:  # noqa: BLE001 - le contrat exige un exit 2 explicite
+        print(json.dumps({"verdict": "SKIP", "raison": "erreur de controle: %s" % exc}))
+        return 2
+
+    print(json.dumps(rapport, ensure_ascii=False, indent=2))
+    if not args.json_only:
+        print("\n%s - %s : %d finding(s), poids %.2f Mo" % (
+            rapport["verdict"], rapport["fichier"],
+            len(rapport["findings"]), rapport["mesures"]["poids_mo"]), file=sys.stderr)
+        for f in rapport["findings"]:
+            print("  [%s] %s (%s) - %s" % (
+                f["gravite"], f["critere"], f["ou"], f["constat"]), file=sys.stderr)
+        print("  non juge : %d point(s) delegues" % len(NON_JUGE), file=sys.stderr)
+
+    return 1 if rapport["verdict"] == "FAIL" else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,151 @@
+---
+name: critique-le-design
+description: "Audit exécuté d'un design produit — page, maquette, écran, capture ou URL — sur une grille en huit dimensions notées, adossée à des oracles lancés et non à une lecture de code : verdict en trois niveaux (Livrer, Renforcer, Refondre), constats à preuve typée, et top cinq des corrections en impact fois effort avec réécritures avant/après. Use when / déclencher dès que l'utilisateur demande de relire, critiquer, auditer, noter, challenger ou renforcer un design, demande ce qui cloche visuellement, si c'est prêt à montrer au client, si ça fait généré par IA, ou comment améliorer une interface existante. Ne pas déclencher pour produire ou refondre la maquette elle-même (→ ameliore-le-design), figer des tokens (→ systeme-de-marque), arbitrer entre directions concurrentes (→ studio-de-direction), auditer un skill (→ ameliore-un-skill), ni challenger la pertinence d'une solution (→ contre-expertise)."
+version: 1.7.0
+---
+
+# Critique le design
+
+Juge un design **déjà produit**. Ne le corrige pas : il produit le relevé et les
+corrections priorisées, le commanditaire décide.
+
+## Ce que ce skill apporte en propre
+
+Loi de qualité et registre → `quality-oracles`.
+Règles de design → `impeccable`.
+Détection déterministe → `oracle-slop`, `oracle-tokens`, `oracle-mobile`, `oracle-images`, `oracle-restitution`, `oracle-saisie`, `oracle-panneau-tache`, et `oracle-document-imprime` pour un PPTX ou un PDF.
+Rendu réel → `render_page.py` (`factory-page-html`).
+
+Reste en propre : la grille en huit dimensions, la règle de verdict, et la grammaire
+de restitution — score, red flags, top 5 en avant/après.
+
+## Quick start
+
+```
+1. Cadrage      → cible (web|mobile), thèmes disponibles, tokens fournis ou non
+2. Oracles      → references/grille.md §Enchaînement — TOUS lancés avant toute lecture
+3. Notation     → references/grille.md, 8 dimensions /5 (D8 seulement si restitution)
+4. Red flags    → un seul suffit à plafonner le verdict
+5. Restitution  → references/restitution.md
+```
+
+## Règle cardinale
+
+**Aucun constat sans preuve exécutée.** Un design ne se juge pas en lisant son
+code : on lance les oracles, on lit les verdicts, on cite les lignes. Une dimension
+dont l'oracle n'a pas pu tourner est notée `non_juge` — jamais estimée, jamais
+approuvée par défaut.
+
+C'est la différence entre cet audit et une relecture : la relecture produit un avis,
+l'audit produit un relevé opposable.
+
+## Règle cardinale, second volet — ce qui a été DEMANDÉ (TF-0494, 22/08/2026)
+
+**Aucun constat sans preuve** dit comment juger le livrable. Il ne dit rien de ce qui avait été
+demandé, et ce sont deux choses différentes : *un livrable peut passer tous ses oracles et rater
+un point sur dix-sept*, parce qu'aucun oracle ne sait ce qui avait été demandé.
+
+*Fait fondateur.* Sur **dix-sept points de correction reçus en une fois**, seize ont été traités.
+Le dix-septième n'a été découvert que parce que **le client l'a redemandé**, avec un « Pourquoi ? ».
+
+**Dès que la demande compte plus d'un point, la revue porte sa liste de contrôle** — un tableau
+*point demandé / correction apportée / preuve*, rempli **avant remise**. Le point se cite dans les
+**mots du demandeur**, jamais reformulé : une reformulation est déjà une interprétation, et c'est
+en reformulant qu'on perd le point qu'on n'a pas compris.
+
+**Un point sans preuve est un point non traité.** Un point légitimement écarté n'est pas interdit —
+ce qui est interdit, c'est qu'il DISPARAISSE : il porte `NON TRAITÉ — <motif>`. Même doctrine que
+le bloc « non traité » d'une restitution : *un reste sans motif est un silence*.
+
+Gabarit et bornes : `references/liste-de-controle-demande.md`. **Contrôle exécuté** :
+`node oracles\run-oracles-design.mjs --liste-demande <REVUE.md>` — D1 une ligne sans preuve ni motif · D2 le
+compte annoncé ne colle pas au nombre de lignes (*le défaut du 22/08 en une soustraction*) ·
+D3 une preuve qui n'en est pas une (« vérifié », « fait », « ok » seuls) · D4 un point non cité
+entre guillemets, mot pour mot (TF-1940) · D5 une demande qui désigne un modèle (« comme pour X »)
+sans critère nommé : le même geste joué sur X et sur le livrable, comparé ; un contrôle ajouté par le
+livrable et absent de la demande s'écrit `AJOUT — …`. Sans section, l'oracle
+rend **SANS OBJET** : tous les livrables ne répondent pas à une demande à points, et en inventer
+une serait pire.
+
+## Deux modes
+
+Une critique se rend en l'un de deux modes, selon ce que la demande attend : chaque ligne dit la sortie du mode et quand le choisir.
+
+| Mode | Sortie | Quand |
+|---|---|---|
+| `complet` (défaut) | rapport Markdown + relevé JSON des oracles | avant envoi client, revue de fin de lot |
+| `express` | score et top 3 en conversation | vérification rapide en cours de travail |
+
+Le mode `express` lance **les mêmes oracles**. Il raccourcit la restitution, jamais
+le contrôle.
+
+## Formats couverts, et formats qui ne le sont pas (TF-2336, TF-2386)
+
+Les oracles de ce skill lisent du HTML : une page, une maquette, une instance servie.
+Sur un **deck PPTX** ou un **PDF**, `oracle-slop`, `oracle-tokens`, `oracle-taste`,
+`oracle-images`, `oracle-a11y` et `render_page.py` rendent « non exécuté, entrée HTML
+seulement » : la revue les **déclare** `non_juge` en tête de rapport. Ces supports ont leur
+variante : `node oracles\oracle-document-imprime.mjs <fichier.pptx|.pdf>` joue DP1 (forme
+étroite accolée à un bloc, le motif S1), DP2 (contraste), DP3 (débordement) et, sur un PDF,
+DP4 (équilibre des colonnes) et DP5 (vide sous le contenu). Une page HTML dont la mise en
+page imprimée compte s'y joue aussi : l'oracle l'imprime en PDF d'abord (TF-2385). Ce que la
+variante ne juge pas reste au `non_juge` de sa sortie : le rendu réel d'un PPTX (exporter en
+PDF, puis rejouer), le texte sur une image, la lisibilité sémantique du PDF. Si le relecteur
+applique encore une partie de la grille à la main, il **le dit** : une grille appliquée à la
+main sans le dire se lit comme une revue outillée. *Le fait* : le 29/09/2026, le relecteur du
+deck d'une propale a mesuré à la main le motif S1 sur la géométrie du PPTX et écrit ses
+propres scripts de contraste et de débordement (ledger du produit, seq 441).
+
+## Les sept dimensions
+
+La critique note sept dimensions ; chaque ligne dit ce que la dimension mesure et l'oracle ou la lecture qui la juge.
+
+| # | Dimension | Ce qu'elle mesure | Adossée à |
+|---|---|---|---|
+| D1 | Intention | direction lisible, ancrée dans le sujet, non générique | `oracle-slop` + lecture |
+| D2 | Système | tokens tracés, parité des thèmes, échelle tenue | `oracle-tokens` |
+| D3 | Hiérarchie | typographie, densité, rythme d'espacement | `render_page.py` + lecture |
+| D4 | Accessibilité | contraste, focus, clavier, sémantique | `oracle-a11y` + `render_page.py` V2 |
+| D5 | Adaptation | breakpoints, tactile, orientation, **tenue jusqu'au 4K — un écran dont le rendu n'a pas été mesuré à 2560 et 3840 n'est pas jugé adapté** | `oracle-mobile` + `render_page.py` (7 largeurs, E5) |
+| D6 | Interaction | états des composants, retours, erreurs, vides, **champs typés/proposés/bornés/atteignables/compilables**, **choix exclusif posé avant ses champs** | `oracle-saisie` SA1–SA7, SA8 en avertissement + `oracle-panneau-tache` PA1–PA7 + parcours exécuté |
+| D7 | Contenu | libellés, erreurs, états vides, constance du vocabulaire | `oracle-textes-application` T4-1…T4-4 (plancher E-12, joué par `run-oracles-design.mjs <page.html> --oracle textes-application`) + lecture |
+
+Détail des barèmes, red flags et règle de verdict : `references/grille.md`.
+
+## Références
+
+Chaque référence s'ouvre au moment que sa ligne nomme, pas avant.
+
+| Fichier | À lire quand |
+|---|---|
+| `references/grille.md` | avant de noter quoi que ce soit |
+| `references/restitution.md` | pour produire le rapport |
+
+## Pièges connus
+
+- **Noter avant d'exécuter.** Le symptôme : une note en D4 sans verdict d'oracle
+  joint. C'est un avis déguisé en audit.
+- **Le 3/5 de confort.** Une dimension notée 3 sans constat précis signifie qu'elle
+  n'a pas été instruite.
+- **Confondre goût et défaut.** « Je n'aime pas cette couleur » n'est pas un
+  constat. « Contraste 3.1:1 en thème sombre, ligne 214 » en est un.
+- **Top 5 sans effort estimé.** Une liste de corrections sans coût n'est pas
+  priorisée : c'est une liste de courses.
+- **Cinq corrections inventées pour remplir le top 5.** Au verdict Livrer calculé, « Rien à
+  changer » est une sortie valide, avec sa preuve ; une seconde passe compare les deux
+  versions et dit ce que l'ajout apporte (`references/grille.md` §Règle de verdict). La
+  loi n° 3 reste entière : ce qui manque se propose une fois, jamais par omission.
+
+## Troisième mode — critique d'implémentation (aval)
+
+Après l'étape development d'un run forge : comparer le produit implémenté à SA promesse design
+(tokens, écrans, états, CTA, voix du run) et produire des **retours consommables par le
+développement**. Entrées doubles (artefacts design du run + instance servie ou gabarits du
+produit), huit contrôles avec preuve — dont l'exploitabilité rejouée sur une instance alimentée
+au volume réel (`oracle-exploitabilite`, `--etat-connexion` derrière une connexion) —,
+restitution en écarts ancrés prêts pour le ledger — tout est dans `references/critique-implementation.md`. Frontière : le câblage fonctionnel des
+affordances reste à forge-tests (pan `interface`) ; ici on juge la forme contre la promesse.
+Sans artefacts de référence, le mode dégrade en critique classique et le déclare. La promesse d'un
+point de la demande humaine **cite la demande mot pour mot**, un « comme pour X » devient un critère
+nommé (le même geste joué sur X et sur le livrable), un ajout non demandé se déclare (TF-1940) :
+`references/critique-implementation.md`.

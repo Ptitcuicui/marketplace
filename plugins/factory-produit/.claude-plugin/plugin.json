@@ -1,0 +1,12 @@
+{
+  "name": "factory-produit",
+  "displayName": "Factory – Produit",
+  "description": "Mallette produit Factory : run complet et run de version, surface fonctionnelle, exigences et vues, critique et amélioration du design, direction artistique, intégration de modèles d'IA, déploiement et restauration sous GO humain.",
+  "author": {
+    "name": "Ptitcuicui"
+  },
+  "license": "MIT",
+  "dependencies": [
+    "factory-socle"
+  ]
+}

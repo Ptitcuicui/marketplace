@@ -2,61 +2,71 @@
   "quality-oracles": {
     "depot": "factory-forge-agents",
     "chemin": ".claude/skills/quality-oracles",
-    "commit": "099ccb94766a060b0042e77344d8e6b83349f196"
+    "commit": "200f72de09668324bc4d891922e1eff5e0d51e77"
   },
   "factory-page-html": {
     "depot": "factory-forge-agents",
     "chemin": ".claude/skills/factory-page-html",
-    "commit": "099ccb94766a060b0042e77344d8e6b83349f196"
+    "commit": "200f72de09668324bc4d891922e1eff5e0d51e77"
   },
   "factory-communication": {
     "depot": "factory-forge-agents",
     "chemin": ".claude/skills/factory-communication",
-    "commit": "099ccb94766a060b0042e77344d8e6b83349f196"
+    "commit": "200f72de09668324bc4d891922e1eff5e0d51e77"
   },
   "la-barre": {
     "depot": "factory-forge-agents",
     "chemin": ".claude/skills/la-barre",
-    "commit": "099ccb94766a060b0042e77344d8e6b83349f196"
+    "commit": "200f72de09668324bc4d891922e1eff5e0d51e77"
   },
   "la-boucle": {
     "depot": "factory-forge-agents",
     "chemin": ".claude/skills/la-boucle",
-    "commit": "099ccb94766a060b0042e77344d8e6b83349f196"
+    "commit": "200f72de09668324bc4d891922e1eff5e0d51e77"
   },
   "prompt-analyzer-l99": {
     "depot": "factory-forge-agents",
     "chemin": ".claude/skills/prompt-analyzer-l99",
-    "commit": "099ccb94766a060b0042e77344d8e6b83349f196"
+    "commit": "200f72de09668324bc4d891922e1eff5e0d51e77"
   },
   "contre-expertise": {
     "depot": "factory-forge-agents",
     "chemin": ".claude/skills/contre-expertise",
-    "commit": "099ccb94766a060b0042e77344d8e6b83349f196"
+    "commit": "200f72de09668324bc4d891922e1eff5e0d51e77"
   },
   "pilote-de-mission": {
     "depot": "factory-forge-agents",
     "chemin": ".claude/skills/pilote-de-mission",
-    "commit": "099ccb94766a060b0042e77344d8e6b83349f196"
+    "commit": "200f72de09668324bc4d891922e1eff5e0d51e77"
   },
   "ou-en-suis-je": {
     "depot": "factory-forge-agents",
     "chemin": ".claude/skills/ou-en-suis-je",
-    "commit": "099ccb94766a060b0042e77344d8e6b83349f196"
+    "commit": "200f72de09668324bc4d891922e1eff5e0d51e77"
   },
   "experts-forge": {
     "depot": "factory-forge-agents",
     "chemin": ".claude/skills/experts-forge",
-    "commit": "099ccb94766a060b0042e77344d8e6b83349f196"
+    "commit": "200f72de09668324bc4d891922e1eff5e0d51e77"
   },
   "accueil-factory": {
     "depot": "factory-forge-agents",
     "chemin": ".claude/skills/accueil-factory",
-    "commit": "099ccb94766a060b0042e77344d8e6b83349f196"
+    "commit": "200f72de09668324bc4d891922e1eff5e0d51e77"
+  },
+  "systeme-de-marque": {
+    "depot": "factory-forge-design",
+    "chemin": "skills/systeme-de-marque",
+    "commit": "d1665cc3747d4504d9e94051dc6ac4591754e370"
+  },
+  "mandat": {
+    "depot": "factory-forge-agents",
+    "chemin": ".claude/skills/mandat",
+    "commit": "200f72de09668324bc4d891922e1eff5e0d51e77"
   },
   "agents": {
     "depot": "factory-pilot",
     "chemin": ".claude/agents",
-    "commit": "72bb3f50722adab41c98d0a44d6de4385e488e59"
+    "commit": "35655d1320b58e20450887da1dd6ca0171188bef"
   }
 }

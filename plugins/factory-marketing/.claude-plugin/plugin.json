@@ -1,0 +1,12 @@
+{
+  "name": "factory-marketing",
+  "displayName": "Factory – Marketing",
+  "description": "Mallette marketing Factory : étude SEO et GEO d'un site, animation de réseaux sociaux avec accord humain par lot, clip de présentation.",
+  "author": {
+    "name": "Ptitcuicui"
+  },
+  "license": "MIT",
+  "dependencies": [
+    "factory-socle"
+  ]
+}

@@ -1,0 +1,217 @@
+# Critères de sortie et restitution
+
+## Critères binaires, figés avant la première génération
+
+Chaque ligne donne un critère de sortie, la preuve qui l'établit et ce qu'un échec coûte : bloquant ou avertissement.
+
+| # | Critère | Moyen de preuve | Verdict |
+|---|---|---|---|
+| C1 | Zéro débordement, zéro chevauchement, contraste conforme | `render_page.py` (V1–V7), **7 breakpoints (3840 → 390) × 2 thèmes** | bloquant |
+| C2 | Bijection menu ↔ écrans, aucun lien mort | `check_maquette.py` | bloquant |
+| C3 | Poids ≤ 10 Mo, aucune requête réseau | `check_maquette.py` | bloquant |
+| C4 | Navigation clavier de bout en bout | parcours scripté ou manuel tracé | bloquant |
+| C5 | États vide / chargement / erreur atteignables | parcours | bloquant |
+| C6 | Aucune donnée chiffrée non marquée | `check_maquette.py` + `<socle-factory>/skills/quality-oracles/scripts/oracle-claims.mjs` | bloquant |
+| C7 | Nommage du fichier conforme | `<socle-factory>/skills/quality-oracles/scripts/oracle-nommage.mjs` | bloquant |
+| C8 | Direction visuelle non générique | jugement argumenté ou arbitrage commanditaire | avertissement |
+| C9 | Aucun marqueur de design généré (S1–S12) | `oracle-slop` | bloquant |
+| C10 | Couleurs et polices tracées aux tokens, parité clair/sombre (T1–T8) | `oracle-tokens` | bloquant |
+| C11 | Contrat d'usage tactile tenu (M1–M11) | `oracle-mobile` — **si cible mobile** | bloquant |
+| C12 | Visuels générés tracés et plafonnés (I1–I8) | `oracle-images` — **si images générées** | bloquant |
+| C13 | Les 3 parcours de bout en bout sont cliquables, trace jointe | parcours exécuté | bloquant |
+| C14 | Textes d'application au plancher E-12 : erreur = cause + réparation, état vide = invitation à agir, libellé = ce que la personne contrôle (T4-1…T4-4) | `oracle-textes-application` — **joué sur la maquette AVANT C15** | bloquant |
+| C15 | Un CTA = une cible : `href` réel, `data-action` ou `type=submit` ; même libellé même écran ⇒ même cible | `check_maquette.py` | bloquant |
+| C16 | Champs **typés, proposés, bornés, atteignables, compilables** (SA1–SA7, SA8 en avertissement) | `oracle-saisie` — **si le document porte des champs** | bloquant |
+| C17 | Choix exclusif posé avant ses champs, panneau de tâche hors de sa liste, motif de création justifié (PA1–PA7) | `oracle-panneau-tache` — **si un panneau de création est balisé** | bloquant |
+
+`check_maquette.py` juge ce qui est décidable sur le fichier. Ce qui exige un
+rendu réel est délégué à `render_page.py` (V1–V7), **installé le 04/08/2026** dans
+`<socle-factory>/skills/factory-page-html/scripts/` — il n'y était pas, alors que le
+registre global le déclarait déjà. `check_html.py`, qui l'accompagne, est un
+contrôle statique de charte, d'accessibilité structurelle et d'impression : il ne
+rend pas la page et ne mesure ni débordement, ni chevauchement, ni contraste rendu.
+
+Si `render_page.py` ou Playwright venaient à manquer, C1 se déclare `non_juge` avec
+la raison — **jamais approuvé par lecture du code**.
+
+```bash
+python <socle-factory>/skills/factory-page-html/scripts/render_page.py <fichier.html>        --widths 3840,2560,1920,1440,1024,768,390 --output json
+```
+
+Sept largeurs, pas cinq : la conception se fait à **1920 px** (largeur de référence,
+règle E5 du pilot) et la vérification monte jusqu'au **4K (3840 px)**. 1440 et 1024
+restent dans la grille. Contrat : `contrat-technique.md`, ligne « Breakpoints ».
+
+Le thème sombre se mesure sur une copie dont `data-theme` vaut `dark` : sans ça,
+seul le thème clair est rendu et V2 ne dit rien du second.
+
+C11 et C12 sont **conditionnels** : hors cible mobile ou sans visuel généré, ils
+sont reportés `SANS OBJET` avec leur raison — jamais `PASS` par défaut. C16 et C17
+le sont aussi, et pour la même raison : un document sans champ de saisie n'a pas de
+champ mal typé, un document sans panneau de création balisé n'a pas de branche
+exclusive. `run-oracles-design.mjs` détecte les deux par contenu (`<input>`,
+`<textarea>`, `<select>` pour C16 ; `data-panneau-tache` ou `data-branche` pour C17)
+et déclare le `SANS OBJET` dans son `non_juge`.
+
+**C14 — les textes d'application, joués AVANT C15.** La numérotation n'est pas
+décorative : C15 vérifie qu'un CTA a une cible, C14 vérifie que son LIBELLÉ nomme
+quelque chose. Un « Valider » parfaitement câblé passe C15 et rate C14. L'ordre est
+donc : on juge le texte, puis le câblage.
+
+```bash
+node oracles/run-oracles-design.mjs <maquette.html> --oracle textes-application
+```
+
+Sur un `.html`, l'oracle extrait les littéraux de `placeholder`, `title`,
+`aria-label`, `alt`, le texte des `<button>`, `<label>`, `<option>` et celui des
+éléments `role="alert"`, `.error`, `.empty`, `[data-etat="vide"]`. Il lit aussi un
+fichier de chaînes extraites (`.json` plat ou imbriqué, `.arb`, `.po`,
+`.properties`) quand le produit en a un — c'est la forme qui sert chez
+forge-development. Il juge la **présence** de ce que E-12 exige ; la justesse du ton
+et la fidélité à la voix restent en `non_juge`, à la relecture et à l'arbitrage du
+commanditaire (`systeme-de-marque/references/voix.md`).
+
+Une maquette sans aucun état vide ni message d'erreur atteignable ne peut pas passer
+C14 : elle rate d'abord **C5**, qui les exige.
+
+C16 et C17 viennent des lots Produit-12 (TF-0736, TF-0739, TF-0707, TF-0708). Ils
+couvrent une classe de défaut que les critères précédents laissaient passer :
+l'affordance **existe et est câblée** — donc verte à l'audit d'interface — mais elle
+n'a ni valeur proposée, ni borne, ni surface de geste utile ; ou bien elle pose son
+choix exclusif au milieu des champs qu'il commande. Doctrine et balisage :
+`patterns-interaction.md`.
+
+## Enchaînement de contrôle
+
+Un seul point d'entrée. Il détecte les oracles applicables, les lance, et déclare
+en `SANS OBJET` ceux qui ne s'appliquent pas :
+
+```bash
+python scripts/check_maquette.py <fichier.html>
+node "$FORGE_DESIGN_ROOT/oracles/run-oracles-design.mjs" <fichier.html> [--mobile] [--tokens tokens.css] [--rendu]
+node "$FORGE_DESIGN_ROOT/oracles/run-oracles-design.mjs" <fichier.html> --oracle textes-application   # C14, AVANT C15
+```
+
+`FORGE_DESIGN_ROOT` est lu dans l'environnement, puis dans le `.env` de la forge,
+puis déduit du dossier parent du script. **Racine non résolue ⇒ exit 2 et verdict
+`SKIP`** : un contrôle qui ne trouve pas ses oracles ne se tait jamais.
+
+**Une maquette d'application passe `--maquette` (TF-2121).** Une page déclarée d'application
+(`<meta name="forge-type-page" content="application">`, ou portant `data-panneau-tache`, `data-branche`,
+`data-exigence`) échoue en X7 tant qu'aucune `--instance` n'est fournie : l'exploitabilité au volume
+réel n'a pas été jouée. Une maquette n'a pas d'instance par nature ; `--maquette` l'exempte et le dit
+au `non_juge` (« ce n'est pas un PASS de l'exploitabilité »). La même page, une fois implémentée,
+se juge avec `--instance` (critique d'implémentation, `critique-le-design`).
+
+Sans `--rendu` : `render_page.py` (V1–V7) et `oracle-a11y.py` restent `non_juge` —
+c'est au parcours de contrôle de les lancer à la main, sur les **deux** thèmes.
+Avec `--rendu` : si l'outillage est détecté (interpréteur Python désigné par
+`$FORGE_DESIGN_PYTHON`, sinon celui du PATH, sinon `.venv` sous la racine de la forge, avec
+le module `playwright` ; les deux scripts aux chemins canoniques), l'orchestrateur les lance
+lui-même — `render_page.py` sur le fichier fourni et sur une copie générée avec `data-theme="dark"`, puis
+`oracle-a11y.py` — et agrège leurs verdicts dans `oracles`. Outillage manquant ⇒
+`SKIP` motivé sur cette entrée, jamais une erreur ; les autres oracles continuent
+de rendre leur verdict normalement.
+
+Un produit dont `playwright` vit dans un environnement `uv` pose `$FORGE_DESIGN_PYTHON` sur son
+interpréteur : sans elle, `--rendu` rend `SKIP` (TF-2461, TF-2473). Depuis le dossier du produit,
+`uv run python -c "import sys; print(sys.executable)"` donne le chemin, que
+`$env:FORGE_DESIGN_PYTHON = '<chemin>'` (PowerShell) ou `export FORGE_DESIGN_PYTHON=<chemin>` (sh) pose
+avant de relancer ; le `SKIP` nomme la variable et cette commande.
+
+Un oracle indisponible — runtime absent, Playwright manquant, quota épuisé — se
+déclare en `non_juge`. Il ne se contourne pas par une approbation sur lecture de code.
+
+## Trace des parcours (C13)
+
+Un fichier `parcours.md` accompagne la maquette. Trois sections, une par parcours,
+chacune au format :
+
+```markdown
+## Parcours 2 — Produire : créer un dossier jusqu'à sa validation
+Routes traversées : #dossiers → #dossier-nouveau → #dossier-1042 → #dossier-1042/valider
+État non nominal rencontré : erreur de validation sur pièce jointe manquante (#dossier-1042, état « erreur »)
+Clavier : parcouru en Tab seul, focus visible à chaque étape
+Joué sur : maquette
+Exécuté le : 2026-08-04
+```
+
+Quatre exigences, sans lesquelles la trace ne vaut rien : les routes sont **celles du
+fichier** (vérifiables contre la table de routage par `check_maquette.py`), chaque
+parcours traverse **au moins un état non nominal**, la trace dit **sur quoi** elle a été
+jouée (maquette ou produit rendu — voir ci-dessous), et elle dit qu'elle a été
+exécutée, pas décrite. Un parcours qui ne montre que le chemin heureux ne démontre
+rien.
+
+### Ce que la maquette mono-fichier ne peut PAS prouver (TF-0875, 06/09/2026)
+
+Un panier rendu par le serveur s'est vidé après « Aide » puis « La carte » — quantité
+2 → 0, mesuré au navigateur sur qualif — alors que dix-huit pages passaient les oracles
+et que **C13 était 3/3 sur la maquette**. La maquette navigue par ancres ou par routeur
+JS : elle ne recharge JAMAIS le document, donc elle ne peut pas perdre un état saisi.
+Un parcours joué sur elle est aveugle à cette classe entière de défaut.
+
+Conséquence, et elle n'est pas négociable : **dès qu'un parcours traverse de la saisie
+puis une navigation, il est rejoué sur le PRODUIT RENDU**, pas seulement sur la maquette.
+La trace le dit — `Joué sur : maquette` ou `Joué sur : produit rendu (qualif, 06/09/2026)` —
+et une trace qui ne le dit pas est réputée jouée sur la maquette, donc non concluante pour
+la survie de l'état. `oracle-mobile` M7 juge en amont le SUPPORT déclaré ; il ne remplace
+pas ce parcours, il le rend exigible plus tôt.
+
+## Boucle
+
+Itération via `la-boucle`, bornée à 3 passes. Si un critère bloquant reste rouge
+au terme des 3 passes, escalader avec le relevé — ne pas requalifier le critère
+pour le faire passer.
+
+**Une passe de plus se compare à la précédente (D-133 (a), TF-2051).** Sur une
+maquette déjà passée, la 2e passe et les suivantes ne rejouent pas seulement les
+oracles : elles comparent la version précédente et la candidate, et écrivent ce que
+l'ajout apporte — quel critère de C1 à C17 progresse, quel oracle passe du rouge au
+vert —, mesuré quand le livrable s'y prête : poids du fichier, nombre d'écrans,
+d'états, d'écarts durs avant et après. Un ajout qui ne fait progresser aucun critère
+n'est pas un progrès et ne se livre pas comme tel ; un retrait qui ne casse aucun
+critère en est un.
+
+**« Rien à changer » est une sortie valide.** Une maquette dont tous les critères
+passent peut conclure qu'il n'y a rien à changer, et la boucle s'arrête sans passe de
+plus. La conclusion porte sa preuve : les oracles lancés avec leur verdict (`SKIP` et
+`SANS OBJET` compris), les constats lus, et la comparaison des deux versions. Ce n'est
+pas une échappatoire : un critère bloquant resté rouge n'est jamais « rien à changer »,
+c'est l'escalade ci-dessus.
+
+**Ce qui manque se propose toujours une fois (loi n° 3).** « Rien à changer » ne lève
+pas la loi n° 3 du pilot, *l'oubli n'existe pas* : la surface implicite absente (aide,
+onboarding, favicon, états vides) se propose une fois, ou s'écarte explicitement dans la
+note de partis pris, jamais par omission. Proposée à une passe, elle n'est pas
+re-proposée aux suivantes.
+
+## Restitution
+
+1. **Le fichier**, nommé selon la convention :
+   `Factory - Maquette {Client} - {Scope} - {AAAAMMJJ}{a,b,c…}.html`
+2. **La note de partis pris** : direction artistique retenue et pourquoi, 3 mots de
+   ton concrets, choix de navigation justifié, écrans produits sur modèle générique
+   faute de matière, hypothèses posées faute d'accès, conséquences assumées du
+   zéro-réseau, et **liste des visuels générés** avec leur modèle.
+3. **Le relevé des contrôles** : verdicts exécutés, y compris les `SKIP` et les
+   `SANS OBJET`, avec leur raison. Un `SKIP` reporté honnêtement vaut mieux qu'un
+   `PASS` supposé.
+4. **Ce que la maquette ne fait pas** : section obligatoire et non vide. Elle dit
+   l'écart entre ce qui est montré et ce qui resterait à construire. Sans elle, une
+   maquette qui « marche partout » se lit comme un produit déjà fait aux trois quarts.
+
+## Support de refonte — bornes dures
+
+La maquette part avec **trois artefacts, pas un de plus** : `tokens.css`,
+l'inventaire des composants, la carte des écrans.
+
+Ne sont **jamais** produits : spécification fonctionnelle, backlog, découpage en
+lots, planning, guide de passation développeur, code de production. La forge
+s'arrête au design ; au-delà, c'est de la construction de produit, hors périmètre.
+
+## Ce qui n'est jamais fait
+
+Juger le rendu depuis le code. Approuver un thème sombre sans l'avoir mesuré.
+Annoncer un poids sans l'avoir pesé. Livrer sans avoir ouvert le fichier.
+Cocher un critère dont l'oracle n'a pas été lancé.

@@ -3,14 +3,16 @@
   "marketplace": {
     "name": "factory",
     "description": "Factory : mallettes d'outils IA des consultants (skills, agents et contrôles de la factory)",
-    "owner": { "name": "Ptitcuicui" }
+    "owner": {
+      "name": "Ptitcuicui"
+    }
   },
   "substitutions": [],
   "plugins": [
     {
       "name": "factory-socle",
       "displayName": "Factory – Socle",
-      "description": "Socle commun Factory : contrôles qualité (oracles), pages HTML chartées, communication, amélioration de prompts, contre-expertise, pilotage de mission, boussole et accueil de la factory.",
+      "description": "Socle commun Factory : contrôles qualité (oracles), pages HTML chartées, communication, système de marque, amélioration de prompts, contre-expertise, pilotage de mission, run de mandat, boussole et accueil de la factory.",
       "skills": [
         "factory-forge-agents/.claude/skills/quality-oracles",
         "factory-forge-agents/.claude/skills/factory-page-html",
@@ -22,7 +24,9 @@
         "factory-forge-agents/.claude/skills/pilote-de-mission",
         "factory-forge-agents/.claude/skills/ou-en-suis-je",
         "factory-forge-agents/.claude/skills/experts-forge",
-        "factory-forge-agents/.claude/skills/accueil-factory"
+        "factory-forge-agents/.claude/skills/accueil-factory",
+        "factory-forge-design/skills/systeme-de-marque",
+        "factory-forge-agents/.claude/skills/mandat"
       ],
       "agents": "factory-pilot/.claude/agents",
       "extra": "outils/socle"
@@ -31,7 +35,9 @@
       "name": "factory-avant-vente",
       "displayName": "Factory – Conseil et avant-vente",
       "description": "Mallette conseil et avant-vente Factory : propales et revue de propale, réponse à appel d'offres, PowerPoint, Word et PDF chartés, schémas, revue de CV, plan d'amélioration, qualification des entrants.",
-      "dependencies": ["factory-socle"],
+      "dependencies": [
+        "factory-socle"
+      ],
       "skills": [
         "factory-forge-agents/.claude/skills/factory-propale",
         "factory-forge-agents/.claude/skills/factory-propale-review",
@@ -42,6 +48,66 @@
         "factory-forge-agents/.claude/skills/factory-cv-review",
         "factory-forge-agents/.claude/skills/plan-d-amelioration",
         "factory-forge-conception/skills/qualifie-l-entrant"
+      ]
+    },
+    {
+      "name": "factory-produit",
+      "displayName": "Factory – Produit",
+      "description": "Mallette produit Factory : run complet et run de version, surface fonctionnelle, exigences et vues, critique et amélioration du design, direction artistique, intégration de modèles d'IA, déploiement et restauration sous GO humain.",
+      "dependencies": [
+        "factory-socle"
+      ],
+      "skills": [
+        "factory-forge-agents/.claude/skills/run-complet",
+        "factory-forge-agents/.claude/skills/run-version",
+        "factory-forge-conception/skills/enumere-la-surface",
+        "factory-forge-conception/skills/redige-les-exigences",
+        "factory-forge-conception/skills/derive-les-vues",
+        "factory-forge-design/skills/critique-le-design",
+        "factory-forge-design/skills/ameliore-le-design",
+        "factory-forge-design/skills/studio-de-direction",
+        "factory-forge-development/.claude/skills/integre-openai-gemini",
+        "factory-forge-ops/skills/deploie-et-restaure"
+      ]
+    },
+    {
+      "name": "factory-audit-securite",
+      "displayName": "Factory – Audit et sécurité",
+      "description": "Mallette audit et sécurité Factory : audit applicatif et fiche sécurité (AuditCore), sécurité du site livré (exposition, dépendances, workflows, DAST autorisé), sécurité des agents IA, audit qualité des tests. Chaque audit part sur mandat explicite.",
+      "dependencies": [
+        "factory-socle"
+      ],
+      "skills": [
+        "factory-forge-audit/skills/audit-applicatif",
+        "factory-forge-websec/skills/securite-web",
+        "factory-forge-agents-security/skills/securite-agentique",
+        "factory-forge-tests/skills/audit-qualite-tests"
+      ]
+    },
+    {
+      "name": "factory-data",
+      "displayName": "Factory – Data",
+      "description": "Mallette data Factory : profilage d'un jeu de données, discipline de la donnée (assertions, lineage, restitution chiffrée sourcée, data contract, modèle Gold, migration de rapport, anonymisation mesurée), veille de dérive dans le temps.",
+      "dependencies": [
+        "factory-socle"
+      ],
+      "skills": [
+        "factory-forge-agents/.claude/skills/data-quality-auditor",
+        "factory-forge-data/skills/discipline-data",
+        "factory-forge-observability/skills/veille-derive"
+      ]
+    },
+    {
+      "name": "factory-marketing",
+      "displayName": "Factory – Marketing",
+      "description": "Mallette marketing Factory : étude SEO et GEO d'un site, animation de réseaux sociaux avec accord humain par lot, clip de présentation.",
+      "dependencies": [
+        "factory-socle"
+      ],
+      "skills": [
+        "factory-forge-seo-geo/skills/audit-seo-geo",
+        "factory-forge-agents/.claude/skills/animation-reseau",
+        "factory-forge-design/skills/clip-de-presentation"
       ]
     }
   ]

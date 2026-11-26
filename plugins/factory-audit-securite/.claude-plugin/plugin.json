@@ -1,0 +1,12 @@
+{
+  "name": "factory-audit-securite",
+  "displayName": "Factory – Audit et sécurité",
+  "description": "Mallette audit et sécurité Factory : audit applicatif et fiche sécurité (AuditCore), sécurité du site livré (exposition, dépendances, workflows, DAST autorisé), sécurité des agents IA, audit qualité des tests. Chaque audit part sur mandat explicite.",
+  "author": {
+    "name": "Ptitcuicui"
+  },
+  "license": "MIT",
+  "dependencies": [
+    "factory-socle"
+  ]
+}

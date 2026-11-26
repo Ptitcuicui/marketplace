@@ -1,0 +1,320 @@
+# Typologie de la surface fonctionnelle
+
+Cinq types, fermés. Un élément qui n'entre dans aucun n'est pas de la surface — c'est du
+contexte, il vit dans `ENTRANT.md`.
+
+## Ce qu'on cherche, par entrant
+
+On ne cherche pas les mêmes signaux dans une idée et dans un dépôt existant. Ce tableau dit,
+pour chaque nature d'entrant, où regarder et à quoi se reconnaît un élément de surface.
+
+| Entrant | Où chercher | Signal d'un élément |
+|---|---|---|
+| Idée | Les 4 champs de seuil | Un nom commun répété dans la formulation du job |
+| Cahier des charges | Substantifs récurrents, verbes d'action, phrases en « le système doit » | Un nom qui porte un article défini et revient ≥ 2 fois |
+| Produit à reprendre | Modèles de données, routes, endpoints, jobs, migrations, fichiers de traduction | Une table, une route, un handler, une commande |
+| Produit à faire évoluer | Idem + l'énoncé du delta | Idem, plus tout élément **cité par le delta** même absent du code |
+| Produit tiers | Menus, titres de page, libellés de bouton, documentation publique | Une entrée de menu, un écran atteignable sans authentification |
+
+## Les cinq types
+
+### `objet` — ce que le produit manipule
+Un objet a un cycle de vie : il est créé, modifié, consulté, supprimé. Si la chose n'a pas
+d'état, ce n'est pas un objet — c'est un attribut.
+
+### `role` — qui agit
+Un rôle se distingue par ce qu'il **peut faire de différent**. Deux libellés qui font
+exactement les mêmes actions sont un seul rôle, et l'écart de vocabulaire est noté.
+
+### `parcours` — une suite d'actions menant à un résultat
+Nommé par son résultat, pas par ses étapes : « Déclaration d'une absence », pas « Cliquer sur
+Nouveau puis remplir le formulaire ».
+
+### `point-entree` — par où l'on entre
+Écran, endpoint, tâche planifiée, import de fichier, webhook. C'est le type le plus oublié sur
+un entrant textuel, et celui qui produit le plus de trous en aval.
+
+### `regle` — une contrainte métier citée
+Une règle **citée dans l'entrant**. Une règle déduite est une hypothèse : elle devient une
+exigence marquée `hypothèse`, pas un élément de surface.
+
+## Surface implicite SaaS — candidats proposés d'office
+
+RC-3 (retour production) : le premier produit livré n'avait ni aide utilisateur ni onboarding —
+absents du CDC, jamais proposés par personne, l'utilisateur les considère comme « la base de
+toute appli SaaS ». Loi transverse qui en découle : **l'oubli n'existe pas** — cette liste close
+est proposée d'office en fin d'énumération dès que l'entrant vise une application web/SaaS à
+utilisateur final. Chaque candidat est **retenu** (un `id` comme n'importe quel élément de
+surface, puis une exigence qui le couvre) ou **écarté explicitement**, raison consignée en
+section 3 de `SURFACE.md` (« Écartés ») **et transcrite dans le champ `ecarts_surface_implicite`
+du référentiel** (TF-0811, section « Les clés de la liste close » ci-dessous). Un candidat
+mentionné dans aucune des deux est un oubli, jamais un arbitrage — et depuis TF-0811,
+`oracle-surface` S4 le refuse au lieu de s'en plaindre.
+
+Ceci ne rouvre pas la règle « on énumère ce qui est dit, pas ce qui est probable » ci-dessus :
+c'est une liste **fermée et versionnée**, pas une invitation générale à ajouter ce qui « existe
+toujours dans ce genre de produit ». L'élargir est une décision, pas une commodité — comme pour
+la liste fermée des prédicats binaires de `redige-les-exigences`.
+
+Hors périmètre déclaré d'un coup : un entrant sans IHM utilisateur final (batch, job planifié,
+API interne, produit tiers analysé de l'extérieur) écarte le bloc entier avec une raison unique
+— « pas d'utilisateur final » ou équivalent — sans examiner chaque ligne séparément.
+
+Côté machine, ce cas se reconnaît le plus souvent tout seul : sans aucun `point-entree` au
+libellé web, `oracle-surface` S4 rend un PASS motivé et ne réclame aucun écart. Si le produit a
+malgré tout une surface que le lexique lit comme web — une API interne exposée par des routes,
+par exemple —, la raison unique se recopie sur chacune des dix-neuf clés. Dix-neuf lignes est le prix
+de l'opposabilité : c'est délibérément moins cher que de rendre l'omission indiscernable.
+
+| Candidat | Type suggéré | Origine |
+|---|---|---|
+| Aide utilisateur | `point-entree` (écran, lien ou contenu d'aide) | RC-3, retour littéral |
+| Onboarding / premier lancement | `parcours` | RC-3, retour littéral |
+| Compte utilisateur | `objet` + `parcours` (création, édition) | RC-3, retour littéral |
+| Favicon | `objet` (asset minimal d'identification ; sa forme diffère pour un document et pour un site, voir « Critères d'acceptation précisés ») | RC-3, retour littéral ; TF-1908 pour la distinction |
+| États vides guidés | `parcours` (état d'une vue avant tout contenu) | RC-3, retour littéral |
+| Gestion des erreurs visible | `regle` (un échec produit un message observable, jamais un écran silencieux) | Généralisation — invariant d'attente d'un utilisateur final |
+| Mentions légales / pied de page | `point-entree` | Généralisation |
+| Responsive mobile | `regle` (contrainte d'affichage transversale) | Généralisation |
+| Accessibilité RGAA — site public français | `regle` (RGAA 4.1/WCAG AA : obligation légale, pas un objectif) + `point-entree` (déclaration d'accessibilité publiée avec son taux) | RF-6, lot Produit-09 20260820a — retour littéral |
+| Livrables légaux d'accessibilité (si site public FR) | `objet` ×4 : schéma pluriannuel, plan d'action annuel, mécanisme de signalement, voie de recours | RF-6 — aucune forge ne les produisait, aucun CDC ne les demandait |
+| **Page 404 par langue** — proposée **si et seulement si** le produit a une surface web | `point-entree` (une page servie, atteignable par une adresse inconnue) | P-2 (`PATRONS-EPROUVES.md` du pilot), TF-0804 — retour d'un produit, 404 nu du serveur servi en production du 25/08 au 01/09/2026 |
+| **Lien public partageable (copie, QR)** — typiquement un produit **multi-tenant** | `point-entree` (une adresse publique par espace client) + `parcours` (copier le lien, afficher son QR depuis l'administration) | TF-0874, lots 20260906b et 20260906c — retour humain littéral : le partage du lien client depuis l'administration n'avait été proposé par personne |
+| **Comptes d'essai vides** — typiquement un produit **multi-tenant** | `objet` (un espace vide, sans donnée d'un autre client) + `parcours` (le commanditaire en ouvre un pour essayer le produit) | TF-0874, lots 20260906b et 20260906c — retour humain littéral, entré en run de version (E-074, E-075) faute d'avoir été proposé à l'énumération |
+| **Traceurs et consentement (mesure d'audience comprise)** — **si et seulement si** le produit pose un traceur non exempté de consentement | `regle` (aucun traceur non exempté n'est posé avant le choix de l'utilisateur, et refuser est aussi simple qu'accepter) + `point-entree` (le moyen de donner, de refuser et de retirer son consentement) | TF-1908, étude d'opportunité 20261019j du pilot : sur 24 éléments d'une check-list de lancement comparés à l'existant, aucun candidat ni exigence ne le portait |
+| **Politique de confidentialité** — **si et seulement si** le produit collecte une donnée personnelle | `point-entree` (une page publiée, atteignable depuis le produit) | TF-1908, même étude : « conforme au RGPD » est non testable en l'état (`formulation.md`), et aucun candidat ne portait la page |
+| **Aperçu de partage** — **si et seulement si** le produit a une page publique | `objet` (titre, description et image affichés quand l'adresse de la page est partagée ; balises Open Graph) | TF-1908, même étude : la balise est lue par `crawler.py` de forge-seo-geo, jamais exigée ni notée |
+| **Aide contextuelle de champ** — **si et seulement si** le produit a un champ de saisie non trivial | `regle` (un champ dont la valeur attendue ne se déduit pas de son intitulé porte une aide ou un exemple à côté de lui) | TF-2120, Produit-86 (lot du 03/11/2026) : une page d'aide réduite aux codes de refus avait satisfait le candidat « aide » ; le produit n'offrait aucune aide au niveau du champ |
+| **Filtre et tri des listes** — **si et seulement si** le produit affiche une liste de 8 éléments ou plus | `regle` (toute liste de 8 éléments ou plus se filtre et se trie) | TF-2120, même lot : le produit listait sans filtre ni tri ; seuil repris de la règle L4 de `check_html.py` (skill `factory-page-html`, forge-agents) |
+| **Garde de saisie** — **si et seulement si** le produit a un formulaire de saisie | `regle` (une valeur invalide est refusée avant l'envoi, avec un message d'erreur localisé) | TF-2120, même lot : aucune validation avant envoi |
+
+Les lignes « lien public partageable » et « comptes d'essai vides » portent, comme l'accessibilité
+RGAA, une condition d'applicabilité que `oracle-surface` **n'infère pas** : un produit
+**mono-tenant** (utilisateur unique, aucun espace client, aucune adresse publique par client) les
+écarte toutes les deux, en deux lignes, avec sa raison. Deux lignes, pas un silence : c'est ce qui
+distingue l'arbitrage de l'oubli, et c'est précisément l'oubli qui a coûté deux exigences en run
+de version le 06/09/2026.
+
+Les trois lignes que TF-1908 a posées (traceurs, confidentialité, aperçu de partage) portent chacune leur condition, que
+`oracle-surface` n'infère pas non plus : un produit qui pose seulement des traceurs exemptés de consentement, ou
+qui ne collecte aucune donnée personnelle, ou qui n'a aucune page publique (outil interne, API),
+écarte le candidat concerné en une ligne, avec sa raison. Sources et limites, relevées le
+19/10/2026 : le consentement s'appuie sur la CNIL (« Bannières cookies trompeuses : la CNIL met
+en demeure des éditeurs de sites web », 12/12/2024) ; les bases légales de la politique de
+confidentialité et des mentions légales n'ont pas été relues à Légifrance, et la liste de vingt
+éléments de la vidéo qui a lancé l'étude reste inconnue, la vidéo n'ayant pas été visionnée. Revue
+prévue le 30/11/2026, ou au premier produit à surface web ouvert avec cette liste si c'est plus
+tôt : si les trois candidats sont tous écartés sur trois produits, ils sortent de la liste.
+
+Les trois dernières lignes du tableau (TF-2120) portent aussi leur condition, que `oracle-surface` n'infère pas :
+un champ de saisie non trivial, une liste de 8 éléments ou plus, un formulaire de saisie. Un outil de consultation
+sans saisie libre, ou dont chaque liste reste sous le seuil, écarte le candidat en une ligne, avec sa raison. Le seuil
+de 8 est celui de la règle L4 de `check_html.py` (skill `factory-page-html` de forge-agents, « filtre, tri et
+recherche obligatoires dès 8 lignes »), lu le 04/11/2026 : la demande de TF-2120 disait « plus de N éléments » sans
+donner N, et L4 s'applique dès 8 lignes inclus. Les trois critères vérifiables sont ci-dessous.
+
+**Critères d'acceptation précisés** (2ᵉ inspection utilisateur du premier produit, lot 03) —
+« exister » ne suffit pas, la perception de l'utilisateur fait foi ; ces critères s'écrivent
+dans l'exigence dès que le candidat est retenu :
+- **Favicon** (TF-1908) : la forme dépend de ce que le produit est. Un **document autoportant**
+  (un fichier HTML seul, sans dossier voisin) porte une favicon-lettre en `data:` dans un
+  `link rel="icon"` (règle G2 de `BEST-PRACTICES-HTML.md` du pilot). Un **site** déclare un
+  `link rel="icon"` sur sa page d'accueil, vers un **fichier** que le robot d'exploration peut
+  télécharger, à une adresse stable ; `apple-touch-icon` est accepté (Google Search Central,
+  lignes directrices du favicon, mises à jour le 28/08/2026, lues le 19/10/2026). Que Google
+  refuse un favicon en `data:` est une inférence : sa page exige un fichier explorable et ne
+  cite pas ce cas. La règle A2 de `check_html.py` (forge-agents), qui refuse tout lien vers un
+  fichier, vaut donc pour le document et non pour le site.
+- **Onboarding** (RC-4) : une expérience **dominante** de première connexion — panneau de
+  bienvenue en tête de page, progression visible (x/N étapes), badge persistant tant que non
+  complété, actions directes depuis le panneau, disparition à complétion. Une carte repliable
+  discrète « existe » mais n'est pas perçue comme un onboarding : exigence non tenue.
+- **Aide utilisateur** (RD-7 — 7ᵉ constat de ce retour) : **trois niveaux** — aide de page (rôle de l'écran, circuit,
+  pièges), encarts par section non évidente, aide par champ. Une page d'aide unique ne tient
+  pas l'exigence. **Une aide réduite aux codes d'erreur (ou de refus) ne tient pas lieu d'aide** (TF-2120) :
+  une page qui ne liste que ces codes avait satisfait le candidat sur Produit-86 ; `oracle-surface` S4 ne la
+  compte plus comme présence, tant qu'un autre élément ne porte pas une facette de l'aide (page, encart, champ).
+- **Aide contextuelle de champ** (TF-2120) : chaque champ de saisie non trivial porte une aide ou un exemple
+  visible à côté de lui. Non trivial : sa valeur attendue ne se déduit pas de son intitulé seul (format imposé,
+  unité, plage, valeur d'une règle métier). Vérifiable : on dénombre, écran par écran, les champs non triviaux et
+  ceux qui n'ont ni aide ni exemple ; le second compte vaut 0.
+- **Filtre et tri des listes** (TF-2120) : toute liste de 8 éléments ou plus offre un filtre et un tri.
+  Vérifiable : sur une liste de 8 éléments, filtrer sur la valeur d'une colonne réduit les lignes affichées et
+  trier sur une colonne les réordonne, les deux gestes observés sur la page rendue.
+- **Garde de saisie** (TF-2120) : une valeur invalide est refusée avant l'envoi, avec un message d'erreur dans la
+  langue de l'interface, affiché à côté du champ, qui nomme le champ et la forme attendue. Vérifiable : pour
+  chaque champ contraint, une valeur invalide n'émet aucune requête et affiche le message ; une valeur valide
+  émet la requête.
+- **Page 404 par langue** (P-2, TF-0804) : **cinq critères**, à recopier dans l'exigence dès
+  que le candidat est retenu — (1) une 404 **par langue**, du **même gabarit** que les autres
+  pages : menu complet, charte, consentement, liens de secours (accueil, plan du site, contact),
+  car une 404 « spéciale » vieillit seule ; (2) le **statut 404 conservé** — une page d'erreur
+  rendue en 200 est un soft-404 indexable ; (3) **`noindex` et exclusion du sitemap**,
+  l'exclusion **déclarée** dans l'oracle SEO du produit, sans quoi elle passe pour un oubli ;
+  (4) la **langue choisie au préfixe du chemin** (`/fr/inconnu` rend la 404 en français ; sans
+  préfixe, la langue par défaut) ; (5) un **contrôle exécutable qui joue les cas** : adresse
+  inconnue rendant une 404 avec menu, préfixe respecté, ressource non-HTML inconnue (image,
+  script) rendant une 404 nue et jamais une page. La conception écrit ce cinquième critère,
+  elle ne l'exécute pas : le contrôle se construit chez forge-tests et se joue à la MEP (M-9).
+
+Ce candidat est le seul de la liste à porter une **condition d'applicabilité** qui lui soit
+propre plutôt qu'une simple suggestion de type : il n'est proposé que **si le produit a une
+surface web**. P-2 écarte lui-même trois cas — une application sans surface web (rien à servir),
+un routeur qui possède déjà sa page d'erreur par langue (c'est lui qu'on juge alors, pas le
+produit), et les réponses d'API, qui répondent 404 en JSON et jamais en page. Ces trois cas ne
+sont pas des exceptions à la loi n° 3 : ce sont des **écarts**, et un écart s'écrit.
+
+## Les clés de la liste close, et où s'écrit un écart (TF-0811)
+
+Jusqu'au 05/09/2026, l'écart d'un candidat d'office ne vivait qu'en prose, en section 3 de
+`SURFACE.md`, qu'aucun oracle ne lisait : `oracle-surface` **S4** ne pouvait qu'avertir, jamais
+refuser — un référentiel qui écarte légitimement la 404 aurait été accusé au même titre qu'un
+référentiel qui l'oublie. **L'oubli restait indiscernable de la décision**, ce que la loi
+transverse n° 3 interdit précisément.
+
+Le référentiel porte désormais un champ racine dédié, transcrit de la section 3 et de nulle part
+ailleurs (`redige-les-exigences/references/schema-referentiel.md`) :
+
+```json
+"ecarts_surface_implicite": [
+  {
+    "element": "accessibilite-rgaa",
+    "motif": "produit interne à l'entreprise : hors du champ du site public français",
+    "decide_par": "le commanditaire du produit (décision D-7)",
+    "date": "2026-09-05"
+  }
+]
+```
+
+`element` prend l'une des dix-neuf **clés** de la liste close, dans cet ordre — c'est la même table
+que celle ci-dessus, vue par la machine :
+
+| Clé | Candidat |
+|---|---|
+| `aide-utilisateur` | Aide utilisateur |
+| `onboarding` | Onboarding / premier lancement |
+| `compte-utilisateur` | Compte utilisateur |
+| `favicon` | Favicon |
+| `etats-vides` | États vides guidés |
+| `erreurs-visibles` | Gestion des erreurs visible |
+| `mentions-legales` | Mentions légales / pied de page |
+| `responsive-mobile` | Responsive mobile |
+| `accessibilite-rgaa` | Accessibilité RGAA — site public français |
+| `livrables-accessibilite` | Livrables légaux d'accessibilité |
+| `page-404` | Page 404 par langue |
+| `lien-public-partageable` | Lien public partageable (copie, QR) |
+| `comptes-essai` | Comptes d'essai vides |
+| `traceurs-consentement` | Traceurs et consentement (mesure d'audience comprise) |
+| `politique-confidentialite` | Politique de confidentialité |
+| `apercu-partage` | Aperçu de partage |
+| `aide-champ` | Aide contextuelle de champ |
+| `filtre-tri-listes` | Filtre et tri des listes |
+| `garde-saisie` | Garde de saisie |
+
+Ce que S4 juge alors, candidat par candidat, chacun **nommé** :
+
+| État | Verdict |
+|---|---|
+| Surface web + candidat présent à la surface énumérée | PASS |
+| Surface web + candidat absent + écart déclaré qui tient | PASS, message préfixé « [ÉCARTÉ] » |
+| Surface web + candidat absent + aucun écart, ou écart qui ne tient pas | **FAIL**, le candidat nommé |
+| Aucun point d'entrée web énuméré | PASS motivé — le bloc n'est pas dû |
+
+Un écart **tient** à quatre conditions cumulatives : `element` dans la liste close, `motif` d'au
+moins **20 caractères**, `decide_par` non vide **qui nomme un humain et sa décision référencée**,
+`date` au format `AAAA-MM-JJ`. Les trois dernières ne sont pas de la bureaucratie : un écart est
+opposable parce qu'il est écrit, daté et signé. S4 ne juge en revanche ni la véracité ni la suffisance du motif — c'est une décision
+humaine, déclarée en `non_juge`.
+
+**Qui décide (TF-2119).** Fait, lot de Produit-86 du 03/11/2026 : l'onboarding avait été écarté avec
+`decide_par` « la session de build », S4 avait rendu PASS, et le porteur a jugé cet écart contraire à la loi
+n° 3 : la surface implicite s'écarte par une **décision humaine**. `decide_par` ne désigne donc ni une session,
+ni un agent, ni un build, ni une IA, un script ou un pipeline, et il porte **une décision humaine référencée**,
+sous l'une de ces trois formes : un identifiant de décision (`D-7`), une entrée de ledger (« ledger seq 412 »),
+ou une citation humaine datée (un texte entre guillemets et une date `AAAA-MM-JJ`). Un nom d'humain seul ne suffit
+plus. S4 et S5 jugent la **forme** de cette référence, jamais son existence (déclaré en `non_juge`) : relire la
+décision contre le registre des décisions du pilot reste un geste humain. Le même validateur de forme juge aussi
+`ecarts_exigences_socle` (E10) depuis TF-2132 : `oracles/_contrat.mjs` le porte une seule fois.
+
+Le champ est **facultatif à la lecture** : absent, il vaut « aucun écart déclaré ». Un
+référentiel écrit avant TF-0811 n'est donc jamais accusé d'un défaut de format — il est jugé sur
+la seule présence de ses candidats, exactement comme il l'aurait été.
+
+Depuis **TF-0822** (06/09/2026), la transcription elle-même est vérifiée : `oracle-exigences-md`
+règle **P4** confronte chaque entrée d'`ecarts_surface_implicite` à la section 3 ci-dessous — la
+clé **et** le motif doivent y figurer. Une entrée du JSON absente de la prose est un FAIL qui la
+nomme. `SURFACE.md` absent rend un `SANS_OBJET` motivé : ce qui est refusé, c'est l'écart écrit
+dans le JSON sans avoir été décidé, jamais la prose qui n'a pas encore été écrite.
+
+## Surface implicite d'un registre — candidats proposés d'office (TF-1655)
+
+Retour du 12/10/2026 sur un produit réel : un hub tenant le registre des projets d'une
+organisation comptait 219 exigences, et aucune ne couvrait trois usages que le commanditaire
+a demandés ensuite. Il voulait lire une même information pour tous les projets, comparer des
+projets, et parcourir l'inventaire hiérarchique des ressources d'un projet avec leur
+architecture. Un run de version a dû ajouter 13 exigences (DELTA-0002). L'entrant décrivait le
+registre fiche par fiche ; les usages qui traversent les fiches n'étaient écrits par personne.
+
+Dès que la surface énumère un **objet qui est un registre** (registre, inventaire, catalogue,
+portefeuille, répertoire, annuaire, cartographie, parc), cette seconde liste close est proposée
+d'office en fin d'énumération, avec la même règle que la surface implicite SaaS. Chaque
+candidat est **retenu** (un élément de surface, puis une exigence qui le couvre) ou **écarté
+explicitement** en section 3 de `SURFACE.md`. L'écart est transcrit dans le même champ
+`ecarts_surface_implicite`, avec l'une des trois clés ci-dessous.
+
+| Candidat | Type suggéré | Ce que l'utilisateur fait |
+|---|---|---|
+| Vue transverse | `point-entree` (un écran qui liste tous les éléments) | lire une même information pour tous les éléments du registre, filtrée et triée |
+| Comparaison d'éléments | `parcours` (sélectionner puis comparer) | mettre deux éléments ou plus côte à côte, attribut par attribut |
+| Inventaire hiérarchique | `point-entree` (une arborescence par élément) | parcourir les ressources d'un élément, du niveau le plus haut au plus fin, avec leur architecture |
+
+### Les clés de la liste close d'un registre
+
+`oracle-surface` **S5** juge ces trois candidats comme S4 juge les dix-neuf autres. Deux
+différences sont assumées. La nature de registre est **inférée** d'un lexique fermé sur les
+libellés de type `objet`. La règle est neuve et opposable à des référentiels déjà scellés :
+un candidat ni retenu ni écarté produit un **avertissement non bloquant** qui le nomme
+(SANS_OBJET), jamais un FAIL.
+
+| Clé | Candidat |
+|---|---|
+| `vue-transverse` | Vue transverse |
+| `comparaison` | Comparaison d'éléments |
+| `inventaire-hierarchique` | Inventaire hiérarchique |
+
+Un objet qui emploie l'un de ces mots sans être un registre (« ligne d'issue du registre » d'un
+journal interne, par exemple) réveille le bloc pour rien. Ce cas se solde par trois écarts
+écrits, en une raison chacun, comme un produit mono-tenant écarte le lien public partageable.
+
+## Identifiants
+
+`S-01`, `S-02`… Numérotation continue, jamais réaffectée.
+
+| Situation | Traitement |
+|---|---|
+| Élément retiré | Son identifiant reste mort. Le consigner dans `identifiants_retires` |
+| Élément scindé en deux | L'ancien meurt, deux neufs naissent. Jamais de réutilisation |
+| Élément renommé | Même identifiant, libellé changé. Un renommage n'est pas une suppression |
+
+## Gabarit de `SURFACE.md`
+
+Quatre sections, dont aucune n'est décorative : les deux dernières sont ce qui distingue un
+inventaire honnête d'une liste de ce qu'on avait sous les yeux.
+
+| Section | Contenu |
+|---|---|
+| 1. Origine | Quel `ENTRANT.md`, quelle section, quelle date |
+| 2. Tableau | `id` · `type` · `libelle` · d'où il vient dans l'entrant |
+| 3. Écartés | Ce qui a été vu et **volontairement** exclu, avec la raison. Sans cette section, un oubli et un arbitrage se ressemblent. Un candidat de la surface implicite écarté ici porte les quatre colonnes `clé` · `motif` · `décidé par` · `date`, transcrites telles quelles dans `ecarts_surface_implicite` |
+| 4. Non énumérable | Ce que l'entrant ne permet pas d'énumérer, repris de `ENTRANT.md` §4 |
+
+## `non_juge`
+
+La **complétude de l'inventaire lui-même**. On ne peut pas prouver mécaniquement qu'un
+inventaire tiré d'un entrant textuel n'a rien oublié. `oracle-surface` mesure la couverture de
+**ce qui a été énuméré** — jamais de ce qui existe. La section 4 est le seul garde-fou, et
+c'est un garde-fou humain.
+
+La **pertinence d'un motif d'écart**, de même : S4 exige qu'il soit écrit, daté et signé, pas
+qu'il soit vrai. La liste close est le seul endroit où l'oubli devient impossible ; ce qu'on
+décide d'en écarter reste une décision humaine, simplement opposable.
