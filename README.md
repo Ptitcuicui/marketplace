@@ -24,8 +24,23 @@ se met à jour avec la marketplace. `outils/mallettes.json` les déclare dans `f
 
 | Mallette | Forges embarquées |
 |---|---|
+| `factory-socle` | `factory-pilot`, partie outil seulement (doctrine, oracles, gabarits, scripts, agents hérités) |
 | `factory-data` | `factory-forge-data`, `factory-forge-observability` |
 | `factory-audit-securite` | `factory-forge-agents-security`, `factory-forge-websec` |
+
+### Pilot embarqué (mode consultant)
+
+Le socle livre la partie outil du pilot, sans son état : ni `input/`, ni `output/`, ni les données de
+`todo/` (TODO, décisions, registres), ni `runs/`. La copie porte `EMBARQUE.json` : `bootstrap.mjs` n'y
+clone ni n'y tire rien.
+
+Sur un poste sans parc (ni `FORGE_ROOT`, ni `~/factory`), le hook d'ouverture du socle pose
+`~/.factory-forge` : le pilot embarqué et les forges que livrent les mallettes installées, copiés
+seulement quand une mallette change de version. Il exporte `FORGE_ROOT` vers les commandes de la
+session. Ce que le poste écrit dans le pilot (TODO, retours, ledger) n'est jamais écrasé par une mise
+à jour, et ne remonte pas au pilot central : un consultant qui a accès à `Ptitcuicui/factory-retours`
+y ouvre une issue. Un parc complet sur le poste prime toujours, et alors le hook n'écrit rien.
+Dans le chat claude.ai, aucun hook ne tourne : pas de pilot.
 
 Pas encore embarquées : `factory-forge-audit` (paquets npm `ajv` et `js-yaml`),
 `factory-forge-tests` (Playwright et Chromium), `factory-forge-ops` (dépend du pilot),

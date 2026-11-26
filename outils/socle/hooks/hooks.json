@@ -6,7 +6,7 @@
           {
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/ouverture.mjs\" \"${CLAUDE_PLUGIN_ROOT}\"",
-            "timeout": 10
+            "timeout": 60
           }
         ]
       }

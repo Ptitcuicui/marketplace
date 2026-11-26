@@ -29,7 +29,32 @@
         "factory-forge-agents/.claude/skills/mandat"
       ],
       "agents": "factory-pilot/.claude/agents",
-      "extra": "outils/socle"
+      "extra": "outils/socle",
+      "forges": [
+        {
+          "depot": "factory-pilot",
+          "inclure": [
+            "^[^/]+\\.md$",
+            "^LICENSE$",
+            "^bootstrap\\.mjs$",
+            "^installer\\.(ps1|sh)$",
+            "^\\.claude/agents/",
+            "^(references|gabarits|oracles|scripts|fiches|profils|catalogues|veille|outillage-tests-e2e|todo)/",
+            "^(input|output)/(.+/)?(README|LISEZMOI)\\.md$"
+          ],
+          "exclure": [
+            "^todo/.*\\.jsonl$",
+            "^todo/TF-decisions-",
+            "^todo/registre-dette\\.json$",
+            "^todo/oeil-critique-",
+            "^todo/observabilite/RECIDIVES\\.json$"
+          ],
+          "marqueur": "Copie embarquée de la partie outil du pilot (doctrine, oracles, gabarits, scripts), livrée par la mallette factory-socle. Elle n'est pas un clone : rien ne s'y tire ni ne s'y pousse, et la marketplace la met à jour. Ce que le poste y écrit (TODO, retours) reste sur le poste.",
+          "garder": [
+            "^\\.claude/agents/"
+          ]
+        }
+      ]
     },
     {
       "name": "factory-avant-vente",

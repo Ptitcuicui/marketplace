@@ -8,7 +8,10 @@
 // --check : n'écrit rien, rend 1 si la marketplace diffère de ce que l'assemblage produirait.
 // Forges embarquées : une mallette qui déclare `forges` dans mallettes.json reçoit une copie de
 // chaque forge sous plugins/<mallette>/forges/<forge>/. Ses skills la trouvent sans clone local,
-// et elle se met à jour avec la marketplace.
+// et elle se met à jour avec la marketplace. Une entrée est un nom de dossier, ou un objet
+// { depot, inclure, exclure, marqueur } : inclure et exclure sont des expressions régulières sur le
+// chemin relatif (séparateur /) ; marqueur pose forges/<depot>/EMBARQUE.json, qui distingue la copie
+// embarquée d'un clone (le pilot embarqué dans le socle s'en sert pour ne rien cloner ni tirer).
 // Fins de ligne : tout fichier texte est rendu en LF, quel que soit le poste qui assemble
 // (Windows en CRLF, Linux en LF) : deux postes produisent les mêmes octets.
 // Sortie : un rapport des références qui ne se résolvent pas dans un plugin (chemins en dur,
@@ -129,11 +132,31 @@ for (const p of conf.plugins) {
     provenance["agents"] = { depot: p.agents.split("/")[0], chemin: p.agents.split("/").slice(1).join("/"), commit: shaDepot(path.join(RACINE, p.agents.split("/")[0])) };
   }
   if (p.extra) copierDossier(path.join(MARKETPLACE, p.extra), base, p.name, constats);
-  for (const forge of p.forges || []) {
+  for (const entree of p.forges || []) {
+    const spec = typeof entree === "string" ? { depot: entree } : entree;
+    const forge = spec.depot;
     const src = path.join(RACINE, forge);
     if (!fs.existsSync(path.join(src, "README.md"))) throw new Error(`forge introuvable : ${src}`);
-    copierDossier(src, path.join(base, "forges", forge), p.name, constats, forgeIgnoree);
-    provenance["forge:" + forge] = { depot: forge, chemin: ".", commit: shaDepot(src) };
+    const inclure = (spec.inclure || []).map((m) => new RegExp(m));
+    const exclure = (spec.exclure || []).map((m) => new RegExp(m));
+    // garder : ce que forgeIgnoree retirerait mais que la forge doit livrer (les agents que le pilot
+    // fait hériter aux produits vivent sous .claude/agents/).
+    const garder = (spec.garder || []).map((m) => new RegExp(m));
+    const ignorer = (rel) => {
+      const r = rel.split(path.sep).join("/");
+      if (forgeIgnoree(rel) && !garder.some((m) => m.test(r))) return true;
+      if (inclure.length && !inclure.some((m) => m.test(r))) return true;
+      return exclure.some((m) => m.test(r));
+    };
+    copierDossier(src, path.join(base, "forges", forge), p.name, constats, ignorer);
+    const commit = shaDepot(src);
+    provenance["forge:" + forge] = { depot: forge, chemin: ".", commit };
+    if (spec.marqueur) {
+      poser(path.join(base, "forges", forge, "EMBARQUE.json"), JSON.stringify({
+        schema: "factory/embarque@1", mode: "embarque", mallette: p.name, depot: forge, commit,
+        note: spec.marqueur,
+      }, null, 2) + "\n");
+    }
   }
   const fichiers = [...sortie.keys()].filter((k) => k.startsWith(base.split(path.sep).join("/") + "/"));
   const octets = fichiers.reduce((n, k) => n + sortie.get(k).length, 0);
