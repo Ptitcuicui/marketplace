@@ -1,0 +1,189 @@
+---
+name: prompt-analyzer-l99
+description: >
+  Analyse approfondie de prompts en 8 couches stratégiques (OODA, Chainlogic, Blindspots, Factcheck, Premortem, Wargame, Deepthink, Synthèse). Utiliser ce skill dès que l'utilisateur demande d'analyser, auditer, améliorer, optimiser, décortiquer ou stress-tester un prompt, que ce soit un prompt personnel ou un prompt client. Aussi déclencher quand l'utilisateur mentionne L99, analyse de prompt, prompt review, audit de prompt, améliore ce prompt, optimise ce prompt, ou colle un prompt en demandant de le passer au crible. Aussi déclencher sur « L99 boucle », « améliore ce prompt en boucle » ou « jusqu'à un score » (mode boucle à relecteur aveugle). Fonctionne sur tout type de prompt, y compris system prompts, user prompts, chaînes de prompts, templates, instructions agent.
+# TF-0997 : le mot-cle du lexique RV-6 est cable cote harnais par hook-lexique (UserPromptSubmit,
+# oracles/hook-lexique.mjs du pilot) ; la description ci-dessus reste le declencheur de secours.
+metadata:
+  version: "2.14.1"
+  updated: "2026-11-16"
+---
+
+# Prompt Analyzer L99
+
+Analyse de prompt en mode expertise maximale, zéro simplification. 8 couches d'analyse
+séquentielles, chacune dans son propre chapitre.
+
+## Langue
+
+Toujours répondre en **français**, quelle que soit la langue du prompt analysé.
+
+## Niveaux
+
+- **L99** (défaut) : analyse complète, 8 couches.
+- **L50** (si « analyse rapide » ou « L50 ») : uniquement couches 1 (OODA, étalon noté), 3 (Blindspots) et 8 (Synthèse). Le score et le contrat de sortie restent produits (portés par Ch1 et Ch8).
+- **L99 boucle** (si « L99 boucle », « en boucle », « jusqu'à un score » ou un seuil donné) : L99, puis
+  des passes de correction jugées chacune par un **relecteur aveugle** (agent neuf, sans l'analyse),
+  défauts recomptés à la source, arrêt à 0 bloquant et 0 majeur ou gain < 3 points, borne 3 passes,
+  étendue jusqu'à 5 si la session l'estime nécessaire, quand la dernière passe gagne encore au moins
+  3 points avec des défauts graves ouverts (TF-2024, extension motivée au journal).
+  Essai D-111 (a) du 29/10/2026 au 16/11/2026 (TF-2026) : défauts retenus à l'union recomptée
+  (vus par un seul relecteur, écartés seulement si le recompte les dément), chaque correction
+  vérifiée par un agent avec contexte qui ne note pas, et une passe qui régresse est rejetée.
+  Charger `references/boucle.md` ; le journal se juge par `scripts/oracle-boucle-l99.mjs` (TF-1831).
+  Hors de ce mode, le score d'arrivée du Ch8 s'écrit **« projeté (non mesuré) »** : mesurés à
+  l'aveugle le 16/10/2026, 5 prompts réécrits valaient de 6 à 12 points de moins que projeté.
+- **Ouverture d'office du mode boucle** (TF-2022, autorisation humaine du 29/10/2026) : sans
+  mot-clé, la session ouvre elle-même le mode boucle quand elle l'estime nécessaire ou préférable,
+  et d'office dès qu'un de ces cas est vrai : le prompt réécrit lancera un run, un mandat ou une
+  campagne d'agents qui écrit ; il sera réutilisé (template, system prompt, consigne d'agent) ;
+  l'analyse a relevé un défaut bloquant. Le Ch8 dit en une ligne pourquoi le mode a été ouvert,
+  ou pourquoi il ne l'a pas été. Le fait : au 29/10/2026, 1 analyse sur 5 rangées au pilot portait
+  un journal de boucle, et chaque restitution répétait « score projeté, non mesuré ».
+
+## Workflow
+
+1. Charger `references/couches.md` — spécification détaillée des 8 chapitres. **Toujours.**
+2. Produire les chapitres numérotés, chacun avec titre clair et séparateur visuel.
+3. Les couches **conditionnelles** (2 Chainlogic, 4 Factcheck, 7 Deepthink, lentille robustesse du 6) ne s'ouvrent que si leur condition est remplie ; sinon, une seule ligne le signale.
+4. Chaque chapitre doit être substantiel — pas de réponse creuse ou générique.
+5. Ancrer chaque analyse dans le contenu concret du prompt (citations à l'appui).
+6. **Forme de la sortie — non négociable** (TF-0770) : tout chapitre ouvre par ce que le lecteur
+   va apprendre et jamais par un tableau nu ; tout chapitre à tableau dit **comment le lire** ;
+   tout identifiant (`M7`, `L4`, `Ch3 #10`) porte son sens **en ligne** à sa première
+   occurrence ; tout chiffre repris du prompt porte sa **source**. Quatre itérations de forme ont
+   été payées sur une seule analyse le 02/09 — le détail et le pourquoi sont dans `couches.md`,
+   section « Forme de la sortie L99 ».
+7. **Livrable HTML** (TF-0765) : si le prompt analysé produit une **page HTML**, le Chapitre 8
+   **nomme** les règles de socle applicables dans le prompt réécrit et dans le contrat de sortie —
+   **L4** et le composant de filtres du socle (jamais un tri maison), **G1-G6**, les règles de
+   lisibilité, et l'**oracle** qui les vérifie. Exiger « tri et filtres » sans nommer la règle a
+   coûté un aller-retour humain complet le 02/09. L99 **cite** ces règles, il ne les exécute
+   jamais.
+8. **Prémisse d'accès — mesurer avant de classer** (TF-1185) : si le prompt analysé désigne une
+   ressource que l'exécutant devra ouvrir (URL, dépôt, base, point d'API, chemin), l'accès se
+   **mesure** par l'appel le moins coûteux et en lecture seule **avant** d'être classé au Ch4 —
+   code de retour, horodatage, identité, contrôle positif, familles d'accès énumérées. *Un refus
+   prouve qu'une porte est fermée, jamais qu'il n'y en a qu'une.* Le Ch1 pose alors l'accès en
+   prérequis vérifié et le prompt réécrit (Ch8) ouvre par une « ÉTAPE 0 — prérequis d'accès ».
+   Détail et bornes : `references/couches.md`, Chapitre 4.
+9. **Nom du livrable dans un projet de la factory** (TF-1441) : quand le prompt s'exécute dans un
+   projet de la factory (un dossier `forge\` à sa racine, ou un `CLAUDE.md` qui renvoie
+   au pilot `factory-pilot`), le prompt réécrit et le contrat de sortie **nomment le livrable
+   selon R-4 et R-25** du pilot, et **citent les deux règles** : `<Projet> - <Type> - <Objet> -
+   AAAAMMJJ<indice>.<ext>`, le projet en tête (R-4), le **type en premier mot du 2ᵉ segment**, pris
+   au registre des types (R-25). Jamais un gabarit de nom composé par l'analyse : le 28/09,
+   « <Projet> - <Objet> - <Type> - AAAAMMJJa » a coûté un renommage et le rejeu de tous les
+   contrôles. Hors factory, le Ch8 reprend la convention du projet, ou n'en prescrit aucune.
+   **L'analyse elle-même**, écrite dans un tel projet, prend le type « Revue » du registre :
+   `<Projet> - Revue - Prompt <objet> passé au crible L99 - AAAAMMJJ<indice>.md`. « Analyse »
+   n'est pas au registre des types (TF-1975 : trois analyses ainsi typées chez un produit).
+   **Le chemin du journal borne l'objet** (TF-2632) : R-4 plafonne un chemin à 116 caractères utiles
+   (150 moins les 34 du sidecar d'oracle), et le journal `<analyse>.boucle.json` ajoute 12 caractères au
+   nom de l'analyse. L'`<objet>` tient en 4 mots au plus, et le chemin du journal se mesure avant
+   l'écriture : au-delà de 116 caractères, l'objet se raccourcit.
+   Détail : `references/couches.md`, section « Nom du livrable ».
+10. **Mode boucle : le juge n'est jamais l'auteur** (TF-1831) : en mode L99 boucle, chaque passe
+   est notée par un agent neuf qui ne voit ni l'analyse ni les passes précédentes ; chaque défaut
+   grave qu'il rend est recompté à la source avant d'entrer dans la passe suivante ; le journal
+   `<analyse>.boucle.json` doit rendre PASS à `node {skilldir}/scripts/oracle-boucle-l99.mjs`
+   avant que le Ch8 affiche un score mesuré. Protocole complet : `references/boucle.md`.
+   Une note de relecteur se recompte à la source avant d'entrer dans une correction, et une
+   régression due à un défaut que la correction a créé ouvre une passe de reprise unique au lieu de
+   livrer la passe précédente avec ses majeurs connus (TF-2202, B11 et B12 de l'oracle).
+   Revue du 16/11/2026 (étude 20261106b, TF-2236 à TF-2242, section « Les règles de la revue du
+   16/11/2026 » de `references/boucle.md`) : la passe se note par la moyenne de ses relecteurs et le
+   bruit toléré se mesure sur leur écart (TF-2237, B13 de l'oracle) ; l'arrêt se pose atteignablement
+   sur l'absence de défaut grave dans le texte écrit par la dernière correction, majeurs restants
+   listés (TF-2238, B14) ; une passe qui dépasse de 30 % la longueur de la passe 1 dit pourquoi elle
+   ajoute, en alerte motivée et non en refus (TF-2239, B15) ; chaque relecteur neuf de la passe 2 juge
+   à l'aveugle les deux versions et la décision de garder suit ce jugement apparié (TF-2240, B16).
+   En essai, avec leur critère de mesure : une fiche des prémisses d'environnement vérifiées une fois
+   et remise aux relecteurs (TF-2236, B17) ; le type d'agent dédié `relecteur` pour les relecteurs
+   aveugles (TF-2241, B18) ; un vérificateur de clôture qui classe chaque phrase ajoutée par la
+   correction (TF-2242, B19).
+   Relecteur tiers (D-240 (b), 23/11/2026) : l'un des 2 relecteurs d'une passe peut être Codex ou Gemini,
+   lancé par `delegue-a-codex-et-gemini` ; le journal déclare son type et son modèle (B18). Sur un poste
+   où aucun n'est configuré, les 2 relecteurs restent des Claude, sans erreur.
+11. **Contrat de sortie : l'oracle de forme de chaque format produit** (TF-2194) : le contrat du
+   Ch8 nomme `check_html.py` pour une page HTML et `check_markdown.py` pour un Markdown, **y
+   compris pour la voie de repli** (générateur en échec, format de secours). Le 05/11/2026, un
+   contrat qui ne nommait que `check_html.py` a laissé sortir un Markdown à 9 défauts de forme,
+   poussé et promu avant que l'oracle ne le voie. Détail : `references/couches.md`, section
+   « Contrat de sortie : l'oracle de forme de chaque format produit ».
+12. **Restitution dans un projet de la Factory : un fichier, préjugé avant affichage** (TF-2551) : dans
+   un tel projet (même détection qu'au point 9), la revue L99 en 8 chapitres est une fin de tour que
+   le hook de fin de tour juge (blocs de restitution, préjugement). Elle s'**écrit d'abord dans un
+   fichier** (le type « Revue » du point 9), se **préjuge** avec `node oracles/hook-restitution.mjs
+   --prejuger <fichier>` (chez un produit : `node forge/hooks/factory.mjs restitution --prejuger
+   <fichier>`), se corrige jusqu'à l'exit 0, et ne s'**affiche qu'après**, telle quelle. Le fait : le
+   14/11/2026, chez un produit, une revue L99 en 8 chapitres affichée sans fichier ni préjugement a été
+   refusée par le hook de fin de tour (S1, S4) faute de blocs de restitution, et ce SKILL.md ne le
+   rappelait pas. **Le tour qui attend les relecteurs aveugles** (TF-2669) : après leur lancement en
+   arrière-plan, le tour ne se clôt jamais sur un message d'attente, que le hook refuse (S1, S4) ; il
+   rend un point d'étape préjugé (`gabarits/RESTITUTION.md`, section « Point d'étape »), dont le
+   bloc 1 porte la mention « point d'étape » et dont le bloc 2, « Ce qui reste à mesurer, et par
+   quoi », nomme la note attendue de chaque relecteur et l'outil qui la rendra,
+   `scripts/oracle-boucle-l99.mjs`. Le tour qui reçoit les notes rend la restitution complète. Le
+   fait : le 16/11/2026, chez un produit, le tour qui attendait deux relecteurs s'est clos sur une
+   attente, refusée par S1 et S4. Hors de la Factory, aucune restitution n'est prescrite ici.
+
+## Les 8 couches (vue d'ensemble)
+
+| # | Couche | Objet |
+|---|---|---|
+| 1 | OODA | Cadrage stratégique : Observe / Orient / Decide / Act + **étalon noté** (rubrique /100) |
+| 2 | Chainlogic | Décomposition logique Si A → alors B ; ruptures et sauts non justifiés |
+| 3 | Blindspots | Hypothèses implicites, ambiguïtés, edge cases, contraintes oubliées, biais |
+| 4 | Factcheck | *(conditionnel)* Prémisses fausses, périmées ou invérifiables que le LLM amplifierait |
+| 5 | Premortem | 5 causes d'échec les plus probables + mécanisme + mitigation |
+| 6 | Wargame | 3 attaques : utilisateur exigeant, expert du domaine, contradicteur (+ lentille robustesse) |
+| 7 | Deepthink | Implications de 2e/3e ordre, effets d'échelle, dépendances systémiques |
+| 8 | Synthèse | **Score /100** + diagnostic 3 lignes + **prompt réécrit** + **contrat de sortie** + **protocole de tests du livrable** *(conditionnel)* + changelog tracé |
+
+Le chapitre 8 est le livrable principal : le prompt réécrit conserve l'intention originale,
+comble les angles morts, intègre les garde-fous, **embarque ses propres critères de réussite
+(contrat de sortie)**, et reste directement utilisable. Si le prompt produit un livrable
+substantiel (code, document, deck, page, template, données), le Ch8 **prescrit** en plus un
+**protocole de tests du livrable** — typé par oracles, jeu d'essai minimal, boucle bornée à
+3 itérations — embarqué dans le prompt réécrit. Le protocole s'applique au livrable produit
+à l'exécution, jamais au prompt lui-même ; il n'est jamais exécuté par L99.
+
+## Exemple d'invocation et de sortie attendue
+
+```
+User : "Passe ce prompt au crible L99 : 'Tu es un expert marketing.
+Rédige-moi un post LinkedIn percutant sur l'IA.'"
+
+→ Charger references/couches.md
+→ Chapitre 1 (OODA) : Observe = 2 instructions seulement (rôle + tâche),
+  aucune contrainte de format, audience ou ton. Étalon noté : 31/100
+  (intention claire mais spécification quasi nulle).
+→ ... chapitres 2, 3 ...
+→ Chapitre 4 (Factcheck) : aucune prémisse factuelle vérifiable
+  → couche non déclenchée (une ligne).
+→ ... chapitres 5 à 7 ...
+→ Chapitre 8 : Score 31 → 84 (projeté). Diagnostic = intention claire
+  mais sous-spécifié (pas d'audience, pas de longueur, pas d'angle).
+  Prompt réécrit = "Tu es consultant IA B2B. Rédige un post LinkedIn de
+  150-200 mots pour des dirigeants de PME, angle : [sujet], hook en
+  1re ligne, 3 paragraphes courts, CTA conversationnel, ≤5 hashtags."
+  Contrat de sortie = 150-200 mots · 1 hook en L1 · 3 paragraphes ·
+  1 CTA · ≤5 hashtags · pas de jargon non défini.
+  Protocole de tests = livrable "contenu court" → pas d'oracle
+  automatisable ; 1 passe de revue contre les critères binaires du
+  contrat, pas de boucle.
+  Changelog = +audience (bloquant Ch3), +format (majeur Ch3), +contrat.
+```
+
+## Cas d'usage
+
+- Prompts personnels avant utilisation (auto-amélioration)
+- Audit de prompts clients (conseil, formation, optimisation)
+- System prompts d'agents IA, templates réutilisables, chaînes de prompts (chaque maillon)
+
+## Consignes de ton
+
+- Expert mais accessible. Pas de jargon inutile, mais aucune simplification.
+- Direct et tranchant dans les diagnostics. Ne pas enrober.
+- Illustrer avec des exemples concrets tirés du prompt analysé.

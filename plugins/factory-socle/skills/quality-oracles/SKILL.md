@@ -1,0 +1,343 @@
+---
+name: quality-oracles
+description: >
+  Loi transversale de qualité (audit exécuté) : avant de finaliser ou diffuser TOUT livrable (rapport, HTML, PPTX,
+  SVG, données, code, calcul, document, schéma, prompt, message), le vérifier par l'ORACLE exécuté
+  de son domaine — jamais par confiance ni en jugeant son propre code. Fournit la grille des classes
+  de défaut (information, données, calculs, logique, complétude, cohérence, process, affichage,
+  format, sécurité), le registre des oracles par domaine (registre-oracles.md, source unique), les
+  profils par contexte (factory, générique, client) et la règle de remontée §4 (domaine non couvert
+  → définir + enregistrer un oracle). Couche méta au-dessus des oracles délégués (factory-page-html,
+  prompt-analyzer-l99…). Déclencher avant toute livraison, ou quand l'utilisateur demande de
+  vérifier / valider / contrôler un livrable ou dit « prêt ? / diffusable ? ». Use when finalizing
+  or shipping any deliverable. Ne pas déclencher pour créer un oracle (→ write-an-oracle) ni
+  auditer un skill (→ ameliore-un-skill).
+metadata:
+  version: "2.43.0"
+---
+
+# SKILL — Oracles de qualité (loi transversale)
+
+**Principe.** Un livrable n'est « fait » que lorsque **chaque affirmation qu'il porte est vérifiée par un oracle
+exécuté** — jamais par confiance, jamais en jugeant son propre code. Charge de la preuve **inversée** : chercher activement ce qui pourrait être faux, manquant ou cassé **avant** de livrer.
+
+## 1. Grille des classes de défaut (rien n'y échappe)
+Passer en revue, pour chaque livrable, **toutes** les classes ci-dessous :
+- **Information** — vraie, à jour, sourcée ; aucune affirmation invérifiée présentée comme un fait.
+  - **Autorité (02/09/2026)** — *une décision n'appartient pas à celui qui la rédige.* Un bloc qui
+    se déclare décision porte un décideur ; un décideur appartenant à l'**émetteur** du livrable en
+    fait une **recommandation**, et le mot doit changer. Toute affirmation de décision cite une
+    trace de **rang décision** qui existe. Oracle : `oracle-autorite-decision.mjs`.
+  - **Effectifs (02/09/2026)** — *un nombre annoncé en prose est une affirmation comme une autre.*
+    « Sept écarts » en tête d'un tableau qui en porte huit est un défaut de calcul, pas de style.
+    Oracle : volet N1/N2 d'`oracle-calculs.mjs`.
+- **Données** — complètes, cohérentes (totaux, unités, formats, doublons), périmètre attendu couvert.
+- **Calculs** — rejoués par exécution, ni estimés ni recopiés ; reproductibles.
+- **Logique & complétude** — enchaînement valide, hypothèses explicites ; répond à *toute* la demande, cas limites (vide / énorme / spéciaux) traités.
+  - **Livrabilité d'une conséquence (02/09/2026)** — *une conséquence qu'aucun responsable
+    n'accepterait de mettre en production n'est pas un repli, c'est une **impasse**, et elle
+    s'écrit comme telle.* Relire chaque état de repli comme s'il fallait le livrer lundi. Une
+    conséquence chiffrée en charge de support **rend le manque invisible au lieu de le
+    révéler**. Oracle : `oracle-livrabilite-consequence.mjs`.
+- **Cohérence** — interne (un même chiffre concorde entre sections), avec les sources, avec les versions.
+- **Process / méthode** — la bonne méthode réellement suivie (références *lues*, étapes non sautées).
+- **Affichage / rendu** — sans débordement, contraste faible ni chevauchement ; jamais jugé depuis le code seul.
+- **Format / livraison** — type réel de fichier, encodage, nommage & versioning, autoportance, liens valides.
+- **Sécurité / confidentialité** — aucun secret ni donnée sensible exposé.
+
+## 2. Vérifier par l'oracle du domaine
+- **Identifier les domaines** touchés (souvent plusieurs) ; pour chacun, lancer son oracle depuis le
+  **registre** [`references/registre-oracles.md`](references/registre-oracles.md) (source unique). L'oracle
+  **observe l'artefact réel**, pas le code source. Puis **auto-critique adversariale** contre la grille §1 :
+  « qu'est-ce qui, ici, pourrait être faux / manquant / cassé ? » (dont ce que les oracles ne mesurent pas — `non_juge`).
+- **La revue manuelle est un REPLI** : autorisée uniquement si **aucun oracle n'existe**, avec preuve
+  traçable (`fichier:ligne`). Un contrôle automatisable doit être **outillé** (§4) ; revue sans preuve = ✓ sans oracle (§5).
+
+## 3. Standard d'un oracle « poussé » (pour en définir de nouveaux)
+1. **Déterministe & exécutable** — verdict PASS/FAIL reproductible, adossé à une **checklist canonique** versionnée.
+2. **Observateur de l'artefact réel** — rendu / exécution / données ; jamais le seul code source.
+3. **Couvrant les modes de défaillance connus** du domaine **et déclarant ce qu'il ne juge pas** (`non_juge`).
+   **La même obligation vaut pour tout critère de vérification écrit en prose pour un humain**
+   (TF-1493, 01/10/2026) : une procédure d'approbation, une contre-lecture, un feu vert portent leur
+   ligne « Ne vérifie pas : … », qui nomme ce que leurs contrôles n'ont pas mesuré. *Le fait* : le
+   28/09/2026, chez un produit, le critère d'approbation d'un plan de production ne comptait que ses
+   créations, modifications et destructions (11, 1 et 0) ; le plan portait une date de début lisible,
+   que la plateforme a refusée à l'application. Un vert qui ne dit pas ce qu'il ne mesure pas se lit
+   comme une absence de limite : c'est la classe `oracle-perimetre-de-non-mesure-non-publie`, revenue
+   par la prose parce que son remède ne visait que la sortie d'un oracle exécuté. Côté pilot, la
+   restitution est jugée par la règle **S55** d'`oracle-synthese` (enregistrement `71b878b8`,
+   `gabarits/RESTITUTION.md` 2.32.0) ; les valeurs datées d'une configuration Terraform, par **D1**
+   d'`oracle-terraform` (TF-1492). **Non mécanisé** : aucun oracle ne lit une procédure d'approbation
+   ou une contre-lecture écrite hors d'une restitution, ni un plan exporté (`plan.txt`) ; la ligne s'y
+   écrit à la main, et sa justesse reste un jugement humain.
+4. **À sortie localisante** (code retour + *où* est le défaut) et **autoportant**, rejouable dans les deux environnements.
+5. **Prouvé par fixtures** — paire rouge/verte dans `fixtures/` (+ `manifest.json`) : le self-test exige
+   FAIL sur la rouge, PASS sur la verte. **Un oracle qui ne sait pas échouer n'est pas un oracle.**
+6. **Une recette ÉPINGLE ce qu'elle éprouve** — sa donnée d'entrée comme la version de l'outil sous
+   test (TF-0912, 08/09/2026). Quatre fixtures rendaient un verdict qui dépendait de la MACHINE, et
+   deux jugeaient une version de l'outil qu'on venait de remplacer : une fixture rouge est devenue
+   muette (verdict PASS) sans que rien ne le dise, un cas « table absente » mesurait l'inverse de ce
+   qu'il croyait, et un banc de câblage restait vert sur la version de la veille. Trois déclinaisons,
+   et elles valent pour **toute** forge à fixtures :
+   - une fixture **désigne** sa donnée de jeu d'essai (`--referentiel=…`, `--produits=…`) et ne la
+     résout **jamais par voisinage** — « fichier voisin de l'artefact » atteint la donnée du poste
+     dès que la résolution de l'outil s'élargit ;
+   - l'isolement d'un banc se fait en **DÉCLARANT une racine jetable**, jamais en **effaçant** une
+     variable : effacer rend la main aux marches devinées, dont l'une atteint la donnée réelle ;
+   - un banc qui éprouve un **câblage** (hook, gate, lanceur posé) **épingle la version sous test**
+     — en déposant la SOURCE au repli que le câblage cherche — le câblage gardant son ordre de
+     recherche réel. Sans cela il éprouve la copie installée, pas ce qu'on vient de corriger.
+7. **Une règle de DENSITÉ exclut de son dénominateur ce que le socle impose ailleurs** (TF-0984,
+   08/09/2026). A5 comptait comme du texte les polices en `url(data:…)` que A1 exige : tenir A1
+   faisait échouer A5, et le gabarit de modèle de données rougissait en permanence. Toute règle qui
+   mesure une densité, une proportion ou un ratio retire de sa mesure les charges imposées par une
+   règle voisine. Et une règle neuve se joue contre un artefact qui applique DÉJÀ toutes les règles
+   voisines, pas seulement contre sa propre fixture.
+8. **Un oracle qui lit le texte d'un PDF le lit par plusieurs lecteurs** (TF-2367, 10/11/2026) — pypdf,
+   PyMuPDF et pdftotext, par `scripts/lib/texte-pdf.mjs` ; il n'écrit un défaut de lisibilité que si TOUS
+   les lecteurs disponibles échouent, et un désaccord se dit en information. Le fait : sur un CV mis en
+   page, PyMuPDF lisait « D A T A B R I C K S » quand pypdf et pdftotext lisaient « DATABRICKS », et un
+   faux défaut a failli partir chez la personne sur la foi du seul PyMuPDF. Premier oracle à l'appliquer :
+   `oracle-pdf.mjs`, P4.
+9. **Un contrôle se déclenche sur ce que le contenu fait, jamais sur la catégorie que son auteur déclare**
+   (TF-2635, 16/11/2026 ; R11 de `references/regles-oracles.md`). Une règle conditionnée à un pilier, un type,
+   une étiquette ou un dossier que l'auteur choisit laisse passer le contenu qui porte le défaut mais qu'il a rangé
+   ailleurs : elle ne s'est pas désactivée, elle n'a jamais été armée. *Le fait* : chez un produit, un contrôle de
+   publications refusait une présentation d'hébergement sans photo de la piscine pour 2 piliers éditoriaux ; 8 campagnes
+   rangées dans 2 autres piliers ont passé 66 contrôles à 0 échec avec 0 photo du domaine sur 40 images. Le déclencheur
+   se lit dans le contenu, et le jeu d'essais rouge porte un cas « même contenu, autre catégorie » qui rend le verdict de la
+   rouge : `write-an-oracle` le crée d'office (`<nom>-autre-categorie`, clé `autre_categorie` du manifest), la recette le
+   rejoue, et le self-test de `write-an-oracle` refuse un oracle scaffoldé sans lui.
+
+## 4. Règle de remontée (la liste grandit)
+Domaine sans oracle au registre → **définir** (scaffold en une commande : skill compagnon **`write-an-oracle`** —
+squelette + fixtures + entrées registre/manifest), **enregistrer**, **appliquer**.
+
+> **OÙ ENREGISTRER, ET NULLE PART AILLEURS (TF-1006, 16/09/2026).** La remontée s'écrit dans la
+> **source versionnée** du skill — `factory-forge-agents/.claude/skills/quality-oracles/references/registre-oracles.json`
+> puis sa vue `registre-oracles.md` —, **jamais dans la copie installée** sous `~/.claude/skills/`.
+> *Le fait* : le 10/09/2026, une remontée §4 exemplaire — un domaine réellement découvert, son
+> oracle, ses huit règles — a été écrite dans la copie qui s'exécute. Elle était juste ; seule sa
+> localisation était fautive, et cela suffisait à la condamner. La copie installée est **écrasée à
+> chaque propagation** (`node bootstrap.mjs --pull` du pilot, à chaque ouverture de session) : un
+> travail qui n'y vit que là disparaît sans bruit, et le dépôt qui le porte ne l'a jamais vu.
+> Deux conséquences pratiques : on édite la **source**, puis on propage ; et une remontée écrite
+> dans la copie installée se **rapatrie** vers la source avant toute propagation — le pilot relève
+> l'écart (`oracle-skills`, règle K11) et refuse d'écraser une copie en avance sur sa source.
+> Depuis le 16/09/2026 la règle est tenue par deux gestes, plus par la seule lecture : le
+> générateur de `write-an-oracle` **refuse** (exit 2) d'écrire un registre sous `~/.claude/skills/`
+> et nomme la source à viser, et le self-test de ce skill échoue si un domaine vit au registre
+> INSTALLÉ sans vivre à la source. Chaque audit enrichit la bibliothèque — un domaine n'est jamais « jugé à l'œil » deux fois.
+**Signalement = écriture (M1, D1, 23/07/2026)** : tout contrôle manuel sur un domaine hors registre produit **dans le tour même** une entrée dans la **file des candidats** (`file-candidats.md` du repo forge ; côté claude.ai : `/areas/forge-file-candidats.md`) — domaine, chantier, contrôle fait, défaut observé, date. Scaffold **obligatoire** (N1) dès : 2e occurrence **du même candidat** dans la file · rejeu d'un contrôle ad hoc dans un même fil · angle A1/A2 vide en contre-expertise d'un livrable client.
+**Règle de famille (M1, D1, 08/08/2026)** — le compteur porte sur le **candidat**, jamais sur le libellé exact du domaine. Deux entrées comptent pour le même candidat si elles partagent **(a)** le **préfixe de domaine** — segment avant le premier tiret : `cadrage-reponse-ao`, `cadrage-acquisition` et `cadrage-programme-formation` forment la famille `cadrage` —, **ou (b)** la **même classe de défaut** consignée, quels que soient les libellés. Motif : trois occurrences d'un même motif sous trois noms différents ne déclenchaient jamais N1, le candidat restait gelé indéfiniment (constaté le 08/08/2026 sur `gabarits de cadrage A0 par famille de livrable`, en attente depuis le 24/07/2026). Le critère (a) est mécanique et s'applique seul ; le critère (b) est un rattrapage, à instruire quand les préfixes divergent.
+
+**Spécification en amont (arbitrage Leviers, TF-0052, 11/08/2026 — « C armé par A »)** : avant tout
+**livrable substantiel** (page, deck, rapport, dashboard, gabarit), produire un **plan de contenu**
+— la liste des blocs et ce que chacun porte — et le confronter au **gabarit A0 de sa famille**
+quand il existe (première famille instanciée : page HTML de restitution, gabarit A0 chez
+forge-organization). Un écart se corrige sur 15 lignes de plan, pas sur 400 lignes de HTML.
+L'injection automatique par hook (option B) est écartée : le type d'un livrable n'est pas
+détectable avant l'écriture.
+
+## 5. Honnêteté & fiabilité du process
+- Ne **jamais recopier** un résultat d'une itération précédente ; itérer par **copie + éditions chirurgicales**.
+- Toute valeur non vérifiable est **marquée** (« à vérifier »), jamais maquillée ; rapporter fidèlement,
+  échecs inclus. **Un ✓ sans oracle exécuté n'est pas un ✓** (0 PASS = INCONCLUSIF, pas conforme).
+- L'oracle est en **lecture seule** pendant la boucle : ni seuils, ni références, ni registre ne bougent
+  entre deux itérations. Toute **exemption** vit dans `.oracles-exemptions.json` (fichier, domaine,
+  justification, échéance — expirée = FAIL) et est listée dans la restitution. Modifier l'oracle en cours de boucle = gaming.
+- **Un verdict dit sur quoi il porte (22/08/2026)** : le journal scelle l'empreinte du contenu jugé, et
+  `--verifier-empreinte` refuse (exit 1) de confirmer un verdict dont la cible a changé depuis. Citer un `CONFORME`
+  rendu sur un autre contenu est une affirmation fausse, pas une approximation.
+- **Ligne de couverture obligatoire (M1, D1, 23/07/2026)** : toute restitution d'audit se clôt par
+  « domaines jugés : N · hors registre : M → M candidats écrits ». Une restitution sans cette ligne
+  est non conforme — contrôlable par l'oracle `etat-forge` (F4).
+
+## 6. Proportionnalité
+Calibrer l'effort à l'**enjeu** et à la **réversibilité** — mécanisé (v2.4) : `--niveau note|diffuse|production`
+(défaut `diffuse`, env `QO_NIVEAU`) sélectionne les domaines et sévérités déclarés dans la section `niveaux` du profil
+(`exclus`, `warn_toleres` — production promeut les warns en FAIL). **Plancher non désactivable codé en dur**
+(format, secrets, calculs, claims) : un profil qui l'exclut = exit 2. Niveau tracé au journal et intégré à la clé de cache
+(un PASS de niveau inférieur n'est jamais recyclé plus haut) — sans jamais descendre sous §2 et §5.
+
+## Outillage (scripts)
+- **Orchestrateur** — `node scripts/run-oracles.mjs <cible> [--json] [--profil <nom|chemin>] [--niveau note|diffuse|production] [--no-cache] [--versionne]` (`--json` : le journal en JSON sur la sortie standard, rien d'autre, TF-2327 ; contrat de sortie §5) (`--versionne` : seul le contenu que git suit ou suivrait est jugé, TF-1702) : matching
+  par **extension + `trigger_files` + contenu** (`content_patterns`, qui RESTREINT les extensions d'une entrée qui déclare les deux — intersection, TF-1539), bornés par **`chemins`** quand l'entrée en porte
+  (dossiers où l'oracle s'applique, TF-1446) et par **`parties_paquet`** (préfixes de parties qu'un paquet zip doit
+  porter, `ppt/fonts/` par exemple — TF-1501), **type réel** (magic bytes ≠ extension = FAIL), exécution
+  **parallèle** + **cache** par hash (jamais sur FAIL/SKIP) + `timeout_ms`, verdict **PASS / FAIL / INCONCLUSIF** (exit 0/1/2),
+  **bilan 4 états** par fichier (jugé / exempté / délégué / signalé — somme = nb de fichiers, aucun silence), exemptions, journal `<cible>.oracles.json` + historique `*-historique.jsonl`.
+  Le journal et chaque ligne d'historique portent l'**empreinte du contenu jugé** au format existant `forge-ops/empreinte@1`
+  (`{format, release, ts, fichiers:{chemin: sha256 complet}}`) : un verdict dit désormais SUR QUOI il a été rendu.
+- **Accord des deux vues du registre** — `node scripts/verifier-accord-registre.mjs [--json …] [--vue …]` (TF-1538) :
+  la version de l'en-tête de `registre-oracles.md` est celle du JSON (V1), le script de chaque entrée du JSON est nommé
+  dans la vue (V2), chaque ligne de tableau de la vue a les colonnes de son en-tête (V3, une barre verticale s'écrit `\|`).
+  Jouée par la recette, dans les deux sens ; ce n'est pas un oracle de livrable, il n'a pas d'entrée au registre.
+- **Alertes de dépendances** — `node scripts/releve-alertes-dependances.mjs (--alertes <relevé gh api> | --depot <propriétaire/nom>) [--declaration <fichier>] [--json]`
+  (TF-2539) : sépare les alertes que l'hébergeur signale sur les **fixtures volontairement vulnérables** déclarées à `references/fixtures-vulnerables.json`
+  (chemin, date, motif ; les fixtures rouges de l'oracle SCA, qui ne se « corrigent » pas) de celles qui visent une **dépendance réelle**, à mettre à jour
+  sous recette verte. Exit 0 aucune dépendance réelle, 1 au moins une, 2 source ou déclaration illisible (jamais un « zéro » sur ce qu'on n'a pas lu).
+  Le 14/11/2026 : 35 alertes sur ce dépôt, les 35 sur les cinq fixtures déclarées. Jouée par la recette, dans les deux sens ; pas d'entrée au registre.
+  **Les manifestes de ces fixtures sont rangés sous un nom que l'hébergeur ne lit pas** (TF-2580, D-220 (a) du 15/11/2026) : `requirements.txt.fixture`, `uv.lock.fixture`,
+  `package-lock.json.fixture`… ; la déclaration nomme, par entrée, le fichier rangé (`range`) et le nom sous lequel la recette le rejoue (`rejoue`), et porte la liste datée et
+  sourcée des noms que l'hébergeur lit (`lecture_hebergeur`). La recette recopie la fixture sous ses vrais noms dans un dossier temporaire, y joue `oracle-sca.mjs` (inchangé), puis
+  retire la copie (`scripts/lib/fixtures-vulnerables.mjs`) ; un contrôle refuse tout manifeste de fixture rangé sous un nom lu. Une fixture rouge s'ajoute donc en rangeant son
+  manifeste sous `<nom>.fixture` et en le déclarant ; l'oracle lancé à la main sur le fichier rangé ne voit rien (SKIP) : la paire rouge/verte se joue par la recette.
+- **Où vivent les journaux** — sous un segment de livraison (`output/`, `old/`, `dist/`, `build/`), les journaux
+  sortent AU-DESSUS du premier segment rencontré, dans un `.oracles/` qui rejoue l'arborescence relative.
+  Corrigé le 22/08/2026 (TF-0501) : l'intention « ce que le client reçoit ne contient pas les traces de son audit »
+  était écrite depuis TF-0428 et n'était pas tenue — `_oracles/` était un dossier ENFANT du dossier livré, et le
+  message annonçait pourtant « HORS livraison », ce qui rendait le défaut invisible. Un journal écrit avant ce
+  correctif reste lu en repli dans l'ancien `_oracles/`, jamais réécrit.
+- **Registre injectable** — `--registre <chemin>` charge un registre d'oracles autre que celui du skill.
+  Sert les recettes qui doivent faire passer un oracle particulier sur une cible (TF-0497).
+- **Fraîcheur d'un verdict** — `node scripts/run-oracles.mjs <cible> --verifier-empreinte` : confronte l'empreinte du journal au
+  contenu présent, **sans rejouer les oracles**. `FRAIS` (exit 0) · **`PERIME` (exit 1) — un verdict périmé BLOQUE**, il n'avertit pas
+  (arbitrage humain du 22/08/2026) · `NON JUGEABLE` (exit 2) quand il n'y a pas de journal, ou quand le journal est ANTÉRIEUR au
+  mécanisme et ne porte pas d'empreinte — antériorité **déclarée, jamais mise en échec** : un verdict ancien n'est pas un verdict faux.
+  Pourquoi : mesuré le 22/08/2026, 2 journaux confrontables sur 2 portaient un `PASS` rendu avant une modification de leur cible ;
+  un `CONFORME` cité dans une restitution vieillissait en silence, ni re-vérifiable ni invalidable.
+- **Surface d'analyse (2.9.0, TF-0485/0486/0487)** — un livrable AUTOPORTANT embarque son code, sa charte et ses
+  sources ; aucune de ces zones n'est une affirmation DU LIVRABLE. `oracle-claims` blanchit donc `<script>`, `<style>`,
+  `<pre>`, `<code>`, `<blockquote>`, tout élément portant `data-cite`, et le code en ligne des Markdown — lignes
+  préservées, les numéros de constat restent justes. Même règle que L1 de `check_html`
+  (`if parent.tag in ("script", "style"): continue`), qui était le précédent disponible et n'avait pas été suivi.
+  Mesuré le 22/08 : une référence arrière `$1` lue comme « montant 1 $ » (FAIL bloquant), deux couleurs de charte
+  (`#334155`, `#374151`) lues comme des nombres non sourcés — et seulement les couleurs PUREMENT numériques, `#0F172A`
+  passant —, onze « 100% » provenant de documents CITÉS, incorrigibles sans falsifier la source. Les contournements
+  subis avant correction disent le coût : réécrire les `$1` en fonctions de remplacement, écrire deux couleurs en
+  `rgb()` alors que la charte prescrit l'hexadécimal. Dégrader le livrable pour plaire à l'oracle.
+- **Source de section (2.19.0, TF-1902)** — une source posée SOUS LE TITRE d'une section couvre les chiffres de cette section.
+  `oracle-claims` ne voyait une source que dans la ligne du chiffre et ses deux voisines : une étude sur les réseaux sociaux,
+  dont chaque section ouvrait par « Source : … », a dû la recopier ligne par ligne (texte alourdi de mentions répétées, rien
+  de plus pour le lecteur). Le titre se lit en Markdown (`#` à `######`) et en HTML (`h1` à `h6`, sans décaler un numéro de
+  ligne) ; la première ligne non vide sous le titre doit COMMENCER par un libellé de source (source(s), d'après, selon, réf.,
+  à vérifier, adresse) — un « cf. » en cours de phrase ou une source posée plus bas ne couvre pas la section. La portée va
+  jusqu'au titre suivant de même rang ou supérieur : une sous-section hérite de la source de sa section, la source d'une
+  sous-section ne remonte pas. La source d'un tableau n'a pas à être recopiée à chaque ligne : il se source une fois (puce
+  suivante), et ses lignes de total restent à `oracle-calculs`. Fixtures `claims-section-*` (md et html).
+- **Tableaux, diapositives, grille de prix (TF-2358, TF-2318, TF-2359, TF-2319, TF-2357, 10/11/2026)** — `oracle-claims` juge
+  les montants et TJM des lignes de tableau hors lignes de total : un tableau est sourcé par son en-tête, sa légende, sa note ou
+  une colonne de source (adresse, citation, preuve, calcul) ; mesuré sur 700 documents du pilot, 4 FAIL neufs (0,6 %), tous des
+  montants de tableau sans marqueur. Dans un texte de diapositives (lignes-repères « Diapositive N », ou sauts de page avec
+  `--diapositives`), la source se cherche dans la diapositive entière ; en texte à plat, une cellule courte est couverte par la
+  cellule d'en-tête à marqueur posée au-dessus d'elle — le même tableau rend le même verdict extrait en lignes ou à plat.
+  `--grille <grille.json>` rapproche chaque montant non dérivé d'une grille de prix (G1, G2 bloquants ; G3 avertissement).
+  Les données `data:` sont écartées avant analyse : une page autoportante de 272 Ko, sans verdict en 150 s, rend en 1 à 2 s.
+- **Arbre jugé au pre-push (2.20.0, TF-1953)** — la porte des noms (`oracle-nom-client-publie`) juge, sous `--revs`, l'arbre des
+  révisions ENVOYÉES, lu dans les objets de git, et non le disque. Mesuré le 20/10/2026 au pilot : un envoi de 5 révisions refusé
+  par 2 constats C5 sur des lignes non enregistrées (HEAD 44 lignes, disque 49). Sans `--revs` le disque reste jugé et le verdict
+  le dit (`ARBRE JUGÉ`, au non jugé). Les empreintes positives avant `--not` sont les arbres ; `^<empreinte>` et `--remotes=` bornent
+  l'histoire. Un objet illisible se compte et se déclare. Recette `self-test-hamecon-publication.mjs`, cas 16 ter (envoi propre
+  avec disque sale : refusé avant, accepté après ; nom publié effacé du disque seulement : C1 le nomme après).
+- **Le distant dit ce qu'il porte (TF-2027)** — le pre-push exclut aussi les têtes que `git ls-remote --heads` annonce et que le
+  dépôt connaît, en plus de l'empreinte distante de git et des suivis locaux. Mesuré le 29/10/2026 au pilot : 4 enregistrements déjà
+  publiés refusaient tout envoi (4 constats C5) ; rejoué le 02/11 sur un clone jetable, un suivi local en retard et une empreinte
+  distante nulle (branche neuve) redonnent exactement ces 4 constats. Distant injoignable : plage d'avant. Le passé publié est exclu,
+  non compté (HISTOIRE RESTREINTE, au non jugé). Recette `self-test-hamecon-publication.mjs`, cas 16 quater (refusé avant, accepté
+  après ; un ajout porteur dans le même envoi reste refusé). Les hooks posés se mettent à jour par une repose de l'installeur.
+- **Identité de publication au pre-push (2.23.0, D-175, TF-2168)** — avant la porte des secrets, le pre-push joue
+  `scripts/porte-identite-publication.mjs` : le compte que rend `gh api user`, lancé avec l'environnement de l'envoi
+  (`GH_CONFIG_DIR`, `GH_TOKEN`, `GITHUB_TOKEN`), doit figurer dans `comptes_autorises` du référentiel du pilot
+  `references/IDENTITE-PUBLICATION.json`. Le fait : le 05/11/2026 à 09:17, l'envoi d'une forge est parti sous le compte du
+  profil de session d'un produit client et n'a été arrêté que par le 403 de l'hébergeur. Un produit (nom hors de `depots`) passe,
+  SANS_OBJET dit. Compte hors liste : refus (exit 1) qui nomme le compte lu et le remède ; compte illisible, assistant autre
+  que `gh auth git-credential` seul, envoi par ssh, référentiel introuvable : refus aussi (exit 2). `git push --no-verify`
+  reste le contournement explicite de tous les hameçons. Recette `self-test-hamecon-publication.mjs`, cas 18 (a à l), faux gh
+  et aucun appel réseau. Les hooks posés se mettent à jour par une repose de l'installeur, décidée par le pilot.
+- **Profils** — `profils/factory.json` · `generique.json` (défaut : factory, env `QO_PROFIL`) : budgets perf,
+  politique pptx, convention de nommage, marqueurs de sources et motifs additionnels (claims : `motifs_bloquants` / `motifs_warn`),
+  niveaux d'exigence (§6), seuils `visual_diff` (seuil_ratio, breakpoints, tolerance_pixel), rubrique du juge, `ignore_patterns`. Un contexte client = un JSON, zéro code.
+- **Contrat de SORTIE du lanceur** — ce que `run-oracles.mjs` REND à son appelant (forme de chaque
+  ligne rendue, en-tête `<n> constat(s) · ` du champ `detail`, codes de sortie, modes `--json` et
+  `--verifier-empreinte`) est écrit et **versionné** dans
+  [`references/contrat-sortie-runner.md`](references/contrat-sortie-runner.md) — **v1.2.0**, avec
+  l'historique daté de ses changements. Le lanceur est hérité par toutes les forges et le hook
+  d'écriture identifie un constat par cette ligne : tout changement de la sortie **incrémente la
+  version** du contrat et se déclare au registre. La forme y est **opposable** — `self-test.mjs`
+  la lit dans le document et la confronte à la ligne réellement rendue (TF-0824).
+- **Oracles CLI** (contrat d'ENTRÉE, JSON `{oracle,domaine,artefact,verdict,findings[],non_juge[]}`, exit 0/1/2 ;
+  **tout `SKIP` porte `motif`**, chaîne non vide, la raison pour laquelle l'oracle n'a pas jugé — un champ, jamais
+  une position dans `non_juge` : chaque oracle déclare son domicile à l'écrivain `scripts/lib/contrat.mjs`, et la
+  recette refuse un SKIP sans motif, TF-1447) :
+  format (UTF-8, zip, placeholders) · code (compilation) · perf (budgets du profil) · **calculs** (re-somme exécutée des
+  lignes Total, **sous-totaux et Total général**, répartitions % totalisées — tables md/html) · **claims** (montant, **TJM ou charge
+  j.h en contexte d'engagement** sans source ni « à vérifier » = FAIL ; dates d'échéance = warn ; incohérence intra-document, unités €/%/j/j.h) ·
+  **coherence** (`oracle-coherence.mjs <dossier|fichier>` : divergences de grandeurs **entre livrables** d'un dossier, versions antérieures exclues par la convention de nommage ; et le **fond** — statut d'une ligne nié par son texte, affirmation absolue démentie, compte figé, préséance non déclarée : un « cohérent » ne se prononce jamais sur un grep de noms) ·
+  **visual-diff** (`oracle-visual-diff.py` : rendu vs **goldens** versionnés `.oracles-goldens/`, masques de zones dynamiques,
+  entérinement **hors boucle uniquement** via `--accepter` — refusé après un FAIL non re-jugé, R5 ; sous `output`, `old`, `dist` ou `build`, références et
+  historique vivent sous le `.oracles/` commun aux journaux, au-dessus du segment de livraison, jamais dans le dossier remis, TF-2363) ·
+  **nommage** (convention du profil) · **pptx** (intégrité du zip, transitions/JPEG selon profil, smoke-test LibreOffice) ·
+  **polices embarquées** (`oracle-polices-embarquees.mjs`, PPTX, DOCX, PDF et page HTML : E0 décodage, E1 contours = police
+  installée, E2 boîte englobante ; Python + fontTools, pypdf pour le PDF, brotli pour le WOFF2, Windows pour le MTX d'un PPTX
+  — TF-1501, TF-1504) ·
+  secrets · sca · sast · a11y (WCAG structurel) · llm (schéma JSON) · **terraform** (`oracle-terraform.mjs` : fmt -check et validate
+  sans init, puis D1 une date d'effet écrite en dur jugée contre le mois d'application — TF-1492) ·
+  **image de conteneur** (`oracle-image-conteneur.mjs` : C1 aucune couche reprise du cache du poste, C2 trivy HIGH/CRITICAL sur
+  une image construite --no-cache — invocation explicite, TF-1499) ·
+  **judge** (LLM-juge externe `claude -p`, rubrique figée — avis outillé, invocation explicite ; rubrique **lecteur visé** par
+  `--lecteur-vise` : 2 relecteurs jouent le lecteur de la fiche, constat retenu seulement s'ils s'accordent, question répétée
+  remontée à l'humain, suites dans `REVUE.md`, SIGNALEMENT jamais bloquant — mode d'emploi [`references/lecteur-vise.md`](references/lecteur-vise.md), TF-1392, TF-1394).
+- **Oracles délégués** (registre) : rendu HTML → `render_page.py` (factory-page-html) ; données → `data-quality-auditor` ; prompts → `prompt-analyzer-l99` ; schémas → `factory-schemas` ; kit RefAudit (externe, projet client). Skill/kit délégué absent de l'environnement → **jamais de substitution silencieuse** : contrôle manuel tracé (§2) et signalement (R6).
+- **Bibliothèque partagée** — `scripts/lib/` : `num.mjs` (parsing des nombres affichés, libellés de totaux), `tables.mjs`
+  (extraction tables md/html), `claims-extract.mjs` (affirmations labellisées) — source unique consommée par calculs, claims et coherence.
+- **Utilitaires** — `self-test.mjs` (frontmatters, registre, **cohérence registre↔environnement des délégués**, profils et niveaux §6, compilation dont `lib/`, **rejeu des fixtures**) · `bootstrap.mjs
+  [--install]` (outils externes, dégradations motivées) · `report-couverture.mjs <racine>` (verdicts, top FAIL/SKIP, exemptions, bilan cumulé).
+
+## Ce que la campagne du 02/09/2026 a ajouté (registre v2.15.0)
+
+Quatre défauts ont en commun d'avoir traversé **toutes** les portes existantes. Les contrôles
+regardaient la forme ; personne ne regardait ce que le livrable **dit à son lecteur**.
+
+| Ce qui manquait | Où c'est désormais | Bruit mesuré (corpus du dépôt) |
+|---|---|---|
+| Aucun oracle ne jugeait la **conception** d'un livrable — 17 contrôles de forme verts, deux refus du lecteur | `oracle-conception-livrable.mjs` (C1 glossaire, C2 cardinal énuméré, C3 liste autoportante, C4 intention de chapitre) | 0 FAIL / 103 documents |
+| Un **pourcentage** publié sans son dénominateur, et des **unités** d'en-tête jamais lues | `oracle-calculs` N3, N4, N5 (`lib/mesure.mjs`) | 0 FAIL / 103 documents ; couverture 1 → 4 PASS |
+| Aucun oracle ne demandait si un **lecteur sans contexte** comprend la page | `oracle-lecture-tiers.mjs` (T1 intention, T2 vocabulaire, T3 geste, T4 lecture par un tiers) — **invocation explicite** | 6 SKIP (gabarits) / 1 FAIL sur 7 pages |
+| Le **ledger** d'un run n'était que journalisé, jamais jugé | `oracle-etat-forge` F6 (maquette validée avant le code) et F7 (l'auteur ne juge pas son propre contrat), via `--ledger` | — (artefact fourni explicitement) |
+
+**La discipline de bruit est la même pour les quatre**, et elle est écrite dans chaque code à
+l'endroit où elle s'applique : un contrôle neuf est **mesuré sur les documents réels du dépôt
+avant d'être rendu bloquant** ; celui qui accuse à côté se publie **en avertissant, avec son taux
+et son seuil**. Un contrôle qui accuse un tiers du parc se fait désactiver dans la semaine, et il
+aurait eu raison — c'est le motif que R-33 bis donne pour ne pas armer d'office le verdict websec :
+« armer un gate que personne n'a exercé le ferait désarmer au premier faux positif ».
+
+## Ce que la campagne du 03/09/2026 a ajouté (registre v2.16.0)
+
+Quatre trous de couverture ont été comblés ce jour-là. Chaque ligne dit ce qui n'était surveillé
+par rien, l'oracle qui le juge désormais, et le bruit que cet oracle produit sur le corpus réel du
+dépôt — un contrôle dont personne n'a mesuré les faux positifs n'est pas prêt à être branché.
+
+| Ce qui manquait | Où c'est désormais | Bruit mesuré (corpus du dépôt) |
+|---|---|---|
+| Rien ne surveillait la **copie** d'un composant d'un skill dans un autre — sept correctifs, une copie qui n'en a reçu aucun | `oracle-parite-assets.mjs` (P1 déclaration, P2 empreinte, P3 parité octet, P4 exemption datée et motivée) | **6 détections / 6 vraies / 0 faux positif** sur 178 pages `.html` |
+
+**Le fait.** `factory-schemas/assets/exemple-reference.html` embarquait une copie **manuelle** de
+`factory-page-html/assets/table-filters.js`. Le composant a été corrigé sept fois
+(TF-0429/0430/0431 le 21/08 ; TF-0768/0769/0781/0782 le 02/09) ; la copie n'a pas bougé d'un octet
+— **même dépôt, deux dossiers d'écart**. Classe TF-0761 / RT-39 (*un générateur réécrit hors
+d'atteinte des corrections*), transposée **entre deux skills**.
+
+**Ce que cet oracle change de méthode** : il ne juge pas un fichier, il juge une **arborescence**,
+et le self-test le rejoue **sur le dépôt réel** — c'est le seul angle qui arrête le *troisième*
+skill. Les fixtures rouge/verte prouvent la règle sur un socle de jeu d'essai aux noms inventés ;
+le cas réel, lui, prouve que la règle est **branchée sur ce qui existe**. Le poseur associé
+(`factory-page-html/scripts/embarquer-composants.mjs`) écrit, l'oracle ne fait que juger.
+
+## Gouvernance du registre
+- Registre **versionné**, double vue JSON (machine) ↔ MD (humaine) ; domaine ❌ rencontré → **§4**. Les priorités se lisent dans `report-couverture`, pas à l'intuition.
+- **Barrière des scripts de contrôle (TF-2399, étendue par TF-2452 le 12/11/2026)** : tout `oracle-*.mjs|py` et tout `check_*.py` d'un skill de ce dépôt, du pilot ou d'une forge est inscrit au registre, ou déclaré hors registre avec un motif dans [`references/oracles-hors-registre.json`](references/oracles-hors-registre.json) ; le self-test échoue sinon, sur une déclaration morte, doublée ou contredite par le registre. Un oracle neuf d'une forge ou du pilot entre donc à l'un ou à l'autre le jour de sa publication. **Depuis le 13/11/2026 (TF-2466, 2.31.0), un oracle sans appelant n'a plus de motif qui le justifie** : sa ligne se câble (`appelants` nommés), ou porte le motif `manuel` avec `manuel.motif` (20 caractères au moins) et `manuel.commande` (la commande qui le joue, elle nomme le script) ; sans l'un ou l'autre, le self-test nomme la ligne. Un retrait se propose au rapport d'une campagne, jamais d'office.
+- **Nature de l'appel d'un oracle déclaré hors registre (TF-2488, 2.33.0, 13/11/2026)** : le relevé d'appelants ne voyait ni un self-test, ni la règle EN1 d'`oracle-enclenchement`, ni une étape prescrite par un document, et neuf des douze oracles « sans appelant » de TF-2466 étaient en réalité joués en recette ou prescrits par un document. Chaque ligne de [`references/oracles-hors-registre.json`](references/oracles-hors-registre.json) nomme donc la nature de ses appelants dans `natures` : `executable` (script, hameçon, lanceur, ou le fichier de configuration qu'il lit), `recette` (self-test, `*.test.mjs`, cliquet ou manifeste de recette), `document` (un `.md` qui prescrit l'étape). Le self-test relit la nature au chemin de chaque appelant et refuse une ligne sans `natures`, à nature inconnue, ou qui en nomme une autre que celle de ses appelants ; une ligne sans appelant porte `natures: []` et le motif `manuel`. Le registre machine fait foi pour les oracles qu'il inscrit (`oracle-clip`, `oracle-restitution`) : la barrière refuse qu'un script y figure ET soit déclaré dans cette liste. Sens rouge et vert joués sur une ligne jouet (document, recette, trois natures, nature absente, inconnue, mal déclarée).
+- **Manifeste de livraison (TF-2493, 2.33.0, 13/11/2026)** : la recette du dépôt forge-agents joue `node maj-versions-livrees.mjs --constat` et échoue si `versions-livrees.json` n'est pas aligné sur les versions réelles des skills et de leurs registres. Le 13/11/2026, le manifeste portait 7 écarts (dont le registre de quality-oracles à 2.60.0 pour 2.61.0) que le constat de TF-0336 relevait déjà, sans qu'aucune recette ne le lise. Le remède est `node maj-versions-livrees.mjs --livrer`, joué dans le commit qui livre le skill. Sens rouge et vert joués sur un dépôt jetable (manifeste en retard, puis aligné) ; une copie installée, qui n'a pas ce script, déclare un SKIP motivé.
+- **Application forcée** (recommandé) : hook PreToolUse bloquant toute livraison sans run PASS — snippet : [`references/hook-pretooluse.md`](references/hook-pretooluse.md).
+
+## Workflow
+1. `node scripts/run-oracles.mjs <cible>` → verdict + bilan 4 états + journal + actions.
+2. Traiter les domaines **délégués / signalés** (invoquer le skill ; aucun oracle → §3 + §4 via write-an-oracle), puis auto-critique §1/§2.
+3. **Ne livrer** que si verdict PASS (ou écarts marqués et assumés, §5). Boucle **bornée à 3 itérations** ;
+   au plafond, handoff humain avec l'historique — jamais d'abaissement de seuils.
+
+```bash
+node scripts/run-oracles.mjs "Factory - Fiche Client - Scope - AAAAMMJJa.html" --profil factory
+```

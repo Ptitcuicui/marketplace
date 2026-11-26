@@ -1,0 +1,7764 @@
+#!/usr/bin/env python3
+"""
+self_test.py — Preuve que les contrôles de lisibilité peuvent échouer.
+
+Un contrôle qui ne peut pas échouer ne prouve rien. Ce script lance
+`check_html.check()` sur les fixtures du skill et vérifie que :
+
+  · la fixture VERTE ne déclenche AUCUN échec de lisibilité ;
+  · chaque fixture ROUGE déclenche EXACTEMENT la (les) règle(s) attendue(s) —
+    ni moins (le contrôle est aveugle), ni plus (le contrôle est bruyant).
+
+Usage :
+    python scripts/self_test.py
+    python scripts/self_test.py --output json
+
+Code de sortie : 0 si tous les cas passent, 1 sinon.
+"""
+import argparse
+import ast
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+
+# Windows : forcer stdout/stderr en UTF-8 pour ne pas planter (cp1252) à l'impression
+# de caractères hors Latin-1 (✅, ①-⑤, tirets cadratins…). Garde-fou si non supporté.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from check_html import check  # noqa: E402
+
+FIXTURES = Path(__file__).resolve().parent.parent / "fixtures"
+
+# fichier -> règles attendues (ensemble de codes). Ensemble vide = doit passer.
+CAS = {
+    "lisibilite-verte.html": set(),
+    # TF-0489 (23/08) — LE LECTEUR DE SOURCE, le composant que la regle A1 rendait necessaire
+    # et qui n existait pas : une page autoportante ne peut pas renvoyer a des fichiers du
+    # depot, donc elle EMBARQUE les documents cites — et un <pre> de 67 Ko est illisible. La
+    # fixture porte le composant COLLE (aucun fichier voisin), son document en Markdown, et la
+    # doctrine des liens non cliquables. Elle doit passer TOUTES les regles : c est un exemple
+    # de reference, pas une demonstration.
+    "src-lecteur-de-source.html": set(),
+    # 23/08, choix humain (option etendue) : une PROMESSE ecrite en commentaire est verifiee. Le
+    # cas fondateur est QUANTIFIE — « un <title> par forme » — et le schema portait bien UN titre,
+    # celui du diagramme entier, et aucun sur ses formes. Une regle de simple presence passait
+    # donc en donnant l'impression de couvrir son propre cas fondateur. Les deux fixtures ne
+    # different que par les titres poses sur les groupes, et par un commentaire de NEGATION qui
+    # ne promet rien.
+    "l22-promesse-non-tenue.html": {"L22"},
+    "l22-promesse-tenue.html": set(),
+    # TF-0733 (31/08) — le voile invisible aux seize oracles : un composant masque par `hidden`
+    # mais style par un display EXPLICITE devient un rectangle transparent qui intercepte chaque
+    # clic — invisible en capture, invisible a la lecture, trouve par elementFromPoint chez le
+    # produit. Les deux fixtures ne different que par la garde `[hidden]{display:none !important}` ;
+    # une page qui n'emploie pas `hidden` n'est pas jugee (borne ecrite dans la regle).
+    "l23-voile-sans-garde.html": {"L23"},
+    "l23-garde-posee.html": set(),
+    "l1-texte-coupe.html": {"L1"},
+    "l1-ponctuation-orpheline.html": {"L1"},
+    # TF-0488 (22/08) — le SUJET d un selecteur est son DERNIER composant. La verte porte
+    # `a.kpi .kpi-label{display:flex}`, `li.item > .badge{display:block}` et
+    # `.carte + .carte .titre{display:grid}` : avec la lecture au PREMIER composant, elle
+    # rendait 3 faux L1 sur des phrases parfaitement formees (mesure du 22/08). La rouge garde
+    # le meme CSS et y ajoute une vraie ponctuation orpheline : la regle doit encore mordre.
+    "l1-selecteur-descendant-vert.html": set(),
+    "l1-selecteur-descendant-rouge.html": {"L1"},
+    # TF-0683 (26/08) — le sujet etait bien lu, mais la CONTRAINTE D ANCETRE etait jetee :
+    # `.toc a` mettait en bloc TOUT `<a>` du document. Mesure sur piece : six constats faux sur
+    # un livrable, dont les deux seules issues vertes etaient de RETIRER des liens d une prose ou
+    # de RENOMMER une classe de sommaire pour tromper le controle. La verte porte un sommaire qui
+    # FERME avant la prose ; la rouge porte le meme CSS avec le lien VRAIMENT dans le sommaire,
+    # parce qu un matcher devenu trop strict passerait sinon pour un correctif.
+    "l1-ancetre-hors-portee-vert.html": set(),
+    "l1-ancetre-dans-portee-rouge.html": {"L1"},
+    # TF-0517 (22/08) — retour DIRECT du client : « je ne sais pas ce qu est E2 ». Un renvoi code
+    # porte son sens la ou on le lit. La verte emploie la bonne pratique qui existait DEJA dans le
+    # rapport HTML du meme projet : une infobulle qui developpe le code, plus son ancre de
+    # definition. Elle ne passait nulle part ailleurs, faute d etre ecrite.
+    "l18-identifiant-muet.html": {"L18 (jeton)"},
+    "l18-identifiant-glose.html": set(),
+    # TF-0944 (08/09) — L18 bis : le SYSTEME d'identifiants, pas le jeton. Les trois fixtures
+    # tiennent ensemble : la rouge porte des jetons TOUS gloses (L18 vert) et echoue quand meme ;
+    # la verte pose la legende AVANT le tableau ; la troisieme pose la MEME legende APRES, et
+    # echoue — sans elle, une regle qui se contenterait de trouver la declaration quelque part
+    # rendrait le meme verdict sur les deux, et le vert ne prouverait rien.
+    "l18bis-systeme-non-explique.html": {"L18 bis"},
+    "l18bis-systeme-explique.html": set(),
+    "l18bis-legende-apres-le-tableau.html": {"L18 bis"},
+    # TF-0952 (08/09) — L31 : une hierarchie longue rendue en tableau se PLIE. Les deux fixtures
+    # portent la MEME donnee ; seule la table de la verte porte `data-arbre`.
+    "l31-hierarchie-non-pliable.html": {"L31"},
+    "l31-hierarchie-pliable.html": set(),
+    # TF-1147 (16/09/2026, lot Produit-64 20260916a) — LA REFERENCE JUSTE DANS LE FICHIER ET MORTE
+    # DANS L INSTANCE SERVIE. Huit schemas definissaient leur pointe de fleche sous le MEME
+    # identifiant : url(#pointe) resolvait vers le premier, et sept schemas sur huit se peignaient
+    # sans pointe des que leur vue etait affichee seule. Les quatre fixtures portent la MEME
+    # construction ; seuls les identifiants et le lieu des definitions changent.
+    # TF-1144 (16/09/2026, lot Produit-64 20260916a) — LA REGLE QUE L16 PRESCRIT DANS SON MESSAGE
+    # DE REFUS FAISAIT ECHOUER L1 SUR SIX PASSAGES DE PROSE INTACTS. Le compound
+    # `[role="tabpanel"][hidden]` etait declare non evaluable, donc permissif, et ne trouvant ni
+    # balise ni classe ni identifiant a verifier il retenait TOUT ELEMENT du document. La premiere
+    # fixture joue le remede que le message prescrit, mot pour mot, et doit PASSER (TF-1013) ; les
+    # deux suivantes prouvent que les selecteurs d attribut sont desormais EVALUES, pas ignores —
+    # sans la rouge, corriger le faux positif aurait pu eteindre la regle en silence.
+    # TF-1145 (16/09/2026, lot Produit-64 20260916a) — L6 ET sommaire_perdu LISAIENT LE MEME
+    # PREMIER NAV, ET LEURS DEUX EXIGENCES S EXCLUAIENT SUR UN DOCUMENT LONG. Le destinataire
+    # demande un menu sans annonces ; onze echecs L6 tombent. Les deux fixtures portent la MEME
+    # page a une difference pres : dans la verte, UNE des deux navigations porte les annonces ;
+    # dans la rouge, aucune — et L6 mord alors exactement comme avant. Sans la rouge, elargir la
+    # collecte aurait suffi a s exempter de la regle en ajoutant un second nav.
+    "l6-deux-navigations-complementaires.html": set(),
+    "l6-aucune-navigation-annotee.html": {"L6"},
+    "l16-regle-impression-prescrite.html": set(),       # le remede prescrit par L16, joue sous L1
+    "l1-attribut-retenu-rouge.html": {"L1"},            # le porteur PORTE l attribut : L1 mord
+    "l1-attribut-ecarte-vert.html": set(),              # il ne le porte pas : plus de faux positif
+    "l32-marqueur-svg-duplique.html": {"L32"},          # deux <marker id="pointe"> dans un document
+    "l32-marqueurs-svg-uniques.html": set(),            # un identifiant par schema
+    "l33-reference-hors-de-son-svg.html": {"L33"},      # le schema 2 emprunte la piece du schema 1
+    "l33-defs-partagees-declarees.html": set(),         # depot mutualise, et il se DECLARE
+    # TF-0492 (22/08) — `overflow-wrap: anywhere` est necessaire sur un chemin, ravageur sur de
+    # la prose. La verte le reserve a `code`, `pre` et aux classes qui disent leur usage technique.
+    "l19-coupure-en-prose.html": {"L19"},
+    # TF-0554 (24/08, lot Produit-10) — LA REGLE REFUSAIT CE QUE LE SOCLE EXIGE. `composants.md` §6
+    # impose « overflow-wrap: anywhere sur les cellules » comme palier intermediaire OBLIGATOIRE du
+    # repli en cartes ; L19 traitait `td` comme de la prose et rendait FAIL bloquant. Mesure : huit
+    # livrables PASS le 19/08 rendaient douze FAIL le 24/08 sans qu un octet ait bouge. La cause
+    # profonde etait que `regles_css` APLATISSAIT la feuille sans garder le contexte d at-rule : un
+    # selecteur ecrit sous `@media` etait juge comme s il s appliquait partout.
+    "l19-repli-cartes-legitime.html": set(),
+    "l19-coupure-reservee-au-technique.html": set(),
+    # TF-1627 (RA-7) — le message de L19 promettait l'exemption data-coupure-ok, que la règle
+    # ne lisait pas. Déclarée sur tous les éléments habillés : vert ; sur une partie : rouge.
+    "l19-coupure-declaree-sur-element.html": set(),
+    "l19-coupure-declaree-partielle.html": {"L19"},
+    # TF-0495 (22/08) — la frontiere entre « le contenu est PRESENT » et « le contenu est
+    # EXPLOITABLE ». Un document embarque en texte brut passait TOUS les oracles ; il a fallu que
+    # le client le redemande DEUX FOIS pour qu'une vue lisible soit produite. Les trois fixtures
+    # portent le MEME bloc de 95 lignes : sans alternative, avec une bascule cablee, et avec le
+    # motif declare — parce que ce qui est delibere se declare et ce qui est subi se corrige.
+    "l20-brut-sans-alternative.html": {"L20"},
+    "l20-brut-avec-bascule.html": set(),
+    "l20-brut-declare.html": set(),
+    # TF-0521 (23/08) — un composant DECLARE sans style est invisible aux DEUX oracles : celui du
+    # MARQUAGE trouve la classe et s'arrete la, celui du RENDU ne voit rien tant que rien ne deborde.
+    # Mesure : deux squelettes de la bibliotheque portaient un sommaire annonce et non style, il se
+    # rendait en liste numerotee nue — vu seulement en comparant a un livrable REEL. La rouge est la
+    # fixture verte AVEC LE SEUL BLOC DE STYLE DU SOMMAIRE RETIRE : une difference, une regle.
+    "l21-composant-sans-style.html": {"L21"},
+    "l2-largeur-bridee.html": {"L2"},
+    # TF-1371 (24/09/2026, lot Produit-68 20260924a, RG-10) — LE CONTENEUR PRINCIPAL REPÉRÉ PAR SA
+    # POSITION, PAS PAR SON NOM. Mesuré chez un produit : un conteneur nommé `.app`, plafonné à
+    # 1 280 px, occupait 67 % d'une fenêtre de 1 920 px et 33 % d'une fenêtre de 3 840 — sous le
+    # plancher de 75 % de la règle E4 — et L2 rendait PASS, aucun des six noms convenus
+    # (`body`/`main`/`.wrap`/`.container`/`.page`/`#page`) ne le voyant. Avant la correction, cette
+    # fixture (conteneur `.app`, aucun nom convenu) rendait 0 constat L2 ; `conteneur_principal`
+    # le repère maintenant par sa position (plus grand enfant direct de `<body>` hors landmarks).
+    "l2-conteneur-renomme.html": {"L2"},
+    "l3-tooltip-vide.html": {"L3"},
+    "l3-bareme-absent.html": {"L3"},
+    "l4-table-sans-filtre.html": {"L4"},
+    "l5-surlignage-casse-mot.html": {"L5"},
+    "l5-collision-de-classe.html": {"L5"},
+    # Même page, classes disjointes (convention `find-hit` du socle) : L5 doit se taire.
+    "l5-classes-separees.html": set(),
+    "l6-ancre-morte.html": {"L6"},
+    "l6-entree-sans-annonce.html": {"L6"},
+    "l7-chapitre-sans-chapeau.html": {"L7"},
+    "l8-lien-muet.html": {"L8"},
+    # TF-0174 (13/08) : routage SPA par hash — data-nav + script = exempt ; data-nav sans
+    # script = liens morts, L8 se déclenche.
+    "l8-spa-cablee.html": set(),
+    "l8-spa-morte.html": {"L8"},
+    "l9-detail-vide.html": {"L9"},
+    "l9-depliant-muet.html": {"L9"},
+    "l9-depliant-inutile.html": {"L9"},
+    "l12-enumeration-en-prose.html": {"L12 (données)"},
+    # 22/08 — la MÊME page, sa zone de contenu déclarée citée (data-cite) : L12 se tait.
+    # Doctrine TF-0436 étendue : un oracle de forme ne juge pas un texte que la page n'a pas
+    # écrit. Cas réel : la page du registre TODO rend le contenu des candidatures.
+    "l12-enumeration-citee.html": set(),
+    "l10-table-sans-mode-emploi.html": {"L10"},
+    # Delta n°6 (14/08) : liste ≥ 8 lignes sans champ de recherche statique — L13 seule
+    # (data-filterable pose L4 muette, exemple de lecture pose L10 muette).
+    "l13-liste-sans-recherche.html": {"L13"},
+    "l11-litteral-null.html": {"L11"},
+    # TF-1590 (RT-116) — « None » ouvrant une phrase d'une page lang="en" est un mot anglais ;
+    # la même page qui rend « None » seul dans une valeur reste rouge.
+    "l11-none-phrase-anglaise.html": set(),
+    "l11-none-valeur-seule.html": {"L11"},
+    # Lot Produit-02 du 02/09 (TF-0772/0771/0778/0777/0783/0754) — cinq regles neuves, cinq
+    # paires. Chaque paire porte la MEME page a une difference pres, et cette difference est
+    # exactement ce que la regle mesure : le sommaire (L25), la bride de largeur autour du
+    # tableau et non autour de la prose (L26), la definition des en-tetes (L27), la valeur
+    # d'ordre des mois (L28), le decalage du thead par le token --hh (L29).
+    # G7 un cran plus bas : une exemption de facette PAR COLONNE se motive, comme celle du
+    # tableau entier (TF-0782). Les deux fixtures ne different que par data-filter-reason.
+    "l4-exemption-facette-muette.html": {"L4"},
+    "l4-exemption-facette-motivee.html": set(),
+    # TF-0932 (lot Produit-10 20260908b) — L30 : un chapitre dit CE QU'IL CONTIENT, et glose
+    # son jargon. L7 porte sur ce que le chapitre APPREND — la promesse ; personne n'exigeait
+    # l'INVENTAIRE, ni la difference avec le chapitre voisin, ni la glose d'un terme technique.
+    # Treize chapitres reecrits en tete apres coup. Le triplet porte la MEME page : la verte
+    # complete, la premiere rouge sans son .contenu (le chapeau L7 reste, et reste satisfait),
+    # la seconde sans sa glose alors que le chapitre suivant garde la sienne — ce qui prouve
+    # que la regle juge CHAPITRE PAR CHAPITRE et non une fois pour la page.
+    # La verte est jugee DEUX FOIS : ici sur les echecs, et dans CAS_AVERT sur les
+    # avertissements — un chapitre annonce ne doit declencher ni l'un ni l'autre.
+    "l30-chapitre-annonce.html": set(),
+    "l30-terme-non-glose.html": {"L30 (chapitre)"},
+    # TF-0969 (08/09) — le terme se cherche entre deux frontieres de mot Unicode : « gate »
+    # dans `aggregate_type` ne compte pas, « la gate du mandat » reste rouge.
+    "l30-identifiant-technique.html": set(),
+    "l30-terme-employe-comme-mot.html": {"L30 (chapitre)"},
+    "l25-chapitres-sans-sommaire.html": {"L25"},
+    "l25-sommaire-lateral.html": set(),
+    # TF-1626 (RA-6, 13/10/2026) — « un menu vertical en plus des onglets n'a aucun intérêt ».
+    # Une barre role=tablist est un sommaire : la verte (4 chapitres sous 2 onglets, aucun nav)
+    # rendait L25 avant la correction ; la rouge pose un 5e chapitre qu'aucun onglet n'atteint.
+    "l25-onglets-sans-menu.html": set(),
+    "l25-onglets-chapitre-orphelin.html": {"L25"},
+    "l26-donnees-colonne-de-lecture.html": {"L26"},
+    "l26-donnees-pleine-largeur.html": set(),
+    "l27-entetes-sans-definition.html": {"L27 (colonne)"},
+    "l27-dictionnaire-de-colonnes.html": set(),
+    "l28-mois-sans-ordre.html": {"L28"},
+    "l28-mois-ordonnes.html": set(),
+    # TF-1677 (lot 20261001b, seq 209) — le mot « date » d'un en-tête ne fait pas une colonne
+    # temporelle : la verte n'a que des catégories sous deux en-têtes homonymes ; la jumelle y
+    # ajoute une vraie colonne de dates en libellés seuls, qui reste rouge.
+    "l28-entete-homonyme.html": set(),
+    "l28-entete-homonyme-et-vraie-date.html": {"L28"},
+    # Revue forge-design du 14/10 : un décimal ou une version (« 1.2 »), un code T1-T4 / S1-S4 /
+    # Q1-Q4 et une abréviation seule (« mar », « dec ») ne sont pas du temps ; avec leur quantième
+    # ou leur année, ils le redeviennent.
+    "l28-codes-non-temporels.html": set(),
+    "l28-abreviations-datees.html": {"L28"},
+    "l29-thead-sous-entete-collant.html": {"L29 (collision)"},
+    "l29-thead-decale-par-token.html": set(),
+    # TF-0227 (lot Produit-10 du 14/08) : 71 marqueurs [c:id] dans un livrable DIFFUSE, PASS
+    # a tous les oracles du socle. La rouge porte le defaut reel, mot pour mot.
+    "l14-plomberie-affichee.html": {"L14"},
+    # Les deux sorties legitimes, chacune sa fixture : citer dans du code, ou s exempter
+    # AVEC un motif. Sans elles, la regle passerait pour un simple refus de crochets.
+    "l14-jetons-cites-en-code.html": set(),
+    "l14-exemption-motivee.html": set(),
+    # TF-0928 (lot Produit-10 20260908b) — L3 bis : la legende TAUTOLOGIQUE. 900 cellules dont
+    # l'infobulle recopiait la cellule avaient passe L3, qui ne juge que l'EXISTENCE et la
+    # longueur d'une legende. La paire porte le MEME tableau et le MEME dictionnaire de
+    # colonnes (L27) : c'est ce qui prouve que le defaut n'est pas l'absence de definition de
+    # colonne. La verte porte en outre le cas de sortie DECLARE (`data-legende-ok`), sans quoi
+    # la regle passerait pour un refus de toute infobulle citant sa cellule.
+    "l3-legende-tautologique.html": {"L3"},
+    "l3-legende-explicative.html": set(),
+    # TF-0954 (08/09) — la MEME loi, un cran plus haut et sur l'autre porteur : une DEFINITION DE
+    # COLONNE qui repete son en-tete, et une `data-definition` de cellule qui recopie sa cellule.
+    # G9 et L27 verifient qu'une definition EXISTE, jamais qu'elle APPREND quelque chose.
+    "l3-definition-colonne-tautologique.html": {"L3"},
+    "l3-definition-colonne-explicative.html": set(),
+    # RT-118 (lot Produit-02 20261003b, D-55 (a) du 03/10) — L3 bis ETENDUE hors tableau : une
+    # etape d'entonnoir dont le title repete « 54 visites engagees », des <title> de barres SVG qui
+    # repetent le montant ecrit au-dessus. La version precedente rend PASS sur la rouge. La verte
+    # est la meme page avec des infobulles de COMPLEMENT, et porte les quatre sorties mesurees sur
+    # le parc : texte `.sr` non vu, texte tronque, `data-legende-ok`, etiquette `data-etiquette-de`.
+    "l3-infobulle-redondante.html": {"L3"},
+    "l3-infobulle-complementaire.html": set(),
+    # TF-0934 (lot Produit-10 20260908c) — L3 ter : l'objet NOMME que personne n'explique. Les
+    # objets d'un systeme source CITE mais jamais joint n'ont aucun catalogue commente ; le
+    # generateur fait retomber l'infobulle sur la DEFINITION DE LA COLONNE, la meme phrase sur
+    # toute la colonne, qui se lit « pas d'explication ». Ni L3 bis (l'infobulle ne recopie pas
+    # la cellule) ni L27 (la colonne a bien sa definition) ne le voient. La verte porte le
+    # dictionnaire d'objets ecrit et source, et sa sortie declaree au niveau de la ligne.
+    "l3-objet-source-muet.html": {"L3"},
+    "l3-dictionnaire-d-objets.html": set(),
+    # TF-0935 (lot Produit-10 20260908d) — L3 quater : la legende ILLISIBLE. 3 153 cellules a
+    # `title`, 2 527 en portant plusieurs objets, la plus longue SEPT objets en 700 caracteres
+    # d'un bloc : conforme a toutes les formes de L3, et illisible. La paire porte les MEMES
+    # sept objets et les MEMES sous-precisions ; seule la mise en forme du `title` change.
+    "l3-legende-en-bloc.html": {"L3"},
+    "l3-legende-en-puces.html": set(),
+    "l3-score-sans-formule.html": {"L3"},
+    "l3-valeur-opaque.html": {"L3"},
+    # TF-0233 (15/08) : un conteneur-valeur dont un DESCENDANT porte la légende est
+    # couvert — plus de double échec L3 pour un seul chiffre.
+    "l3-conteneur-couvert.html": set(),
+    # Lot Produit-05 20260820a/b (21/08) — TF-0423 : L7 refuse le chapeau répété, le chapeau de
+    # remplissage ; L10 refuse l'exemple de lecture en double. TF-0433 : « note » n'est un score
+    # que suivi d'un chiffre — la carte-remarque se tait, la note chiffrée échoue. TF-0434 : un
+    # libellé-identifiant sans title est elliptique (échec nommé), avec title il passe.
+    # TF-0425/TF-0432 : onglets et lignes dépliables — rouge sans câblage, verte conforme.
+    "l7-chapeaux-identiques.html": {"L7"},
+    "l7-chapeau-remplissage.html": {"L7"},
+    # TF-0931 / TF-0933 (lot Produit-10 20260908b et 20260908c) — le sommaire a DEUX NIVEAUX.
+    # L7 le refusait sous toutes ses formes : cible = <h3> nu -> « sans chapeau » ; cible = le
+    # bloc h3 + chapeau -> « chapeau IDENTIQUE » avec le parent, qui collectait les chapeaux de
+    # TOUS ses descendants. Le produit a paye ce refus deux fois en une journee, la seconde en
+    # remplacant ses liens de sous-chapitre par des BOUTONS. La verte porte la forme legitime
+    # (sous-entrees en <a href="#...">, un chapeau propre par bloc cible) ; la rouge est la MEME
+    # page avec un chapeau de sous-chapitre recopie du parent — un VRAI doublon, qui prouve que
+    # la correction juge autrement et n'eteint rien.
+    "l7-sommaire-deux-niveaux.html": set(),
+    "l7-sommaire-deux-niveaux-chapeau-repete.html": {"L7"},
+    "l10-exemple-double.html": {"L10"},
+    "l3-note-encadre.html": set(),
+    "l3-note-chiffree.html": {"L3"},
+    # TF-1904 (RA-15, lot Produit-79 20261018a) — une date « JJ/MM » en cellule n'est pas une note
+    # « N/M ». La verte porte DEUX voies de sortie (en-tete qui nomme la date ; <time datetime>) ; la
+    # rouge porte les memes valeurs sous des en-tetes qui nomment une note : la regle doit mordre.
+    "l3-date-jjmm-colonne-date.html": set(),
+    "l3-date-jjmm-colonne-resultat.html": {"L3"},
+    "l8-identifiant-sans-title.html": {"L8"},
+    "l8-identifiant-avec-title.html": set(),
+    # TF-1609 (RT-32) — L8 acceptait un title qui recopie le dd de l'entrée visée : il exige un
+    # aria-label, ou un title qui DIFFÈRE du texte de la cible (verte : l3-recopie-aucune.html).
+    "l8-title-recopie-cible.html": {"L8"},
+    "l16-onglets-sans-controls.html": {"L16"},
+    "l16-onglets-conformes.html": set(),
+    "l17-depliant-sans-bouton.html": {"L17"},
+    "l17-depliant-conforme.html": set(),
+    # TF-0719 (31/08) — LE BADGE QUI AFFIRME UN RANG QUE RIEN NE VERIFIE. Un `span.badge.acte`,
+    # titre « Decision prise le 22 aout 2026 par la direction... », a ete pose sur une decision
+    # QUI N A JAMAIS ETE PRISE, sur CINQ emplacements d un livrable client — et il est passe :
+    # L3 exige qu un badge porte une LEGENDE, et elle etait la. Le vocabulaire etait bon, la
+    # discipline absente. Mesure du 02/09 : la rouge rendait PASS avant correction, FAIL ×2
+    # apres. TROIS fixtures, parce que la regle a DEUX sorties legitimes et un piege :
+    #   · rouge : un badge nu, et un second dont l `aria-describedby` RESOUT vers une note qui
+    #     ne se declare PAS decision — une description resolue n est pas une trace ;
+    #   · verte 1 : les memes emplacements, l un enveloppe d un lien vers son ADR, l autre
+    #     decrit par un element qui se declare decision ;
+    #   · verte 2 : la SORTIE PAR DEFAUT — sans trace, le badge se degrade en `propose`, jamais
+    #     l inverse. Sans elle, la regle passerait pour un refus des badges.
+    "l24-badge-acte-sans-trace.html": {"L24"},
+    "l24-badge-acte-resolu.html": set(),
+    "l24-badge-propose-degrade.html": set(),
+    # TF-1333 (26/09) — du 02/09 au 26/09, l antislash-b de quatre branches de RE_TRACE (adr,
+    # arbitre, tranche, acte) etait un octet BACKSPACE : ces branches ne reconnaissaient plus
+    # rien, et un badge resolu par une trace qui ne se declare QUE par l un de ces mots sortait en
+    # L24. Les vertes ci-dessus passaient par « decision » ou « arbitrage », intacts : le trou leur
+    # etait invisible. Mesure : la verte rendait L24 x4 avant correction, 0 apres.
+    #   · verte : quatre badges, quatre traces, chacune declaree par un seul mot borne ;
+    #   · rouge : « cadre », « acteurs », « arbitrer » — un correctif qui retirerait l octet sans
+    #     remettre l antislash-b reconnaitrait « adr » dans « cadre » et rendrait ce badge vert.
+    "l24-trace-mots-bornes.html": set(),
+    "l24-trace-mots-colles.html": {"L24"},
+    # TF-1333 (report du 28/09) — la frontière de GAUCHE : « impacte », « exacte », « contacte »,
+    # « retranche » finissent par un jeton court sans le porter comme mot. Deux badges dont la
+    # cible ne se déclare pas décision : L24 doit mordre. Sans la frontière de gauche, rendu vert.
+    "l24-trace-mot-voisin.html": {"L24"},
+}
+
+# TF-0435 : L15 est un AVERTISSEMENT — jugé à part, sur les warns. La verte emploie un chevron
+# sûr (U+203A), la rouge le triangle U+25B6 qui sortait en tofu sur mobile.
+CAS_AVERT = {
+    "l15-glyphe-hors-liste.html": {"L15"},
+    "l15-glyphe-sur.html": set(),
+    # TF-1609 (RT-32) — l'infobulle qui recopie un texte affiché AILLEURS : la cible d'un lien
+    # interne, la légende de la page. Avertissement (bruit mesuré non nul sur le parc). La verte
+    # est la même page corrigée : aria-label, title qui diffère de la cible, pastilles sans title.
+    "l3-recopie-cible-du-lien.html": {"L3"},
+    "l3-recopie-legende.html": {"L3"},
+    "l3-recopie-aucune.html": set(),
+    # TF-0932 — la moitie « ce que le chapitre CONTIENT » de L30 est un AVERTISSEMENT, pas un
+    # echec : mesure du 08/09 sur les pages generees du pilot, tenues pour conformes, 40
+    # constats sur TODO.html et 47 sur TODO-ARCHIVE.html, tous sur cette moitie. `.contenu` est
+    # une obligation redactionnelle neuve ; la rendre bloquante d'un commit ferait rougir tout
+    # le parc sans migration. L'avertissement propose le geste d'office et se decline en
+    # l'ecrivant. La seconde moitie (le jargon) reste un echec, et a sa fixture dans CAS.
+    "l30-chapitre-sans-contenu.html": {"L30 (chapitre)"},
+    "l30-chapitre-annonce.html": set(),
+    # RT-119 (lot Produit-02 20261003b, D-55 (a) du 03/10) — L34 : un graphique qui declare deux
+    # series dans sa donnee source (data-series-source="2") et n'en trace qu'une (data-serie).
+    # AVERTISSEMENT, jamais bloquant. La verte porte les memes barres empilees par pays, et un
+    # second graphique a serie source unique, qui ne doit pas crier.
+    "l34-serie-unique.html": {"L34"},
+    "l34-series-tracees.html": set(),
+}
+
+RE_CODE = re.compile(r"^(L\d+(?: \([^)]+\)| (?:bis|ter|quater)(?!\w))?)(?!\w)")
+
+# A1 (autonomie réseau, D-10) vit dans la famille « charte » : ses fixtures se
+# jugent avec regles="charte" et on n'extrait que les codes A — les deux pages
+# sont charte-conformes par construction, seul A1 les départage.
+CAS_AUTONOMIE = {
+    "a1-cdn-au-chargement.html": {"A1"},
+    "a1-liens-documentaires.html": set(),  # liens <a>, xmlns, data: URI : silence exigé
+    # RA-1 (Produit-10, 13/08) : un </script> en clair dans le commentaire d'un asset inliné
+    # tronque le script hôte — le déséquilibre ouvertures/fermetures le trahit.
+    "a1bis-script-tronque.html": {"A1-bis"},
+    # TF-0307 : deux jumelles qui ne diffèrent QUE par la place d'une url() — dans un
+    # commentaire (rien n'est chargé, silence exigé) ou dans la règle CSS qui suit
+    # (requête réelle, A1 doit la nommer). Sans la rouge, retirer les commentaires
+    # pourrait avaler le CSS qui les suit sans que rien ne le dise.
+    "a1-reseau-cite-en-commentaire.html": set(),
+    "a1-reseau-hors-commentaire.html": {"A1"},
+    # TF-0896 (lot Produit-10 20260907c) — A5, la feuille de style se PARSE. Un générateur qui
+    # extrait le style « à la première occurrence » avait embarqué le commentaire qui citait la
+    # balise en toutes lettres : UNE règle obtenue pour 27 350 caractères, page rendue nue, et
+    # trois passes d'oracles à mesurer des symptômes (2 106 px de débordement, sommaire perdu,
+    # faux G1) avant de trouver une cause d'une ligne. Les DEUX branches ont leur rouge : le
+    # résidu de balisage dans un sélecteur (signature exacte) et la densité de règles (forme
+    # générale, quand le résidu ne porte aucun marqueur reconnaissable).
+    "a5-feuille-parsable.html": set(),
+    "a5-residu-de-commentaire.html": {"A5"},
+    "a5-feuille-ecrasee.html": {"A5"},
+    # TF-0984 (08/09) — le dénominateur de A5 exclut les `url(data:…)` que A1 impose : une page
+    # qui embarque ses polices reste verte ; la même police suivie de prose diluée reste rouge.
+    "a5-polices-embarquees.html": set(),
+    "a5-polices-et-feuille-ecrasee.html": {"A5"},
+}
+RE_CODE_A = re.compile(r"^(A\d+(?:-bis)?)\b")
+
+# G1 (bascule thème sombre câblée, R-30/TF-0134) vit lui aussi dans la famille
+# « charte » : mêmes garanties anti-parasite que A1. Ensemble vide de FAILS
+# n'exclut pas un WARN (cas sans bouton) — seul check() décide, ici on ne juge
+# que les codes G en échec bloquant.
+# TF-0241 (15/08) : la langue se DÉCLARE — lang="en" assumé passe (avertissement,
+# jamais un échec), lang absent échoue. Jugé en famille charte, anti-parasite : la
+# fixture verte doit être charte-verte par ailleurs.
+CAS_LANG = {
+    "charte-lang-en.html": False,     # aucun échec attendu (warn seulement)
+    "charte-lang-absent.html": "absent",  # un échec « lang » attendu, et lui seul
+    # TF-1884 (19/10/2026) — une fiche demandée en espagnol était refusée sur le seul motif lang.
+    # Les trois écritures HTML de l'attribut (guillemets doubles, apostrophes, valeur nue) et
+    # une étiquette de trois lettres passent ; une étiquette mal formée échoue, pour la bonne
+    # raison (« invalide », pas « absent » : la langue y est déclarée).
+    "charte-lang-es.html": False,
+    "charte-lang-apostrophes.html": False,
+    "charte-lang-trois-lettres.html": False,
+    "charte-lang-invalide.html": "invalide",
+}
+
+CAS_G1 = {
+    "g1-bouton-sans-cablage.html": {"G1"},  # bascule morte : bouton présent, jamais câblé
+    "g1-bouton-cable.html": set(),          # bascule câblée : silence exigé
+    "g1-sans-bouton.html": set(),           # aucun bouton : WARN seulement, jamais un FAIL
+}
+RE_CODE_G = re.compile(r"^(G\d+)\b")
+# TF-0445 : famille S — structure du document (S1 cohérence de tableau). Une famille de plus
+# demande son extracteur : `codes()` ne rend que ce que son motif reconnaît, et un code non
+# reconnu se lit « aucun défaut » — c'est un faux vert de recette, pas une lacune anodine.
+RE_CODE_S = re.compile(r"^(S\d+)\b")
+
+# AUTOPORTANCE (TF-0303, décidé par l'étude d'opportunité 20260817b — verdict O3) :
+# mécanisation des règles A1 (squelette auto-portant), A2/G2 (favicon data:), A3 (charset
+# dans les 1024 premiers octets), A4 (titre marque + objet + version datée) et de la
+# branche R-30 « clair par défaut STRICT » de G1 (auto-sombre hérité de l'OS interdit
+# depuis TF-0158, tranché RV-9). Codes A et G jugés ENSEMBLE : le cas fondateur les cumule,
+# et les séparer aurait fait passer un fragment sans en-tête pour un simple défaut de titre.
+#
+# Cas fondateur (lot Produit-01, 17/08) : un rapport d'audit remis à un client, écrit pour
+# une publication hébergée — l'hôte fournissait le squelette, le fichier livré n'en avait
+# aucun. Quatre règles écrites du socle violées d'un coup, zéro contrôle pour le dire.
+CAS_AUTOPORTANCE = {
+    "a1-fragment-sans-head.html": {"A1", "A2", "A3", "A4", "G1"},
+    "a1-fragment-corrige.html": set(),      # le MÊME contenu, rendu auto-portant
+    # La position se mesure en octets, pas en caractères, et le commentaire n'est pas
+    # coupable en soi : les deux jumelles ne diffèrent que par l'ordre de trois lignes.
+    "a3-charset-tardif.html": {"A3"},
+    "a3-charset-en-tete.html": set(),
+    # Le titre porte un nom de produit INVENTÉ (« Cartavia ») : la forme du défaut est celle
+    # du cas fondateur — un seul bloc, sans marque ni indice daté — le nom, lui, n'est celui
+    # de personne (relecture post-anonymisation du 02/09).
+    "a4-titre-sans-marque.html": {"A4"},
+    "a4-titre-sans-version.html": {"A4"},   # marque et objet présents, révision muette
+    "a2-favicon-absent.html": {"A2"},
+    "a2-favicon-fichier-externe.html": {"A2"},   # déclaré, mais pas embarqué
+    # La verte de l'auto-sombre est g1-bouton-cable.html : elle CITE prefers-color-scheme
+    # en commentaire pour dire qu'il est retiré — la règle doit y rester muette.
+    "g1-auto-sombre-media.html": {"G1"},
+}
+RE_CODE_AG = re.compile(r"^(A\d+(?:-bis)?|G\d+)\b")
+
+# Cas mesurés AU RENDU : le contrôle statique de L2 lit le CSS du conteneur et ne
+# voit pas un paragraphe bridé à l'intérieur. Ces deux-là ne se jugent qu'en
+# ouvrant la page dans un navigateur.
+CAS_RENDU = {
+    "l2r-texte-a-50-pourcent.html": ("l2_width", 1),   # paragraphe bridé
+    "l2r-texte-pleine-largeur.html": ("l2_width", 0),  # colonne de mesure
+    # TF-0421 (lot Produit-05 20260820a) : la bride par `width: min(75ch, 100%)` passait L2 (qui ne
+    # regardait que max-width) et laissait 60 % de la fenêtre vide à 1 800 px. L2 mesure
+    # désormais QUELLE QUE SOIT la propriété ; la mesure de lecture se pose sur le conteneur
+    # (.chap.lire), jamais sur le paragraphe.
+    "l2r-texte-width-min.html": ("l2_width", 1),       # bride par width:min(ch)
+    "l2r-chap-lire.html": [("l2_width", 0), ("l2_conteneur", 0)],  # conteneur centre, texte plein (TF-1799)
+    # TF-0444 (21/08) : <colgroup>/<col> DÉCLARENT des largeurs, ils ne mettent rien en page —
+    # leur boîte englobe celle du tableau, donc tout tableau à colgroup rendait deux faux
+    # positifs BLOQUANTS (50 mesurés sur un livrable sain). Les deux sens sont dus : sans la
+    # contre-épreuve, corriger le faux positif aurait pu éteindre la règle en silence.
+    # TF-0633 (25/08, lot Produit-02) — V8 : un actif visuel se juge dans le CONTEXTE ou il
+    # est servi. Les deux fixtures sont le meme fichier a une valeur hexadecimale pres, le
+    # remplissage du logo : #2d4047 sur un bandeau #2d4047 (le fantome mesure en production,
+    # ratio 1,0) contre #FFFFFF sur le meme bandeau. Si la regle rougissait sur les deux, ou
+    # passait sur les deux, elle ne mesurerait pas ce qu'elle pretend mesurer.
+    "v9-logo-invisible.html": ("v9_actif_invisible", 1),
+    "v9-logo-visible.html": ("v9_actif_invisible", 0),
+    # TF-1087 (17/09) — V9 retenait le MEILLEUR pixel : un logo dont 90 % de la surface est
+    # exactement la couleur du fond passait, sauve par un accent a 2,16:1. La fixture verte du
+    # meme couple est un DESSIN AU TRAIT conforme du gabarit de schema — c'est elle qui interdit
+    # de rouvrir la regression du 14/09, ou juger la dominance condamnait tous les schemas.
+    "v9-logo-bicolore.html": ("v9_actif_invisible", 1),
+    "v9-schema-au-trait.html": ("v9_actif_invisible", 0),
+    # TF-1192 (17/09) — V9 mesurait ce qu un element COLLANT peint par-dessus l actif dans sa
+    # propre capture : un schema lisible, passe sous un bandeau `position: sticky`, etait declare
+    # indiscernable de son fond. Les deux fixtures sont le MEME fichier a la couleur du dessin
+    # pres. La VERTE porte un schema lisible sous le bandeau : mesure avant / apres correctif, a
+    # 1440 px et a l echelle par defaut, 1 constat a 1,06:1 puis 0. La ROUGE porte un dessin
+    # blanc sur blanc sous le MEME bandeau : elle reste a 1 constat, a 1,00:1 — sans elle,
+    # neutraliser les elements collants serait indistinguable d un desarmement de V9.
+    "v9-schema-sous-bandeau-collant.html": ("v9_actif_invisible", 0),
+    "v9-schema-indiscernable-sous-bandeau-collant.html": ("v9_actif_invisible", 1),
+    # TF-1145 (16/09) — sommaire_perdu juge desormais la navigation LA PLUS PERMANENTE, pas le
+    # premier nav du document. Les deux fixtures sont la MEME page a une declaration pres : la
+    # barre est `position: sticky` dans la verte, elle ne l est pas dans la rouge. Le sommaire en
+    # cartes est place AVANT la barre : c est ce qui reproduisait le defaut, l ancien selecteur
+    # retenant le premier nav rencontre. Mesure avant / apres sur la verte : 1 bloquant, puis 0.
+    "sommaire-permanent-et-cartes.html": ("sommaire_perdu", 0),
+    "sommaire-perdu-aucune-permanente.html": ("sommaire_perdu", 1),
+    # TF-1146 (16/09) — data-overlap-ok exemptait l ELEMENT, pas la PAIRE, et couvrait donc aussi
+    # le recouvrement NON VOULU : un libelle de fleche imprime dans la boite VOISINE a traverse
+    # deux livraisons et quatre executions des trois oracles. Les trois fixtures sont le MEME
+    # fichier a une valeur d attribut ou une coordonnee pres. Mesure avant / apres sur la rouge :
+    # 0 constat, puis 1 — c est le constat que l exemption en bloc avalait.
+    "v4-libelle-dans-la-boite-voisine.html": ("v4_overlap", 1),   # paire declaree, autre boite
+    "v4-libelle-sur-sa-boite.html": ("v4_overlap", 0),            # paire declaree, sa boite
+    # RT-124 (lot Produit-02 20261003b, D-55 (a) du 03/10) — l etiquette DIRECTE ecrite dans son
+    # segment (prescrite par dataviz) rendait « rect.seg x text.dans, intersection 100 % ». Un
+    # <text> declare etiquette de sa marque (data-etiquette-de ou .etiquette-marque) et CONTENU
+    # dans son rectangle est exempte : ancienne version 3 constats, nouvelle 0. Celle qui deborde
+    # sur le segment voisin reste un constat (2 avant comme apres).
+    "v4-etiquette-dans-sa-marque.html": ("v4_overlap", 0),
+    "v4-etiquette-deborde-sa-marque.html": ("v4_overlap", 1),
+    # La forme NUE exempte toujours — 1 716 occurrences dans le parc — mais elle est RECENSEE.
+    "v4-exemption-en-bloc-recensee.html": [("v4_overlap", 0), ("overlap_en_bloc", 1)],
+    "v4-colgroup-legitime.html": ("v4_overlap", 0),    # largeurs déclarées, rien ne se recouvre
+    "v4-chevauchement-reel.html": ("v4_overlap", 1),   # deux frères qui se recouvrent vraiment
+    # TF-1281 (RD-13) — un CALQUE : des traits qui déclarent le même jeton s'exemptent entre eux
+    # (1 constat avant, 0 après) ; un numéro posé sur leur croisement, sans le jeton, reste jugé.
+    "v4-calque-declare.html": ("v4_overlap", 0),
+    "v4-calque-recouvre-numero.html": ("v4_overlap", 1),
+    # TF-1628 (RA-8) — un logo <svg role="img"> nommé et sans <text> est une figure unique (5
+    # constats avant, 0 après) ; le même logo sans role ni nom reste jugé. Le schéma à libellés
+    # (v4-libelle-dans-la-boite-voisine.html, role="img" lui aussi) garde son constat.
+    "v4-logo-figure-unique.html": ("v4_overlap", 0),
+    "v4-logo-sans-nom.html": ("v4_overlap", 1),
+    # TF-1891 (lot Produit-84 20261019b, RT-10) — un texte de premier niveau pose sur le dernier libelle,
+    # court, d'une legende <g transform> sans <title> : 0 constat avant (le recouvrement ne pesait pas
+    # 10 % du plus petit des deux dans la comparaison au groupe entier), 1 apres. Les deux jumelles
+    # vertes : le meme texte pose sous la legende, et le meme recouvrement avec sa paire declaree
+    # (data-overlap-ok="<id du libelle>", le remede que le message prescrit).
+    "v4-texte-sur-libelle-de-groupe-rouge.html": ("v4_overlap", 1),
+    "v4-texte-sur-libelle-de-groupe-vert.html": ("v4_overlap", 0),
+    "v4-texte-sur-libelle-de-groupe-declare.html": ("v4_overlap", 0),
+    # TF-0559 (24/08, lot Produit-10) — LA BOITE D'UN INLINE VAUT LA HAUTEUR D'EM, PAS L'INTERLIGNE.
+    # Deux surlignages de lignes consecutives se recouvrent donc geometriquement des que line-height
+    # est serre, SANS QU'AUCUN PIXEL PEINT NE SE SUPERPOSE. Mesure du 19/08 sur 1 246 surlignages
+    # d'un livrable reel : a 1,22 le recouvrement vaut 5 px et rend un BLOQUANT a 390 px ; a 1,45 il
+    # disparait. La parade existante ne couvrait que l'inline reparti sur plusieurs lignes ; deux
+    # FRERES du meme parent restaient juges sur leur boite d'em. Les deux fixtures voisines
+    # (chevauchement reel, colgroup) prouvent que la tolerance n'a pas eteint la regle.
+    "v4-inline-freres-interligne.html": ("v4_overlap", 0),
+    # TF-0558 (24/08, lot Produit-10) — LE CALIBRAGE DU REPLI ETAIT ECRIT EN PROSE, donc retraduit par
+    # chaque emetteur, et mal : repli regle a 900 px alors qu un tableau de huit colonnes debordait
+    # jusque vers 1 400 (bord droit mesure a 1 308 px pour un viewport de 1 280). Il est desormais
+    # MECANISE — le nombre de colonnes se lit dans le marquage, `:has(th:nth-child(n))` declenche le
+    # palier, aucun emetteur ne calibre plus rien. Cette fixture porte huit colonnes et doit rendre
+    # ZERO debordement aux quatre largeurs. Deux defauts trouves en l ecrivant : un jeton
+    # `--replier` qui ne declenchait rien (une propriete personnalisee n active aucune regle), et
+    # `width:100%` sans `box-sizing` qui debordait de son propre remplissage — 1 300 px pour 1 280.
+    "repli-huit-colonnes.html": ("v1_overflow", 0),
+    # TF-0440 (21/08) : L2 mesurait le paragraphe contre son conteneur — déplacer la bride
+    # d'un cran la satisfaisait sans rien changer pour le lecteur. Les deux fixtures ne
+    # diffèrent que par le CENTRAGE de la colonne : centrée = mesure de lecture (légitime),
+    # calée à gauche = gouttière (refusée par le lecteur humain le 21/08).
+    "l2c-conteneur-cale-a-gauche.html": ("l2_conteneur", 1),
+    "l2c-conteneur-centre.html": ("l2_conteneur", 0),
+    # TF-0491 (23/08) — la rupture d'alignement ENTRE FRERES EMPILES. Les trois mesures L2
+    # precedentes comparent un bloc a ce que son CONTENEUR lui offre : une prose bornee ET
+    # CENTREE au-dessus de cartes pleine largeur les satisfait toutes les trois. Le client l'a
+    # pourtant signalee TROIS FOIS en quatre versions, sous trois formulations. Les trois
+    # fixtures sont geometriquement liees : la rouge, la meme alignee, et la meme DECLAREE.
+    "l2fr-freres-desalignes.html": ("l2_freres", 1),       # prose bornee sur cartes larges
+    "l2fr-freres-alignes.html": ("l2_freres", 0),          # le meme, aligne — ce que le client demandait
+    "l2fr-freres-declares.html": ("l2_freres", 0),         # le meme, mais data-mesure-lecture
+    "l2g-gouttiere-etiquettes.html": ("l2_gouttiere", 1),   # colonne d'étiquettes
+    "l2g-etiquettes-en-tete.html": ("l2_gouttiere", 0),     # étiquette en tête
+    # TF-0694 (27/08) — LA REGLE DECRIVAIT EXACTEMENT CE DEFAUT, AU SEUIL EXACT, ET RENDAIT PASS
+    # DESSUS : son implementation commencait par `if (cs.display !== 'grid') continue`, et une
+    # mise en page « intitule | contenu » en <table> n'y entrait jamais. Elle n'a pas echoue,
+    # ELLE N'A PAS ETE APPELEE, et rien ne le disait. Mesure du 27/08 rejouee le 02/09 sur la
+    # rouge : verdict PASS, l2_gouttiere 0, comme les douze autres familles — le socle rendait
+    # PASS sur le document meme que la regle est faite pour condamner. Cout : deux fiches
+    # livrees et trois regenerations avant qu'un humain ne l'ouvre.
+    # TROIS fixtures, parce que la contre-epreuve porte ici tout le risque : faire entrer les
+    # <table> pouvait condamner TOUS les tableaux a deux colonnes.
+    "l2g-table-gouttiere.html": ("l2_gouttiere", 1),   # intitules a 32 % de la largeur rendue
+    "l2g-table-etroite.html": ("l2_gouttiere", 0),     # les memes, ramenes au seuil exact (20 %)
+    "l2g-table-donnees.html": ("l2_gouttiere", 0),     # vrai tableau : deux valeurs comparables
+    # TF-0500 (22/08) : L2-largeur ne pouvait STRUCTURELLEMENT pas voir un texte écrasé en
+    # colonne d'un mot — caption absente de sa collecte, écartée par closest('table'), et
+    # seuil de 1100 px alors que le défaut n'existe que sous 640 px. L2-filet mesure un rapport
+    # d'aspect anormal, à toute largeur. Les deux fixtures ne diffèrent QUE par une règle CSS :
+    # `table` en display:block (la caption tombe à 70px pour 366px de conteneur, 12 lignes pour
+    # 15 mots) ou non (366px, 2 lignes). Mesuré le 22/08 avant et après correction.
+    # TF-0551 (24/08, lot Produit-03) — LE DEFAUT QU'UN ORACLE VISUEL NE PEUT
+    # PAS VOIR. Une fiche livree, declaree conforme la veille par les DEUX controles, avait perdu
+    # deux sections entieres et son pied de page : gabarit A4 a hauteur FIGEE, contenu 1441px pour
+    # une boite de 1123px, 41 elements de texte invisibles. Aucun signal, ni a l'ecran ni a
+    # l'impression — `overflow:hidden` EST le mecanisme qui rend un defaut invisible a un controle
+    # d'apparence. Les deux fixtures ne different QUE par une propriete : `height` (plafond, le
+    # contenu disparait) ou `min-height` (plancher, la feuille s'allonge).
+    "rogne-contenu-perdu.html": ("contenu_rogne", 1),
+    "rogne-hauteur-plancher.html": ("contenu_rogne", 0),
+    # TF-0847 (05/09) — un champ de saisie defile nativement : sa valeur longue n'est pas du
+    # contenu perdu. rogne-contenu-perdu.html, ci-dessus, garde son constat.
+    "rogne-champ-saisie.html": ("contenu_rogne", 0),
+    "l2f-caption-ecrasee-en-filet.html": ("l2_filet", 1),
+    "l2f-caption-pleine-largeur.html": ("l2_filet", 0),
+    # TF-0582 (lot Produit-02 20260824) : ce qui PEINT sans etre un `background-color`.
+    # Mesure en production : un fond peint par `.color-exp::before` sous un texte dont l'element
+    # porte `background: transparent`. Une mesure par styles calcules remonte au conteneur, y lit
+    # un fond clair et conclut « tout va bien » sur un texte a 1,0 de ratio — un faux PASS qui
+    # porte une signature. Les deux fixtures ont les MEMES couleurs : seule la facon de peindre
+    # les separe. La rouge doit sortir en NON MESURABLE, pas en contraste vert.
+    "v2p-pseudo-element-peint.html": ("unmeasured", 1),
+    "v2p-fond-mesurable.html": ("v2_contrast", 1),
+    # TF-1368 (lot Produit-68 20260924a, RG-7) : un texte SVG se juge sur `fill` et la forme posee
+    # dessous, pas sur l'encre heritee de la page. Sans la correction, la rouge rendait 0 constat.
+    "v2-svg-libelle-couleur-de-sa-boite.html": ("v2_contrast", 2),
+    "v2-svg-libelle-lisible-sur-sa-boite.html": ("v2_contrast", 0),
+    # Complement « reste-svg-sombre » (15/10/2026) — un fond ecrit en oklch() est un fond : V2 ne
+    # lisait que rgb(), sautait le panneau et jugeait le libelle sur le blanc par defaut. Avant :
+    # clair 2 constats (faux), sombre 0 (manque) ; apres : 0 et >= 1.
+    "v2-svg-panneau-oklch-clair.html": ("v2_contrast", 0),
+    "v2-svg-panneau-oklch-sombre.html": ("v2_contrast", 1),
+    # TF-1369 (lot Produit-68 20260924a, RG-8) : une fleche se juge par son trace. Rouge : une
+    # traversee et une confusion (l'ancienne mesure ne voyait que la seconde, par sa boite) ;
+    # verte : une fleche coudee dont la boite recouvre une brique sans la toucher (l'ancienne
+    # mesure l'accusait).
+    "v4-fleche-traverse-boite.html": ("v4_overlap", 2),
+    "v4-fleche-contourne-boite.html": ("v4_overlap", 0),
+    "v4-grille-de-graphe.html": ("v4_overlap", 0),
+    # TF-1417 (lot Produit-64 20260924e, RD-27) : un decor peint sur l'ANCETRE du texte aveugle son
+    # contraste — un constat par ancetre ; le meme decor en element frere n'en rend aucun.
+    "decor-rail-sur-ancetre.html": ("decor_sur_ancetre", 1),
+    "decor-rail-frere-du-texte.html": [("decor_sur_ancetre", 0), ("unmeasured", 0)],
+    # V7 : le rythme vertical se mesure au blanc ENTRE les boîtes, pas au pas d'un
+    # haut de boîte au suivant. Les deux pages sont identiques à une chose près —
+    # un paragraphe hors de l'échelle d'espacement dans la rouge.
+    "v7-prose-en-flux.html": ("v7_spacing", 0),   # hauteurs variables, blanc constant
+    "v7-rythme-casse.html": ("v7_spacing", 1),    # un paragraphe hors échelle
+    # Lot Produit-02 du 02/09 — quatre familles neuves, quatre paires. Chaque paire porte la
+    # MEME page a une declaration pres, et cette declaration est exactement ce que la famille
+    # mesure : l'etiquette de statut descendue sous le champ (TF-0773), la page qui prend la
+    # largeur de la fenetre au lieu de se brider (TF-0771), le chapo qui remplit son conteneur
+    # (TF-0778), le sommaire colle par `position: sticky; top: var(--hh)` (TF-0772).
+    "ctrl-rangee-desalignee.html": ("controles_desalignes", 1),
+    "ctrl-rangee-alignee.html": ("controles_desalignes", 0),
+    # TF-1663 (RT-8) — la grille sommaire lateral + contenu n'est pas une rangee de formulaire ;
+    # la jumelle porte une vraie rangee decalee DANS le contenu, qui doit rester rouge.
+    "ctrl-grille-sommaire-contenu.html": ("controles_desalignes", 0),
+    "ctrl-grille-sommaire-rangee-desalignee.html": ("controles_desalignes", 1),
+    # TF-2162 (lot Produit-86 20261104a, RD-6) — les CASES d'un menu ou d'un panneau deplie ne sont pas une
+    # rangee : 2 constats avant le correctif, 0 apres. Deux contre-epreuves, qui restent rouges : la meme
+    # grille de cases hors de tout panneau, et des CHAMPS de saisie desalignes dans un panneau deplie.
+    "ctrl-menu-cases-deplie.html": ("controles_desalignes", 0),
+    "ctrl-menu-cases-hors-panneau.html": ("controles_desalignes", 1),
+    "ctrl-champs-dans-panneau-deplie.html": ("controles_desalignes", 1),
+    "donnees-tableau-rogne.html": ("rognage_donnees", 1),
+    "donnees-tableau-entier.html": ("rognage_donnees", 0),
+    "donnees-prose-etroite.html": ("prose_etroite", 1),
+    "donnees-prose-pleine.html": ("prose_etroite", 0),
+    # TF-1623 (RA-4, 13/10/2026) — l'en-tete aligne sur sa colonne. Rouge : valeurs a droite,
+    # <th> a gauche ; verte : la MEME page avec le composant de filtres, qui pose th.tf-num.
+    "entete-desaligne.html": ("entete_desaligne", 1),
+    "entete-aligne-composant.html": ("entete_desaligne", 0),
+    # TF-1800 (lot Produit-83 20261015b, RA-6) — un en-tete reserve au lecteur d'ecran (boite de
+    # 1 px rognee, dans le <th> ou sur le <th>) ne se desaligne de rien : 1 constat avant, 0 apres.
+    "entete-masque-accessibilite.html": ("entete_desaligne", 0),
+    # TF-1799 (lot Produit-83 20261015b, RA-5) — les remedes que les messages L2 nomment, JOUES :
+    # page d'application declaree page de donnees, colonne etroite declaree. Le conteneur centre
+    # est l2r-chap-lire (ci-dessus). Chacun passe toutes les familles L2 de la largeur de lecture.
+    "l2-remede-page-application.html": [("l2_width", 0), ("l2_conteneur", 0), ("prose_etroite", 0),
+                                        ("conteneur_bride_donnees", 0)],
+    "l2-remede-colonne-declaree.html": [("l2_width", 0), ("l2_conteneur", 0)],
+    # TF-0930 (lot Produit-10 20260908b) — le troisieme angle de la page de donnees : le
+    # CONTENEUR contre la FENETRE. La paire porte le MEME token `--w` du socle ; la seule
+    # difference est la regle qui en exempte une page declaree page de donnees. La rouge
+    # attend en outre ZERO constat des deux autres familles de la page de donnees : c'est ce
+    # qui prouve que le defaut leur echappait, et non qu'on le compte deux fois.
+    "donnees-conteneur-bride.html": [("conteneur_bride_donnees", 1),
+                                     ("rognage_donnees", 0), ("prose_etroite", 0)],
+    "donnees-conteneur-plein.html": ("conteneur_bride_donnees", 0),
+    # TF-2776 (Produit-12, RS-47 ; D-235 (a) du porteur, 23/11/2026) — une navigation laterale DECLAREE (`nav`, `aside` ou
+    # `data-navigation`) sort de la mesure de V17 et de L2 ; les regles et les seuils sont ceux d'avant. Les trois verts sont
+    # ROUGES sur l'outil d'avant (V17 : le `main` a 78 % de la fenetre ; L2 : la piste de la navigation prise pour une colonne
+    # d'etiquettes, 22 % pour un seuil de 20 %). Les trois contre-epreuves restent rouges : la MEME page sans declaration,
+    # une navigation en bandeau (elle ne retire aucune largeur), et une colonne de lecture calee a gauche a cote d'une navigation
+    # (la navigation sort du cadre, elle n'excuse pas la colonne : l'outil d'avant l'accusait a 1 920 px et pas a 1 440).
+    "nav-laterale-nav-accusee-a-tort.html": [("conteneur_bride_donnees", 0), ("l2_gouttiere", 0)],
+    "nav-laterale-aside-a-droite.html": [("conteneur_bride_donnees", 0), ("l2_gouttiere", 0), ("l2_conteneur", 0)],
+    "nav-laterale-attribut-fixe.html": [("conteneur_bride_donnees", 0), ("l2_conteneur", 0)],
+    "nav-laterale-non-declaree.html": [("conteneur_bride_donnees", 1), ("l2_gouttiere", 1)],
+    "nav-bandeau-conteneur-bride.html": ("conteneur_bride_donnees", 1),
+    "nav-laterale-colonne-calee-a-gauche.html": ("l2_conteneur", 1),
+    "sommaire-perdu-au-defilement.html": ("sommaire_perdu", 1),
+    "sommaire-colle.html": ("sommaire_perdu", 0),
+    # TF-0910 (lot Produit-10 20260908a) — V16 : deux etats qui se ressemblent ne sont pas deux
+    # etats. Les cinq teintes pastel du socle vivent entre L* 93 et 97 ; le texte encre dessus
+    # tient 4,5:1, donc V2 rendait PASS sur CHAQUE badge pris un par un. Le defaut vit ENTRE deux
+    # badges — une distance, pas un ratio. La fixture rouge porte donc DEUX attentes : zero
+    # constat V2 (c'est ce qui prouve que V16 mesure autre chose) et au moins cinq paires sous les
+    # deux seuils. Mesures : vert/turquoise dE 7,3 · vert/ambre 19,5 · vert/gris 16,3 ·
+    # turquoise/gris 16,5 · rouge/gris 12,5.
+    "v16-etats-pastel.html": [("etats_indiscernables", 5), ("v2_contrast", 0)],
+    # les MEMES cinq etats en fonds pleins a encre blanche : dE de 23,8 a 98,2, contraste de
+    # 6,47:1 a 7,56:1, et un glyphe par palier — l'indice non colorimetrique de WCAG 1.4.1.
+    "v16-etats-pleins.html": [("etats_indiscernables", 0), ("v2_contrast", 0)],
+    # TF-0901 (lot Produit-10 20260907e) — V15 : l'en-tete de tableau, mesure APRES DEFILEMENT.
+    # Huit en-tetes poses sur leurs propres lignes, TROIS oracles PASS, et l'humain seul
+    # detecteur a la premiere ouverture : L29 lit la feuille et pas le style en ligne, V4 compare
+    # des freres tous decales pareil, l'oracle de filtres juge le marquage. Deux branches, deux
+    # causes, et chacune a sa paire :
+    #   · le conteneur defilant (TF-0900) — l'en-tete recouvre ses lignes au repos ET se tient
+    #     hors de son `top` declare apres defilement ;
+    #   · la pose en ligne par un script (TF-0899) — l'en-tete recouvre ses lignes, et le
+    #     `sticky` n'existe plus, donc la seconde branche n'a rien a mesurer.
+    "l29-table-hote-defilante.html": [("entete_pose_sur_lignes", 1), ("entete_ne_colle_pas", 1)],
+    "l29-table-hote-socle.html": [("entete_pose_sur_lignes", 0), ("entete_ne_colle_pas", 0)],
+    "l29t-pose-nue.html": [("entete_pose_sur_lignes", 1), ("entete_ne_colle_pas", 0)],
+    "l29t-pose-gardee.html": [("entete_pose_sur_lignes", 0), ("entete_ne_colle_pas", 0)],
+    # TF-0929 (lot Produit-10 20260908b) — TROISIEME instance de la classe en deux jours, et la
+    # troisieme branche de V15 : l'en-tete se tient EXACTEMENT a son `top` declare, et il est
+    # quand meme illisible. `--hh` est un TOKEN ; des qu'une bande de sommaire colle sous
+    # l'en-tete, ce qui surplombe le thead est plus haut que lui. La rouge attend donc ZERO
+    # constat des DEUX branches existantes — c'est ce qui prouve qu'elles ne pouvaient pas le
+    # voir, et non qu'on compte le meme defaut trois fois. La paire ne differe que par le
+    # `--hh-tab` MESURE (poserHauteurs() du socle) contre le token fige.
+    "l29q-empilement-token.html": [("entete_masque_par_collants", 1),
+                                   ("entete_ne_colle_pas", 0), ("entete_pose_sur_lignes", 0)],
+    "l29q-hauteurs-mesurees.html": ("entete_masque_par_collants", 0),
+    # TF-0968 / TF-1060 / TF-0973 — la triple fixture de V15. Le tableau court, bride par sa
+    # propre fin, ne rend plus de bloquant (il passe dans la famille informative) ; le tableau
+    # VIDE reste bloquant ; le tableau haut recouvert, c'est l29q-empilement-token ci-dessus.
+    "v15-tableau-court-bride.html": [("entete_masque_par_collants", 0),
+                                     ("entete_bride_par_tableau", 1)],
+    "v15-tableau-vide.html": ("entete_masque_par_collants", 1),
+    # TF-2170 (lot Produit-84 20261105a) — un en-tete ROGNE par un ancetre (`thead` reserve au lecteur
+    # d'ecran : boite de 1 px, overflow:hidden) n'est pas « pose sur ses lignes » : 1 constat avant
+    # le correctif, 0 apres. La contre-epreuve ne differe que par le rognage (thead sorti du flux
+    # mais visible) et reste a 1 : ne plus compter un en-tete rogne n'est pas ne plus compter.
+    # TF-2176 — la famille `entete_desaligne` (alignement du libelle sur sa colonne) ignore le meme
+    # en-tete rogne : 2 constats (« Etat », « Echeance ») avant le correctif, 0 apres. La contre-epreuve
+    # visible garde ses 2 constats : un libelle sorti du flux mais VISIBLE reste decale de ses valeurs.
+    "v15-entete-rogne-par-ancetre.html": [("entete_pose_sur_lignes", 0), ("entete_desaligne", 0)],
+    "v15-entete-pose-non-rogne.html": [("entete_pose_sur_lignes", 1), ("entete_desaligne", 2)],
+    # TF-2220 (Produit-86, lot 20261105h RP-40) — un <details> FERME n'a que la largeur de son resume dans une
+    # rangee flex : son contenu se mesurait a 42 px (154 px sur le livrable fautif, 1 376 ouvert) et rendait des
+    # constats de largeur de texte sur un panneau que le lecteur ne voit pas. 2 constats `prose_verticale` avant
+    # le correctif, 0 apres. La contre-epreuve, le MEME panneau ouvert et borne a 260 px, garde ses 2 constats :
+    # ne plus juger un panneau ferme n'est pas ne plus juger un panneau.
+    "details-ferme-resume-etroit.html": [("prose_verticale", 0), ("prose_etroite", 0), ("l2_width", 0), ("l2_filet", 0)],
+    "details-ouvert-etroit.html": ("prose_verticale", 2),
+    # TF-1061 — une barre sticky, au-dessus, OPAQUE survole : zero V4. La meme, transparente,
+    # recouvre vraiment : un V4.
+    "v4-sticky-survol-opaque.html": ("v4_overlap", 0),
+    "v4-sticky-transparent.html": ("v4_overlap", 1),
+    # reste-v4-opaque (15/10/2026) — un fond de barre ecrit en oklch() se lit : opaque, il survole
+    # (1 constat avant, 0 apres) ; a 60 %, il recouvre et reste accuse.
+    "v4-sticky-oklch-opaque.html": ("v4_overlap", 0),
+    "v4-sticky-oklch-translucide.html": ("v4_overlap", 1),
+    # TF-1350 (24/09/2026, lot Produit-64 20260924a, RD-21) — V19, LE CONTROLE DE RENDU QUE L19
+    # (statique) ANNONCAIT SANS LE JOUER. Le fait mesure : « Remediation » en gras dans une
+    # cellule etroite, `overflow-wrap:break-word` (legitime sur la prose, hors du perimetre de
+    # L19 qui ne vise que `anywhere`/`break-all`), se rend « Remediatio » puis « n » sans trait
+    # d'union — check_html PASS, render_page PASS, run-oracles-design PASS. Trois fixtures :
+    # la rouge (cellule 5rem, mot coupe, mesure AVANT correction : 1 constat) ; la verte par
+    # LARGEUR (meme mot, cellule 22rem, le mot tient sur sa ligne : 0 constat — sans elle, V19
+    # crierait sur tout mot en gras d'un tableau) ; la verte par EXEMPTION (meme cellule 5rem,
+    # meme coupure geometrique, `data-coupure-ok` pose : 0 constat — meme attribut que L19
+    # statique, lisibilite.md §L19).
+    "v19-mot-coupe-sans-trait-union.html": ("mot_coupe", 1),
+    "v19-mot-entier-colonne-large.html": ("mot_coupe", 0),
+    "v19-coupure-declaree-exemptee.html": ("mot_coupe", 0),
+    # TF-1307 (17/10/2026, decision D-9 option (b)) — V21, LES LARGEURS DE CONTENU MELANGEES :
+    # reecriture NEUVE de la regle perdue avant publication. Le fait du retour humain du 11/09
+    # (TF-1038) : un chapitre en pleine largeur suivi d un chapitre brida par .chap.lire. Quatre
+    # fixtures, deux sens : la rouge (2 chapitres a 1 080 px, 1 pleine largeur : 1 constat) ; la
+    # verte homogene (meme texte, trois .chap.lire : 0) ; la verte par EXEMPTION declaree
+    # (data-largeur-exception : 0) ; la verte par GARDE (sections enfants d une grille, largeur
+    # decidee par la piste : 0).
+    "v21-largeurs-melangees.html": ("largeurs_melangees", 1),
+    "v21-largeurs-homogenes.html": ("largeurs_melangees", 0),
+    "v21-exception-declaree.html": ("largeurs_melangees", 0),
+    "v21-sections-en-grille.html": ("largeurs_melangees", 0),
+}
+
+
+# TF-1066 (12/09/2026, regle E5 du pilot) — LES CAS QUI N'EXISTENT QU'AU-DELA DE 2560 px.
+#
+# Branche a part, et c'est le point : `CAS_RENDU` se joue a 1440 px, la ou les deux defauts de V18
+# n'existent tout simplement pas — une prose bornee par la fenetre ne s'etire pas, un tableau a
+# l'etroit dans 1 440 px n'a aucune place a prendre. Les jouer a 1440 rendrait quatre verts qui ne
+# prouveraient rien. Chaque page porte DEUX attentes : celle de sa famille, et ZERO constat de
+# l'autre — c'est ce qui prouve que les deux branches mesurent deux choses et non la meme deux fois.
+#
+# La paire de PROSE ne differe que par le chapitre de lecture (`.chap.lire`), la paire de DONNEES
+# que par le plafond en pixels nus du tableau. La verte de prose borne a 720 px et non au token de
+# 1 080 px du socle : au plafond de 100 caracteres par ligne pose le 12/09, 1 080 px en mesurait
+# 134 — l'ecart etait publie en NON MESURABLE par l'oracle (il ne bloquait pas une forme que le
+# gabarit prescrit), et cette fixture verte prouvait le sens vert PAR LA MESURE plutot que par la
+# seule declaration.
+#
+# TF-1069 (decision humaine du 15/09/2026, "13a") — L'ARBITRAGE EST TRANCHE, DEUX FIXTURES DE
+# PLUS. Le plafond passe a 135 et `.chap.lire` reste a 1 080 px : son token (134 cpl) rentre
+# desormais SOUS le plafond. Les deux fixtures ci-dessus restaient vraies apres l'arbitrage (720
+# px mesure encore moins que 134, 1 080 px non tenu mesure encore plus que 135), mais aucune des
+# deux ne PROUVE le nouveau seuil lui-meme : `v18-prose-mesuree.html` mesure un conteneur plus
+# etroit que le token reel, `v18-prose-etiree.html` mesure une prose totalement non tenue. Deux
+# fixtures neuves ferment cet ecart, sur le token EXACT du socle et sur le plafond EXACT de 135 :
+#   · `v18-chap-lire-socle.html` — le VRAI conteneur du boilerplate (1 080 px), sonde du 15/09 :
+#     129 et 125 caracteres par ligne mesures sur les deux paragraphes, tous deux SOUS 135 — la
+#     page passe desormais par la MESURE, plus seulement par l'exemption de conteneur declare ;
+#   · `v18-cpl-au-dela-135.html` — un conteneur plus large (1 200 px) et NON declare comme
+#     chapitre de lecture, sonde du 15/09 : 168 et 136 caracteres par ligne, tous deux AU-DELA de
+#     135 — le plafond releve de 100 a 135 bloque encore une forme reelle.
+CAS_RENDU_LARGE = {
+    "v18-prose-etiree.html": [("v18_prose_etiree", 1), ("v18_tableau_etrique", 0)],
+    "v18-prose-mesuree.html": [("v18_prose_etiree", 0), ("v18_tableau_etrique", 0)],
+    "v18-donnees-tableau-etrique.html": [("v18_tableau_etrique", 1), ("v18_prose_etiree", 0)],
+    "v18-donnees-tableau-plein.html": [("v18_tableau_etrique", 0), ("v18_prose_etiree", 0)],
+    "v18-chap-lire-socle.html": [("v18_prose_etiree", 0), ("v18_tableau_etrique", 0)],
+    "v18-cpl-au-dela-135.html": [("v18_prose_etiree", 1), ("v18_tableau_etrique", 0)],
+    # TF-1622 (RA-3) : sur une page de DONNEES, la prose pleine largeur est le defaut ; V18 (a)
+    # la comptait en defaut et poussait vers .chap.lire (1 avant, 0 apres). Rouge : v18-prose-etiree.
+    "v18-donnees-prose-pleine.html": [("v18_prose_etiree", 0), ("v18_tableau_etrique", 0)],
+}
+
+
+# EXEMPTIONS DÉCLARÉES (TF-0308) — double sens du registre `EXEMPTIONS_DECLAREES`.
+#
+# Fixtures EMBARQUÉES ici, et non des fichiers de `fixtures/` : le mécanisme se déclenche
+# sur le CHEMIN du fichier jugé (registre nominatif), et une fixture de ce skill ne peut
+# pas vivre dans l'arbre d'un autre skill. Même contrainte, même choix que le self-test
+# du hook C7. Ce que ces cas prouvent : l'exemption s'applique là où elle est déclarée,
+# nulle part ailleurs, et n'écarte QUE ce qu'elle nomme.
+FRAGMENT_CANEVAS = "\n".join([
+    "<!-- TEMPLATE TOPOLOGIE · canevas Factory",
+    "     Utilisation : insérer ce <svg>...</svg> dans une page qui utilise le squelette",
+    "     de template-multi-bandes.html. -->",
+    '<div class="diagram-wrap">',
+    '  <svg viewBox="0 0 1400 720" xmlns="http://www.w3.org/2000/svg" role="img">',
+    "    <title>{{TITRE_TOPOLOGIE}} | {{SOUSTITRE}}</title>",
+    '    <rect x="60" y="76" width="200" height="114" rx="8" fill="#ede9fe"/>',
+    "  </svg>",
+    "</div>",
+])
+CHEMIN_DECLARE = ".claude/skills/factory-schemas/assets/template-topologie.html"
+CHEMIN_GABARIT = ".claude/skills/factory-schemas/assets/template-multi-bandes.html"
+# Page datée : sous le chemin du gabarit à trous, l'exemption A4-version n'écarte plus
+# rien — le contrôle doit le DIRE, sinon une ligne de registre survit à son motif.
+PAGE_DATEE = "\n".join([
+    '<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8">',
+    '<meta name="viewport" content="width=device-width, initial-scale=1.0">',
+    "<title>Factory — Canevas multi-bandes · essai — 20260817a</title>",
+    '<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg/%3E">',
+    "<style>:root { --ink: #0f172a; } @media print { body { background: #fff; } }</style>",
+    "</head><body><h1>Essai</h1><p>Contenu.</p></body></html>",
+])
+
+
+def run_exemptions():
+    """Cas à double sens du registre d'exemptions déclarées. Même forme que run()."""
+    def a_code_autoportance(fails):
+        return any(f.startswith(("A1 DOCTYPE", "A1 <head>", "A3 ", "A2 ")) for f in fails)
+
+    cas = []
+
+    fails, warns = check(FRAGMENT_CANEVAS, regles="charte", source=CHEMIN_DECLARE)
+    cas.append(("VERTE  fragment déclaré : autoportance écartée",
+                not a_code_autoportance(fails)
+                and any("SKIP exemption déclarée" in w for w in warns), fails))
+
+    fails, warns = check(FRAGMENT_CANEVAS, regles="charte", source=CHEMIN_DECLARE)
+    cas.append(("VERTE  le SKIP NOMME son motif (jamais muet)",
+                any("fragment SVG de canevas" in w and "template-multi-bandes" in w
+                    for w in warns), warns))
+
+    fails, _ = check(FRAGMENT_CANEVAS, regles="charte",
+                     source="output/livrable-client.html")
+    cas.append(("ROUGE  même contenu HORS registre : les échecs reviennent",
+                a_code_autoportance(fails), fails))
+
+    fails, _ = check(FRAGMENT_CANEVAS, regles="charte")
+    cas.append(("ROUGE  sans chemin fourni : aucune exemption possible",
+                a_code_autoportance(fails), fails))
+
+    cdn = FRAGMENT_CANEVAS.replace(
+        '<div class="diagram-wrap">',
+        '<link rel="stylesheet" href="https://cdn.exemple.invalid/t.css">\n'
+        '<div class="diagram-wrap">')
+    fails, _ = check(cdn, regles="charte", source=CHEMIN_DECLARE)
+    cas.append(("ROUGE  fichier exempté qui charge un CDN : A1 réseau reste en échec",
+                any("requête(s) réseau" in f for f in fails), fails))
+
+    fails, warns = check(PAGE_DATEE, regles="charte", source=CHEMIN_GABARIT)
+    cas.append(("       exemption devenue inutile : annoncée SANS EFFET",
+                any("SANS EFFET" in w for w in warns), warns))
+
+    return [{"fixture": nom, "verdict": "OK" if tenu else "ECHEC",
+             "attendu": ["exemption"], "obtenu": ["exemption"] if tenu else [],
+             "detail": "" if tenu else " | ".join(detail)[:300]}
+            for nom, tenu, detail in cas]
+
+
+# TF-2791 (factory-site, 16/11/2026) — UN <h1> QUI N'EST PAS AFFICHE NE COMPTE PAS. Une maquette a deux ecrans dans un seul
+# fichier porte un <h1> par ecran, un seul est affiche : A3 refusait « 2 balises <h1> » sur une page conforme au rendu (deux refus
+# residuels, le 16/11/2026). Le compte baisse de ce que la lecture du fichier etablit comme masque (`hidden`, `display: none` en ligne
+# ou par une regle a selecteur simple, <template>, <dialog> ferme), et de rien d'autre : les cas rouges gardent le refus.
+BASE_H1 = "\n".join([
+    '<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8">',
+    '<meta name="viewport" content="width=device-width, initial-scale=1.0">',
+    "<title>Factory — Maquette à deux écrans · essai — 20261122a</title>",
+    '<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg/%3E">',
+    "<style>:root { --ink: #0f172a; } @@CSS@@ @media print { body { background: #fff; } }</style>",
+    "</head><body>@@CORPS@@</body></html>",
+])
+CSS_ECRANS = ".ecran{display:none}.ecran.actif{display:block}"
+# (nom, css, corps, nombre de refus « <h1> » attendus)
+CAS_H1_ECRANS = [
+    ("VERTE  le second ecran porte `hidden`", "", "<section><h1>Un</h1></section><section hidden><h1>Deux</h1></section>", 0),
+    ("VERTE  le second ecran est masque en ligne (display:none)", "", '<section><h1>Un</h1></section><section style="display:none"><h1>Deux</h1></section>', 0),
+    ("VERTE  la feuille masque .ecran et affiche .ecran.actif", CSS_ECRANS,
+     '<section class="ecran actif"><h1>Un</h1></section><section class="ecran"><h1>Deux</h1></section>', 0),
+    ("VERTE  le <h1> d'un <template> n'est pas affiche", "", "<section><h1>Un</h1></section><template><h1>Deux</h1></template>", 0),
+    ("VERTE  deux ecrans masques au chargement (un script en montre un)", "",
+     "<section hidden><h1>Un</h1></section><section hidden><h1>Deux</h1></section>", 0),
+    ("ROUGE  deux <h1> affiches : le refus reste", "", "<section><h1>Un</h1></section><section><h1>Deux</h1></section>", 1),
+    ("ROUGE  deux ecrans « actifs » : la regle d'affichage l'emporte, le refus reste", CSS_ECRANS,
+     '<section class="ecran actif"><h1>Un</h1></section><section class="ecran actif"><h1>Deux</h1></section>', 1),
+    ("ROUGE  la regle ne masque rien (display:block) : le refus reste", ".ecran{display:block}",
+     '<section class="ecran"><h1>Un</h1></section><section class="ecran"><h1>Deux</h1></section>', 1),
+    ("ROUGE  un selecteur a combinateur n'est pas evalue : le refus reste", "main .ecran2{display:none}",
+     '<main><section class="ecran1"><h1>Un</h1></section><section class="ecran2"><h1>Deux</h1></section></main>', 1),
+    ("ROUGE  trois <h1>, un seul masque : le refus reste, il en compte deux", "",
+     "<h1>Un</h1><h1>Deux</h1><section hidden><h1>Trois</h1></section>", 1),
+    ("ROUGE  aucun <h1> : le refus « Aucun » reste", "", "<p>Contenu.</p>", 1),
+]
+
+
+def run_h1_ecrans():
+    """TF-2791 — le compte des <h1> de A3 ne retient que ceux qu'aucun masquage lisible dans le fichier ne retire."""
+    cas = []
+    for nom, css, corps, attendu in CAS_H1_ECRANS:
+        fails, _ = check(BASE_H1.replace("@@CSS@@", css).replace("@@CORPS@@", corps), regles="charte")
+        h1 = [f for f in fails if "<h1>" in f]
+        cas.append((nom, len(h1) == attendu, h1))
+    # Le remede que le refus propose est JOUE : la page a deux <h1> affiches, rejouee avec `hidden` sur le second ecran, passe.
+    rouge = BASE_H1.replace("@@CSS@@", "").replace("@@CORPS@@", "<section><h1>Un</h1></section><section><h1>Deux</h1></section>")
+    refus = [f for f in check(rouge, regles="charte")[0] if "<h1>" in f]
+    cas.append(("REMEDE le refus propose `hidden` ; la page rejouee avec `hidden` passe",
+                bool(refus) and "`hidden`" in refus[0]
+                and not [f for f in check(rouge.replace("<section><h1>Deux", "<section hidden><h1>Deux"), regles="charte")[0] if "<h1>" in f],
+                refus))
+    return [{"fixture": nom, "verdict": "OK" if tenu else "ECHEC", "attendu": ["h1"], "obtenu": ["h1"] if tenu else [],
+             "detail": "" if tenu else " | ".join(detail)[:300]} for nom, tenu, detail in cas]
+
+
+def codes(messages, motif=RE_CODE):
+    out = set()
+    for m in messages:
+        c = motif.match(m)
+        if c:
+            out.add(c.group(1))
+    return out
+
+
+# TF-0445 (21/08) — S1 : cohérence de tableau. Jugée sous `regles="charte"` et non "L" : ce
+# n'est pas de la lisibilité, c'est de la structure. Les cas ne comparent QUE les codes S,
+# sinon le bruit des règles de charte (favicon, responsive) d'une fixture minimale masquerait
+# le seul point qu'elles prouvent.
+CAS_STRUCTURE = {
+    "s1-tableau-incoherent.html": {"S1"},   # `|` non échappé : 5 cellules pour un en-tête de 4
+    "s1-tableau-coherent.html": set(),      # même page, la barre verticale échappée
+    "s1-rowspan-non-juge.html": set(),      # rowspan : non comptable, écarté avec son motif
+    # TF-1036 — un même ensemble n'est énuméré qu'une fois : tableau + fiches = S2 ; le détail
+    # DANS la ligne ne compte pas.
+    "s2-double-listing.html": {"S2"},
+    "s2-detail-dans-la-ligne.html": set(),
+    # TF-1053 — une colonne déclarée relevée porte sa source par ligne et la page cite son
+    # garde-fou ; muette = S3, sourcée et gardée = rien.
+    "s3-provenance-muette.html": {"S3"},
+    "s3-provenance-declaree.html": set(),
+}
+
+
+def run_structure():
+    """Cas à double sens de S1. Ne compare que les codes S — voir le commentaire ci-dessus."""
+    resultats = []
+    for nom, attendu in CAS_STRUCTURE.items():
+        chemin = FIXTURES / nom
+        if not chemin.exists():
+            resultats.append({"fixture": nom, "verdict": "ABSENTE", "attendu": sorted(attendu),
+                              "obtenu": [], "detail": "fixture manquante"})
+            continue
+        fails, _ = check(chemin.read_text(encoding="utf-8"), regles="charte")
+        obtenu = codes(fails, RE_CODE_S)
+        ok = obtenu == attendu
+        resultats.append({"fixture": nom, "verdict": "OK" if ok else "ECHEC",
+                          "attendu": sorted(attendu), "obtenu": sorted(obtenu),
+                          "detail": "" if ok else "codes S obtenus != attendus"})
+    return resultats
+
+
+def run():
+    resultats = []
+    for nom, attendu in CAS.items():
+        chemin = FIXTURES / nom
+        if not chemin.exists():
+            resultats.append({"fixture": nom, "verdict": "ABSENTE", "attendu": sorted(attendu),
+                              "obtenu": [], "detail": "fixture manquante"})
+            continue
+        fails, _ = check(chemin.read_text(encoding="utf-8"), regles="L")
+        obtenu = codes(fails)
+        ok = obtenu == attendu
+        resultats.append({
+            "fixture": nom,
+            "verdict": "OK" if ok else "ECHEC",
+            "attendu": sorted(attendu),
+            "obtenu": sorted(obtenu),
+            "detail": "" if ok else " | ".join(fails)[:400],
+        })
+    for nom, attendu in CAS_AVERT.items():
+        chemin = FIXTURES / nom
+        if not chemin.exists():
+            resultats.append({"fixture": nom, "verdict": "ABSENTE", "attendu": sorted(attendu),
+                              "obtenu": [], "detail": "fixture manquante"})
+            continue
+        fails, warns = check(chemin.read_text(encoding="utf-8"), regles="L")
+        # Seule la famille de la fixture est en cause : l'avertissement L6 « aucun sommaire »
+        # d'une page minimale n'est pas l'objet de deux jumelles qui ne diffèrent que par le
+        # glyphe. La famille se lit dans le NOM de la fixture — `l15-…` juge L15, `l30-…` juge
+        # L30 — plutôt que d'être écrite en dur : une famille en dur a valu, en ajoutant L30,
+        # une fixture verte par défaut d'extraction.
+        famille = {re.match(r"^(l\d+)", nom).group(1).upper()}
+        obtenu = {c for c in codes(warns) if c.split()[0] in famille}
+        # un avertissement ne doit jamais s'accompagner d'un ÉCHEC L parasite : la fixture est
+        # verte par ailleurs, seul le glyphe la distingue de sa jumelle.
+        ok = obtenu == attendu and not codes(fails)
+        resultats.append({
+            "fixture": nom,
+            "verdict": "OK" if ok else "ECHEC",
+            "attendu": sorted(attendu),
+            "obtenu": sorted(obtenu | codes(fails)),
+            "detail": "" if ok else " | ".join(warns + fails)[:400],
+        })
+    for nom, attendu in CAS_AUTONOMIE.items():
+        chemin = FIXTURES / nom
+        if not chemin.exists():
+            resultats.append({"fixture": nom, "verdict": "ABSENTE", "attendu": sorted(attendu),
+                              "obtenu": [], "detail": "fixture manquante"})
+            continue
+        fails, _ = check(chemin.read_text(encoding="utf-8"), regles="charte")
+        obtenu = codes(fails, RE_CODE_A)
+        # une fixture A doit aussi être charte-verte : un échec charte parasite
+        # rendrait le cas trompeur (on croirait tester A1, on testerait la charte).
+        parasites = [f for f in fails if not RE_CODE_A.match(f)]
+        ok = obtenu == attendu and not parasites
+        resultats.append({
+            "fixture": nom,
+            "verdict": "OK" if ok else "ECHEC",
+            "attendu": sorted(attendu),
+            "obtenu": sorted(obtenu),
+            "detail": "" if ok else " | ".join(fails + parasites)[:400],
+        })
+    for nom, echec_lang_attendu in CAS_LANG.items():
+        chemin = FIXTURES / nom
+        if not chemin.exists():
+            resultats.append({"fixture": nom, "verdict": "ABSENTE",
+                              "attendu": ["lang" if echec_lang_attendu else "(aucun)"],
+                              "obtenu": [], "detail": "fixture manquante"})
+            continue
+        fails, _ = check(chemin.read_text(encoding="utf-8"), regles="charte")
+        fails_lang = [f for f in fails if "lang" in f.lower()]
+        parasites = [f for f in fails if f not in fails_lang]
+        # Un attendu texte (« absent », « invalide ») exige AUSSI que le message nomme la bonne cause.
+        bonne_cause = (not isinstance(echec_lang_attendu, str)
+                       or all(echec_lang_attendu in f for f in fails_lang))
+        ok = (bool(fails_lang) == bool(echec_lang_attendu)) and not parasites and bonne_cause
+        resultats.append({
+            "fixture": nom,
+            "verdict": "OK" if ok else "ECHEC",
+            "attendu": ["lang"] if echec_lang_attendu else [],
+            "obtenu": (["lang"] if fails_lang else []) + parasites,
+            "detail": "" if ok else " | ".join(fails)[:400],
+        })
+    for nom, attendu in CAS_AUTOPORTANCE.items():
+        chemin = FIXTURES / nom
+        if not chemin.exists():
+            resultats.append({"fixture": nom, "verdict": "ABSENTE", "attendu": sorted(attendu),
+                              "obtenu": [], "detail": "fixture manquante"})
+            continue
+        fails, _ = check(chemin.read_text(encoding="utf-8"), regles="charte")
+        obtenu = codes(fails, RE_CODE_AG)
+        # Même garde anti-parasite que A1 et G1 : un échec de charte NON codé (h1 absent,
+        # :root manquant, @media print oublié) rendrait le cas trompeur — on croirait
+        # mesurer l'autoportance, on mesurerait un oubli de gabarit.
+        parasites = [f for f in fails if not RE_CODE_AG.match(f)]
+        ok = obtenu == attendu and not parasites
+        resultats.append({
+            "fixture": nom,
+            "verdict": "OK" if ok else "ECHEC",
+            "attendu": sorted(attendu),
+            "obtenu": sorted(obtenu),
+            "detail": "" if ok else " | ".join(fails + parasites)[:400],
+        })
+    for nom, attendu in CAS_G1.items():
+        chemin = FIXTURES / nom
+        if not chemin.exists():
+            resultats.append({"fixture": nom, "verdict": "ABSENTE", "attendu": sorted(attendu),
+                              "obtenu": [], "detail": "fixture manquante"})
+            continue
+        fails, _ = check(chemin.read_text(encoding="utf-8"), regles="charte")
+        obtenu = codes(fails, RE_CODE_G)
+        # même garde anti-parasite que A1 : un échec charte étranger rendrait le
+        # cas trompeur (on croirait tester G1, on testerait autre chose).
+        parasites = [f for f in fails if not RE_CODE_G.match(f)]
+        ok = obtenu == attendu and not parasites
+        resultats.append({
+            "fixture": nom,
+            "verdict": "OK" if ok else "ECHEC",
+            "attendu": sorted(attendu),
+            "obtenu": sorted(obtenu),
+            "detail": "" if ok else " | ".join(fails + parasites)[:400],
+        })
+    return resultats
+
+
+def run_rendu():
+    """Rejoue les cas de largeur au rendu. Silencieux si playwright est absent."""
+    try:
+        import importlib
+        importlib.import_module("playwright.sync_api")
+    except ImportError:
+        return None
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import json as _json
+    import subprocess
+    import tempfile
+    out = []
+    # Les captures partent dans un dossier jetable (--out, TF-0058) : le dossier des
+    # fixtures n'a pas à héberger les PNG de son propre auto-test.
+    captures = tempfile.mkdtemp(prefix="self-test-render-")
+    # TF-0910 : une fixture peut porter PLUSIEURS attentes de familles (liste de couples). Le cas
+    # fondateur l'exige — la fixture pastel doit rendre 0 constat V2 ET au moins 5 constats V16 :
+    # c'est le fait que V2 reste VERT qui prouve que V16 mesure autre chose qu'un ratio.
+    for nom, spec in CAS_RENDU.items():
+        paires = spec if isinstance(spec, list) else [spec]
+        chemin = FIXTURES / nom
+        etiquette = (lambda cle: nom if len(paires) == 1 else f"{nom} · {cle}")
+        if not chemin.exists():
+            for cle, attendu in paires:
+                out.append({"fixture": etiquette(cle), "verdict": "ABSENTE", "attendu": attendu,
+                            "obtenu": 0, "detail": "fixture manquante"})
+            continue
+        r = subprocess.run(
+            [sys.executable, "-X", "utf8",
+             str(Path(__file__).resolve().parent / "render_page.py"),
+             str(chemin), "--widths", "1440", "--output", "json", "--out", captures],
+            capture_output=True, text=True, encoding="utf-8")
+        try:
+            d = _json.loads(r.stdout)
+        except Exception:
+            for cle, attendu in paires:
+                out.append({"fixture": etiquette(cle), "verdict": "ECHEC", "attendu": attendu,
+                            "obtenu": 0, "detail": "render_page illisible"})
+            continue
+        for cle, attendu in paires:
+            n = len(d["breakpoints"]["1440"]["issues"][cle])
+            ok = (n >= attendu) if attendu else (n == 0)
+            out.append({"fixture": etiquette(cle), "verdict": "OK" if ok else "ECHEC",
+                        "attendu": attendu, "obtenu": n, "regle": cle,
+                        "detail": "" if ok else f"{n} constat(s) {cle} au rendu"})
+    shutil.rmtree(captures, ignore_errors=True)
+    return out
+
+
+def run_rendu_large():
+    """TF-1066 — les deux branches de V18, jouees a 2560 px (la ou elles se declenchent).
+
+    Silencieux si playwright est absent : la mesure de lecture se prend dans un navigateur, pas en
+    prose. Un `None` rendu ici ne vaut JAMAIS un vert — `main()` ne l'ajoute simplement pas au
+    bilan, et l'absence de ces cas se lit dans le compte total.
+    """
+    try:
+        import importlib
+        importlib.import_module("playwright.sync_api")
+    except ImportError:
+        return None
+    import json as _json
+    import subprocess
+    import tempfile
+    captures = tempfile.mkdtemp(prefix="self-test-4k-")
+    rendu = str(Path(__file__).resolve().parent / "render_page.py")
+    out = []
+    for nom, paires in CAS_RENDU_LARGE.items():
+        chemin = FIXTURES / nom
+        etiquette = (lambda cle: f"{nom} · {cle}")
+        if not chemin.exists():
+            for cle, attendu in paires:
+                out.append({"fixture": etiquette(cle), "verdict": "ABSENTE", "attendu": attendu,
+                            "obtenu": 0, "detail": "fixture manquante"})
+            continue
+        r = subprocess.run([sys.executable, "-X", "utf8", rendu, str(chemin),
+                            "--widths", "2560", "--output", "json", "--out", captures],
+                           capture_output=True, text=True, encoding="utf-8")
+        try:
+            d = _json.loads(r.stdout)
+        except Exception:  # noqa: BLE001
+            for cle, attendu in paires:
+                out.append({"fixture": etiquette(cle), "verdict": "ECHEC", "attendu": attendu,
+                            "obtenu": 0, "detail": "render_page illisible"})
+            continue
+        for cle, attendu in paires:
+            n = len(d["breakpoints"]["2560"]["issues"][cle])
+            ok = (n >= attendu) if attendu else (n == 0)
+            out.append({"fixture": etiquette(cle), "verdict": "OK" if ok else "ECHEC",
+                        "attendu": attendu, "obtenu": n, "regle": cle + " (2560 px)",
+                        "detail": "" if ok else f"{n} constat(s) {cle} a 2560 px"})
+    shutil.rmtree(captures, ignore_errors=True)
+    return out
+
+
+def run_repli_cartes():
+    """TF-0442 — le repli en cartes du socle, mesuré à 390 px (là où il sert).
+
+    Les autres cas de rendu se jouent à 1440 px : le repli ne s'y déclenche pas. Cette branche
+    mesure la seule largeur où il compte.
+
+    Ce que la mesure a APPRIS, et qui n'était pas la thèse de départ. La thèse était : « un
+    conteneur `overflow-x: auto` ne fait pas passer V1, le repli en cartes le fait ». Mesuré le
+    21/08 sur ces deux fixtures, avec le socle À JOUR : les DEUX rendent 0 constat V1 à 390 px.
+    La raison est que le socle porte désormais `overflow-wrap: anywhere` sur les cellules — le
+    tableau ne déborde plus, il s'ÉCRASE. La capture le montre sans discussion : huit colonnes
+    réduites à un ou deux caractères par ligne, « Identifiant » rendu sur cinq lignes, et
+    V1 PASS.
+
+    Donc : le repli en cartes n'est PAS un correctif de débordement, c'est un correctif de
+    LISIBILITÉ — et V1 est muet sur un tableau écrasé, même famille d'angle mort que TF-0440
+    (une règle satisfaite sans être tenue). Le constat est versé au registre en candidat.
+
+    Ce que ces deux cas verrouillent donc, en attendant :
+      · le repli du socle ne CASSE rien (0 constat V1, la carte tient dans le viewport) ;
+      · le cas sans repli est à 0 AUJOURD'HUI, et ce zéro est le défaut, pas le succès. Le jour
+        où une règle saura voir l'écrasement, ce cas devra passer à >= 1 — et c'est ici qu'on
+        le lira.
+    """
+    try:
+        import importlib
+        importlib.import_module("playwright.sync_api")
+    except ImportError:
+        return None
+    import json as _json
+    import subprocess
+    import tempfile
+    captures = tempfile.mkdtemp(prefix="self-test-repli-")
+    rendu = str(Path(__file__).resolve().parent / "render_page.py")
+    cas = {
+        "v1-tableau-repli-cartes.html": 0,   # replié : chaque ligne devient une carte
+        # TF-0926 (08/09) — CE ZÉRO A ENFIN BOUGÉ, et c'est le scénario écrit ci-dessus qui
+        # s'est produit : « le jour où une règle saura voir l'écrasement, ce cas devra passer
+        # à >= 1 ». Ce n'est pas une règle neuve qui l'a vu, c'est la fixture qui a cessé de
+        # mentir. Elle portait une copie FIGÉE du CSS du gabarit, prise le 21/08 ; TF-0724 D1
+        # a retiré `overflow-wrap: anywhere` de `th, td` le 31/08, et la copie a continué
+        # d'écraser dans son coin. Depuis que la feuille est POSÉE depuis le gabarit
+        # (boilerplate.css, contrôle de parité), la mesure à 390 px rend le défaut réel :
+        # `table` à 736 px de bord droit pour 390 px de fenêtre, 45 descendants avec elle.
+        "v1-tableau-sans-repli.html": 1,     # non replié, et le débordement se VOIT enfin
+    }
+    out = []
+    for nom, attendu in cas.items():
+        chemin = FIXTURES / nom
+        if not chemin.exists():
+            out.append({"fixture": nom, "verdict": "ABSENTE", "attendu": attendu,
+                        "obtenu": 0, "detail": "fixture manquante"})
+            continue
+        r = subprocess.run([sys.executable, "-X", "utf8", rendu, str(chemin),
+                            "--widths", "390", "--output", "json", "--out", captures],
+                           capture_output=True, text=True, encoding="utf-8")
+        try:
+            n = len(_json.loads(r.stdout)["breakpoints"]["390"]["issues"]["v1_overflow"])
+        except Exception:
+            out.append({"fixture": nom, "verdict": "ECHEC", "attendu": attendu,
+                        "obtenu": 0, "detail": "render_page illisible"})
+            continue
+        ok = n == attendu
+        out.append({"fixture": nom, "verdict": "OK" if ok else "ECHEC", "attendu": attendu,
+                    "obtenu": n, "regle": "v1_overflow (390 px)",
+                    "detail": "" if ok else f"{n} constat(s) v1_overflow à 390 px"})
+    shutil.rmtree(captures, ignore_errors=True)
+    return out
+
+
+def run_v1_bornes():
+    """TF-0382 — les DEUX sens de la borne V1, en comptes EXACTS.
+
+    `CAS_RENDU` teste « au moins n constats » : sur ces deux cas-là, un `>=` ne discriminerait
+    rien — 16 entrees passeraient un `>= 4` aussi bien que 4. Or c'est precisement le nombre qui
+    est en cause. D'ou une branche a part, a egalite stricte.
+
+    Sens 1 — REGROUPEMENT : trois tableaux de gabarit identique, chacun portant 54 descendants
+    debordants. Avant correction : 16 releves, tous dans le PREMIER tableau, les deux suivants
+    jamais examines et rien ne le disait. Apres : 4 constats (le document + une cause par
+    tableau), chacun annoncant ses descendants.
+
+    Sens 2 — TRONCATURE DECLAREE : dix-neuf blocs FRERES, donc dix-neuf causes qu'aucun
+    regroupement ne peut fusionner. Le plafond est alors atteint pour de vraies raisons, et le
+    drapeau doit dire le compte exact — 20 defauts pour 17 lignes detaillees.
+
+    Silencieux si playwright est absent : la borne se mesure dans un navigateur, pas en prose.
+    """
+    try:
+        import importlib
+        importlib.import_module("playwright.sync_api")
+    except ImportError:
+        return None
+    import json as _json
+    import subprocess
+    import tempfile
+    captures = tempfile.mkdtemp(prefix="self-test-v1-bornes-")
+    rendu = str(Path(__file__).resolve().parent / "render_page.py")
+
+    def mesurer(nom):
+        chemin = FIXTURES / nom
+        if not chemin.exists():
+            return None
+        r = subprocess.run([sys.executable, "-X", "utf8", rendu, str(chemin),
+                            "--widths", "1440", "--output", "json", "--out", captures],
+                           capture_output=True, text=True, encoding="utf-8")
+        try:
+            return _json.loads(r.stdout)["breakpoints"]["1440"]
+        except Exception:
+            return None
+
+    out = []
+    groupe = mesurer("v1-trois-tableaux-debordants.html")
+    if groupe is None:
+        out.append({"fixture": "v1-trois-tableaux-debordants.html", "verdict": "ECHEC",
+                    "attendu": 4, "obtenu": 0, "detail": "fixture absente ou rendu illisible"})
+    else:
+        n = len(groupe["issues"]["v1_overflow"])
+        avec_descendants = [x for x in groupe["issues"]["v1_overflow"]
+                            if "descendant(s) débordent AVEC lui" in x["detail"]]
+        # Egalite stricte : 3 tableaux + le document. Et les trois tableaux doivent ANNONCER
+        # leurs descendants, sinon le regroupement serait silencieux — on aurait remplace une
+        # troncature muette par une fusion muette.
+        ok = (n == 4 and len(avec_descendants) == 3
+              and groupe["issues"].get("v1_tronque") is None
+              and groupe["blocking"] == 4)
+        out.append({"fixture": "v1-trois-tableaux-debordants.html",
+                    "verdict": "OK" if ok else "ECHEC", "attendu": 4, "obtenu": n,
+                    "regle": "v1_overflow (regroupement par sous-arbre)",
+                    "detail": "" if ok else (f"{n} constat(s) au lieu de 4, "
+                                             f"{len(avec_descendants)} annoncant des descendants "
+                                             f"au lieu de 3, blocking {groupe['blocking']}")})
+
+    borne = mesurer("v1-dix-neuf-causes-independantes.html")
+    if borne is None:
+        out.append({"fixture": "v1-dix-neuf-causes-independantes.html", "verdict": "ECHEC",
+                    "attendu": 20, "obtenu": 0, "detail": "fixture absente ou rendu illisible"})
+    else:
+        t = borne["issues"].get("v1_tronque")
+        # Le compte EXACT est ce qui dit l'ampleur ; la liste, elle, est plafonnee. Les deux
+        # doivent etre lisibles, et `blocking` doit suivre le compte, pas la liste.
+        ok = bool(t) and t["total"] == 20 and t["detaillees"] == 17 and t["plafond"] == 16 \
+            and borne["blocking"] == 20 and "TRONQUÉ" in t["motif"]
+        out.append({"fixture": "v1-dix-neuf-causes-independantes.html",
+                    "verdict": "OK" if ok else "ECHEC", "attendu": 20,
+                    "obtenu": (t or {}).get("total", 0),
+                    "regle": "v1_tronque (borne declaree)",
+                    "detail": "" if ok else f"drapeau {t!r}, blocking {borne['blocking']}"})
+
+    shutil.rmtree(captures, ignore_errors=True)
+    return out
+
+
+def run_glyphes_du_socle():
+    """TF-0490 (22/08/2026) — LE SOCLE NE PROPAGE PAS UN GLYPHE QU'IL INTERDIT.
+
+    Le fait fondateur, et c'est une CONFIRMATION : le lot du 20/08 avait signalé un chevron
+    absent des piles de repli déclarées (TF-0435), corrigé en passant tout le socle à `›`
+    (U+203A). Le 22/08, le même défaut revient — un producteur reprend le composant
+    `details`/`summary` du socle, recopie les triangles de l'exemple, et hérite du risque.
+
+    LA CAUSE N'EST PAS LE PRODUCTEUR : c'est que rien ne juge les EXEMPLES du socle. `L15` juge
+    les glyphes en `content:` CSS d'une page produite ; personne ne juge ceux que le socle offre
+    à la copie. Un exemple est une prescription silencieuse : ce qu'il montre sera repris.
+
+    CE QUI EST JUGÉ, et la borne est délibérée : les BLOCS DE CODE des références (ce qu'on
+    recopie) et les FIXTURES (ce qui sert de modèle). PAS la prose des références : les marqueurs
+    de gravité de `bonnes-pratiques.md` (🔴 🟡 ⚪) sont la LÉGENDE du document, pas un exemple —
+    personne ne les recopie dans un livrable, et les interdire dégraderait la référence sans rien
+    gagner. Un contrôle qui déborde de son domaine se fait désactiver.
+    """
+    from check_html import GLYPHES_SURS
+    racine = Path(__file__).resolve().parent.parent
+    cibles = sorted((racine / 'references').rglob('*.md')) + sorted((racine / 'fixtures').rglob('*.html'))
+    fautifs = {}
+    for f in cibles:
+        texte = f.read_text(encoding='utf-8')
+        dans_code = False
+        # TF-0926 (08/09) — un bloc POSÉ par `embarquer-composants.mjs` n'est pas un exemple
+        # ÉCRIT dans la fixture : c'est la source elle-même, recopiée sous contrôle de parité.
+        # La juger ici la jugerait DEUX FOIS et au mauvais endroit — la source vit dans
+        # `assets/`, hors du domaine délibéré de ce contrôle (« les blocs de code des
+        # références et les fixtures »). Le fait : dès que la feuille du gabarit a été posée
+        # dans les deux fixtures V1, le séparateur de commentaire `──` (U+2500) du gabarit est
+        # devenu un glyphe « d'exemple » — un faux positif né du contrôle de parité lui-même.
+        dans_bloc_pose = False
+        for i, ligne in enumerate(texte.split('\n'), 1):
+            if f.suffix == '.html':
+                if 'COMPOSANT-EMBARQUE:DEBUT' in ligne:
+                    dans_bloc_pose = True
+                    continue
+                if 'COMPOSANT-EMBARQUE:FIN' in ligne:
+                    dans_bloc_pose = False
+                    continue
+                if dans_bloc_pose:
+                    continue
+            if f.suffix == '.md':
+                if ligne.strip().startswith('```'):
+                    dans_code = not dans_code
+                    continue
+                if not dans_code:
+                    # On ne lit QUE le contenu des spans de code, jamais la ligne entière : un
+                    # marqueur de gravité en tête de puce (« - 🔴 Ouvrir par `<!DOCTYPE html>` »)
+                    # n'est pas un exemple recopié, et juger la ligne le condamnait à tort.
+                    ligne = ' '.join(re.findall(r'`([^`]+)`', ligne))
+                    if not ligne:
+                        continue
+            for ch in set(ligne):
+                if ord(ch) > 0x00FF and ch not in GLYPHES_SURS:
+                    fautifs.setdefault(ch, []).append(f'{f.name}:{i}')
+    if not fautifs:
+        return [{'fixture': 'socle (références + fixtures)', 'verdict': 'OK',
+                 'attendu': 'aucun glyphe hors liste blanche dans un exemple',
+                 'obtenu': f'{len(cibles)} fichier(s) relus', 'regle': 'TF-0490 glyphes du socle',
+                 'detail': ''}]
+    detail = ' · '.join(f'U+{ord(c):04X} ({"/".join(o[:2])})' for c, o in sorted(fautifs.items()))
+    return [{'fixture': 'socle (références + fixtures)', 'verdict': 'ECHEC',
+             'attendu': 'aucun glyphe hors liste blanche dans un exemple',
+             'obtenu': f'{len(fautifs)} glyphe(s)', 'regle': 'TF-0490 glyphes du socle',
+             'detail': detail}]
+
+
+def run_v9_echelles():
+    """TF-1143 — V9 REJOUEE A CHAQUE ECHELLE DOCUMENTEE (1 / 0,5 / 0,4).
+
+    Le fait payé : même fichier, même largeur de fenêtre, `--scale 1` rendait PASS et
+    `--scale 0.5` rendait FAIL avec un bloquant V9 « actif visuel indiscernable de son fond ».
+    L'aide de l'option la présente comme un réglage de PERFORMANCE — « 0.4 sur une page très
+    haute » — et c'est pour cela qu'elle avait été employée. Le premier réflexe devant ce
+    bloquant est de foncer la charte du livrable : le geste aurait dégradé huit schémas pour
+    satisfaire un artefact de rastérisation.
+
+    Contre-mesure du socle, même page et même largeur, capture de l'actif et meilleur contraste :
+    17,85:1 à l'échelle 1, 10,85:1 à 0,5, 6,39:1 à 0,4, 3,66:1 à 0,25 — un facteur cinq perdu
+    sans qu'un pixel de la page ait bougé.
+
+    Trois sens ici. (a) La fixture CONFORME ne rend aucun bloquant à AUCUNE des trois échelles —
+    c'est le geste (1) de l'item : le banc rejoue la fixture conforme à chaque échelle
+    documentée. (b) La fixture VRAIMENT invisible bloque toujours à l'échelle 1 : la garde n'a
+    pas éteint V9. (c) Sous l'échelle 1, ce même constat part au non jugé, avec sa raison, et la
+    sortie DIT que l'échelle est réduite — un PASS obtenu à 0,4 ne doit pas se lire comme un PASS
+    obtenu à l'échelle native.
+    """
+    try:
+        import importlib
+        importlib.import_module("playwright.sync_api")
+    except ImportError:
+        return []
+    import subprocess
+    import tempfile
+    rendu = str(Path(__file__).resolve().parent / "render_page.py")
+    dossier = tempfile.mkdtemp(prefix="self-test-v9-")
+    out = []
+
+    def cas(nom, attendu, obtenu, regle):
+        out.append({"fixture": nom, "verdict": "OK" if attendu == obtenu else "ECHEC",
+                    "attendu": str(attendu), "obtenu": str(obtenu), "regle": regle, "detail": ""})
+
+    def jouer(nom, echelle):
+        r = subprocess.run([sys.executable, "-X", "utf8", rendu, str(FIXTURES / nom),
+                            "--widths", "1280", "--scale", str(echelle),
+                            "--output", "json", "--out", dossier],
+                           capture_output=True, text=True, encoding="utf-8")
+        try:
+            d = json.loads(r.stdout)
+        except Exception:  # noqa: BLE001
+            return None
+        i = d["breakpoints"]["1280"]["issues"]
+        return {
+            "bloquants": len(i["v9_actif_invisible"]),
+            "non_juge_v9": sum(1 for x in (i.get("unmeasured") or []) if "V9" in x["detail"]),
+            "dit_echelle": any(x.startswith("ECHELLE") for x in d["non_juge"]),
+        }
+
+    for nom, conforme in (("v9-texte-fin-a-echelle-reduite.html", True),
+                          ("v9-logo-visible.html", True),
+                          ("v9-logo-invisible.html", False)):
+        if not (FIXTURES / nom).exists():
+            cas(f"v9 · {nom}", "fixture présente", "absente", "TF-1143")
+            continue
+        for echelle in (1, 0.5, 0.4):
+            r = jouer(nom, echelle)
+            if r is None:
+                cas(f"v9 · {nom} · échelle {echelle}", "sortie JSON", "illisible", "TF-1143")
+                continue
+            if conforme:
+                cas(f"v9 · page conforme · échelle {echelle} · aucun bloquant",
+                    0, r["bloquants"], "TF-1143 fixture conforme a chaque echelle")
+            elif echelle >= 1:
+                cas("v9 · page vraiment invisible · échelle 1 · BLOQUE (la garde n'éteint rien)",
+                    1, r["bloquants"], "TF-1143 contre-epreuve")
+            else:
+                cas(f"v9 · page vraiment invisible · échelle {echelle} · non jugé, pas bloquant",
+                    (0, 1), (r["bloquants"], r["non_juge_v9"]), "TF-1143 garde")
+            cas(f"v9 · {nom} · échelle {echelle} · la réduction est DITE",
+                echelle < 1, r["dit_echelle"], "TF-1143 echelle publiee")
+    shutil.rmtree(dossier, ignore_errors=True)
+    return out
+
+
+def run_perimetre_non_mesure():
+    """TF-1148 — LE PÉRIMÈTRE DE NON-MESURE DE check_html.py, joué dans les deux sens.
+
+    Le fait payé : `SKILL.md` déclare la revue de lecture OBLIGATOIRE avant toute livraison, et
+    aucun des trois scripts du socle ne la demandait ni ne la mentionnait. Un indice livré le
+    15/09 avec trois verdicts verts s'est vu opposer SEPT défauts par son destinataire, dont
+    cinq visibles en une minute sur des captures.
+
+    Un bloc qui ne sortirait que sur un PASS serait pire qu'absent : il apprendrait à se lire
+    comme une décoration du vert. Les deux sens sont donc : il sort sur un verdict PASS, ET il
+    sort sur un verdict FAIL. Le troisième cas ferme la seule autre façon de mentir — un
+    gabarit nommé dans le message et introuvable sur le disque n'envoie le lecteur nulle part.
+    """
+    outil = Path(__file__).resolve().parent / 'check_html.py'
+    fx = Path(__file__).resolve().parent.parent / 'fixtures'
+    out = []
+
+    def cas(nom, attendu, obtenu, regle):
+        out.append({'fixture': nom, 'verdict': 'OK' if attendu == obtenu else 'ECHEC',
+                    'attendu': str(attendu), 'obtenu': str(obtenu), 'regle': regle, 'detail': ''})
+
+    def jouer(cible, sortie):
+        r = subprocess.run([sys.executable, '-X', 'utf8', str(outil), str(cible),
+                            '--output', sortie],
+                           capture_output=True, text=True, encoding='utf-8', timeout=120)
+        return r.stdout or ''
+
+    # Sens VERT et sens ROUGE du VERDICT — le bloc est permanent, il ne suit pas le verdict.
+    for nom, etiquette in (('lisibilite-verte.html', 'verdict le plus favorable'),
+                           ('l1-ponctuation-orpheline.html', 'verdict en échec')):
+        cible = fx / nom
+        if not cible.exists():
+            cas(f'perimetre · {nom}', 'fixture présente', 'absente', 'TF-1148')
+            continue
+        texte = jouer(cible, 'text')
+        cas(f'perimetre · {etiquette} · le bloc sort quand même',
+            True, 'non jugé — ' in texte, 'TF-1148 bloc permanent')
+        cas(f'perimetre · {etiquette} · la revue de lecture est NOMMÉE',
+            True, 'REVUE DE LECTURE' in texte and 'REVUE.md' in texte, 'TF-1148 étape nommée')
+
+    # Le contrat machine : même clé et même forme que render_page.py, sinon un consommateur
+    # devrait connaître deux formats pour lire le même périmètre.
+    brut = jouer(fx / 'lisibilite-verte.html', 'json')
+    try:
+        j = json.loads(brut)
+    except Exception:
+        j = {}
+    cas('perimetre · clé `non_juge` au JSON, liste non vide (format render_page.py)',
+        True, isinstance(j.get('non_juge'), list) and len(j['non_juge']) > 0, 'TF-1148 contrat JSON')
+
+    # TF-1013 — le remède que le message propose est JOUÉ : le gabarit cité existe.
+    chemin = ''
+    for note in (j.get('non_juge') or []):
+        if 'gabarit' in note:
+            chemin = note.split(': ')[-1].strip()
+    cas('perimetre · le gabarit cité par le message EXISTE sur le disque',
+        True, bool(chemin) and Path(chemin).is_file(), 'TF-1148 remède joué')
+
+    # TF-1141 — les QUATRE familles que le destinataire a relevées sur onze pages doublement
+    # vertes sont NOMMÉES, chacune. Une liste qui en perdrait une redeviendrait un silence sur
+    # ce point-là, et c'est exactement ce silence qui a coûté huit défauts le 15/09.
+    bloc = ' '.join(j.get('non_juge') or [])
+    for famille, mot in (('largeur utile des colonnes', 'LARGEUR UTILE'),
+                         ('densité et proportion des figures', 'DENSITÉ ET LA PROPORTION'),
+                         ('sens des libellés', "SENS D'UN LIBELLÉ"),
+                         ('adéquation contenu / lecteur', 'ADÉQUATION DU CONTENU'),
+                         ('renvoi au rendu (render_page.py)', "LE RENDU N'EST PAS JUGÉ")):
+        cas(f'perimetre · famille NOMMÉE : {famille}', True, mot in bloc, 'TF-1141 périmètre publié')
+
+    # TF-1173 (lot Produit-64 20260916b, RD-9) — LE RENVOI AUX QUATRE ORACLES DE
+    # `factory-forge-design`, JOUÉ DANS LES DEUX SENS. Trois d'entre eux étaient rouges sur une
+    # page que les trois scripts du socle déclaraient PASS ; le socle ne les nommait nulle part.
+    # SENS VERT : les quatre sont nommés dans le bloc publié à chaque exécution, ET dans SKILL.md,
+    # avec la commande qui les joue. SENS ROUGE : la même détection, sur une copie de SKILL.md
+    # amputée de ces noms, rend les manques un par un — une règle qui ne saurait pas dire ce qui
+    # manque ne prouverait rien de ce qu'elle déclare présent.
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from check_html import (ORACLES_FORGE_DESIGN, manques_du_renvoi_forge_design,
+                            renvoi_forge_design, _racine_forge_design, _oracles_sur_disque)
+
+    # TF-1290 (22/09/2026, lot Produit-64 20260922a, RD-16) — depuis cette correction, le bloc
+    # LIT `factory-forge-design` sur le disque au lieu de réciter QUATRE noms figés. Les deux cas
+    # qui suivent sont donc CONDITIONNÉS à ce que ce poste porte ou non le dépôt frère — sur un
+    # poste qui ne le porte pas, le bloc doit dire PROPREMENT qu'il n'a rien mesuré, jamais
+    # affirmer une liste. Les quatre noms de TF-1173 restent un fait vérifiable SEULEMENT quand
+    # la forge est jointe : ce n'est plus une certitude écrite en dur dans check_html.py.
+    racine_fd, _motif_fd = _racine_forge_design()
+    if racine_fd:
+        noms_reels = _oracles_sur_disque(racine_fd)
+        for nom_oracle, _regles, _domaine in ORACLES_FORGE_DESIGN:
+            cas(f'perimetre · oracle de forge-design NOMMÉ : {nom_oracle}',
+                True, nom_oracle in bloc, 'TF-1173 renvoi publié (forge-design jointe)')
+        cas('perimetre · la COMMANDE qui joue les oracles est donnée',
+            True, 'run-oracles-design.mjs' in bloc, 'TF-1173 renvoi publié')
+        cas('perimetre · le COMPTE publié est celui LU sur le disque, pas un chiffre figé (TF-1290)',
+            True, f'LES {len(noms_reels)} ORACLES' in bloc, 'TF-1290 compte lu')
+        cas('perimetre · le renvoi sort AUSSI sur un verdict en échec',
+            [], manques_du_renvoi_forge_design(jouer(fx / 'l1-ponctuation-orpheline.html', 'text')),
+            'TF-1173 renvoi permanent')
+    else:
+        cas('perimetre · forge-design absente de ce poste : motif HONNÊTE, jamais une liste figée',
+            True, 'NE SONT PAS MESURÉS ICI' in bloc, 'TF-1290 non mesuré dit proprement')
+
+    # TF-1290 proposition (3) de la fiche : FIXTURE À DOUBLE SENS sur le contrat lui-même — un
+    # faux `factory-forge-design` portant 3 oracles, un autre en portant 5 : seule forme qui
+    # prouve que le bloc LIT l'autre forge au lieu de la RÉCITER. Avant la correction,
+    # `renvoi_forge_design()` ignorait tout paramètre `racine` et répondait TOUJOURS
+    # « LES QUATRE ORACLES… » quel que soit le contenu du faux dépôt — ce cas tournait donc FAUX
+    # pour les deux cardinaux à la fois, et c'est la preuve recherchée.
+    import tempfile
+    faux_fd = Path(tempfile.mkdtemp(prefix='self-test-tf1290-'))
+    for mot, nb in (('trois', 3), ('cinq', 5)):
+        dossier = faux_fd / mot / 'oracles'
+        dossier.mkdir(parents=True, exist_ok=True)
+        for i in range(nb):
+            (dossier / f'oracle-fictif-{i}.mjs').write_text('// fixture TF-1290', encoding='utf-8')
+        # un fichier qui NE DOIT PAS être compté : un test homonyme, un dossier écarté (sens
+        # négatif de la même preuve — lire la règle de nommage, pas tout ce qui s'y trouve).
+        (dossier / 'oracle-fictif-0.test.mjs').write_text('// pas un oracle', encoding='utf-8')
+        leurre = dossier / 'fixtures'
+        leurre.mkdir(exist_ok=True)
+        (leurre / 'oracle-leurre.mjs').write_text('// écarté', encoding='utf-8')
+        message = renvoi_forge_design(racine=dossier.parent)
+        cas(f'TF-1290 · faux factory-forge-design à {nb} oracles : le bloc en nomme {nb}, pas quatre',
+            True, f'LES {nb} ORACLES' in message and 'QUATRE' not in message,
+            'TF-1290 preuve double sens (lu, pas récité)')
+        cas(f'TF-1290 · faux dépôt à {nb} oracles : le leurre (test, dossier écarté) n\'est PAS compté',
+            True, f'LES {nb} ORACLES' in message, 'TF-1290 règle de nommage respectée')
+
+    message_absent = renvoi_forge_design(racine=faux_fd / 'nexistepas')
+    cas('TF-1290 · factory-forge-design introuvable : motif HONNÊTE, pas de liste inventée',
+        True, 'NE SONT PAS MESURÉS ICI' in message_absent, 'TF-1290 non mesuré dit proprement')
+
+    skill = Path(__file__).resolve().parent.parent / 'SKILL.md'
+    texte_skill = skill.read_text(encoding='utf-8') if skill.is_file() else ''
+    cas('renvoi · SKILL.md documente fidèlement le cas du 16/09 (TF-1173, instantané historique)',
+        [], manques_du_renvoi_forge_design(texte_skill), 'TF-1173 socle écrit')
+    ampute = texte_skill
+    for nom_oracle, _r, _d in ORACLES_FORGE_DESIGN:
+        ampute = ampute.replace(nom_oracle, 'oracle-XXX')
+    ampute = ampute.replace('run-oracles-design', 'run-XXX')
+    cas('renvoi · SKILL.md amputé de ces noms : chaque manque est LOCALISÉ (sens rouge)',
+        [nom for nom, _r, _d in ORACLES_FORGE_DESIGN] + ['commande qui les joue'],
+        manques_du_renvoi_forge_design(ampute), 'TF-1173 sens rouge')
+    return out
+
+
+def run_v9_surface_dominante():
+    """TF-1087 — LA SURFACE DOMINANTE ENTRE DANS LE JUGEMENT DE V9, SANS CONDAMNER LES SCHEMAS.
+
+    Le fait mesure (preuve de couverture P-1 du 14/09/2026, livrable E-06) : V9 retenait le
+    MEILLEUR pixel de l'actif. Un logo dont 90 % de la surface est exactement la couleur du fond
+    rendait PASS, sauve par un accent minoritaire a 2,16:1 — au-dessus du seuil de 1,2. Le temoin
+    monocolore, lui, echouait : la regle ne marchait que sur l'actif d'une seule couleur.
+
+    CE QUE CE BANC VERROUILLE, et c'est le point dur de l'item : la correction proposee le 14/09
+    (« juger la dominante, ou un contraste pondere par la surface ») avait ete RETIREE, et la
+    mesure dit pourquoi — le dessin au trait CONFORME du gabarit de schema est plus dominant
+    (86,7 % a 1,00:1) et moins contraste en surface (3,2 %) que le logo DEFECTUEUX (90,0 % et
+    10,0 %). Aucun seuil de surface ne les separe. Ce qui les separe est le NIVEAU du contraste qui
+    depasse : 9,12:1 contre 2,16:1.
+
+    Les cas :
+      1. le logo bicolore rend un constat, et son motif est celui de la clause NEUVE (la regle
+         historique ne mord pas : son meilleur pixel est a 2,16, au-dessus de 1,2) ;
+      2. le temoin monocolore rend un constat, et son motif est celui de la regle HISTORIQUE —
+         sans ce cas, on ne saurait pas laquelle des deux a parle ;
+      3. le temoin blanc sur bandeau sombre reste VERT (la clause neuve n'a rien elargi) ;
+      4. le GABARIT REEL `factory-schemas/assets/template-multi-bandes.html` reste VERT — le
+         dessin fabrique pour le banc ne prouverait rien si le vrai gabarit rougissait.
+    """
+    try:
+        import importlib
+        importlib.import_module("playwright.sync_api")
+    except ImportError:
+        return None
+    import tempfile
+    outil = Path(__file__).resolve().parent / "render_page.py"
+    fx = Path(__file__).resolve().parent.parent / "fixtures"
+    gabarit = (Path(__file__).resolve().parent.parent.parent
+               / "factory-schemas" / "assets" / "template-multi-bandes.html")
+    captures = tempfile.mkdtemp(prefix="self-test-v9-dominante-")
+    out = []
+
+    def cas(nom, attendu, obtenu, regle, detail=""):
+        ok = attendu == obtenu
+        out.append({"fixture": nom, "verdict": "OK" if ok else "ECHEC", "attendu": str(attendu)[:96],
+                    "obtenu": str(obtenu)[:96], "regle": regle,
+                    "detail": "" if ok else (detail or "")[:300]})
+
+    def constats(page):
+        r = subprocess.run([sys.executable, "-X", "utf8", str(outil), str(page),
+                            "--widths", "1280", "--scale", "1", "--output", "json",
+                            "--out", captures],
+                           capture_output=True, text=True, encoding="utf-8", timeout=600)
+        try:
+            return json.loads(r.stdout)["breakpoints"]["1280"]["issues"]["v9_actif_invisible"]
+        except Exception:
+            return None
+
+    try:
+        bicolore = constats(fx / "v9-logo-bicolore.html")
+        cas("v9-dominante · logo bicolore 90/10 : 1 constat (sens rouge)",
+            1, len(bicolore or []), "TF-1087 sens rouge", str(bicolore)[:280])
+        cas("v9-dominante · et c'est la clause NEUVE qui parle, pas l'ancienne",
+            True, bool(bicolore) and "SAUVE PAR UN ACCENT MINORITAIRE" in bicolore[0]["detail"],
+            "TF-1087 motif localisant", str(bicolore)[:280])
+
+        mono = constats(fx / "v9-logo-invisible.html")
+        cas("v9-dominante · temoin monocolore : reste rouge sur la regle HISTORIQUE",
+            (1, True), (len(mono or []),
+                        bool(mono) and "INDISCERNABLE de son fond" in mono[0]["detail"]),
+            "TF-1087 temoin", str(mono)[:280])
+
+        blanc = constats(fx / "v9-logo-visible.html")
+        cas("v9-dominante · temoin blanc sur bandeau sombre : reste VERT",
+            0, len(blanc or []), "TF-1087 rien d'elargi", str(blanc)[:280])
+
+        trait = constats(fx / "v9-schema-au-trait.html")
+        cas("v9-dominante · dessin au trait conforme : reste VERT (anti-regression du 14/09)",
+            0, len(trait or []), "TF-1087 anti-regression", str(trait)[:280])
+
+        if gabarit.is_file():
+            reel = constats(gabarit)
+            cas("v9-dominante · GABARIT REEL multi-bandes de factory-schemas : reste VERT",
+                0, len(reel or []), "TF-1087 anti-regression sur le vrai gabarit", str(reel)[:280])
+        else:
+            cas("v9-dominante · gabarit reel de factory-schemas introuvable — cas NON JOUE, et dit",
+                "non joue", "non joue", "TF-1087 anti-regression")
+    finally:
+        shutil.rmtree(captures, ignore_errors=True)
+    return out
+
+
+def run_completude():
+    """TF-1174 — LA COMPLÉTUDE RENDU vs SOURCE, JOUÉE DANS LES DEUX SENS.
+
+    Le fait payé, 16/09/2026 (lot Produit-64 20260916b, RD-10) : une édition d'un générateur a
+    sorti un `append` de sa boucle de regroupement de prose. Le livrable est passé de 11 996 à
+    environ 3 000 mots visibles, les neuf encadrés « Exemple de lecture » sont tombés à ZÉRO, et
+    SIX oracles ont rendu leur verdict dessus — cinq PASS, et le sixième rouge sur deux règles qui
+    parlent d'autre chose. Une page amputée n'a ni débordement, ni contraste faible, ni couleur en
+    dur : elle est parfaitement conforme et presque vide.
+
+    LES CAS, et le dernier est celui qui donne son sens aux autres :
+      1. SENS VERT — la page qui porte toute sa source passe, et sa couverture dépasse 100 %
+         (un rendu porte EN PLUS les libellés du générateur) ;
+      2. SENS ROUGE — la page amputée du dernier-paragraphe-seulement échoue, exit 1, et le
+         message CHIFFRE la perte au lieu de la qualifier ;
+      3. une source vide rend SKIP (exit 2), jamais un PASS de complaisance ;
+      4. une dérogation de seuil est ÉCRITE au périmètre de non-mesure, jamais silencieuse ;
+      5. LE TÉMOIN DE L'AVEUGLEMENT — `check_html.py` rend le MÊME verdict et les MÊMES constats
+         sur les deux pages. Sans ce cas, rien ne prouverait que la chaîne existante ne voyait
+         pas déjà la perte, et le contrôle neuf serait une duplication qu'on croirait utile.
+    """
+    import tempfile
+    outil = Path(__file__).resolve().parent / 'check_completude.py'
+    chk = Path(__file__).resolve().parent / 'check_html.py'
+    fx = Path(__file__).resolve().parent.parent / 'fixtures'
+    src = fx / 'completude-source.md'
+    out = []
+
+    def cas(nom, attendu, obtenu, regle, detail=''):
+        ok = attendu == obtenu
+        out.append({'fixture': nom, 'verdict': 'OK' if ok else 'ECHEC', 'attendu': str(attendu)[:96],
+                    'obtenu': str(obtenu)[:96], 'regle': regle,
+                    'detail': '' if ok else (detail or '')[:300]})
+
+    def jouer(page, *extra, source=None):
+        r = subprocess.run([sys.executable, '-X', 'utf8', str(outil), str(page),
+                            '--source', str(source or src), '--output', 'json', *extra],
+                           capture_output=True, text=True, encoding='utf-8', timeout=120)
+        try:
+            return r.returncode, json.loads(r.stdout)
+        except Exception:
+            return r.returncode, {}
+
+    code_vert, j_vert = jouer(fx / 'completude-verte.html')
+    cas('completude · page complète : PASS, exit 0 (sens vert)',
+        (0, 'PASS'), (code_vert, j_vert.get('verdict')), 'TF-1174 sens vert')
+    cas('completude · un rendu est PLUS riche que sa source (couverture > 1)',
+        True, (j_vert.get('couverture') or 0) > 1.0, 'TF-1174 sens vert',
+        f"couverture {j_vert.get('couverture')}")
+
+    code_rouge, j_rouge = jouer(fx / 'completude-amputee.html')
+    cas('completude · page amputée : FAIL, exit 1 (sens rouge)',
+        (1, 'FAIL'), (code_rouge, j_rouge.get('verdict')), 'TF-1174 sens rouge')
+    cas('completude · le message CHIFFRE la perte (mots rendus, mots source, couverture)',
+        True, any('PERTE DE TEXTE' in f and str(j_rouge.get('mots_rendu')) in f
+                  and str(j_rouge.get('mots_source')) in f for f in j_rouge.get('fails') or []),
+        'TF-1174 constat localisant', str(j_rouge.get('fails'))[:280])
+    cas('completude · la page amputée porte bien moins de la moitié de sa source',
+        True, (j_rouge.get('couverture') or 1) < 0.5, 'TF-1174 sens rouge',
+        f"couverture {j_rouge.get('couverture')}")
+
+    # 3 — une source vide ne rend jamais PASS : rien à comparer se DIT, exit 2.
+    atelier = tempfile.mkdtemp(prefix='self-test-completude-')
+    try:
+        vide = Path(atelier) / 'source-vide.md'
+        vide.write_text('\n\n', encoding='utf-8')
+        code_skip, j_skip = jouer(fx / 'completude-verte.html', source=vide)
+        cas('completude · source vide : SKIP motivé (exit 2), jamais un PASS',
+            (2, 'SKIP'), (code_skip, j_skip.get('verdict')), 'TF-1174 pas de PASS de complaisance')
+    finally:
+        shutil.rmtree(atelier, ignore_errors=True)
+
+    # 4 — la dérogation de seuil est ÉCRITE. Un seuil qu'on abaisse en silence désarmerait la règle
+    # sans laisser de trace au verdict ; ici le PASS porte la raison pour laquelle il est vert.
+    code_der, j_der = jouer(fx / 'completude-amputee.html', '--seuil', '0.3')
+    cas('completude · un seuil abaissé rend PASS, mais la DÉROGATION est écrite au non_juge',
+        (0, 'PASS', True),
+        (code_der, j_der.get('verdict'),
+         any('DÉROGATION DÉCLARÉE' in n for n in j_der.get('non_juge') or [])),
+        'TF-1174 dérogation déclarée')
+
+    # 5 — LE TÉMOIN : la chaîne existante ne distingue pas les deux pages.
+    def verdict_check_html(page):
+        r = subprocess.run([sys.executable, '-X', 'utf8', str(chk), str(page), '--output', 'json'],
+                           capture_output=True, text=True, encoding='utf-8', timeout=120)
+        try:
+            d = json.loads(r.stdout)
+            return d['verdict'], sorted(d['fails'])
+        except Exception:
+            return None, None
+    v_vert, f_vert = verdict_check_html(fx / 'completude-verte.html')
+    v_amp, f_amp = verdict_check_html(fx / 'completude-amputee.html')
+    cas('completude · TÉMOIN : check_html.py rend le MÊME verdict et les MÊMES constats sur les deux',
+        True, v_vert is not None and (v_vert, f_vert) == (v_amp, f_amp),
+        'TF-1174 aveuglement de la chaîne',
+        f"verte {v_vert}/{len(f_vert or [])} · amputée {v_amp}/{len(f_amp or [])}")
+    return out
+
+
+def run_structure_completude():
+    """TF-1436, 28/09/2026 (lot Produit-78 20260928a, RP-2) — LA STRUCTURE, RENDU vs SOURCE.
+
+    Le fait payé : sur une page d'étude, une liste numérotée Markdown de 8 éléments sortie en un
+    seul paragraphe, un « ## » rendu en h3 sous le h1 (saut signalé par `check_html.py` et
+    `oracle-a11y`) — `check_completude.py` rendait PASS à 100,3 % puis 118,8 % : il ne comptait
+    que des MOTS, et le compte restait intact malgré la perte. TF-1174 (16/09) avait appris que la
+    FORME ne suffit pas ; ici c'est le compte de MOTS lui-même qui ne suffit pas.
+
+    LES CAS :
+      1. SENS VERT — chaque titre à son niveau, chaque liste à son type : PASS ;
+      2. SENS ROUGE — titre de niveau 2 rétrogradé + liste numérotée fondue en paragraphe :
+         FAIL, exit 1, ALORS QUE la couverture de MOTS seule reste au-dessus du seuil (le défaut
+         du 28/09 REPRODUIT : un contrôle qui ne compterait que les mots laisserait passer) ;
+      3. LA BONNE RAISON — le message nomme le niveau 2 et la liste NUMÉROTÉE, jamais la liste à
+         puces (inchangée dans la fixture rouge) : un contrôle bruyant accuserait tout à la fois ;
+      4. NON-RÉGRESSION — les fixtures de mots (TF-1174) gardent leur verdict PASS avec le code
+         étendu : aucun écart de structure n'y a été introduit par erreur.
+    """
+    outil = Path(__file__).resolve().parent / 'check_completude.py'
+    fx = Path(__file__).resolve().parent.parent / 'fixtures'
+    src = fx / 'structure-source.md'
+    out = []
+
+    def cas(nom, attendu, obtenu, regle, detail=''):
+        ok = attendu == obtenu
+        out.append({'fixture': nom, 'verdict': 'OK' if ok else 'ECHEC', 'attendu': str(attendu)[:96],
+                    'obtenu': str(obtenu)[:96], 'regle': regle,
+                    'detail': '' if ok else (detail or '')[:300]})
+
+    def jouer(page, source=None):
+        r = subprocess.run([sys.executable, '-X', 'utf8', str(outil), str(page),
+                            '--source', str(source or src), '--output', 'json'],
+                           capture_output=True, text=True, encoding='utf-8', timeout=120)
+        try:
+            return r.returncode, json.loads(r.stdout)
+        except Exception:
+            return r.returncode, {}
+
+    # 1 — SENS VERT.
+    code_vert, j_vert = jouer(fx / 'structure-verte.html')
+    cas('structure · page complète : PASS, exit 0 (sens vert)',
+        (0, 'PASS'), (code_vert, j_vert.get('verdict')), 'TF-1436 sens vert')
+    cas('structure · aucun écart en sens vert (fails vide)',
+        [], j_vert.get('fails'), 'TF-1436 sens vert')
+
+    # 2 — SENS ROUGE : la couverture de MOTS seule resterait un PASS (défaut du 28/09 reproduit).
+    code_rouge, j_rouge = jouer(fx / 'structure-rouge.html')
+    cas('structure · titre rétrogradé + liste numérotée fondue : FAIL, exit 1 (sens rouge)',
+        (1, 'FAIL'), (code_rouge, j_rouge.get('verdict')), 'TF-1436 sens rouge')
+    cas('structure · la couverture de MOTS seule resterait AU-DESSUS du seuil (défaut du 28/09)',
+        True, (j_rouge.get('couverture') or 0) >= 1.0, 'TF-1436 aveuglement du seul compte de mots',
+        f"couverture {j_rouge.get('couverture')}")
+
+    # 3 — LA BONNE RAISON : niveau 2 et liste numérotée nommés, liste à puces jamais accusée.
+    fails_rouge = j_rouge.get('fails') or []
+    cas('structure · le message nomme le titre de niveau 2 (##) manquant',
+        True, any('niveau 2' in f and 'TITRE' in f for f in fails_rouge),
+        'TF-1436 constat localisant', str(fails_rouge)[:280])
+    cas('structure · le message CHIFFRE les 8 éléments de liste numérotée manquants',
+        True, any('ÉLÉMENT DE LISTE' in f and 'numérotée' in f and '8' in f for f in fails_rouge),
+        'TF-1436 constat localisant', str(fails_rouge)[:280])
+    cas("structure · la liste à puces, inchangée, n'est jamais accusée",
+        True, all('puces' not in f for f in fails_rouge),
+        "TF-1436 bonne raison — pas de bruit sur ce qui n'a pas bougé", str(fails_rouge)[:280])
+    cas('structure · exactement 2 écarts (un titre, une liste) — ni plus ni moins',
+        2, len(fails_rouge), 'TF-1436 bonne raison', str(fails_rouge)[:280])
+
+    # 4 — NON-RÉGRESSION : les fixtures de mots (TF-1174) gardent leur verdict avec le code étendu.
+    code_mv, j_mv = jouer(fx / 'completude-verte.html', source=fx / 'completude-source.md')
+    cas('structure · non-régression — completude-verte.html reste PASS (TF-1174)',
+        (0, 'PASS'), (code_mv, j_mv.get('verdict')), 'TF-1436 non-régression sur TF-1174')
+    code_ma, j_ma = jouer(fx / 'completude-amputee.html', source=fx / 'completude-source.md')
+    cas('structure · non-régression — completude-amputee.html reste FAIL sur les MOTS seulement',
+        (1, 'FAIL', 1), (code_ma, j_ma.get('verdict'), len(j_ma.get('fails') or [])),
+        'TF-1436 non-régression sur TF-1174', str(j_ma.get('fails'))[:280])
+    return out
+
+
+def run_markdown():
+    """TF-0518 (22/08/2026) — LA PORTE DU MARKDOWN, ouverte et jouée dans les deux sens.
+
+    Le registre compte 48 domaines ; mesuré sur un livrable réel de 85 Ko, le lanceur en jugeait
+    QUATRE et aucun de lisibilité. Les règles L1-L19 vivent dans `check_html.py`, qui ne
+    s'exécute que sur du HTML — or le Markdown est le format de livraison DOMINANT des runs
+    d'architecture et de conseil, et c'est exactement là que le défaut du retour jumeau (un
+    identifiant sans son sens) s'est produit. Un humain l'a trouvé, comme pour L14.
+
+    La paire rouge/verte porte le MÊME contenu à trois différences près, pour que ce qui est
+    jugé soit isolé : un chapitre qui ouvre sur un tableau nu, un marqueur de balisage interne
+    resté dans le texte, et un code employé sans son sens.
+    """
+    outil = Path(__file__).resolve().parent / 'check_markdown.py'
+    fx = Path(__file__).resolve().parent.parent / 'fixtures'
+    out = []
+    # TF-0720 (31/08) — LE BALISAGE D'EMPHASE EST TRAITE COMME DU TEXTE, deuxieme fois que ca
+    # casse une adjacence. Les deux fixtures portent le MEME document a deux differences pres :
+    # dans la verte, `**RD-23**` porte sa glose en italique juste apres (les quatre marqueurs de
+    # gras rompaient l'adjacence) et `RA-16` porte la sienne A LA LIGNE SUIVANTE (le controle
+    # travaillait ligne par ligne, donc n'avait aucune suite a examiner) ; dans la rouge, les
+    # deux memes jetons sont VRAIMENT muets. Mesure du 02/09 : la verte rendait FAIL sur DEUX
+    # faux positifs avant correction, PASS apres, et la rouge mord toujours sur les deux — sans
+    # la rouge, neutraliser l'emphase aurait pu eteindre la regle en silence.
+    attendus = {'m-lisibilite-rouge.md': {'M7', 'M14', 'M18'}, 'm-lisibilite-vert.md': set(),
+                'm18-emphase-rouge.md': {'M18'}, 'm18-emphase-vert.md': set()}
+    for nom, attendu in attendus.items():
+        cible = fx / nom
+        if not cible.exists():
+            out.append({'fixture': nom, 'verdict': 'ECHEC', 'attendu': 'fixture présente',
+                        'obtenu': 'absente', 'regle': 'M (markdown)', 'detail': ''})
+            continue
+        r = subprocess.run([sys.executable, str(outil), str(cible), '--output', 'json'],
+                           capture_output=True, text=True, encoding='utf-8', timeout=60)
+        try:
+            j = json.loads(r.stdout)
+        except Exception:
+            out.append({'fixture': nom, 'verdict': 'ECHEC', 'attendu': 'sortie JSON',
+                        'obtenu': 'illisible', 'regle': 'M (markdown)', 'detail': (r.stderr or '')[:160]})
+            continue
+        obtenus = {m.split()[0] for m in j.get('fails', [])}
+        ok = obtenus == attendu
+        out.append({'fixture': nom, 'verdict': 'OK' if ok else 'ECHEC',
+                    'attendu': ','.join(sorted(attendu)) or '(aucune règle)',
+                    'obtenu': ','.join(sorted(obtenus)) or '(aucune)',
+                    'regle': 'M (markdown)', 'detail': ''})
+    out += run_emphase_partagee()
+    return out
+
+
+def run_emphase_partagee():
+    """TF-0720 — LA FONCTION PARTAGEE, jugee pour elle-meme et dans les deux sens.
+
+    Le retour porte DEUX manifestations d'une seule cause : un jeton en gras refuse par M18, et
+    une cellule `**90**` que l'oracle Calculs ne lisait pas comme un nombre (re-somme a 189 au
+    lieu de 99, signalee le 22/08). Les fixtures ci-dessus jugent la premiere ; cette branche
+    juge la SECONDE ET LES BORNES, qu'aucun document entier ne montre proprement :
+
+      · un nombre en gras est lu comme un nombre, et la re-somme retombe juste ;
+      · les POSITIONS sont preservees — sans quoi lignes et colonnes d'un message d'echec
+        mentiraient, et le correctif couterait plus cher que le defaut ;
+      · une puce `* premier` et un `nom_de_variable` ne sont PAS de l'emphase : le sens rouge
+        est ici, une neutralisation trop large mangerait le document au lieu de son balisage.
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from check_markdown import neutraliser_emphase, nombres_de  # noqa: PLC0415
+
+    cas = []
+    ligne = '| total | **90** |'
+    cas.append(('VERT   `**90**` lu comme un nombre (re-somme)', nombres_de(ligne) == ['90'],
+                repr(nombres_de(ligne))))
+    somme = [float(x) for x in nombres_de('| relecture | **40** | correction | **50** |')]
+    cas.append(('VERT   la re-somme retombe juste (40 + 50 = 90)',
+                sum(somme) == 90.0, repr(somme)))
+    src = 'le jeton **RD-23** *(glose)* et un _mot_ en italique'
+    cas.append(('VERT   positions preservees (meme longueur)',
+                len(neutraliser_emphase(src)) == len(src),
+                f'{len(neutraliser_emphase(src))} != {len(src)}'))
+    cas.append(('VERT   les marqueurs disparaissent, le contenu reste',
+                'RD-23' in neutraliser_emphase(src) and '**' not in neutraliser_emphase(src),
+                neutraliser_emphase(src)))
+    cas.append(('ROUGE  une puce `* premier` n est pas de l emphase',
+                neutraliser_emphase('* premier') == '* premier',
+                neutraliser_emphase('* premier')))
+    cas.append(('ROUGE  `nom_de_variable` garde ses tirets bas',
+                neutraliser_emphase('nom_de_variable') == 'nom_de_variable',
+                neutraliser_emphase('nom_de_variable')))
+    return [{'fixture': nom, 'verdict': 'OK' if tenu else 'ECHEC',
+             'attendu': 'emphase neutralisee, positions justes',
+             'obtenu': 'conforme' if tenu else 'ecart',
+             'regle': 'TF-0720 fonction partagee', 'detail': '' if tenu else str(detail)[:200]}
+            for nom, tenu, detail in cas]
+
+def run_avertissements_13_10():
+    """Campagne du 13/10/2026 — les règles NEUVES du socle entrent en AVERTISSEMENT (D-70 (b)).
+
+    Chaque paire prouve ses deux sens sur les avertissements (les échecs restent vides : une règle
+    neuve ne bloque pas) : TF-1621 L12 virgules, TF-1384 L35 typographie, TF-1283 L36 contenu
+    d'auteur ; et TF-1624, le style du texte visible joué par la ligne de commande (EC-8 de
+    l'oracle d'écriture du pilot : SKIP motivé si le pilot est absent du poste).
+    """
+    out = []
+    PAIRES = [("l12-enumeration-virgules.html", "L12 (virgules) énumération en prose", True, "TF-1621"),
+              ("l12-virgules-prose.html", "L12 (virgules) énumération en prose", False, "TF-1621"),
+              ("l35-typo-espaces-ordinaires.html", "L35 ", True, "TF-1384"),
+              ("l35-typo-insecables.html", "L35 ", False, "TF-1384"),
+              ("l36-contenu-auteur.html", "L36 ", True, "TF-1283"),
+              ("l36-escalade-du-lecteur.html", "L36 ", False, "TF-1283")]
+    for nom, prefixe, attendu, tf in PAIRES:
+        fails, warns = check((FIXTURES / nom).read_text(encoding="utf-8"), regles="L")
+        vu = any(w.startswith(prefixe) for w in warns)
+        bloque = [f for f in fails if f.startswith(prefixe.strip().split()[0] + " ")]
+        ok = vu == attendu and not bloque
+        out.append({"fixture": nom, "verdict": "OK" if ok else "ECHEC",
+                    "attendu": f"{tf} avertissement {'présent' if attendu else 'absent'}, 0 échec",
+                    "obtenu": f"avertissement {'présent' if vu else 'absent'}, {len(bloque)} échec(s)",
+                    "regle": prefixe.strip(), "detail": ""})
+    outil = Path(__file__).resolve().parent / "check_html.py"
+    # TF-1717 (Produit-83 20261014a, RA-1) : la rouge rejouée sous `python -I`, mode isolé qui
+    # retire le dossier du script du chemin de recherche — le chargement de check_markdown y tient.
+    for nom, attendu, isole in (("style-annonce-nominalisee.html", True, []),
+                                ("style-nomme.html", False, []),
+                                ("style-annonce-nominalisee.html", True, ["-I"])):
+        r = subprocess.run([sys.executable, *isole, "-X", "utf8", str(outil), str(FIXTURES / nom),
+                            "--output", "json"], capture_output=True, text=True, encoding="utf-8")
+        nom = nom + (" (python -I, TF-1717)" if isole else "")
+        try:
+            j = json.loads(r.stdout)
+        except Exception:                        # noqa: BLE001
+            out.append({"fixture": nom, "verdict": "ECHEC", "attendu": "sortie JSON",
+                        "obtenu": "illisible", "regle": "EC (texte rendu)", "detail": r.stderr[:160]})
+            continue
+        non_joue = [w for w in j["warns"] if "style NON JOUÉ" in w]
+        vu = any(w.startswith("EC-8") and "TF-1624" in w for w in j["warns"])
+        # TF-1717 : seul le pilot ABSENT justifie un SKIP ; un check_markdown illisible, posé à
+        # côté de check_html, est une panne de l'outil, jamais un motif.
+        if any("check_markdown illisible" in w for w in non_joue):
+            out.append({"fixture": nom, "verdict": "ECHEC", "attendu": "TF-1717 check_markdown chargé",
+                        "obtenu": "check_markdown illisible", "regle": "EC (texte rendu)",
+                        "detail": non_joue[0][:160]})
+            continue
+        if non_joue:
+            out.append({"fixture": nom, "verdict": "OK", "attendu": "TF-1624 EC-8 (SKIP motivé)",
+                        "obtenu": "oracle d'écriture injoignable, DIT", "regle": "EC (texte rendu)",
+                        "detail": non_joue[0][:160]})
+            continue
+        ok = vu == attendu and not any(f.startswith("EC") for f in j["fails"])
+        out.append({"fixture": nom, "verdict": "OK" if ok else "ECHEC",
+                    "attendu": f"TF-1624 EC-8 {'présent' if attendu else 'absent'} en avertissement",
+                    "obtenu": f"EC-8 {'présent' if vu else 'absent'}", "regle": "EC (texte rendu)",
+                    "detail": ""})
+    return out
+
+
+def run_avertissements_14_10():
+    """Campagne du 14/10/2026 — deux règles NEUVES du socle, entrées en AVERTISSEMENT (D-70 (b)).
+
+    TF-1665 (RT-33) : L12 lit aussi les cellules de tableau qui enchaînent plusieurs faits par des
+    points-virgules ; jugée sur l'avertissement attendu ET sur l'absence d'échec de la même règle.
+    TF-1664 (RT-58) : L37, une ligne en statut défavorable porte son action — deux sorties vertes,
+    la colonne d'action et le lien interne vers l'action. TF-1688 (décision humaine « Traite A1 »
+    du 14/10/2026, sur 8 pages averties du parc, toutes de vrais cas) : L37 BLOQUE. La rouge est
+    jugée sur l'échec attendu et sur l'absence d'avertissement L37 restant ; les vertes sur
+    l'absence des deux.
+    """
+    out = []
+    BLOQUANTES = {"L37 "}
+    PAIRES = [("l12-cellule-points-virgules.html", "L12 (cellules) énumération en cellule", True, "TF-1665"),
+              ("l12-cellule-en-puces.html", "L12 (cellules) énumération en cellule", False, "TF-1665"),
+              ("l37-ecart-sans-remede.html", "L37 ", True, "TF-1688"),
+              ("l37-ecart-avec-remede.html", "L37 ", False, "TF-1688"),
+              ("l37-ecart-lien-vers-action.html", "L37 ", False, "TF-1688")]
+    for nom, prefixe, attendu, tf in PAIRES:
+        if prefixe in BLOQUANTES:
+            fails, warns = check((FIXTURES / nom).read_text(encoding="utf-8"), regles="L")
+            vu = any(f.startswith(prefixe) for f in fails)
+            reste = [w for w in warns if w.startswith(prefixe)]
+            ok = vu == attendu and not reste
+            out.append({"fixture": nom, "verdict": "OK" if ok else "ECHEC",
+                        "attendu": f"{tf} échec {'présent' if attendu else 'absent'}, "
+                                   "0 avertissement",
+                        "obtenu": f"échec {'présent' if vu else 'absent'}, "
+                                  f"{len(reste)} avertissement(s)",
+                        "regle": prefixe.strip(), "detail": "" if ok else " | ".join(reste)[:200]})
+            continue
+        fails, warns = check((FIXTURES / nom).read_text(encoding="utf-8"), regles="L")
+        vu = any(w.startswith(prefixe) for w in warns)
+        bloque = [f for f in fails if f.startswith(prefixe.strip().split()[0] + " ")]
+        ok = vu == attendu and not bloque
+        out.append({"fixture": nom, "verdict": "OK" if ok else "ECHEC",
+                    "attendu": f"{tf} avertissement {'présent' if attendu else 'absent'}, 0 échec",
+                    "obtenu": f"avertissement {'présent' if vu else 'absent'}, {len(bloque)} échec(s)",
+                    "regle": prefixe.strip(), "detail": "" if ok else " | ".join(bloque)[:200]})
+    return out
+
+
+def run_accolade_dans_une_valeur():
+    """TF-1682 — une accolade dans une valeur de la feuille ne fait plus planter `check()`.
+
+    La rouge porte la forme de deux pages d'un produit : un trou de gabarit dans l'url() d'une
+    police embarquée. Avant le correctif, `check()` levait une IndexError sur le faux sélecteur
+    « … base64, » et la page n'était jugée par rien. Attendu sur la rouge, dans chaque famille :
+    aucune exception ; en famille charte, l'avertissement A5 « lue de travers » et aucun échec A5.
+    La verte (même police, charge utile réelle) ne porte pas cet avertissement.
+    """
+    out = []
+    for nom, attendu in (("a5-trou-de-gabarit-dans-url.html", True),
+                         ("a5-polices-embarquees.html", False)):
+        html = (FIXTURES / nom).read_text(encoding="utf-8")
+        try:
+            for famille in ("L", "tout"):
+                fails, warns = check(html, regles=famille)
+        except Exception as e:  # noqa: BLE001 — le défaut même que ce cas garde
+            out.append({"fixture": nom, "verdict": "ECHEC", "attendu": "TF-1682 aucun plantage",
+                        "obtenu": f"{type(e).__name__}: {e}", "regle": "A5 accolade",
+                        "detail": ""})
+            continue
+        vu = any(w.startswith("A5 ") and "lue de travers" in w for w in warns)
+        a5 = [f for f in fails if f.startswith("A5 ")]
+        ok = vu == attendu and not a5
+        out.append({"fixture": nom, "verdict": "OK" if ok else "ECHEC",
+                    "attendu": f"TF-1682 aucun plantage, avertissement A5 "
+                               f"{'présent' if attendu else 'absent'}, 0 échec A5",
+                    "obtenu": f"avertissement {'présent' if vu else 'absent'}, {len(a5)} échec(s) A5",
+                    "regle": "A5 accolade", "detail": "" if ok else " | ".join(a5)[:200]})
+    return out
+
+
+def jetons_solid_absents(charte: str, gabarit: str) -> list[str]:
+    """TF-1744 — les jetons `--*-solid` que la charte définit (et que le message de V16 prescrit)
+    sans que le gabarit de départ les pose dans ses trois projections (clair, sombre, impression)."""
+    jetons = sorted(set(re.findall(r"--([a-z]+-solid)\s*:", charte)))
+    return [f"--{j} ({n} projection(s))" for j in jetons
+            if (n := len(re.findall(r"--" + re.escape(j) + r"\s*:", gabarit))) < 3]
+
+
+def run_avertissements_15_10():
+    """Campagne du 15/10/2026 — retours Produit-03 (08/09) et Produit-64 (15/10) sur check_html.
+
+    TF-1742 (RA-41) : L38, un listing dont les lignes renvoient leur détail vers des sections d'un
+    autre chapitre qui complètent le même objet — avertissement (règle neuve, D-70 (b)).
+    TF-1763 (RT-68) : L3 bis juge le `<title>` d'un groupe SVG et le title d'un lien de ligne de
+    tableau ligne par ligne contre le texte de SON groupe ou de SA ligne, préfixe de code retiré —
+    avertissement, au même rang que les recopies de TF-1609.
+    TF-1743 (RA-42) : « Indice » sur des numéros de version AAAAMMJJ<lettre> n'est pas une colonne
+    calculée ; le même mot sur des valeurs calculées reste accusé (sens rouge).
+    TF-1744 (RA-43) : les jetons `*-solid` que V16 prescrit sont posés par le gabarit de départ.
+    """
+    out = []
+    PAIRES = [("l38-listing-detail-ailleurs.html", "L38 ", True, "TF-1742"),
+              ("l38-listing-detail-dans-la-ligne.html", "L38 ", False, "TF-1742"),
+              ("l37-ecart-lien-vers-action.html", "L38 ", False, "TF-1742"),
+              ("l3-infobulle-recopie-sa-carte.html", "L3 infobulle qui RECOPIE sa ", True, "TF-1763"),
+              ("l3-infobulle-complete-sa-carte.html", "L3 infobulle qui RECOPIE sa ", False, "TF-1763")]
+    for nom, prefixe, attendu, tf in PAIRES:
+        fails, warns = check((FIXTURES / nom).read_text(encoding="utf-8"), regles="L")
+        vus = [w for w in warns if w.startswith(prefixe)]
+        bloque = [f for f in fails if f.startswith(prefixe)]
+        ok = bool(vus) == attendu and not bloque
+        out.append({"fixture": nom, "verdict": "OK" if ok else "ECHEC",
+                    "attendu": f"{tf} avertissement {'présent' if attendu else 'absent'}, 0 échec",
+                    "obtenu": f"{len(vus)} avertissement(s), {len(bloque)} échec(s)",
+                    "regle": prefixe.strip(), "detail": "" if ok else " | ".join(vus + bloque)[:300]})
+    for nom, attendu in (("l3-indice-de-version.html", False), ("l3-indice-calcule.html", True)):
+        fails, _ = check((FIXTURES / nom).read_text(encoding="utf-8"), regles="L")
+        vu = [f for f in fails if f.startswith("L3 colonne calculée sans formule")]
+        ok = bool(vu) == attendu
+        out.append({"fixture": nom, "verdict": "OK" if ok else "ECHEC",
+                    "attendu": f"TF-1743 échec colonne calculée {'présent' if attendu else 'absent'}",
+                    "obtenu": f"{len(vu)} échec(s)", "regle": "L3 colonne calculée",
+                    "detail": "" if ok else " | ".join(vu)[:200]})
+    racine = FIXTURES.parent
+    charte = (racine / "references" / "charte-et-tokens.md").read_text(encoding="utf-8")
+    gabarit = (racine / "assets" / "boilerplate.html").read_text(encoding="utf-8")
+    absents = jetons_solid_absents(charte, gabarit)
+    nb = len(set(re.findall(r"--([a-z]+-solid)\s*:", charte)))
+    out.append({"fixture": "assets/boilerplate.html · jetons *-solid (V16)",
+                "verdict": "OK" if nb >= 6 and not absents else "ECHEC",
+                "attendu": f"TF-1744 {nb} jeton(s) *-solid posés dans les 3 projections",
+                "obtenu": "; ".join(absents) or "0 absent", "regle": "TF-1744 remède dans le gabarit",
+                "detail": ""})
+    rouge = jetons_solid_absents(charte, ":root { --green-fill: #F2FCF5; }")
+    out.append({"fixture": "sens rouge · gabarit sans *-solid",
+                "verdict": "OK" if len(rouge) == nb and nb >= 6 else "ECHEC",
+                "attendu": f"{nb} jeton(s) nommés absents", "obtenu": str(len(rouge)),
+                "regle": "TF-1744 remède dans le gabarit", "detail": ""})
+    return out
+
+
+def run_l39_graphique_maison():
+    """TF-1857 (RA-12, lot Produit-79 20261017c) : L39, une rangée de chiffres clés ou un graphique en
+    barres que le socle couvre par un composant, réalisés à la main — avertissement (règle neuve).
+
+    Les deux formes se jouent dans les deux sens : la rouge accuse, la verte ne dit rien, et chaque
+    verte ne diffère de sa rouge que par l'élément que la règle lit. Rangée : la structure du
+    composant (`.tuile-valeur`) contre un `.tuile` écrit à la main ; barres : le composant contre le
+    même tracé à la main, y compris sous des groupes translatés. Exemption : un motif de 8
+    caractères au moins l'accorde, un « ok » ne l'accorde pas (sinon elle se réduirait à un attribut).
+    Contre-épreuve : un schéma de briques alignées n'est pas un graphique. Le remède que le message
+    prescrit (le composant lui-même) se joue sur l'exemple du socle : zéro constat."""
+    out = []
+    PAIRES = [
+        ("l39-rangee-maison.html", True, "rangée de chiffres clés"),
+        ("l39-tuiles-maison-nom-seul.html", True, "rangée de chiffres clés"),
+        ("l39-tuiles-du-socle.html", False, "rangée de chiffres clés"),
+        ("l39-rangee-exemption-motivee.html", False, "rangée de chiffres clés"),
+        ("l39-rangee-exemption-muette.html", True, "rangée de chiffres clés"),
+        ("l39-barres-maison.html", True, "graphique en barres"),
+        ("l39-barres-dans-des-groupes.html", True, "graphique en barres"),
+        ("l39-barres-composant.html", False, "graphique en barres"),
+        ("l39-barres-exemption-motivee.html", False, "graphique en barres"),
+        ("l39-barres-exemption-muette.html", True, "graphique en barres"),
+        ("l39-schema-de-boites.html", False, "graphique en barres"),
+        ("../assets/exemples-interactions/exemple-tuiles-et-barres-empilees.html", False, "L39"),
+    ]
+    for nom, attendu, forme in PAIRES:
+        fails, warns = check((FIXTURES / nom).read_text(encoding="utf-8"), regles="L")
+        vus = [w for w in warns if w.startswith("L39 ") and (forme == "L39" or forme in w)]
+        bloque = [f for f in fails if f.startswith("L39")]
+        ok = bool(vus) == attendu and not bloque
+        out.append({"fixture": nom.split("/")[-1], "verdict": "OK" if ok else "ECHEC",
+                    "attendu": f"TF-1857 avertissement {'présent' if attendu else 'absent'}, 0 échec",
+                    "obtenu": f"{len(vus)} avertissement(s), {len(bloque)} échec(s)",
+                    "regle": "L39", "detail": "" if ok else " | ".join(vus + bloque)[:300]})
+    return out
+
+
+def run_barres_12_categories():
+    """TF-1858 (RA-13, lot Produit-79 20261017c) : le composant barres empilées à 12 catégories, jugé par
+    render_page.py — ROUGE AVANT, VERT APRÈS.
+
+    Les fixtures du composant n'avaient que 2 à 5 catégories ; avec 12, V4 rendait « 0 » × « oct. 2025 »
+    (étiquette de l'axe contre la première étiquette de catégorie) et des totaux « 9 158 sessions » qui se
+    chevauchent. Sens ROUGE : `barres-12-categories-ancien-rendu.html`, le SVG GELÉ de l'ancien composant,
+    doit rendre les deux constats. Sens VERT : `barres-12-categories.html` fait dessiner la même donnée par
+    le composant ACTUEL (lu par référence, jamais copié : un retour en arrière le fait rougir) et ne rend
+    aucun chevauchement à 1440 et 390 px. Le composant se joue aussi sous node : totaux masqués et repris
+    par l'infobulle quand ils ne tiennent pas (vertical et horizontal), conservés quand ils tiennent."""
+    try:
+        import importlib
+        importlib.import_module("playwright.sync_api")
+    except ImportError:
+        return None
+    import json as _json
+    import tempfile
+    out = []
+    captures = tempfile.mkdtemp(prefix="self-test-barres12-")
+
+    def cas(nom, ok, attendu, obtenu, detail=""):
+        out.append({"fixture": nom, "verdict": "OK" if ok else "ECHEC", "attendu": attendu,
+                    "obtenu": obtenu, "regle": "TF-1858", "detail": "" if ok else detail[:300]})
+
+    def v4(nom, largeur):
+        r = subprocess.run([sys.executable, "-X", "utf8", str(Path(__file__).resolve().parent / "render_page.py"),
+                            str(FIXTURES / nom), "--widths", str(largeur), "--output", "json", "--out", captures],
+                           capture_output=True, text=True, encoding="utf-8")
+        try:
+            return [i["what"] for i in _json.loads(r.stdout)["breakpoints"][str(largeur)]["issues"]["v4_overlap"]]
+        except Exception:
+            return None
+
+    rouge = v4("barres-12-categories-ancien-rendu.html", 1440)
+    cas("barres-12-categories-ancien-rendu · rouge : l'étiquette « 0 » chevauche « oct. 2025 »",
+        bool(rouge) and any("« 0 »" in w and "oct. 2025" in w for w in rouge), "V4 « 0 » × « oct. 2025 »",
+        f"{len(rouge or [])} constat(s)", " | ".join(rouge or [])[:200])
+    cas("barres-12-categories-ancien-rendu · rouge : les totaux à unité en mot se chevauchent",
+        bool(rouge) and any("graphe-total" in w for w in rouge), "V4 sur graphe-total",
+        f"{sum('graphe-total' in w for w in (rouge or []))} constat(s)")
+    for largeur in (1440, 390):
+        vert = v4("barres-12-categories.html", largeur)
+        cas(f"barres-12-categories · vert à {largeur} px : aucun chevauchement",
+            vert == [], "V4 ×0", f"{None if vert is None else len(vert)} constat(s)", " | ".join(vert or [])[:200])
+    asset = (FIXTURES.parent / "assets" / "barres-empilees.js").as_posix()
+    script = (
+        "const B=require(%s);const cats=n=>Array.from({length:n},(_,i)=>'c'+i);"
+        "const nb=(d)=>{const r=B.rendre(d,'g');return [(r.svg.match(/graphe-total/g)||[]).length,"
+        "/Total de la (colonne|barre)/.test(r.svg)];};"
+        "const vals=n=>Array.from({length:n},(_,i)=>9000+i*37);"
+        "const dv=(o,u,n)=>({orientation:o,mode:'valeurs',unite:u,totaux:true,categories:cats(n),"
+        "series:[{nom:'x',valeurs:vals(n)}]});"
+        "console.log(JSON.stringify({vMot:nb(dv('vertical','sessions',12)),vEuro:nb(dv('vertical','€',6)),"
+        "hMot:nb(dv('horizontal','sessions',6)),hEuro:nb(dv('horizontal','€',6))}));" % _json.dumps(asset))
+    r = subprocess.run(["node", "-e", script], capture_output=True, text=True, encoding="utf-8")
+    try:
+        j = _json.loads(r.stdout)
+    except Exception:
+        j = {}
+    for cle, attendu, nom in (("vMot", [0, True], "vertical, 12 colonnes, unité « sessions » : totaux masqués, repris à l'infobulle"),
+                              ("vEuro", [6, False], "vertical, 6 colonnes, unité « € » : totaux conservés"),
+                              ("hMot", [0, True], "horizontal, unité « sessions » : totaux masqués (ils étaient rognés), repris à l'infobulle"),
+                              ("hEuro", [6, False], "horizontal, unité « € » : totaux conservés")):
+        cas(f"composant sous node · {nom}", j.get(cle) == attendu, f"{attendu}", f"{j.get(cle)}", r.stderr)
+    shutil.rmtree(captures, ignore_errors=True)
+    return out
+
+
+def run_canvas_v22():
+    """TF-1859 (RA-14, lot Produit-79 20261017c) : un graphique en <canvas> aux séries invisibles, jugé par
+    render_page.py — et le canvas déclaré hors de la mesure du DOM, PASS compris.
+
+    Le fait : jetons `--cat-1` à `--cat-6` absents, barres ECharts presque blanches, légende sans pastille,
+    render_page PASS en clair et en sombre aux 7 largeurs. Trois fixtures portent le MÊME dessin :
+    `canvas-series-invisibles.html` (jetons absents, repli quasi blanc : ROUGE, V22 à 1,08:1),
+    `canvas-series-visibles.html` (jetons posés : VERTE) et `canvas-courbe-sans-aplat.html` (une courbe,
+    aucun aplat : ni accusée ni passée sous silence, déclarée NON MESURABLE). Le périmètre de non-mesure
+    nomme le canvas dans les DEUX sorties (JSON et texte) sur un verdict PASS comme sur un FAIL, et dit
+    « aucun canvas » quand la page n'en porte pas."""
+    try:
+        import importlib
+        importlib.import_module("playwright.sync_api")
+        importlib.import_module("PIL.Image")
+    except ImportError:
+        return None
+    import json as _json
+    import tempfile
+    out = []
+    captures = tempfile.mkdtemp(prefix="self-test-canvas-")
+    outil = str(Path(__file__).resolve().parent / "render_page.py")
+
+    def cas(nom, ok, attendu, obtenu, detail=""):
+        out.append({"fixture": nom, "verdict": "OK" if ok else "ECHEC", "attendu": attendu,
+                    "obtenu": obtenu, "regle": "TF-1859", "detail": "" if ok else detail[:300]})
+
+    def jouer(nom, sortie="json"):
+        r = subprocess.run([sys.executable, "-X", "utf8", outil, str(FIXTURES / nom), "--widths", "1440",
+                            "--output", sortie, "--out", captures],
+                           capture_output=True, text=True, encoding="utf-8")
+        if sortie == "text":
+            return r.stdout
+        try:
+            return _json.loads(r.stdout)
+        except Exception:
+            return None
+
+    rouge = jouer("canvas-series-invisibles.html")
+    vert = jouer("canvas-series-visibles.html")
+    courbe = jouer("canvas-courbe-sans-aplat.html")
+
+    def v22(d):
+        return None if d is None else d["breakpoints"]["1440"]["issues"].get("v22_canvas_indiscernable", [])
+
+    cas("canvas-series-invisibles · rouge : V22 rend un constat bloquant, verdict FAIL",
+        rouge is not None and len(v22(rouge)) == 1 and rouge["verdict"] == "FAIL",
+        "V22 ×1, FAIL", f"{None if rouge is None else len(v22(rouge))} constat(s), "
+        f"{None if rouge is None else rouge['verdict']}")
+    cas("canvas-series-invisibles · le constat dit le contraste mesuré et nomme les jetons à vérifier",
+        rouge is not None and bool(v22(rouge)) and "1.08:1" in v22(rouge)[0]["detail"]
+        and "--cat-N" in v22(rouge)[0]["detail"], "1.08:1 et --cat-N", "")
+    cas("canvas-series-visibles · verte : aucun V22, verdict PASS",
+        vert is not None and v22(vert) == [] and vert["verdict"] == "PASS", "V22 ×0, PASS",
+        f"{None if vert is None else len(v22(vert))} constat(s), {None if vert is None else vert['verdict']}")
+    cas("canvas-courbe-sans-aplat · ni accusée ni silencieuse : NON MESURABLE, avec sa raison",
+        courbe is not None and v22(courbe) == [] and any(
+            "V22" in i["detail"] and "sans aplat" in i["detail"]
+            for i in courbe["breakpoints"]["1440"]["issues"]["unmeasured"]),
+        "V22 ×0 et un non mesurable V22", "")
+    for nom, d in (("rouge (FAIL)", rouge), ("verte (PASS)", vert)):
+        ligne = [n for n in (d or {}).get("non_juge", []) if n.startswith("CANVAS")]
+        cas(f"canvas · périmètre de non-mesure au JSON, page {nom}",
+            len(ligne) == 1 and "n'est PAS dans le DOM" in ligne[0] and "1 canvas rencontre" in ligne[0],
+            "ligne CANVAS, 1 canvas rencontré", f"{len(ligne)} ligne(s)")
+    texte = jouer("canvas-series-visibles.html", "text")
+    cas("canvas · périmètre de non-mesure à la sortie TEXTE, sur un PASS",
+        "Verdict : PASS" in texte and "non jugé — CANVAS" in texte, "PASS et « non jugé — CANVAS »",
+        "PASS" if "Verdict : PASS" in texte else "pas de PASS")
+    sans = jouer("lisibilite-verte.html")
+    ligne = [n for n in (sans or {}).get("non_juge", []) if n.startswith("CANVAS")]
+    cas("canvas · page sans canvas : la ligne sort quand même et le dit",
+        len(ligne) == 1 and "aucun <canvas>" in ligne[0], "ligne CANVAS, aucun canvas", f"{len(ligne)} ligne(s)")
+    shutil.rmtree(captures, ignore_errors=True)
+    return out
+
+
+def run_l2_remedes_nommes():
+    """TF-1799 (lot Produit-83 20261015b, RA-5) — UNE RÈGLE QUI INTERDIT SON PROPRE REMÈDE.
+
+    Brider le paragraphe donnait « bride par max-width » ; brider le conteneur, « conteneur de
+    lecture calé à gauche » ; aucun message ne nommait `data-page="donnees"`. Les deux messages
+    doivent désormais nommer les sorties qui passent : conteneur CENTRÉ, page de données déclarée,
+    colonne étroite déclarée. Chacune est jouée et PASSE par une fixture de CAS_RENDU
+    (l2r-chap-lire, l2-remede-page-application, l2-remede-colonne-declaree).
+    """
+    try:
+        import importlib
+        importlib.import_module("playwright.sync_api")
+    except ImportError:
+        return None
+    import tempfile
+    captures = tempfile.mkdtemp(prefix="self-test-l2-remedes-")
+    out = []
+    try:
+        for nom, famille in (("l2r-texte-a-50-pourcent.html", "l2_width"),
+                             ("l2c-conteneur-cale-a-gauche.html", "l2_conteneur")):
+            r = subprocess.run(
+                [sys.executable, "-X", "utf8", str(Path(__file__).resolve().parent / "render_page.py"),
+                 str(FIXTURES / nom), "--widths", "1440", "--output", "json", "--out", captures],
+                capture_output=True, text=True, encoding="utf-8")
+            try:
+                details = [i.get("detail", "") for i in
+                           json.loads(r.stdout)["breakpoints"]["1440"]["issues"][famille]]
+            except Exception:  # noqa: BLE001
+                details = []
+            manques = [m for m in ('data-page="donnees"', "data-colonne-ok", "centr")
+                       if not details or not all(m in d for d in details)]
+            ok = bool(details) and not manques
+            out.append({"fixture": f"{nom} · message {famille}", "verdict": "OK" if ok else "ECHEC",
+                        "attendu": "TF-1799 le message nomme les 3 remèdes qui passent",
+                        "obtenu": f"{len(details)} constat(s), manque : {', '.join(manques) or 'rien'}",
+                        "regle": "TF-1799 remède nommé", "detail": "" if ok else " | ".join(details)[:300]})
+    finally:
+        shutil.rmtree(captures, ignore_errors=True)
+    return out
+
+
+ANNONCES_PLAGE_L = (
+    re.compile(r"règles de lisibilité L1[–-]L(\d+)", re.I),
+    re.compile(r"--regles L\s+#\s*L1[–-]L(\d+)"),
+    re.compile(r"^# Lisibilité — règles L1 à L(\d+)", re.M),
+    re.compile(r"check_html\.py page\.html\b.*\bL1[–-]L(\d+)"),
+)
+
+
+def plages_l_perimees(texte, derniere):
+    """Les plages « L1–Lnn » annoncées en prose dont la borne n'est pas la dernière règle L."""
+    return [m.group(0) for rx in ANNONCES_PLAGE_L for m in rx.finditer(texte)
+            if int(m.group(1)) != derniere]
+
+
+def run_compte_regles_en_prose():
+    """TF-1689 — la plage des règles L annoncée en prose suit la dernière règle écrite.
+
+    La description du skill annonçait « L1–L30 » alors que L37 existait : un compte écrit à la
+    main ne suit pas sa source. La borne se DÉRIVE ici des titres « ## Lnn » de lisibilite.md et
+    se compare à chaque annonce de SKILL.md (description comprise) et de lisibilite.md. Les deux
+    sens sont joués sur un texte jouet : une plage périmée est vue, une plage juste ne l'est pas.
+    """
+    ref = (FIXTURES.parent / "references" / "lisibilite.md").read_text(encoding="utf-8")
+    derniere = max(int(n) for n in re.findall(r"^## L(\d+)\b", ref, re.M))
+    skill = (FIXTURES.parent / "SKILL.md").read_text(encoding="utf-8")
+    perimees = plages_l_perimees(skill, derniere) + plages_l_perimees(ref, derniere)
+    vues = sum(len(list(rx.finditer(t))) for rx in ANNONCES_PLAGE_L for t in (skill, ref))
+    rouge = plages_l_perimees("les règles de lisibilité L1–L30 à fixtures rouges", 37)
+    vert = plages_l_perimees("les règles de lisibilité L1–L37 à fixtures rouges", 37)
+    ok = not perimees and vues > 0 and len(rouge) == 1 and not vert
+    return [{"fixture": "SKILL.md + lisibilite.md", "verdict": "OK" if ok else "ECHEC",
+             "attendu": f"TF-1689 plages L1–L{derniere}, rouge jouet vue, vert jouet muet",
+             "obtenu": f"{vues} annonce(s), {len(perimees)} périmée(s), rouge {len(rouge)}, "
+                       f"vert {len(vert)}",
+             "regle": "TF-1689 compte en prose", "detail": " | ".join(perimees)[:200]}]
+
+
+RE_TITRE_REGLE = re.compile(r"^#{2,3} (L\d+\b[^—\n]*?) +— ", re.M)
+RE_COMPTE_CAS_L = re.compile(r"(\d+) cas de lisibilité, (\d+) rouges")
+
+
+def debuts_de_chaines_de_check_html():
+    """Le début de chaque chaîne littérale (ou f-string) de `check_html.py`, lu dans l'arbre syntaxique.
+
+    Un commentaire qui nomme une règle ne la juge pas : seul un message émis compte.
+    """
+    source = (Path(__file__).resolve().parent / "check_html.py").read_text(encoding="utf-8")
+    for noeud in ast.walk(ast.parse(source)):
+        if isinstance(noeud, ast.Constant) and isinstance(noeud.value, str):
+            yield noeud.value
+        elif isinstance(noeud, ast.JoinedStr) and noeud.values \
+                and isinstance(noeud.values[0], ast.Constant):
+            yield noeud.values[0].value
+
+
+def regles_jugees_par_check_html():
+    """Les numéros de règle L que `check_html.py` émet : toute chaîne littérale qui ouvre par « Lnn »."""
+    jugees = set()
+    for debut in debuts_de_chaines_de_check_html():
+        m = re.match(r"L(\d+)\b", debut)
+        if m:
+            jugees.add(int(m.group(1)))
+    return jugees
+
+
+# Un identifiant de règle émis : « L30 », ou « L30 (chapitre) » ou « L29 ter » quand le numéro porte plusieurs règles.
+RE_IDENTIFIANT_EMIS = RE_CODE
+
+# Un identifiant de section qualifié : « L30 (chapitre) », « L12 (virgules) », « L29 ter » (TF-2508).
+RE_SECTION_QUALIFIEE = re.compile(r"^L\d+ (?:\(|(?:bis|ter|quater)\b)")
+
+# Les sections qualifiées que `check_html` n'émet pas : jugées au rendu, ou prescription du socle sans contrôle
+# de lecture (TF-2508). Le banc vérifie aussi qu'aucun message de `check_html` ne les ouvre : une section
+# déclarée ici et émise est un écart, la liste ne se périme pas en silence.
+SECTIONS_HORS_CHECK_HTML = {
+    "L29 bis": "prescription du socle (conteneur défilant) : aucun message de check_html",
+    "L29 quater": "mesure de rendu : entete_masque_par_collants de render_page.py",
+}
+
+
+def identifiants_emis_par_check_html():
+    """Les identifiants que `check_html.py` met en tête de ses messages, qualificatif compris (TF-2492)."""
+    emis = set()
+    for debut in debuts_de_chaines_de_check_html():
+        m = RE_IDENTIFIANT_EMIS.match(debut)
+        if m:
+            emis.add(m.group(1))
+    return emis
+
+
+def ecarts_sections_lisibilite(texte, jugees):
+    """TF-2469 — les sections publiées d'un référentiel de lisibilité contre les règles jugées.
+
+    Deux écarts : une règle jugée sans aucune section (L23 jugée par `check_html`, jamais publiée),
+    et un identifiant de section porté deux fois (deux « L30 », deux « L29 ter »). Une règle à
+    plusieurs volets se distingue par un qualificatif (« L12 (virgules) », « L29 quater »), jamais
+    par une répétition.
+    """
+    sections = [p.strip() for t in RE_TITRE_REGLE.findall(texte) for p in t.split("/")]
+    publiees = {int(re.match(r"L(\d+)", s).group(1)) for s in sections}
+    ecarts = [f"règle L{n} jugée par check_html, aucune section" for n in sorted(jugees - publiees)]
+    ecarts += [f"section « {s} » publiée {sections.count(s)} fois"
+               for s in sorted(set(sections)) if sections.count(s) > 1]
+    return ecarts
+
+
+def sections_par_numero(texte):
+    """Les identifiants de section d'un référentiel de lisibilité, rangés par numéro de règle."""
+    sections = [p.strip() for t in RE_TITRE_REGLE.findall(texte) for p in t.split("/")]
+    par_numero = {}
+    for s in sections:
+        par_numero.setdefault(int(re.match(r"L(\d+)", s).group(1)), []).append(s)
+    return par_numero
+
+
+def numeros_a_section_nue(texte):
+    """Les numéros qui portent plusieurs sections dont une sans qualificatif (« L15 » et « L15 bis ») : non jugés."""
+    return sorted(n for n, noms in sections_par_numero(texte).items()
+                  if len(noms) >= 2 and not all(RE_SECTION_QUALIFIEE.match(s) for s in noms))
+
+
+def ecarts_identifiants_partages(texte, emis, hors_check_html=()):
+    """TF-2492, TF-2508 — un identifiant émis ne désigne qu'UNE règle de `lisibilite.md`.
+
+    Quand toutes les sections d'un numéro portent un qualificatif (« L30 (chapitre) », « L12 (virgules) »,
+    « L29 ter »), aucune ne porte l'identifiant nu : `check_html` ne peut pas émettre « L30 », qui désignerait
+    plusieurs règles, et chaque section doit être émise sous son propre identifiant, sauf celles que
+    `hors_check_html` déclare jugées ailleurs (et qu'aucun message n'ouvre alors). Un numéro qui garde une
+    section sans qualificatif (« L15 » et « L15 bis ») n'est pas jugé ici : `numeros_a_section_nue` les nomme,
+    pour que la borne se dise au lieu de se taire. Le 13/11/2026 « L12 » et « L29 » étaient dans ce cas, et
+    check_html émettait leur identifiant nu pour quatre et trois règles.
+    """
+    ecarts = []
+    for n, noms in sorted(sections_par_numero(texte).items()):
+        if len(noms) < 2 or not all(RE_SECTION_QUALIFIEE.match(s) for s in noms):
+            continue
+        if f"L{n}" in emis:
+            ecarts.append(f"identifiant « L{n} » émis alors que ses sections sont {', '.join(noms)} : "
+                          "deux règles le partagent")
+        ecarts += [f"section « {s} » : aucun message de check_html n'ouvre par cet identifiant"
+                   for s in noms if s not in emis and s not in hors_check_html]
+        ecarts += [f"section « {s} » déclarée jugée hors de check_html, et un message l'ouvre"
+                   for s in noms if s in hors_check_html and s in emis]
+    return ecarts
+
+
+def ecarts_compte_cas(texte, attendu):
+    """TF-2469 — le compte « N cas de lisibilité, M rouges » du référentiel contre les tables du banc."""
+    annonces = RE_COMPTE_CAS_L.findall(texte)
+    if not annonces:
+        return ["aucun compte « N cas de lisibilité, M rouges » dans le texte"]
+    return [f"compte annoncé {n} cas dont {r} rouges, mesuré {attendu[0]} dont {attendu[1]}"
+            for n, r in annonces if (int(n), int(r)) != attendu]
+
+
+def run_sections_lisibilite_publiees():
+    """TF-2469 — `lisibilite.md` publie une section par règle que `check_html` juge, sans doublon.
+
+    Le 12/11/2026, l'agent du lot org mesure : L23 jugée (attribut `hidden`, TF-0733) et sans
+    section, deux sections « L30 », deux « L29 ter », et un compte de cas daté du 23/08. Les deux
+    sens sont joués sur des textes jouets (rouge : une règle jugée sans section, un identifiant
+    répété, un compte périmé ; vert : les mêmes textes corrigés), puis sur le référentiel réel.
+    """
+    out = []
+
+    def cas(nom, ok, attendu, obtenu, detail=""):
+        out.append({"fixture": nom, "verdict": "OK" if ok else "ECHEC", "attendu": attendu,
+                    "obtenu": obtenu, "regle": "TF-2469 sections de lisibilité",
+                    "detail": "" if ok else detail[:300]})
+
+    jouet_sans_section = "## L1 — a\n## L2 — b\n## L4 — d\n"
+    rouge = ecarts_sections_lisibilite(jouet_sans_section, {1, 2, 3, 4})
+    cas("jouet : règle jugée sans section (ROUGE)",
+        rouge == ["règle L3 jugée par check_html, aucune section"],
+        "1 écart nommant L3", f"{len(rouge)} écart(s)", " | ".join(rouge))
+    jouet_doublon = "## L1 — a\n## L2 — b\n### L2 — c\n## L3 / L4 — d\n"
+    rouge = ecarts_sections_lisibilite(jouet_doublon, {1, 2, 3, 4})
+    cas("jouet : identifiant de section répété (ROUGE)",
+        rouge == ["section « L2 » publiée 2 fois"], "1 écart nommant L2", f"{len(rouge)} écart(s)",
+        " | ".join(rouge))
+    jouet_vert = ("## L1 — a\n### L1 bis — a2\n## L2 (virgules) — b\n## L2 (cellules) — c\n"
+                  "## L3 / L4 — d\n")
+    vert = ecarts_sections_lisibilite(jouet_vert, {1, 2, 3, 4})
+    cas("jouet : qualificatifs distincts, plage « L3 / L4 » (VERT)", not vert, "0 écart",
+        f"{len(vert)} écart(s)", " | ".join(vert))
+
+    attendu_cas = (len(CAS) + len(CAS_AVERT),
+                   sum(1 for v in list(CAS.values()) + list(CAS_AVERT.values()) if v))
+    rouge = ecarts_compte_cas("**70 cas de lisibilité, 50 rouges** (comptés le 23/08)", attendu_cas)
+    cas("jouet : compte de cas périmé (ROUGE)", len(rouge) == 1, "1 écart", f"{len(rouge)} écart(s)",
+        " | ".join(rouge))
+    vert = ecarts_compte_cas(f"**{attendu_cas[0]} cas de lisibilité, {attendu_cas[1]} rouges**", attendu_cas)
+    cas("jouet : compte de cas juste (VERT)", not vert, "0 écart", f"{len(vert)} écart(s)",
+        " | ".join(vert))
+
+    # TF-2492 — le 13/11/2026, check_html émettait « L30 » pour deux règles que lisibilite.md distingue
+    # (« L30 (chapitre) », « L30 (couverture) ») : le numéro seul ne dit pas laquelle a mordu.
+    sections_l30 = "## L30 (chapitre) — a\n## L30 (couverture) — b\n## L12 — c\n## L12 (virgules) — d\n"
+    rouge = ecarts_identifiants_partages(sections_l30, {"L30", "L12"})
+    cas("jouet : « L30 » émis pour deux sections qualifiées (ROUGE)",
+        len(rouge) == 3 and "identifiant « L30 » émis" in rouge[0],
+        "3 écarts : l'identifiant nu, puis les deux sections sans émission", f"{len(rouge)} écart(s)",
+        " | ".join(rouge))
+    rouge = ecarts_identifiants_partages(sections_l30, {"L30 (chapitre)", "L12"})
+    cas("jouet : une section qualifiée jamais émise (ROUGE)",
+        rouge == ["section « L30 (couverture) » : aucun message de check_html n'ouvre par cet identifiant"],
+        "1 écart nommant L30 (couverture)", f"{len(rouge)} écart(s)", " | ".join(rouge))
+    vert = ecarts_identifiants_partages(sections_l30, {"L30 (chapitre)", "L30 (couverture)", "L12"})
+    cas("jouet : un identifiant par section, « L12 » nu partagé par ses volets (VERT)", not vert,
+        "0 écart", f"{len(vert)} écart(s)", " | ".join(vert))
+
+    # TF-2508 — le 13/11/2026, check_html émettait « L12 » pour quatre règles et « L29 » pour trois : leurs sections
+    # gardaient une version nue à côté des volets, et le contrôle de TF-2492 ne jugeait que les numéros dont toutes
+    # les sections portent un qualificatif. Les sections nues deviennent « L12 (données) » et « L29 (collision) »,
+    # les ordinaux latins (« L29 ter ») comptent comme des qualificatifs, et le contrôle refuse le code nu.
+    sections_l12_l29 = ("## L12 (données) — a\n## L12 (virgules) — b\n## L29 (collision) — c\n"
+                        "### L29 bis — d\n### L29 ter — e\n")
+    hors = {"L29 bis": "jugée au rendu"}
+    emis_justes = {"L12 (données)", "L12 (virgules)", "L29 (collision)", "L29 ter"}
+    rouge = ecarts_identifiants_partages(sections_l12_l29, (emis_justes - {"L12 (données)"}) | {"L12"}, hors)
+    cas("jouet : « L12 » nu émis pour ses volets qualifiés (ROUGE)",
+        len(rouge) == 2 and "identifiant « L12 » émis" in rouge[0] and "« L12 (données) » : aucun" in rouge[1],
+        "2 écarts : l'identifiant nu, puis la section sans émission", f"{len(rouge)} écart(s)", " | ".join(rouge))
+    rouge = ecarts_identifiants_partages(sections_l12_l29, (emis_justes - {"L29 (collision)"}) | {"L29"}, hors)
+    cas("jouet : « L29 » nu émis pour ses suites et sa collision (ROUGE)",
+        len(rouge) == 2 and "identifiant « L29 » émis" in rouge[0] and "« L29 (collision) » : aucun" in rouge[1],
+        "2 écarts : l'identifiant nu, puis la section sans émission", f"{len(rouge)} écart(s)", " | ".join(rouge))
+    rouge = ecarts_identifiants_partages(sections_l12_l29, emis_justes - {"L29 ter"}, hors)
+    cas("jouet : une suite à ordinal latin jamais émise (ROUGE)",
+        rouge == ["section « L29 ter » : aucun message de check_html n'ouvre par cet identifiant"],
+        "1 écart nommant L29 ter", f"{len(rouge)} écart(s)", " | ".join(rouge))
+    rouge = ecarts_identifiants_partages(sections_l12_l29, emis_justes | {"L29 bis"}, hors)
+    cas("jouet : une section déclarée hors de check_html qu'un message ouvre (ROUGE)",
+        rouge == ["section « L29 bis » déclarée jugée hors de check_html, et un message l'ouvre"],
+        "1 écart nommant L29 bis", f"{len(rouge)} écart(s)", " | ".join(rouge))
+    vert = ecarts_identifiants_partages(sections_l12_l29, emis_justes, hors)
+    cas("jouet : un identifiant par section, la suite déclarée hors de check_html (VERT)", not vert,
+        "0 écart", f"{len(vert)} écart(s)", " | ".join(vert))
+    rouge = ecarts_identifiants_partages("## L15 — a\n### L15 bis — b\n", {"L15"})
+    cas("jouet : un numéro à section nue (L15, L15 bis) n'est pas jugé, et se nomme (BORNE DITE)",
+        not rouge and numeros_a_section_nue("## L15 — a\n### L15 bis — b\n## L30 (a) — c\n## L30 (b) — d\n") == [15],
+        "0 écart, numéros non jugés [15]", f"{len(rouge)} écart(s)", " | ".join(rouge))
+
+    # TF-2531 — le 14/11/2026, check_html émettait « L18 » pour trois règles (jeton, code de règle, système) et « L27 »
+    # pour deux (colonne, en-tête de ligne) : leurs sections nues côtoyaient « L18 bis » et « L27 bis », et le contrôle
+    # les nommait sans les juger. Les sections nues deviennent « L18 (jeton) » et « L27 (colonne) », « bis » les distingue.
+    sections_l18_l27 = ("## L18 (jeton) — a\n### L18 bis — b\n## L27 (colonne) — c\n### L27 bis — d\n")
+    emis_justes_18_27 = {"L18 (jeton)", "L18 bis", "L27 (colonne)", "L27 bis"}
+    rouge = ecarts_identifiants_partages(sections_l18_l27, (emis_justes_18_27 - {"L18 (jeton)"}) | {"L18"})
+    cas("jouet : « L18 » nu émis pour ses sections qualifiées (ROUGE)",
+        len(rouge) == 2 and "identifiant « L18 » émis" in rouge[0] and "« L18 (jeton) » : aucun" in rouge[1],
+        "2 écarts : l'identifiant nu, puis la section sans émission", f"{len(rouge)} écart(s)", " | ".join(rouge))
+    rouge = ecarts_identifiants_partages(sections_l18_l27, (emis_justes_18_27 - {"L27 (colonne)"}) | {"L27"})
+    cas("jouet : « L27 » nu émis pour ses sections qualifiées (ROUGE)",
+        len(rouge) == 2 and "identifiant « L27 » émis" in rouge[0] and "« L27 (colonne) » : aucun" in rouge[1],
+        "2 écarts : l'identifiant nu, puis la section sans émission", f"{len(rouge)} écart(s)", " | ".join(rouge))
+    vert = ecarts_identifiants_partages(sections_l18_l27, emis_justes_18_27)
+    cas("jouet : un identifiant par section pour L18 et L27 (VERT)", not vert and numeros_a_section_nue(sections_l18_l27) == [],
+        "0 écart, aucun numéro à section nue", f"{len(vert)} écart(s)", " | ".join(vert))
+
+    ref = (FIXTURES.parent / "references" / "lisibilite.md").read_text(encoding="utf-8")
+    jugees = regles_jugees_par_check_html()
+    emis = identifiants_emis_par_check_html()
+    reel = (ecarts_sections_lisibilite(ref, jugees) + ecarts_compte_cas(ref, attendu_cas)
+            + ecarts_identifiants_partages(ref, emis, SECTIONS_HORS_CHECK_HTML))
+    nues = numeros_a_section_nue(ref)
+    cas("references/lisibilite.md : L18 et L27 n'ont plus de section nue, le contrôle de TF-2492 les juge",
+        18 not in nues and 27 not in nues and {"L18 (jeton)", "L18 bis", "L27 (colonne)", "L27 bis"} <= emis,
+        "ni 18 ni 27 parmi les numéros à section nue, quatre identifiants émis", f"nues {nues}, émis {sorted(i for i in emis if i[:3] in ('L18', 'L27'))}")
+    cas("references/lisibilite.md contre check_html.py", not reel and len(jugees) > 0,
+        f"0 écart sur {len(jugees)} règles jugées, {len(emis)} identifiants émis ; "
+        f"numéros à section nue non jugés : {numeros_a_section_nue(ref)}", f"{len(reel)} écart(s)",
+        " | ".join(reel))
+    return out
+
+
+def run_console_cp1252():
+    """TF-1884 — aucun script Python du skill ne plante en console Windows (cp1252).
+
+    Le banc joue habituellement ses sous-processus en `-X utf8`, ce qui MASQUE le défaut : un
+    script qui imprime « → » sans forcer sa sortie lève UnicodeEncodeError dès qu'un humain le
+    lance depuis une console Windows. Ici le sous-processus tourne en cp1252 imposé
+    (PYTHONIOENCODING, PYTHONUTF8=0), sans `-X utf8`. Deux preuves : chaque script, IMPORTÉ,
+    laisse sa sortie capable d'écrire « → » ; et `check_completude.py`, qui l'imprime dans son
+    rapport, se joue de bout en bout. Le rouge est un script jouet qui n'y pense pas.
+    """
+    env = {**os.environ, "PYTHONUTF8": "0", "PYTHONIOENCODING": "cp1252"}
+    env.pop("PYTHONLEGACYWINDOWSSTDIO", None)
+    dossier = Path(__file__).resolve().parent
+    res = []
+
+    def cas(nom, ok, attendu, obtenu, detail=""):
+        res.append({"fixture": nom, "verdict": "OK" if ok else "ECHEC", "attendu": attendu,
+                    "obtenu": obtenu, "regle": "TF-1884 console cp1252", "detail": detail[:300]})
+
+    jouet = subprocess.run([sys.executable, "-c", "print('→')"], capture_output=True,
+                           env=env, timeout=60)
+    cas("script jouet sans reconfigure (ROUGE)", jouet.returncode != 0, "exit != 0",
+        f"exit {jouet.returncode}", "le jouet doit lever UnicodeEncodeError")
+    for nom in ("check_html", "check_markdown", "check_completude", "check_format_a4", "mesurer_bruit", "render_page"):
+        code = (f"import sys; sys.path.insert(0, {str(dossier)!r}); import {nom}; "
+                "print('\u2192 \u2717')")
+        r = subprocess.run([sys.executable, "-c", code], capture_output=True, env=env, timeout=120)
+        sortie = r.stdout.decode("utf-8", "replace")
+        cas(f"{nom}.py importé en cp1252", r.returncode == 0 and "→" in sortie,
+            "exit 0, « → » écrit", f"exit {r.returncode}", r.stderr.decode("utf-8", "replace")[-250:])
+    r = subprocess.run([sys.executable, str(dossier / "check_completude.py"),
+                        str(FIXTURES / "completude-verte.html"),
+                        "--source", str(FIXTURES / "completude-source.md")],
+                       capture_output=True, env=env, timeout=120)
+    sortie = r.stdout.decode("utf-8", "replace")
+    cas("check_completude.py de bout en bout en cp1252", r.returncode == 0 and "→" in sortie,
+        "exit 0, rapport complet (« → » écrit)", f"exit {r.returncode}",
+        r.stderr.decode("utf-8", "replace")[-250:])
+    return res
+
+
+def run_jonction_sortie_oem():
+    """TF-2478 — la création d'une jonction n'imprime plus d'exception de fil de lecture.
+
+    Le fait (12/11/2026, lot fb) : lancée avec `PYTHONUTF8=1`, la recette imprimait en tête de sortie une
+    `UnicodeDecodeError` (octet 0x82, position 11) venue d'un `_readerthread`, sans effet sur le compte ni sur
+    l'exit. La cause : `cmd /c mklink /J` écrit « Jonction créée » en cp850 (« é » = 0x82), et `text=True` lisait
+    ces octets comme de l'UTF-8. Le défaut n'existe QU'en mode UTF-8 : sans `PYTHONUTF8`, cp1252 décode 0x82
+    en « ‚ » sans rien dire, et rien ne signalait l'erreur. Les sous-processus ci-dessous forcent donc `-X utf8`
+    (le rouge, et le vert dans la condition qui l'exposait) puis `-X utf8=0` (le vert sans UTF-8 forcé).
+      · rouge : la forme d'avant (`text=True`, sans encodage) lève UnicodeDecodeError sur 0x82 ;
+      · vert  : `_creer_jonction`, jouée dans les deux modes, rend vrai et laisse stderr vide.
+    Sans Windows, pas de `cmd` : le cas est déclaré non joué.
+
+    TF-2510 (13/11/2026) — le rouge ne dépend plus de ce que `cmd` écrit ce jour-là. Le pilot a mesuré 863/864
+    au rejeu de la recette, puis 3/3 OK au rejeu du cas seul, et l'a attribué à la charge du poste. Mesuré le
+    14/11/2026 : la cause n'est pas la charge. `cmd /c mklink` écrit dans la page de code de la CONSOLE qui
+    lance la recette : sous un lancement depuis Git Bash (page 850) il écrit « Jonction cr\\x82\\x82e », sous un
+    lancement depuis PowerShell (page 65001) il écrit de l'UTF-8 (« cr\\xc3\\xa9\\xc3\\xa9e »), que `text=True`
+    décode sans erreur : l'ancienne forme ne lève plus rien, le rouge rend « aucune exception », et le même
+    cas rend ECHEC ou OK selon le shell. Quarante processus occupés sur vingt cœurs n'ont rien changé (10 cas
+    sur 10 OK) : la charge n'y est pour rien. Le défaut est donc rejoué sur un flux d'octets IMPOSÉ, celui que
+    `cmd` écrit en page 850, que `subprocess.run` rend à la place de `cmd` dans le sous-processus (substitution) ;
+    la forme d'avant et `_creer_jonction` lisent ce flux, quelle que soit la console :
+      · rouge : la forme d'avant lève UnicodeDecodeError sur 0x82, dans toute console ;
+      · vert  : `_creer_jonction` lit le même flux sans exception, dans les deux modes ;
+      · vert réel : `_creer_jonction` crée une vraie jonction avec le vrai `cmd`, dans les deux modes (inchangé).
+    """
+    if os.name != "nt":
+        return [{"fixture": "jonction · sortie OEM de cmd — cas NON JOUÉ hors Windows, et dit (TF-2478)",
+                 "verdict": "OK", "attendu": "non joué", "obtenu": "non joué", "regle": "TF-2478", "detail": ""}]
+    dossier = str(Path(__file__).resolve().parent)
+    env = {k: v for k, v in os.environ.items() if k not in ("PYTHONUTF8", "PYTHONIOENCODING")}
+    prologue = ("import os, subprocess, sys, tempfile; sys.path.insert(0, %r); import self_test as s; "
+                "d = tempfile.mkdtemp(prefix='self-test-oem-'); lien = os.path.join(d, 'lien'); ") % dossier
+    nettoyage = "os.rmdir(lien) if ok else None; os.rmdir(d)"
+    code_ancien = (prologue + "r = subprocess.run(['cmd', '/c', 'mklink', '/J', lien, d], capture_output=True, text=True); "
+                   "ok = r.returncode == 0; print('JONCTION', ok); " + nettoyage)
+    code_actuel = prologue + "ok = s._creer_jonction(lien, d); print('JONCTION', ok); " + nettoyage
+    # TF-2510 : `cmd` remplacé, dans le sous-processus, par un émetteur des octets qu'il écrit en page 850.
+    emetteur = "import sys; sys.stdout.buffer.write(%r); sys.stdout.flush()" % b"Jonction cr\x82\x82e pour lien"
+    substitution = ("\nreel = subprocess.run\n"
+                    "def cmd_page_850(args, **kw):\n"
+                    "    return reel([sys.executable, '-c', %r] if args[0] == 'cmd' else args, **kw)\n"
+                    "subprocess.run = cmd_page_850\n") % emetteur
+    code_ancien_flux = (prologue + substitution + "r = subprocess.run(['cmd', '/c', 'mklink', '/J', lien, d], "
+                        "capture_output=True, text=True); ok = r.returncode == 0; print('JONCTION', ok); os.rmdir(d)")
+    code_actuel_flux = (prologue + substitution + "ok = s._creer_jonction(lien, d); print('JONCTION', ok); "
+                        "os.rmdir(d)")
+    res = []
+
+    def jouer(code, mode):
+        r = subprocess.run([sys.executable, "-X", mode, "-c", code], capture_output=True, env=env, timeout=120)
+        return r.returncode, r.stdout.decode("utf-8", "replace"), r.stderr.decode("utf-8", "replace")
+
+    def cas(nom, ok, attendu, obtenu, detail="", regle="TF-2478 sortie OEM"):
+        res.append({"fixture": nom, "verdict": "OK" if ok else "ECHEC", "attendu": attendu, "obtenu": obtenu,
+                    "regle": regle, "detail": "" if ok else detail[:300]})
+
+    code, sortie, err = jouer(code_ancien_flux, "utf8")
+    cas("jonction · forme d'avant (text=True) sous -X utf8, flux de cmd en page 850 imposé : "
+        "UnicodeDecodeError sur l'octet 0x82 (ROUGE)",
+        "UnicodeDecodeError" in err and "0x82" in err, "UnicodeDecodeError, octet 0x82",
+        "exception" if "UnicodeDecodeError" in err else "aucune exception", err[-250:],
+        regle="TF-2510 flux OEM imposé")
+    for mode, nom in (("utf8", "-X utf8, la condition qui exposait le défaut"), ("utf8=0", "-X utf8=0, sans UTF-8 forcé")):
+        code, sortie, err = jouer(code_actuel_flux, mode)
+        cas(f"jonction · _creer_jonction sous {nom}, flux de cmd en page 850 imposé : lu sans exception, stderr vide",
+            code == 0 and "JONCTION True" in sortie and err.strip() == "", "exit 0, JONCTION True, stderr vide",
+            f"exit {code}, stderr {len(err.strip())} car.", err[-250:] or sortie[-250:],
+            regle="TF-2510 flux OEM imposé")
+    for mode, nom in (("utf8", "-X utf8, la condition qui exposait le défaut"), ("utf8=0", "-X utf8=0, sans UTF-8 forcé")):
+        code, sortie, err = jouer(code_actuel, mode)
+        cas(f"jonction · _creer_jonction sous {nom} : jonction créée, stderr vide",
+            code == 0 and "JONCTION True" in sortie and err.strip() == "", "exit 0, JONCTION True, stderr vide",
+            f"exit {code}, stderr {len(err.strip())} car.", err[-250:] or sortie[-250:])
+    return res
+
+
+# Skills qui tirent leurs gabarits du socle : une régression du socle y rougit sans que le socle le voie.
+# TF-2474 : le 3e rouge SC4 en trois jours (TF-2406 le socle, TF-2448 forge-tests, TF-2459 les schémas) était
+# visible au self-test de factory-schemas depuis TF-2384, mais aucune recette ne le jouait à la livraison du socle.
+CONSOMMATEURS_DU_SOCLE = ("factory-schemas",)
+DELAI_CONSOMMATEUR = 1800
+
+
+def rejouer_consommateur(racine_skills, nom, delai=DELAI_CONSOMMATEUR):
+    """Rejoue `<racine_skills>/<nom>/scripts/self-test.mjs` ; rend (verdict, detail).
+
+    verdict : "OK" (exit 0), "ECHEC" (exit non nul, ou délai dépassé), "NON_JOUE" (node ou le script absents :
+    dit, jamais pris pour un vert). Le détail porte les lignes rouges du consommateur, pour qu'un rouge nomme sa cause.
+    """
+    script = Path(racine_skills) / nom / "scripts" / "self-test.mjs"
+    if not shutil.which("node"):
+        return "NON_JOUE", "node absent de ce poste"
+    if not script.is_file():
+        return "NON_JOUE", f"{nom}/scripts/self-test.mjs introuvable à côté du socle"
+    try:
+        r = subprocess.run(["node", str(script)], cwd=str(script.parent.parent), capture_output=True, timeout=delai)
+    except subprocess.TimeoutExpired:
+        return "ECHEC", f"{nom} : self-test non terminé après {delai} s"
+    lignes = (r.stdout + r.stderr).decode("utf-8", "replace").splitlines()
+    rouges = [ligne.strip() for ligne in lignes if "❌" in ligne]
+    bilan = next((ligne.strip() for ligne in reversed(lignes) if ligne.strip()), "")
+    return ("OK" if r.returncode == 0 else "ECHEC"), f"exit {r.returncode} · {len(rouges)} rouge(s) · " + " | ".join(rouges[:3] or [bilan])
+
+
+def run_consommateurs_du_socle():
+    """TF-2474 — la recette du socle rejoue le self-test de ses consommateurs ; un rouge bloque la livraison.
+
+    Quatre cas : les deux sens de la barrière sur des consommateurs jetables (un self-test qui sort 1 doit
+    rendre ECHEC, un qui sort 0 doit rendre OK, un consommateur absent doit rendre NON_JOUE et non un vert),
+    puis le VRAI consommateur, `factory-schemas`, dont le verdict est celui de la recette. Un `ECHEC` du
+    consommateur réel fait échouer ce cas, donc la recette du socle, donc son exit.
+    """
+    res = []
+
+    def cas(nom, ok, attendu, obtenu, detail=""):
+        res.append({"fixture": nom, "verdict": "OK" if ok else "ECHEC", "attendu": attendu, "obtenu": obtenu,
+                    "regle": "TF-2474 consommateur du socle", "detail": "" if ok else detail[:300]})
+
+    import tempfile
+    if not shutil.which("node"):
+        cas("consommateurs du socle — cas NON JOUÉ sans node, et dit (TF-2474)", True, "non joué", "non joué")
+        return res
+    atelier = tempfile.mkdtemp(prefix="self-test-consommateurs-")
+    try:
+        for nom, sortie in (("jouet-rouge", 1), ("jouet-vert", 0)):
+            scripts = Path(atelier) / nom / "scripts"
+            scripts.mkdir(parents=True)
+            (scripts / "self-test.mjs").write_text(
+                f"console.log('  \\u274c un rouge du consommateur'); process.exit({sortie});\n", encoding="utf-8")
+        for nom, attendu in (("jouet-rouge", "ECHEC"), ("jouet-vert", "OK"), ("jouet-absent", "NON_JOUE")):
+            verdict, detail = rejouer_consommateur(atelier, nom, delai=120)
+            cas(f"consommateur du socle · {nom} : le self-test rejoué rend {attendu}",
+                verdict == attendu, attendu, verdict, detail)
+        verdict, detail = rejouer_consommateur(atelier, "jouet-rouge", delai=120)
+        cas("consommateur du socle · un rouge est NOMMÉ dans le détail (la cause se lit sans rejouer)",
+            "un rouge du consommateur" in detail, "ligne rouge citée", detail[:80], detail)
+    finally:
+        shutil.rmtree(atelier, ignore_errors=True)
+    racine = FIXTURES.parent.parent
+    for nom in CONSOMMATEURS_DU_SOCLE:
+        verdict, detail = rejouer_consommateur(racine, nom)
+        if verdict == "NON_JOUE":
+            cas(f"{nom} introuvable ou node absent — cas NON JOUÉ, et dit (TF-2474) : {detail}", True, "non joué", "non joué")
+        else:
+            cas(f"consommateur du socle · le self-test de {nom} est VERT (un rouge bloque la livraison du socle)",
+                verdict == "OK", "exit 0", verdict, detail)
+    return res
+
+
+def run_graphiques_tf1875():
+    """TF-1875 (retour du constructeur de TF-1855, 18/10/2026) — quatre défauts de rendu des composants de
+    graphique et un composant d'entonnoir, chacun ROUGE AVANT, VERT APRÈS.
+
+    1. Grille prise pour une liaison (V4, 390 px) : `barres-grille-liaison.html`, douze colonnes dont les totaux
+       extrêmes frôlent une graduation, rendait 9 constats à 390 px et 0 à 1440. VERT : 0 aux deux largeurs ;
+       l'oracle n'est pas adouci, `v4-fleche-traverse-boite.html` garde ses constats à 390 px.
+    2. Tableau de données à cinq séries, débordement V1 à 390 px : VERT `barres-5-series.html`, ROUGE
+       `barres-5-series-ancien-style.html` (la feuille d'avant correctif, `barres-empilees-ancien.css`, figée).
+    3. À 33 mois, étiquette du dernier mois et graduation la plus haute rognées par le viewBox, et 4. sans totaux,
+       dernière graduation horizontale rognée : VERT par le composant actuel, ROUGE par `-ancien-rendu` (le SVG
+       pré-rendu par le composant d'avant correctif). Le rognage se MESURE : chaque `<text>` d'un graphe tient
+       dans le rectangle de son `<svg>`.
+    5. Le composant d'entonnoir : rendu sans défaut à 390 et 1440 px, chaque effectif écrit UNE fois (la barre
+       horizontale à une série du composant barres empilées l'écrit deux fois ou plus), donnée non décroissante
+       REFUSÉE, pré-rendu idempotent."""
+    try:
+        import importlib
+        importlib.import_module("playwright.sync_api")
+    except ImportError:
+        return None
+    import json as _json
+    import tempfile
+    from playwright.sync_api import sync_playwright
+    out = []
+    captures = tempfile.mkdtemp(prefix="self-test-tf1875-")
+    outil = str(Path(__file__).resolve().parent / "render_page.py")
+
+    def cas(nom, ok, attendu, obtenu, detail=""):
+        out.append({"fixture": nom, "verdict": "OK" if ok else "ECHEC", "attendu": attendu,
+                    "obtenu": obtenu, "regle": "TF-1875", "detail": "" if ok else str(detail)[:300]})
+
+    def rendu(nom, largeur, famille):
+        r = subprocess.run([sys.executable, "-X", "utf8", outil, str(FIXTURES / nom), "--widths", str(largeur),
+                            "--output", "json", "--out", captures], capture_output=True, text=True, encoding="utf-8")
+        try:
+            return [i["what"] for i in _json.loads(r.stdout)["breakpoints"][str(largeur)]["issues"][famille]]
+        except Exception:
+            return None
+
+    js_rogne = ("() => { const o=[]; for (const svg of document.querySelectorAll('svg.graphe-svg')) {"
+                " const r=svg.getBoundingClientRect(); for (const t of svg.querySelectorAll('text')) {"
+                " const b=t.getBoundingClientRect(); if (b.right>r.right+0.5||b.left<r.left-0.5||b.top<r.top-0.5||"
+                "b.bottom>r.bottom+0.5) o.push(t.textContent); } } return o; }")
+    with sync_playwright() as p:
+        nav = p.chromium.launch()
+
+        def rognes(nom, largeur):
+            pg = nav.new_page(viewport={"width": largeur, "height": 900})
+            pg.goto((FIXTURES / nom).as_uri())
+            pg.wait_for_timeout(300)
+            res = pg.evaluate(js_rogne)
+            pg.close()
+            return [t.replace(" ", " ").replace(" ", " ") for t in res]
+        for largeur in (390, 1440):
+            v = rendu("barres-grille-liaison.html", largeur, "v4_overlap")
+            cas(f"barres-grille-liaison · vert à {largeur} px : aucune grille prise pour une liaison",
+                v == [], "V4 ×0", f"{None if v is None else len(v)} constat(s)", " | ".join(v or []))
+        v = rendu("v4-fleche-traverse-boite.html", 390, "v4_overlap")
+        cas("v4-fleche-traverse-boite · l'oracle n'est pas adouci : la vraie liaison reste accusée à 390 px",
+            bool(v) and len(v) >= 2, "V4 ≥ 2", f"{None if v is None else len(v)} constat(s)")
+        rouge = rendu("barres-5-series-ancien-style.html", 390, "v1_overflow")
+        cas("barres-5-series-ancien-style · rouge : la vue tableau à cinq séries déborde à 390 px",
+            bool(rouge), "V1 ≥ 1", f"{None if rouge is None else len(rouge)} constat(s)")
+        vert = rendu("barres-5-series.html", 390, "v1_overflow")
+        cas("barres-5-series · vert à 390 px : repli en cartes, aucun débordement",
+            vert == [], "V1 ×0", f"{None if vert is None else len(vert)} constat(s)", " | ".join(vert or []))
+        for nom, attendu_rouge in (("barres-33-mois", ["sept. 2026", "300"]),
+                                   ("barres-horizontal-sans-totaux", ["20 000"])):
+            for largeur in (390, 1440):
+                r = rognes(nom + "-ancien-rendu.html", largeur)
+                cas(f"{nom}-ancien-rendu · rouge à {largeur} px : texte rogné par le viewBox",
+                    all(any(a in t for t in r) for a in attendu_rouge),
+                    f"rogné : {attendu_rouge}", f"{r}")
+                v = rognes(nom + ".html", largeur)
+                cas(f"{nom} · vert à {largeur} px : tout texte tient dans le viewBox",
+                    v == [], "aucun texte rogné", f"{v}")
+        for largeur in (390, 1440):
+            for famille in ("v1_overflow", "v2_contrast", "v4_overlap"):
+                v = rendu("entonnoir.html", largeur, famille)
+                cas(f"entonnoir · vert à {largeur} px : {famille} ×0", v == [], f"{famille} ×0",
+                    f"{None if v is None else len(v)}", " | ".join(v or []))
+        nav.close()
+    asset = (FIXTURES.parent / "assets" / "entonnoir.js").as_posix()
+    barres = (FIXTURES.parent / "assets" / "barres-empilees.js").as_posix()
+    script = (
+        "const E=require(@ASSET@),B=require(@BARRES@);"
+        "const fmt=v=>new Intl.NumberFormat('fr-FR').format(v);"
+        "const vis=h=>h.replace(/<[^>]*>/g,' ');"
+        "const cnt=(t,s)=>t.split(s).length-1;"
+        "const d={unite:'visiteurs',titre:'T',etapes:[{nom:'A',valeur:12480},{nom:'B',valeur:3412},{nom:'C',valeur:905}]};"
+        "const r=E.rendre(d,'e');"
+        "const un=cnt(vis(r.liste),fmt(12480));"
+        "const b=B.rendre({orientation:'horizontal',mode:'valeurs',unite:'€',totaux:true,categories:['A','B','C'],"
+        "series:[{nom:'s',valeurs:[12480,6000,3000]}]},'g');"
+        "const deux=cnt(vis(b.svg),fmt(6000));"
+        "const refuse=(x)=>{try{E.rendre(x,'e');return false;}catch(e){return true;}};"
+        "const croissant=refuse({etapes:[{nom:'A',valeur:10},{nom:'B',valeur:20}]});"
+        "const nul=refuse({etapes:[{nom:'A',valeur:0},{nom:'B',valeur:0}]});"
+        "const seule=refuse({etapes:[{nom:'A',valeur:10}]});"
+        "const egal=!refuse({etapes:[{nom:'A',valeur:10},{nom:'B',valeur:10}]});"
+        "const t=vis(r.liste);"
+        "const conv=/27,3 % de l.\\u00e9tape pr\\u00e9c\\u00e9dente/.test(t)&&/26,5 % de l.\\u00e9tape pr\\u00e9c\\u00e9dente +\\u00b7 +7,3 % du d\\u00e9part/.test(t);"
+        "console.log(JSON.stringify({un,deux,croissant,nul,seule,egal,conv}));" ).replace("@ASSET@", _json.dumps(asset)).replace("@BARRES@", _json.dumps(barres))
+    r = subprocess.run(["node", "-e", script], capture_output=True, text=True, encoding="utf-8")
+    try:
+        j = _json.loads(r.stdout)
+    except Exception:
+        j = {}
+    cas("entonnoir sous node · l'effectif d'une étape est écrit UNE fois", j.get("un") == 1, "1", f"{j.get('un')}", r.stderr)
+    cas("barres empilées à une série (sens rouge) · le même effectif est écrit au moins deux fois",
+        (j.get("deux") or 0) >= 2, "≥ 2", f"{j.get('deux')}", r.stderr)
+    cas("entonnoir sous node · la conversion se lit (étape précédente, puis départ dès l'étape 3)",
+        j.get("conv") is True, "True", f"{j.get('conv')}", r.stderr)
+    for cle, nom in (("croissant", "une étape plus grande que la précédente"), ("nul", "un départ nul"),
+                     ("seule", "une seule étape")):
+        cas(f"entonnoir sous node · donnée refusée : {nom}", j.get(cle) is True, "refus", f"{j.get(cle)}", r.stderr)
+    cas("entonnoir sous node · deux étapes égales sont admises (aucune perte)", j.get("egal") is True, "admis",
+        f"{j.get('egal')}", r.stderr)
+    # Pré-rendu : idempotent, et la page rendue par la voie fichier garde un seul rendu.
+    tmp = Path(captures) / "entonnoir-injecte.html"
+    shutil.copyfile(FIXTURES / "entonnoir.html", tmp)
+    versions = []
+    for _ in range(2):
+        subprocess.run(["node", asset, "--injecter", str(tmp)], capture_output=True, text=True, encoding="utf-8")
+        versions.append(tmp.read_text(encoding="utf-8"))
+    cas("entonnoir --injecter · idempotent, un seul rendu dans le fichier",
+        versions[0] == versions[1] and versions[0].count("<!--entonnoir-rendu-->") == 1,
+        "même contenu, un rendu", f"{versions[0] == versions[1]}, {versions[0].count('<!--entonnoir-rendu-->')} rendu(s)")
+    shutil.rmtree(captures, ignore_errors=True)
+    return out
+
+
+def run_format_a4():
+    """TF-1882 (RT-1, lot Produit-84 20261016a) — `check_format_a4.py` compte les pages dans les conditions du lecteur.
+
+    Une fiche demandée « sur une page A4 » passait check_html, render_page et run-oracles-design, mesurait 374 mm à
+    l'écran et sortait sur 2 pages imprimée. Trois fixtures, jouées dans les deux sens :
+      · VERTE `format-a4-une-page.html` : une page dans les quatre conditions d'impression, moins de 297 mm à l'écran ;
+      · ROUGE `format-a4-regle-mobile-sans-screen.html` : la même fiche, la règle de petit écran écrite sans `screen` —
+        elle tient à l'écran et dans la condition « marges de la page », sort sur 2 pages avec les marges de 10 mm, de
+        0,4 pouce et de 15 mm : l'échec est nommé, et c'est le bon (aucun échec d'écran) ;
+      · ROUGE `format-a4-trop-haute.html` : sans feuille bornée, 478 mm à l'écran aux quatre largeurs et 2 pages.
+    Le défaut du premier mesurage de la session est rejoué : à marges NULLES, la fixture rouge sort sur 1 page, c'est
+    pourquoi aucune condition du script n'est « marges nulles ». Le boilerplate écrit ses règles de petit écran sous
+    `screen` ; l'ancienne forme (sans `screen`) est reconnue par le contrôle statique, sens rouge."""
+    try:
+        import importlib
+        importlib.import_module("playwright.sync_api")
+        importlib.import_module("pymupdf")
+    except ImportError:
+        return None
+    import json as _json
+    out = []
+    outil = Path(__file__).resolve().parent / "check_format_a4.py"
+
+    def cas(nom, ok, attendu, obtenu, detail=""):
+        out.append({"fixture": nom, "verdict": "OK" if ok else "ECHEC", "attendu": attendu,
+                    "obtenu": obtenu, "regle": "TF-1882", "detail": "" if ok else str(detail)[:300]})
+
+    def jouer(cible, *options):
+        r = subprocess.run([sys.executable, "-X", "utf8", str(outil), str(cible), "--output", "json", *options],
+                           capture_output=True, text=True, encoding="utf-8")
+        try:
+            return r.returncode, _json.loads(r.stdout)
+        except Exception:
+            return r.returncode, None
+
+    code, d = jouer(FIXTURES / "format-a4-une-page.html")
+    cas("format-a4-une-page · vert : une page dans les quatre conditions, moins de 297 mm à l'écran",
+        code == 0 and d is not None and d["verdict"] == "PASS" and not d["echecs"], "exit 0, PASS",
+        f"exit {code}, {None if d is None else d['verdict']}", None if d is None else d.get("echecs"))
+    code, d = jouer(FIXTURES / "format-a4-regle-mobile-sans-screen.html")
+    echecs = [] if d is None else d["echecs"]
+    cas("format-a4-regle-mobile-sans-screen · rouge : 2 pages avec les marges de 10 mm, 0,4 pouce et 15 mm",
+        code == 1 and len(echecs) == 3 and all("marges" in e for e in echecs)
+        and any("10 mm" in e for e in echecs) and any("0,4 pouce" in e for e in echecs) and any("15 mm" in e for e in echecs),
+        "exit 1, trois conditions d'impression", f"exit {code}, {echecs}")
+    cas("format-a4-regle-mobile-sans-screen · rouge pour la BONNE raison : rien n'échoue à l'écran",
+        d is not None and not any(e.startswith("écran") for e in echecs)
+        and all(m["ok"] for m in d["mesures"]["ecran"]), "écran PASS aux 4 largeurs", f"{echecs}")
+    code, d = jouer(FIXTURES / "format-a4-trop-haute.html")
+    echecs = [] if d is None else d["echecs"]
+    cas("format-a4-trop-haute · rouge : plus de 297 mm à l'écran aux quatre largeurs, et 2 pages imprimées",
+        code == 1 and sum(e.startswith("écran") for e in echecs) == 4 and any("0,4 pouce" in e for e in echecs),
+        "exit 1, 4 largeurs d'écran + impression", f"exit {code}, {len(echecs)} échec(s)")
+    code, d = jouer(FIXTURES / "format-a4-trop-haute.html", "--sans-ecran")
+    cas("format-a4-trop-haute --sans-ecran · l'écran n'est pas mesuré et le dit au non jugé",
+        code == 1 and d is not None and not d["mesures"]["ecran"]
+        and any("--sans-ecran" in n for n in d["non_juge"]), "exit 1, écran absent, motif écrit",
+        f"exit {code}")
+    code, d = jouer(FIXTURES / "format-a4-introuvable.html")
+    cas("fichier introuvable · SKIP motivé (exit 2), jamais PASS", code == 2 and d is not None and d["verdict"] == "SKIP",
+        "exit 2, SKIP", f"exit {code}, {None if d is None else d['verdict']}")
+    # Le mesurage qui avait menti : à marges nulles, la fixture rouge tient sur une page.
+    from playwright.sync_api import sync_playwright
+    import pymupdf
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix="self-test-a4-") as tmp, sync_playwright() as p:
+        nav = p.chromium.launch()
+        pg = nav.new_page(viewport={"width": 1280, "height": 1080})
+        pg.goto((FIXTURES / "format-a4-regle-mobile-sans-screen.html").as_uri())
+        pg.wait_for_timeout(500)
+        pg.emulate_media(media="print")
+        f = Path(tmp) / "marges-nulles.pdf"
+        pg.pdf(path=str(f), format="A4", print_background=True, margin={k: "0" for k in ("top", "bottom", "left", "right")})
+        n = pymupdf.open(str(f)).page_count
+        nav.close()
+    cas("format-a4-regle-mobile-sans-screen · à marges NULLES elle sort sur 1 page (le mesurage qui avait menti)",
+        n == 1, "1 page", f"{n} page(s)")
+    # Le boilerplate, les composants et l'exemple qui en dérive : aucune règle de petit écran sans `screen`.
+    nues = []
+    fichiers = [c for c in sorted((FIXTURES.parent / "assets").rglob("*"))
+                if c.is_file() and c.suffix in (".html", ".css", ".js")]
+    for chemin in fichiers:
+        nues += [f"{chemin.name}:{n}" for n in regles_petit_ecran_sans_screen(chemin.read_text(encoding="utf-8"))]
+    cas(f"assets/ ({len(fichiers)} fichiers, boilerplate compris) · chaque règle de petit écran est écrite sous `screen`",
+        nues == [], "aucune @media (max-width) sans screen", f"{len(nues)} : {nues[:3]}")
+    rouge = regles_petit_ecran_sans_screen("    @media (max-width: 640px) {\n      .x { display: block; }\n    }")
+    vert = regles_petit_ecran_sans_screen("    @media screen and (max-width: 640px) {\n      .x { display: block; }\n    }")
+    cas("contrôle statique · sens rouge reconnu (forme d'avant correctif), sens vert muet",
+        len(rouge) == 1 and vert == [], "rouge 1, vert 0", f"rouge {len(rouge)}, vert {len(vert)}")
+    rouge_min = regles_petit_ecran_sans_screen("  @media (min-width: 1100px) {\n    .x { display: grid; }\n  }")
+    vert_min = regles_petit_ecran_sans_screen("  @media screen and (min-width: 1100px) {\n    .x { display: grid; }\n  }")
+    cas("contrôle statique · `min-width` aussi : sens rouge reconnu, sens vert muet (TF-1895)",
+        len(rouge_min) == 1 and vert_min == [], "rouge 1, vert 0", f"rouge {len(rouge_min)}, vert {len(vert_min)}")
+    # TF-1895 (D-41 (a), 19/10/2026) — le skill de schémas écrivait neuf règles de largeur sans `screen`, dans cinq
+    # fichiers (trois cités, deux trouvés au recompte). Le même contrôle juge ses assets et ses références.
+    schemas = FIXTURES.parent.parent / "factory-schemas"
+    if not schemas.is_dir():
+        cas("factory-schemas introuvable à côté du socle — cas NON JOUÉ, et dit (TF-1895)",
+            True, "non joué", "non joué")
+        return out
+    cibles = [c for c in sorted((schemas / "assets").rglob("*")) if c.is_file() and c.suffix in (".html", ".css", ".js")]
+    cibles += sorted((schemas / "references").glob("*.md"))
+    nues_s = []
+    for chemin in cibles:
+        nues_s += [f"{chemin.name}:{n}" for n in regles_petit_ecran_sans_screen(chemin.read_text(encoding="utf-8"))]
+    cas(f"factory-schemas ({len(cibles)} fichiers : assets/ et references/*.md) · chaque règle de largeur est écrite sous `screen`",
+        nues_s == [], "aucune @media (max-width|min-width) sans screen", f"{len(nues_s)} : {nues_s[:3]}")
+    # Sens rouge sur le VRAI gabarit : la forme d'avant correctif, rétablie en mémoire, est refusée.
+    gabarit_s = (schemas / "assets" / "template-multi-bandes.html").read_text(encoding="utf-8")
+    ancien = gabarit_s.replace("@media screen and (max-width", "@media (max-width")
+    n_ancien, n_actuel = len(regles_petit_ecran_sans_screen(ancien)), len(regles_petit_ecran_sans_screen(gabarit_s))
+    cas("factory-schemas · template-multi-bandes.html rétabli sans `screen` (sens rouge) : refusé ; la version actuelle passe",
+        ancien != gabarit_s and n_ancien >= 1 and n_actuel == 0, "rouge ≥ 1, vert 0", f"rouge {n_ancien}, vert {n_actuel}")
+    return out
+
+
+RE_MEDIA_LARGEUR_NUE = re.compile(r"@media\s*\(\s*(?:max|min)-width\b", re.I)
+
+
+def regles_petit_ecran_sans_screen(texte):
+    """TF-1882 — les `@media (max-width: …)` et `@media (min-width: …)` écrites sans `screen` : elles se déclenchent aussi
+    à l'impression, où la largeur imprimable d'un A4 vaut ~698 px (TF-1895 : `min-width` rejoint `max-width`, le skill
+    de schémas en écrivait une). Liste de numéros de ligne."""
+    return [i for i, ligne in enumerate(texte.splitlines(), 1) if RE_MEDIA_LARGEUR_NUE.search(ligne)]
+
+
+def run_classe_source_machine():
+    """TF-1589 (RT-115) — la classe d'artefact `source-machine`, jouée dans ses deux sens.
+
+    La même page de livret (lue par un agent d'ingestion) ÉCHOUE sous `page-lue` sur L7 et L25 et
+    s'avertit sur le .contenu de L30 ; sous `source-machine`, demandée ou déclarée, elle PASSE.
+    La page à vrais défauts échoue encore sur A2 et G1 malgré la classe, et le dénominateur de
+    couverture de L30 reste jugé. Le périmètre de non-mesure NOMME les règles retirées.
+    """
+    out = []
+    PREF = ("L7 ", "L25 ", "L30 (chapitre) #")
+
+    def lire(nom):
+        return (FIXTURES / nom).read_text(encoding="utf-8")
+
+    def cas(nom, tenu, attendu, obtenu):
+        out.append({"fixture": nom, "verdict": "OK" if tenu else "ECHEC", "attendu": attendu,
+                    "obtenu": obtenu, "regle": "TF-1589 classe source-machine", "detail": ""})
+
+    f, w = check(lire("source-machine-livret.html"))
+    vus = sorted(codes(f) & {"L7", "L25"})
+    w30 = [x for x in w if x.startswith("L30 (chapitre) #")]
+    cas("source-machine-livret.html (page-lue, défaut)", vus == ["L25", "L7"] and len(w30) == 4,
+        "ROUGE : L7 + L25 en échec, 4 avertissements L30 .contenu", f"{vus}, {len(w30)} L30")
+
+    f, w = check(lire("source-machine-livret.html"), classe="source-machine")
+    retires = [x for x in f + w if x.startswith(PREF)]
+    cas("source-machine-livret.html (--classe=source-machine)", not f and not retires,
+        "VERTE : 0 échec, aucun L7 / L25 / L30 .contenu", f"{len(f)} échec(s), {len(retires)} retiré(s) restant(s)")
+
+    f, w = check(lire("source-machine-declaree.html"))
+    cas("source-machine-declaree.html (meta classe-artefact)", not f,
+        "VERTE : la classe déclarée par la page suffit", f"{len(f)} échec(s) : {codes(f)}")
+
+    f, _ = check(lire("source-machine-declaree.html"), classe="page-lue")
+    vus = sorted(codes(f) & {"L7", "L25"})
+    cas("source-machine-declaree.html (--classe=page-lue)", vus == ["L25", "L7"],
+        "ROUGE : la ligne de commande prime sur la déclaration", str(vus))
+
+    f, _ = check(lire("source-machine-vrai-defaut.html"))
+    obtenu = sorted(codes(f, RE_CODE_AG) | codes(f))
+    cas("source-machine-vrai-defaut.html (classe déclarée)", obtenu == ["A2", "G1"],
+        "ROUGE : A2 + G1 en échec, et rien d'autre", str(obtenu))
+
+    f, w = check(lire("l30-couverture-muette.html"), regles="L", classe="source-machine")
+    f30 = [x for x in f if x.startswith("L30 (couverture)")]
+    w30 = [x for x in w if x.startswith("L30 (couverture)")]
+    cas("l30-couverture-muette.html (--classe=source-machine)", len(f30) == 3 and len(w30) == 1,
+        "ROUGE : dénominateur de couverture L30 toujours jugé (3 FAIL / 1 WARN)",
+        f"{len(f30)} FAIL / {len(w30)} WARN")
+
+    inconnue = lire("source-machine-declaree.html").replace(
+        'content="source-machine"', 'content="source-machin"')
+    f, w = check(inconnue)
+    signale = any(x.startswith("classe d'artefact inconnue") for x in w)
+    cas("classe déclarée inconnue (faute de frappe)", signale and "L7" in codes(f),
+        "ROUGE : avertie, et jugée en page-lue", f"avertie={signale}, L7={'L7' in codes(f)}")
+
+    outil = Path(__file__).resolve().parent / "check_html.py"
+    for options, attendu in ((["--classe=source-machine"], True), ([], False)):
+        r = subprocess.run([sys.executable, "-X", "utf8", str(outil),
+                            str(FIXTURES / "source-machine-livret.html"), "--output", "json",
+                            "--sans-style", *options],
+                           capture_output=True, text=True, encoding="utf-8", timeout=120)
+        try:
+            j = json.loads(r.stdout)
+            note = [n for n in j["non_juge"] if n.startswith("CLASSE D'ARTEFACT source-machine")]
+            nomme = bool(note) and all(c in note[0] for c in ("L7", "L25", "L30"))
+            tenu = nomme == attendu and (j["verdict"] == "PASS") == attendu
+            obtenu = f"verdict {j['verdict']}, règles nommées au non_juge : {nomme}"
+        except Exception as e:                   # noqa: BLE001
+            tenu, obtenu = False, f"sortie JSON illisible : {e}"
+        cas(f"source-machine-livret.html CLI {' '.join(options) or '(sans classe)'}", tenu,
+            f"non_juge {'nomme' if attendu else 'ne nomme pas'} L7 / L25 / L30", obtenu)
+    return out
+
+
+def run_matrice_etats():
+    """TF-0493 (23/08/2026) — LA MATRICE D'ETATS, et les deux defauts qu'un client a trouves.
+
+    Les deux etaient reproductibles en deux clics, et invisibles au rendu par defaut :
+      (1) le panneau de filtre CREE un ascenseur horizontal a l'ouverture ;
+      (2) le bouton « Aucun » DETRUIT l'affichage, sans un mot.
+    `--etats-ouverts` existait et avait ete utilise : il ouvre le PREMIER panneau et ne produit
+    aucun etat d'echec. Or c'est la que les composants cassent, parce que personne ne les
+    regarde.
+
+    LE CAS QUI PORTE LA DEMONSTRATION est le panneau debordant : la MEME page rend 0 constat sur
+    « filtre-premiere-colonne » et 2 sur « filtre-derniere-colonne ». Un panneau ne deborde pas
+    du meme cote a droite qu'a gauche — ouvrir le premier ne prouve donc rien du dernier, et
+    c'est exactement ce que faisait l'ancienne option.
+    """
+    try:
+        import importlib
+        importlib.import_module("playwright.sync_api")
+    except ImportError:
+        return None
+    import tempfile
+    rendu = str(Path(__file__).resolve().parent / "render_page.py")
+    captures = tempfile.mkdtemp(prefix="self-test-matrice-")
+    # fixture -> etat -> (famille, compte attendu)
+    CAS = {
+        "mat-aucun-muet.html": {"filtre-sans-resultat": ("etat_muet", 1)},
+        "mat-aucun-annonce.html": {"filtre-sans-resultat": ("etat_muet", 0)},
+        # TF-1618 (RA-1) : le tableau dort dans un onglet MASQUE. L'etat ouvre l'onglet d'abord ;
+        # la verte annonce (0), la rouge reste muette (1) — ouvrir l'onglet ne tait pas le defaut.
+        "mat-onglet-masque-annonce.html": {"filtre-sans-resultat": ("etat_muet", 0)},
+        "mat-onglet-masque-muet.html": {"filtre-sans-resultat": ("etat_muet", 1)},
+        "mat-panneau-deborde.html": {"filtre-derniere-colonne": ("v1_overflow", 2),
+                                     "filtre-premiere-colonne": ("v1_overflow", 0)},
+        "mat-panneau-ancre-droite.html": {"filtre-derniere-colonne": ("v1_overflow", 0)},
+    }
+    out = []
+    for nom, attendus in CAS.items():
+        cible = FIXTURES / nom
+        if not cible.exists():
+            out.append({"fixture": nom, "verdict": "ABSENTE", "attendu": "fixture présente",
+                        "obtenu": "absente", "regle": "matrice d états", "detail": ""})
+            continue
+        r = subprocess.run([sys.executable, "-X", "utf8", rendu, str(cible), "--widths", "1440",
+                            "--matrice-etats", "--output", "json", "--out", captures],
+                           capture_output=True, text=True, encoding="utf-8")
+        try:
+            etats = json.loads(r.stdout)["breakpoints"]["1440"]["etats"]
+        except Exception:
+            out.append({"fixture": nom, "verdict": "ECHEC", "attendu": "matrice lisible",
+                        "obtenu": "illisible", "regle": "matrice d états",
+                        "detail": (r.stderr or r.stdout or "")[:160]})
+            continue
+        for etat, (famille, attendu) in attendus.items():
+            e = etats.get(etat) or {}
+            if not e.get("applique"):
+                out.append({"fixture": f"{nom} · {etat}", "verdict": "ECHEC",
+                            "attendu": f"état joué ({famille} ×{attendu})",
+                            "obtenu": "NON JOUÉ", "regle": "matrice d états",
+                            "detail": e.get("motif", "état absent de la matrice")})
+                continue
+            n = len(e.get("issues", {}).get(famille, []))
+            ok = (n >= attendu) if attendu else (n == 0)
+            out.append({"fixture": f"{nom} · {etat}", "verdict": "OK" if ok else "ECHEC",
+                        "attendu": attendu, "obtenu": n, "regle": f"{famille} (état)",
+                        "detail": "" if ok else f"{n} constat(s) {famille} dans l état {etat}"})
+    # Un etat NON JOUE se DECLARE : sur une page sans composant, la matrice ne doit pas rendre
+    # « aucun defaut » — ce serait le pire des verdicts. On le verifie sur une fixture nue.
+    nue = FIXTURES / "l2fr-freres-alignes.html"
+    if nue.exists():
+        r = subprocess.run([sys.executable, "-X", "utf8", rendu, str(nue), "--widths", "1440",
+                            "--matrice-etats", "--output", "json", "--out", captures],
+                           capture_output=True, text=True, encoding="utf-8")
+        try:
+            j = json.loads(r.stdout)
+            etats = j["breakpoints"]["1440"]["etats"]
+            joues = [n for n, e in etats.items() if e.get("applique")]
+            declares = [x for x in j.get("non_juge", []) if "NON JOUE" in x]
+            ok = not joues and len(declares) >= 5
+            out.append({"fixture": "page sans composant · tous les états", "verdict": "OK" if ok else "ECHEC",
+                        "attendu": "0 état joué, chacun DÉCLARÉ au non_juge",
+                        "obtenu": f"{len(joues)} joué(s), {len(declares)} déclaré(s)",
+                        "regle": "matrice d états", "detail": ""})
+        except Exception:
+            out.append({"fixture": "page sans composant", "verdict": "ECHEC",
+                        "attendu": "matrice lisible", "obtenu": "illisible",
+                        "regle": "matrice d états", "detail": ""})
+    shutil.rmtree(captures, ignore_errors=True)
+    return out
+
+
+def run_matrice_lignes_detail():
+    """TF-1341 (23/09/2026) — « TOUT DEPLIE » OUVRE LES LIGNES DU COMPOSANT 10, ET LE DIT.
+
+    LE FAIT MESURE. `render_page.py <vue> --widths 1280 --matrice-etats` rendait PASS et un etat
+    « tout-deplie » JOUE, motif « 0 <details> ouvert(s), premier panneau deplie », alors que la
+    vue portait 11 lignes `tr[data-detail]` restees fermees. `--etats-ouverts` avait le meme trou.
+
+    DOUBLE SENS, sur deux fixtures :
+      - VERT (`mat-lignes-detail.html`) : un defaut cache dans une ligne depliable, une trace de
+        2 400 px. Rendu ferme : 0 constat V1, c'est le temoin. Etat « tout-deplie » : joue, 3/3
+        lignes ouvertes, et le debordement MESURE ; `--etats-ouverts` : les memes lignes, le meme
+        debordement. Avant TF-1341, l'etat se disait joue (« 1 <details> ouvert(s) ») et ne
+        voyait rien ;
+      - ROUGE (`mat-lignes-detail-inertes.html`) : des lignes que rien n'ouvre et un declencheur
+        de panneau inerte. L'etat est NON JOUE, son motif compte les lignes restees fermees, et
+        `--etats-ouverts` est declare NON JOUE au non_juge. Avant : le motif du 23/09, mot pour mot.
+    """
+    try:
+        import importlib
+        importlib.import_module("playwright.sync_api")
+    except ImportError:
+        return None
+    import tempfile
+    rendu = str(Path(__file__).resolve().parent / "render_page.py")
+    vert, rouge = "mat-lignes-detail.html", "mat-lignes-detail-inertes.html"
+    out = []
+    absentes = [n for n in (vert, rouge) if not (FIXTURES / n).exists()]
+    for n in absentes:
+        out.append({"fixture": n, "verdict": "ABSENTE", "attendu": "fixture présente",
+                    "obtenu": "absente", "regle": "TF-1341 tout-deplie", "detail": ""})
+    if absentes:
+        return out
+    captures = tempfile.mkdtemp(prefix="self-test-lignes-detail-")
+
+    def juger(nom, drapeau):
+        r = subprocess.run([sys.executable, "-X", "utf8", rendu, str(FIXTURES / nom), "--widths",
+                            "1280", drapeau, "--output", "json", "--out", captures],
+                           capture_output=True, text=True, encoding="utf-8")
+        try:
+            return json.loads(r.stdout)["breakpoints"]["1280"], json.loads(r.stdout), ""
+        except Exception:
+            return None, None, (r.stderr or r.stdout or "")[:160]
+
+    def cas(fixture, tenu, attendu, obtenu, detail):
+        out.append({"fixture": fixture, "verdict": "OK" if tenu else "ECHEC", "attendu": attendu,
+                    "obtenu": obtenu, "regle": "TF-1341", "detail": "" if tenu else detail})
+
+    def v1(issues):
+        return len((issues or {}).get("v1_overflow", []))
+
+    toutes = {"ouvertes": 3, "total": 3}
+    b, _, err = juger(vert, "--matrice-etats")
+    if b is None:
+        cas(f"{vert} · matrice", False, "matrice lisible", "illisible", err)
+    else:
+        e = (b.get("etats") or {}).get("tout-deplie") or {}
+        cas(f"{vert} · rendu fermé (témoin)", v1(b["issues"]) == 0,
+            "0 v1_overflow", v1(b["issues"]),
+            "le rendu fermé voit déjà le débordement : la démonstration tombe")
+        cas(f"{vert} · tout-deplie ouvre et compte les lignes",
+            bool(e.get("applique")) and e.get("lignes_detail") == toutes
+            and "3/3 ligne" in (e.get("motif") or ""),
+            "joué, 3/3 lignes", f"{e.get('applique')} {e.get('lignes_detail')}",
+            f"l'état n'ouvre pas les lignes du composant 10, ou ne le dit pas : {e.get('motif', '')[:120]}")
+        cas(f"{vert} · tout-deplie mesure la ligne ouverte", v1(e.get("issues")) >= 1,
+            ">=1 v1_overflow", v1(e.get("issues")),
+            "le débordement caché dans la ligne C2 n'est pas mesuré dans l'état déplié")
+    b, _, err = juger(vert, "--etats-ouverts")
+    if b is None:
+        cas(f"{vert} · --etats-ouverts", False, "rendu lisible", "illisible", err)
+    else:
+        eo = b.get("etats_ouverts") or {}
+        cas(f"{vert} · --etats-ouverts ouvre les lignes",
+            bool(eo.get("applique")) and eo.get("lignes_detail") == toutes and v1(b["issues"]) >= 1,
+            "3/3 lignes, v1 mesuré", f"{eo.get('lignes_detail')} v1={v1(b['issues'])}",
+            "--etats-ouverts garde le trou de TF-1341 : les lignes restent fermées")
+    b, j, err = juger(rouge, "--matrice-etats")
+    if b is None:
+        cas(f"{rouge} · matrice", False, "matrice lisible", "illisible", err)
+    else:
+        e = (b.get("etats") or {}).get("tout-deplie") or {}
+        declare = any("tout-deplie" in x and "NON JOUE" in x for x in j.get("non_juge", []))
+        cas(f"{rouge} · tout-deplie NON JOUÉ",
+            not e.get("applique") and e.get("lignes_detail") == {"ouvertes": 0, "total": 3}
+            and "0/3 ligne" in (e.get("motif") or "") and declare,
+            "NON JOUÉ, 0/3 dit", f"{e.get('applique')} {e.get('lignes_detail')}",
+            f"un état qui n'ouvre rien se dit encore joué, ou tait les lignes : {e.get('motif', '')[:120]}")
+    b, j, err = juger(rouge, "--etats-ouverts")
+    if b is None:
+        cas(f"{rouge} · --etats-ouverts", False, "rendu lisible", "illisible", err)
+    else:
+        eo = b.get("etats_ouverts") or {}
+        declare = any(x.startswith("etats ouverts NON JOUES") and "0/3 ligne" in x
+                      for x in j.get("non_juge", []))
+        cas(f"{rouge} · --etats-ouverts NON JOUÉ", not eo.get("applique") and declare,
+            "NON JOUÉ au non_juge", f"{eo.get('applique')} déclaré={declare}",
+            "--etats-ouverts mesure la page fermée sans dire qu'il n'a rien ouvert")
+    shutil.rmtree(captures, ignore_errors=True)
+    return out
+
+
+def run_recherche_composants():
+    """TF-1340 (23/09/2026) et TF-1353 (24/09/2026) — LA RECHERCHE ET SES VOISINS, JOUES DANS UN
+    NAVIGATEUR.
+
+    TF-1340. `find-in-page.js` reaffectait `container.innerHTML` a chaque frappe : les attributs
+    survivaient, les ecouteurs des autres composants non. Mesure au navigateur : apres une
+    recherche puis son effacement, un bouton de filtre n'ouvrait plus son panneau (0 au lieu
+    de 1). Le composant enveloppe desormais les noeuds texte trouves et les desenveloppe a la
+    frappe suivante. Trois sequences, chacune sur une page NEUVE : recherche effacee puis filtre,
+    recherche active puis filtre, recherche puis chevron d'une ligne depliable. Et une quatrieme,
+    qui garde l'avenir : une coupure d'hier (le texte decoupe par un surlignage retire) ne doit pas
+    cacher le terme d'aujourd'hui qui l'enjambe — c'est ce que le recollage des textes assure.
+
+    TF-1353. Dans le texte d'un schema SVG, le surlignage etait un <mark> HTML, que SVG ne peint
+    pas : le mot disparaissait du schema pendant la recherche. Le nombre de caracteres PEINTS
+    (`getNumberOfChars`) doit etre le meme avant, pendant et apres, et l'enveloppe est un <tspan>.
+
+    CHAQUE SONDE PORTE SON SENS ROUGE, joue sur la meme page : le mecanisme d'avant, reproduit a
+    la main (le conteneur reecrit par son propre HTML ; un <mark> HTML pose dans le texte SVG),
+    doit faire tomber la mesure. Sans lui, un 1 ou un nombre constant pourraient venir d'une
+    sonde aveugle.
+
+    Silencieux si playwright est absent : un comportement se mesure dans un navigateur.
+    """
+    try:
+        import importlib
+        importlib.import_module("playwright.sync_api")
+    except ImportError:
+        return None
+    from playwright.sync_api import sync_playwright  # noqa: PLC0415
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from render_page import ensure_browser_path  # noqa: PLC0415
+        ensure_browser_path()
+    except Exception:  # noqa: BLE001 — l'auto-detection du navigateur est un confort, pas un du
+        pass
+
+    nom = "recherche-composants.html"
+    if not (FIXTURES / nom).exists():
+        return [{"fixture": nom, "verdict": "ABSENTE", "attendu": "fixture présente",
+                 "obtenu": "absente", "regle": "TF-1340", "detail": ""}]
+    out = []
+
+    def cas(etiquette, attendu, obtenu, regle):
+        ok = attendu == obtenu
+        out.append({"fixture": f"{nom} · {etiquette}", "verdict": "OK" if ok else "ECHEC",
+                    "attendu": str(attendu)[:120], "obtenu": str(obtenu)[:120], "regle": regle,
+                    "detail": "" if ok else f"attendu {attendu!r}, obtenu {obtenu!r}"[:300]})
+
+    panneaux = ("() => [...document.querySelectorAll('.tf-panel')]"
+                ".filter((p) => !p.hidden && getComputedStyle(p).display !== 'none').length")
+    peints = "() => document.getElementById('legende').getNumberOfChars()"
+    filtre = "#t thead .tf-btn >> nth=0"
+
+    with sync_playwright() as pw:
+        navigateur = pw.chromium.launch()
+        page = navigateur.new_page(viewport={"width": 1280, "height": 900})
+
+        def neuve():
+            page.goto((FIXTURES / nom).resolve().as_uri())
+            page.wait_for_load_state("load")
+            page.wait_for_timeout(100)
+
+        def section(etiquette, regle, fn):
+            """Une section qui LEVE est un composant en echec, pas un banc casse."""
+            try:
+                fn()
+            except Exception as erreur:  # noqa: BLE001 — toute panne se compte, aucune n'arrete
+                out.append({"fixture": f"{nom} · {etiquette}", "verdict": "ECHEC",
+                            "attendu": "section jouee", "obtenu": type(erreur).__name__,
+                            "regle": regle, "detail": str(erreur).splitlines()[0][:300]})
+
+        def filtre_apres_effacement():
+            neuve()
+            page.fill("#find", "lot")
+            page.fill("#find", "")
+            page.click(filtre)
+            cas("recherche effacée puis filtre : panneau ouvert", 1, page.evaluate(panneaux),
+                "TF-1340")
+
+        def filtre_pendant_recherche():
+            neuve()
+            page.fill("#find", "lot")
+            page.click(filtre)
+            cas("recherche active puis filtre : panneau ouvert", 1, page.evaluate(panneaux),
+                "TF-1340")
+
+        def chevron_pendant_recherche():
+            neuve()
+            page.fill("#find", "lot")
+            page.click("button[aria-controls='det-1']")
+            cas("recherche puis chevron : la ligne s'ouvre", True,
+                page.evaluate("() => !document.getElementById('det-1').hidden"), "TF-1340")
+
+        def temoin_reecriture():
+            neuve()
+            page.evaluate("() => { const z = document.getElementById('zone');"
+                          " z.innerHTML = z.innerHTML; }")
+            page.click(filtre)
+            cas("témoin : conteneur RÉÉCRIT, le filtre n'ouvre plus rien (sens rouge)", 0,
+                page.evaluate(panneaux), "TF-1340 contre-épreuve")
+
+        def coupure_recollee():
+            neuve()
+            page.fill("#find", "schema")
+            page.fill("#find", "")
+            page.fill("#find", "schema de la")
+            cas("une coupure d'hier ne cache pas le terme qui l'enjambe", "1 occurrence",
+                page.evaluate("() => document.getElementById('findCount').textContent"),
+                "TF-1340")
+
+        def svg_peint():
+            neuve()
+            avant = page.evaluate(peints)
+            page.fill("#find", "schema")
+            pendant = page.evaluate(peints)
+            enveloppes = page.evaluate(
+                "() => ({ tspan: document.querySelectorAll('#schema tspan.find-hit').length,"
+                " mark: document.querySelectorAll('#schema mark').length })")
+            page.fill("#find", "")
+            apres = page.evaluate(peints)
+            cas("caractères peints du schéma avant / pendant / après", [avant, avant, avant],
+                [avant, pendant, apres], "TF-1353")
+            cas("le surlignage du schéma est un tspan, jamais un mark", {"tspan": 1, "mark": 0},
+                enveloppes, "TF-1353")
+
+        def temoin_mark_svg():
+            neuve()
+            avant = page.evaluate(peints)
+            apres = page.evaluate(
+                "() => { const t = document.getElementById('legende'); const n = t.firstChild;"
+                " const i = n.nodeValue.indexOf('schéma'); const mot = n.splitText(i);"
+                " mot.splitText(6); const mk = document.createElement('mark');"
+                " mk.textContent = mot.nodeValue; t.replaceChild(mk, mot);"
+                " return t.getNumberOfChars(); }")
+            cas("témoin : un mark HTML dans le texte SVG fait tomber les caractères peints "
+                "(sens rouge)", True, apres < avant, "TF-1353 contre-épreuve")
+
+        def phrase_coupee():
+            neuve()
+            texte = "() => document.getElementById('phrases').textContent"
+            avant = page.evaluate(texte)
+            page.fill("#find", "application laissée arrêtée")
+            cas("une phrase coupée par strong, code et lien se trouve (4 dans le texte)",
+                "4 occurrences",
+                page.evaluate("() => document.getElementById('findCount').textContent"),
+                "TF-1342")
+            cas("une occurrence à cheval pose une enveloppe par nœud traversé, texte intact",
+                [7, avant],
+                [page.evaluate("() => document.querySelectorAll('#phrases mark.find-hit').length"),
+                 page.evaluate(texte)],
+                "TF-1342")
+            page.fill("#find", "")
+            cas("la recherche effacée rend le paragraphe sans enveloppe", 0,
+                page.evaluate("() => document.querySelectorAll('#phrases mark').length"),
+                "TF-1342")
+
+        def temoin_noeud_par_noeud():
+            neuve()
+            n = page.evaluate(
+                "() => { const re = window.FactoryFindInPage.buildRegex('application laissée "
+                "arrêtée'); const w = document.createTreeWalker(document.getElementById('phrases'),"
+                " NodeFilter.SHOW_TEXT); let n, c = 0; while ((n = w.nextNode())) {"
+                " c += (n.nodeValue.match(re) || []).length; } return c; }")
+            cas("témoin : le motif appliqué nœud texte par nœud texte n'en trouve qu'une "
+                "(sens rouge)", 1, n, "TF-1342 contre-épreuve")
+
+        section("recherche effacée puis filtre", "TF-1340", filtre_apres_effacement)
+        section("recherche active puis filtre", "TF-1340", filtre_pendant_recherche)
+        section("recherche puis chevron", "TF-1340", chevron_pendant_recherche)
+        section("témoin réécriture", "TF-1340 contre-épreuve", temoin_reecriture)
+        section("coupure recollée", "TF-1340", coupure_recollee)
+        section("schéma SVG", "TF-1353", svg_peint)
+        section("témoin mark SVG", "TF-1353 contre-épreuve", temoin_mark_svg)
+        section("phrase coupée par le balisage", "TF-1342", phrase_coupee)
+        section("témoin nœud par nœud", "TF-1342 contre-épreuve", temoin_noeud_par_noeud)
+        navigateur.close()
+    return out
+
+def run_mesure_prete():
+    """TF-1093 (20/09/2026) — LA MESURE SE PUBLIE PRETE, JAMAIS EN GABARIT.
+
+    LE FAIT, trouve en branchant les croisements chez forge-tests. `MEASURE_JS` porte des jetons
+    (`__ALIGN_TOL__`, `__L2_MIN_VIEWPORT__`…) que `run()` remplacait chez lui. Un consommateur
+    qui importe le module pour ne PAS recopier la formule — c'est exactement ce que fait le pan
+    `contraste`/`plancher` de forge-tests — recevait le GABARIT, et son evaluation levait
+    `ReferenceError: __ALIGN_TOL__ is not defined`. Cote consommateur, la levee devenait un
+    motif par route (« visitee mais non mesuree ») : un pan qui ne mesure plus rien, sans que
+    le mot « panne » soit prononce nulle part.
+
+    DOUBLE SENS : la constante brute PORTE ses jetons (sinon ce cas ne prouve rien), et ce que
+    la porte publique rend n'en porte AUCUN.
+    """
+    import re
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import render_page as rp  # noqa: PLC0415
+    out = []
+    for nom, fn, brut in (("mesure_js (V1/V2/V4/L2)", rp.mesure_js, rp.MEASURE_JS),
+                          ("mesure_large_js (V18)", rp.mesure_large_js, rp.MESURE_LARGE_JS)):
+        jetons_brut = sorted(set(re.findall(r"__[A-Z0-9_]+__", brut)))
+        out.append({"fixture": f"{nom} · le gabarit porte ses jetons (sens rouge)",
+                    "verdict": "OK" if jetons_brut else "ECHEC",
+                    "attendu": "au moins 1 jeton dans la constante brute",
+                    "obtenu": len(jetons_brut), "regle": "TF-1093 mesure prete",
+                    "detail": "" if jetons_brut else "sans jeton, ce cas ne prouve rien"})
+        restants = sorted(set(re.findall(r"__[A-Z0-9_]+__", fn())))
+        out.append({"fixture": f"{nom} · la mesure publiee n'en porte aucun",
+                    "verdict": "OK" if not restants else "ECHEC",
+                    "attendu": 0, "obtenu": len(restants), "regle": "TF-1093 mesure prete",
+                    "detail": "" if not restants else
+                              f"jetons non remplaces : {', '.join(restants)} — cette mesure "
+                              "leve dans un navigateur"})
+    return out
+
+
+def run_instance_servie():
+    """TF-1093 (20/09/2026) — CE QUI NE SE VOIT QUE SUR UNE INSTANCE SERVIE, ET LES CROISEMENTS.
+
+    Restes archives de TF-0480 et TF-0493 : les controles visuels et d'interaction n'etaient
+    JAMAIS joues sur une instance servie, et la matrice d'etats ne pose qu'UN filtre a la fois.
+    Deux trous, deux sens rouges, et un banc qui sert lui-meme ses fixtures.
+
+    LE BANC SERT SES FIXTURES. Un serveur HTTP de la bibliotheque standard, sur 127.0.0.1 et sur
+    un port LIBRE choisi par le systeme (aucun port en dur, aucune collision avec une autre
+    session), enracine sur le dossier des fixtures, arrete en `finally`. Aucune dependance
+    nouvelle, aucun acces reseau exterieur.
+
+    LES QUATRE CELLULES DU PREMIER SENS ROUGE. `servi-actif-absolu.html` reference sa feuille en
+    chemin ABSOLU (`/servi-actif-absolu.css`) :
+      - sur FICHIER : la feuille ne resout pas, rien ne deborde, PASS. C'est le trou.
+      - SERVIE : la feuille charge, le bandeau deborde, FAIL sur V1.
+    Et sa corrigee passe des DEUX cotes — sans elle, la regle pourrait n'etre qu'un refus
+    systematique des feuilles en chemin absolu.
+
+    LES TROIS CELLULES DU SECOND. `paires-croisement-muet.html` annonce le vide quand une facette
+    est entierement decochee, et se TAIT quand l'intersection de deux facettes est vide :
+      - `--matrice-etats` seule : PASS. C'est la preuve que le trou existait.
+      - `--matrice-paires` : FAIL, au moins un `etat_muet` sur un croisement.
+      - la meme page corrigee : PASS, zero `etat_muet`.
+
+    ET LA BORNE SE DIT. La couverture (« N paires jouees sur M possibles ») est exigee dans la
+    sortie machine : une borne tue n'est pas une borne.
+
+    Silencieux si playwright est absent : une instance servie se juge dans un navigateur.
+    """
+    try:
+        import importlib
+        importlib.import_module("playwright.sync_api")
+    except ImportError:
+        return None
+    import functools
+    import http.server
+    import socketserver
+    import tempfile
+    import threading
+
+    rendu = str(Path(__file__).resolve().parent / "render_page.py")
+    captures = tempfile.mkdtemp(prefix="self-test-servi-")
+    out = []
+
+    def juger(cible, options):
+        r = subprocess.run([sys.executable, "-X", "utf8", rendu, cible, "--widths", "1440",
+                            "--output", "json", "--out", captures] + options,
+                           capture_output=True, text=True, encoding="utf-8")
+        try:
+            return json.loads(r.stdout), r
+        except Exception:
+            return None, r
+
+    def compte(rapport, famille):
+        """Les constats d'une famille, etat au repos + etats + croisements confondus."""
+        n = 0
+        for data in (rapport.get("breakpoints") or {}).values():
+            n += len(((data.get("issues") or {}).get(famille)) or [])
+            for e in (data.get("etats") or {}).values():
+                n += len(((e.get("issues") or {}).get(famille)) or [])
+            for c in ((data.get("paires") or {}).get("combinaisons") or {}).values():
+                n += len(((c.get("issues") or {}).get(famille)) or [])
+        return n
+
+    def cas(nom, tenu, attendu, obtenu, regle, detail=""):
+        out.append({"fixture": nom, "verdict": "OK" if tenu else "ECHEC", "attendu": attendu,
+                    "obtenu": obtenu, "regle": regle, "detail": "" if tenu else detail})
+
+    class BancHTTP(socketserver.ThreadingTCPServer):
+        allow_reuse_address = True
+        daemon_threads = True
+
+    class Silencieux(http.server.SimpleHTTPRequestHandler):
+        def log_message(self, *_a):   # le banc n'imprime pas le journal d'acces du serveur
+            pass
+
+    srv = BancHTTP(("127.0.0.1", 0),
+                   functools.partial(Silencieux, directory=str(FIXTURES)))
+    port = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{port}"
+    try:
+        # ---- 1. le defaut qui n'existe QUE servi -----------------------------------------
+        for nom, servi_attendu in (("servi-actif-absolu.html", 1),
+                                   ("servi-actif-corrige.html", 0)):
+            if not (FIXTURES / nom).exists():
+                cas(nom, False, "fixture presente", "absente", "instance servie")
+                continue
+            jf, rf = juger(str(FIXTURES / nom), [])
+            js_, rs = juger(f"{base}/{nom}", [])
+            if jf is None or js_ is None:
+                cas(nom, False, "rapport lisible", "illisible", "instance servie",
+                    ((rf.stderr if jf is None else rs.stderr) or "")[:160])
+                continue
+            vf, vs = compte(jf, "v1_overflow"), compte(js_, "v1_overflow")
+            cas(f"{nom} · sur FICHIER", vf == 0, "0 V1 (feuille absolue non resolue)", vf,
+                "instance servie", f"{vf} constat(s) V1 sur file:// — la feuille a resolu ?")
+            cas(f"{nom} · SERVIE", (vs >= 1) if servi_attendu else (vs == 0),
+                f"{'>=1' if servi_attendu else '0'} V1 une fois servie", vs,
+                "instance servie",
+                f"{vs} constat(s) V1 servie, attendu {'au moins 1' if servi_attendu else '0'}")
+            cas(f"{nom} · origine declaree", js_.get("servie") is True
+                and any("INSTANCE SERVIE" in x for x in js_.get("non_juge", [])),
+                "verdict servi DECLARE au non juge", js_.get("servie"),
+                "instance servie", "un verdict servi qui ne se declare pas se lit comme un "
+                                   "verdict sur fichier")
+            cas(f"{nom} · file:// declare", jf.get("servie") is False
+                and any("file://" in x for x in jf.get("non_juge", [])),
+                "verdict fichier DECLARE au non juge", jf.get("servie"),
+                "instance servie", "un PASS sur fichier doit dire qu'il ne juge pas le servi")
+
+        # ---- 2. les croisements, et le trou qu'ils ferment --------------------------------
+        for nom, muets_attendus in (("paires-croisement-muet.html", 1),
+                                    ("paires-croisement-annonce.html", 0)):
+            if not (FIXTURES / nom).exists():
+                cas(nom, False, "fixture presente", "absente", "filtres croises")
+                continue
+            sans, rsa = juger(f"{base}/{nom}", ["--matrice-etats"])
+            avec, rav = juger(f"{base}/{nom}", ["--matrice-paires"])
+            if sans is None or avec is None:
+                cas(nom, False, "rapport lisible", "illisible", "filtres croises",
+                    ((rsa.stderr if sans is None else rav.stderr) or "")[:160])
+                continue
+            # Le trou : la matrice UNITAIRE ne voit rien, sur la fixture rouge comme sur la verte.
+            m_sans = compte(sans, "etat_muet")
+            cas(f"{nom} · matrice unitaire seule", m_sans == 0,
+                "0 etat_muet (aucun etat ne croise deux filtres)", m_sans, "filtres croises",
+                "la matrice unitaire voit deja le croisement : la demonstration du trou tombe")
+            m_avec = compte(avec, "etat_muet")
+            cas(f"{nom} · croisements par paires",
+                (m_avec >= 1) if muets_attendus else (m_avec == 0),
+                f"{'>=1' if muets_attendus else '0'} etat_muet sur un croisement", m_avec,
+                "filtres croises",
+                f"{m_avec} constat(s) etat_muet, attendu "
+                f"{'au moins 1' if muets_attendus else '0'}")
+            cas(f"{nom} · verdict", avec.get("verdict") == ("FAIL" if muets_attendus else "PASS"),
+                "FAIL" if muets_attendus else "PASS", avec.get("verdict"), "filtres croises")
+            # LA BORNE SE DIT : couverture chiffree, jamais un plafond silencieux.
+            p = (avec.get("breakpoints", {}).get("1440", {}) or {}).get("paires") or {}
+            dit = any("paire(s) jouee(s) sur" in x for x in avec.get("non_juge", []))
+            cas(f"{nom} · couverture affichee",
+                bool(p) and p.get("possibles", 0) > 0 and dit,
+                "« N paires jouees sur M possibles » au rapport",
+                f"{p.get('jouees')}/{p.get('possibles')}, declaree={dit}", "filtres croises",
+                "un plafond qui ne publie pas son total est une borne silencieuse")
+
+        # ---- 3. une origine non locale ne s'ouvre pas sans drapeau ------------------------
+        r = subprocess.run([sys.executable, "-X", "utf8", rendu, "https://exemple.invalid/p.html"],
+                           capture_output=True, text=True, encoding="utf-8")
+        refus = (r.stderr or "") + (r.stdout or "")
+        cas("origine non locale · sans drapeau", r.returncode != 0 and "NON LOCALE" in refus,
+            "refus nomme, aucune page ouverte", r.returncode, "instance servie",
+            f"code {r.returncode} — {refus.strip()[:160]}")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+        shutil.rmtree(captures, ignore_errors=True)
+    return out
+
+
+def run_mire_a_son_action():
+    """TF-2433 (retour Produit-82 20261110a, RT-21) — UNE MIRE SE RECONNAIT A SON ACTION.
+
+    `MIRE_JS` ne prend plus pour une mire tout ecran qui porte un champ mot de passe visible :
+    il juge le formulaire qui le porte. Ce banc joue la sonde sur des formulaires courts, un
+    cas par signal, chacun avec la reponse attendue ; les deux premiers sont le sens rouge
+    (une connexion, reconnue) et le defaut d'origine (un changement de mot de passe, refuse).
+    """
+    try:
+        import importlib
+        importlib.import_module("playwright.sync_api")
+    except ImportError:
+        return None
+    from playwright.sync_api import sync_playwright  # noqa: PLC0415
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import render_page as rp  # noqa: PLC0415
+    ID = '<input name="id" type="text" autocomplete="username">'
+    cas_ = [
+        ("connexion · action /connexion, identifiant et mot de passe", True,
+         f'<form action="/connexion">{ID}<input type="password" autocomplete="current-password">'
+         '<button>Se connecter</button></form>'),
+        ("changement · trois champs, action /espace/mot-de-passe (le defaut d'origine)", False,
+         '<form action="/espace/mot-de-passe"><input type="password" autocomplete="current-password">'
+         '<input type="password" autocomplete="new-password"><input type="password" '
+         'autocomplete="new-password"><button>Enregistrer</button></form>'),
+        ("creation de compte · deux champs mot de passe, action /inscription", False,
+         f'<form action="/inscription">{ID}<input type="password"><input type="password">'
+         '<button>Creer le compte</button></form>'),
+        ("reinitialisation · un seul champ new-password, action /reinitialiser-mot-de-passe", False,
+         '<form action="/reinitialiser-mot-de-passe"><input type="password" autocomplete="new-password">'
+         '<button>Valider</button></form>'),
+        ("un champ mot de passe seul, aucun indice d'ouverture de session", False,
+         '<form action="/profil"><input type="password"><button>Valider</button></form>'),
+        ("page a formulaire sans balise form · bouton Connexion et identifiant", True,
+         '<div><input name="email" type="email"><input type="password"><button>Connexion</button></div>'),
+        ("champ mot de passe masque (display:none) dans une connexion", False,
+         '<form action="/connexion"><input type="password" style="display:none"></form>'),
+        ("action /connexion/mot-de-passe : la connexion prime sur le mot de passe", True,
+         '<form action="/connexion/mot-de-passe"><input type="password" autocomplete="current-password">'
+         '<button>Entrer</button></form>'),
+    ]
+    out = []
+    with sync_playwright() as pw:
+        navigateur = pw.chromium.launch()
+        try:
+            page = navigateur.new_page(viewport={"width": 1280, "height": 900})
+            for nom, attendu, corps in cas_:
+                page.set_content(f"<!DOCTYPE html><html lang='fr'><body>{corps}</body></html>")
+                obtenu = bool(page.evaluate(rp.MIRE_JS))
+                out.append({"fixture": f"mire · {nom}", "verdict": "OK" if obtenu == attendu else "ECHEC",
+                            "attendu": "mire" if attendu else "pas une mire",
+                            "obtenu": "mire" if obtenu else "pas une mire", "regle": "TF-2433",
+                            "detail": "" if obtenu == attendu else
+                            "la sonde de mire ne suit pas l'action du formulaire (TF-2433)"})
+        finally:
+            navigateur.close()
+    return out
+
+
+def run_session_et_theme():
+    """TF-1674 (lot Produit-80 20261012b, RD-1) — UNE APPLICATION CONNECTEE, ET SON THEME SOMBRE.
+
+    LE BANC SERT UNE APPLICATION DERRIERE UNE CONNEXION. Meme serveur que `run_instance_servie`
+    (127.0.0.1, port libre, arrete en finally), avec une seule regle : `/app.html` sert
+    l'application a qui presente le cookie de session du banc, et l'ecran de connexion a tous
+    les autres. L'application porte un debordement V1 ; l'ecran de connexion est sain.
+      - sans --etat-session : l'oracle juge l'ecran de connexion, 0 V1, PASS. C'est le trou.
+      - avec --etat-session : l'application est jugee, au moins 1 V1, FAIL.
+      - la matrice d'etats rejoue chaque etat sur une page rechargee : elle reste DANS la
+        session (au moins 1 V1 sur un etat), au lieu de retomber sur l'ecran de connexion.
+    LE THEME. `theme-sombre-deborde.html` ne deborde que sous prefers-color-scheme: dark : 0 V1
+    sans --theme, au moins 1 avec --theme sombre.
+    LES BORNES. --etat-session est refuse sur un fichier et sur une origine distante, et le
+    rapport DECLARE la session et le theme rendus.
+    """
+    try:
+        import importlib
+        importlib.import_module("playwright.sync_api")
+    except ImportError:
+        return None
+    import functools
+    import http.server
+    import socketserver
+    import tempfile
+    import threading
+
+    rendu = str(Path(__file__).resolve().parent / "render_page.py")
+    tmp = Path(tempfile.mkdtemp(prefix="self-test-session-"))
+    out = []
+    JETON = "jeton-de-banc"
+
+    def juger(cible, options):
+        r = subprocess.run([sys.executable, "-X", "utf8", rendu, cible, "--widths", "1440",
+                            "--output", "json", "--out", str(tmp)] + options,
+                           capture_output=True, text=True, encoding="utf-8")
+        try:
+            return json.loads(r.stdout), r
+        except Exception:
+            return None, r
+
+    def v1(rapport):
+        n = 0
+        for data in (rapport.get("breakpoints") or {}).values():
+            n += len(((data.get("issues") or {}).get("v1_overflow")) or [])
+            for e in (data.get("etats") or {}).values():
+                n += len(((e.get("issues") or {}).get("v1_overflow")) or [])
+        return n
+
+    def cas(nom, tenu, attendu, obtenu, detail=""):
+        out.append({"fixture": nom, "verdict": "OK" if tenu else "ECHEC", "attendu": attendu,
+                    "obtenu": obtenu, "regle": "TF-1674", "detail": "" if tenu else detail})
+
+    class BancHTTP(socketserver.ThreadingTCPServer):
+        allow_reuse_address = True
+        daemon_threads = True
+
+    class Garde(http.server.SimpleHTTPRequestHandler):
+        def log_message(self, *_a):
+            pass
+
+        def do_GET(self):  # noqa: N802 — nom impose par la bibliotheque standard
+            if self.path.split("?")[0] == "/app.html":
+                connecte = ("session=" + JETON) in (self.headers.get("Cookie") or "")
+                self.path = "/session-application.html" if connecte else "/session-connexion.html"
+            return super().do_GET()
+
+    srv = BancHTTP(("127.0.0.1", 0), functools.partial(Garde, directory=str(FIXTURES)))
+    port = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{port}"
+    etat = tmp / "etat-session.json"
+    etat.write_text(json.dumps({"cookies": [{
+        "name": "session", "value": JETON, "domain": "127.0.0.1", "path": "/", "expires": -1,
+        "httpOnly": True, "secure": False, "sameSite": "Lax"}], "origins": []}),
+        encoding="utf-8")
+    try:
+        sans, rs = juger(f"{base}/app.html", [])
+        avec, ra = juger(f"{base}/app.html", ["--etat-session", str(etat)])
+        if sans is None or avec is None:
+            cas("session · rapports", False, "rapports lisibles", "illisible",
+                ((rs.stderr if sans is None else ra.stderr) or "")[:160])
+        else:
+            cas("session · sans --etat-session (le trou)", v1(sans) == 0 and sans["verdict"] == "PASS",
+                "ecran de connexion juge : 0 V1, PASS", f"{v1(sans)} V1, {sans['verdict']}",
+                "sans session, l'oracle devait juger l'ecran de connexion")
+            cas("session · avec --etat-session", v1(avec) >= 1 and avec["verdict"] == "FAIL",
+                "application jugee : >=1 V1, FAIL", f"{v1(avec)} V1, {avec['verdict']}",
+                "la session n'a pas ete chargee : l'application n'est pas jugee")
+            cas("session · declaree au non juge",
+                any("SESSION AUTHENTIFIEE" in x for x in avec.get("non_juge", []))
+                and not any(JETON in x for x in avec.get("non_juge", [])),
+                "session declaree, jeton jamais publie", "voir non_juge",
+                "un verdict connecte doit le dire, sans publier le contenu de la session")
+            # TF-1788 (lot Produit-83 20261015b, RA-4) — la MIRE se reconnait et se dit : sans
+            # session, l'oracle nomme le geste (--etat-session) ; connecte, il n'en dit rien.
+            mire_sans = [x for x in sans.get("non_juge", []) if "MIRE DE CONNEXION" in x]
+            cas("session · mire vue sans --etat-session, geste nomme (TF-1788)",
+                bool(mire_sans) and all("--etat-session" in x for x in mire_sans),
+                "non_juge MIRE DE CONNEXION + --etat-session", f"{len(mire_sans)} ligne(s)",
+                "une mire jugee en silence : le verdict passe pour celui de l'application")
+            cas("session · aucune mire dite une fois connecte (TF-1788)",
+                not any("MIRE DE CONNEXION" in x for x in avec.get("non_juge", [])),
+                "0 ligne MIRE", "voir non_juge", "l'application connectee est prise pour une mire")
+        fichier, rf = juger(str(FIXTURES / "session-connexion.html"), [])
+        mire_f = [] if fichier is None else [x for x in fichier.get("non_juge", [])
+                                             if "MIRE DE CONNEXION" in x]
+        cas("session · mire sur un fichier : servir puis --etat-session (TF-1788)",
+            bool(mire_f) and all("INSTANCE SERVIE" in x and "--etat-session" in x for x in mire_f),
+            "non_juge MIRE + instance servie + --etat-session", f"{len(mire_f)} ligne(s)",
+            (rf.stderr or "")[:160] if fichier is None else "mire non dite en mode fichier")
+        # TF-2433 (retour Produit-82 20261110a, RT-21) — UNE MIRE SE RECONNAIT A SON ACTION. Sens
+        # rouge : `session-connexion.html` (action /connexion) reste une mire. Sens vert : l'ecran
+        # connecte de changement de mot de passe (trois champs, action /espace/mot-de-passe) se
+        # juge comme ecran connecte, sans ligne MIRE. Avant TF-2433, un champ mot de passe visible
+        # suffisait et l'ecran de changement etait pris pour une mire.
+        chg, rchg = juger(str(FIXTURES / "session-changement-mdp.html"), [])
+        mire_chg = [] if chg is None else [x for x in chg.get("non_juge", []) if "MIRE DE CONNEXION" in x]
+        cas("session · l'ecran de changement de mot de passe n'est pas une mire (TF-2433)",
+            chg is not None and not mire_chg and chg.get("verdict") == "PASS",
+            "0 ligne MIRE, ecran juge (PASS)",
+            (rchg.stderr or "")[:160] if chg is None else f"{len(mire_chg)} ligne(s) MIRE, {chg.get('verdict')}",
+            "l'ecran connecte de changement de mot de passe est pris pour une mire de connexion")
+        sa, rsa = juger(str(FIXTURES / "session-connexion-sans-action.html"), [])
+        mire_sa = [] if sa is None else [x for x in sa.get("non_juge", []) if "MIRE DE CONNEXION" in x]
+        cas("session · une mire sans attribut action reste une mire (TF-2433)",
+            sa is not None and len(mire_sa) == 1,
+            "1 ligne MIRE (bouton Se connecter, identifiant + mot de passe courant)",
+            (rsa.stderr or "")[:160] if sa is None else f"{len(mire_sa)} ligne(s) MIRE",
+            "le resserrement par l'action a fait perdre la mire d'une application a page unique")
+        # L'etat « tout-deplie » recharge la page puis ouvre son <details> : il n'est JOUE que si
+        # le rechargement est reste dans l'application (l'ecran de connexion n'en porte pas), et
+        # ce sont les constats de CET etat qui se comptent, pas ceux de l'etat initial.
+        def v1_etats(rapport):
+            return 0 if rapport is None else sum(
+                len(((e.get("issues") or {}).get("v1_overflow")) or [])
+                for d in (rapport.get("breakpoints") or {}).values()
+                for e in (d.get("etats") or {}).values())
+
+        mat_sans, _ = juger(f"{base}/app.html", ["--matrice-etats"])
+        cas("session · matrice d'etats SANS session (le trou)",
+            mat_sans is not None and v1_etats(mat_sans) == 0,
+            "0 V1 dans les etats (chaque rechargement retombe sur la connexion)",
+            "illisible" if mat_sans is None else f"{v1_etats(mat_sans)} V1 dans les etats",
+            "un etat a ete joue dans l'application sans session : le banc ne garde plus l'acces")
+        # `--etat-connexion` : le nom d'oracle-exploitabilite (forge-design), alias de --etat-session.
+        mat, rm = juger(f"{base}/app.html", ["--etat-connexion", str(etat), "--matrice-etats"])
+        etats_v1 = v1_etats(mat)
+        cas("session · matrice d'etats dans la session", etats_v1 >= 1,
+            ">=1 V1 dans un etat rejoue (le rechargement reste connecte)",
+            "illisible" if mat is None else f"{etats_v1} V1 dans les etats",
+            (rm.stderr or "")[:160] if mat is None else "aucun etat joue dans l'application")
+        clair, rc = juger(f"{base}/theme-sombre-deborde.html", [])
+        sombre, rso = juger(f"{base}/theme-sombre-deborde.html", ["--theme", "sombre"])
+        if clair is None or sombre is None:
+            cas("theme · rapports", False, "rapports lisibles", "illisible",
+                ((rc.stderr if clair is None else rso.stderr) or "")[:160])
+        else:
+            cas("theme · sans --theme (clair)", v1(clair) == 0, "0 V1 (le defaut est sombre)",
+                v1(clair), "la page deborde deja en clair : la fixture ne prouve plus rien")
+            cas("theme · --theme sombre", v1(sombre) >= 1
+                and sombre.get("theme") == "sombre"
+                and any("THEME RENDU : sombre" in x for x in sombre.get("non_juge", [])),
+                ">=1 V1, theme sombre declare", f"{v1(sombre)} V1, {sombre.get('theme')}",
+                "le schema sombre n'a pas ete rendu, ou pas declare")
+        # Un theme sombre porte par l'ATTRIBUT data-theme (bascule de l'application), joue avec
+        # l'alias `--theme dark` d'oracle-exploitabilite.
+        a_clair, rac = juger(f"{base}/theme-attribut-sombre.html", [])
+        a_sombre, ras = juger(f"{base}/theme-attribut-sombre.html", ["--theme", "dark"])
+        if a_clair is None or a_sombre is None:
+            cas("theme par attribut · rapports", False, "rapports lisibles", "illisible",
+                ((rac.stderr if a_clair is None else ras.stderr) or "")[:160])
+        else:
+            cas("theme par attribut · sans --theme", v1(a_clair) == 0, "0 V1 (sans data-theme)",
+                v1(a_clair), "la page deborde sans l'attribut : la fixture ne prouve plus rien")
+            cas("theme par attribut · --theme dark (alias)",
+                v1(a_sombre) >= 1 and a_sombre.get("theme") == "sombre",
+                ">=1 V1, data-theme pose, theme sombre declare",
+                f"{v1(a_sombre)} V1, {a_sombre.get('theme')}",
+                "data-theme n'a pas ete pose avant les scripts, ou l'alias dark n'est pas lu")
+        # TF-1718 (lot Produit-83 20261014a, RA-2) — le theme sombre du SOCLE : clair par defaut,
+        # sombre seulement par le choix du lecteur, relu dans le stockage local par le script
+        # d'initialisation, qui REECRIT data-theme. Avant TF-1718, --theme sombre rendait cette page
+        # claire (0 V1) sur un PASS. Et une page qui impose son theme le DIT au rapport.
+        stocke, rst = juger(f"{base}/theme-choix-stocke-sombre.html", ["--theme", "sombre"])
+        impose, rim = juger(f"{base}/theme-force-clair.html", ["--theme", "sombre"])
+        if stocke is None or impose is None:
+            cas("theme du socle · rapports", False, "rapports lisibles", "illisible",
+                ((rst.stderr if stocke is None else rim.stderr) or "")[:160])
+        else:
+            cas("theme du socle · --theme sombre pose le choix stocke (TF-1718)",
+                v1(stocke) >= 1 and not any("NON RENDU" in x for x in stocke.get("non_juge", [])),
+                ">=1 V1, theme sombre rendu", f"{v1(stocke)} V1",
+                "le script du socle a reecrit data-theme : le sombre n'a pas ete rendu")
+            # TF-1775 (15/10/2026) — le theme demande TIENT face au script de la page : un
+            # observateur remet data-theme a chaque reecriture. La page qui impose le clair est
+            # donc rendue sombre, et la reecriture contree se DIT (« THEME TENU »).
+            non_rendu = any("THEME DEMANDE NON RENDU" in x for x in impose.get("non_juge", []))
+            tenu = any("THEME TENU" in x for x in impose.get("non_juge", []))
+            cas("theme impose par la page · tenu et DIT (TF-1775)", tenu and not non_rendu,
+                "non_juge THEME TENU, aucun THEME DEMANDE NON RENDU",
+                f"tenu {tenu}, non rendu {non_rendu}",
+                "la reecriture de la page l'emporte sur le theme demande, ou passe en silence")
+        cle, rcl = juger(f"{base}/theme-cle-propre-clair.html", ["--theme", "sombre"])
+        if cle is None:
+            cas("theme · cle propre de la page · rapport", False, "rapport lisible", "illisible",
+                (rcl.stderr or "")[:160])
+        else:
+            cas("theme · page qui relit sa propre cle et pose light : sombre rendu (TF-1775)",
+                v1(cle) >= 1 and not any("NON RENDU" in x for x in cle.get("non_juge", []))
+                and any("THEME TENU" in x for x in cle.get("non_juge", [])),
+                ">=1 V1, aucun NON RENDU, THEME TENU dit", f"{v1(cle)} V1",
+                "la page a reecrit data-theme : le sombre n'a pas ete rendu")
+        for nom, cible, options, motif in (
+                ("session · refusee sur un fichier", str(FIXTURES / "session-application.html"),
+                 ["--etat-session", str(etat)], "INSTANCE SERVIE"),
+                ("session · refusee sur une origine distante", "https://exemple.invalid/app.html",
+                 ["--origine-distante", "--etat-session", str(etat)], "NON LOCALE")):
+            r = subprocess.run([sys.executable, "-X", "utf8", rendu, cible] + options,
+                               capture_output=True, text=True, encoding="utf-8")
+            texte = (r.stderr or "") + (r.stdout or "")
+            cas(nom, r.returncode != 0 and motif in texte, "refus nomme", r.returncode,
+                texte.strip()[:160])
+    finally:
+        srv.shutdown()
+        srv.server_close()
+        shutil.rmtree(tmp, ignore_errors=True)
+    return out
+
+
+def run_filtres_runtime():
+    """TF-0768/0769/0781/0782 (02/09/2026) — LE COMPOSANT DE FILTRES, JOUE DANS UN NAVIGATEUR.
+
+    Les quatre defauts remontes par un produit sont des defauts d'EXECUTION : un tri qui range
+    « 1 000 » avant « 250 », une facette de mois rangee par ordre alphabetique, une colonne cle
+    sans facette, un second `init` qui rend `null`. Aucun oracle statique ne peut les voir — le
+    marquage etait juste, c'est le COMPORTEMENT qui etait faux. Ces cas chargent donc l'ASSET
+    REEL (`assets/table-filters.js`) dans Chromium et mesurent ce qu'il fait.
+
+    CHAQUE CAS PORTE SON SENS ROUGE, et deux d'entre eux le portent DANS LA PAGE : la fixture
+    calcule elle-meme l'ordre qu'aurait rendu l'ancienne lecture (parseFloat sur le texte brut,
+    tri alphabetique des valeurs) et le banc EXIGE que l'ordre rendu en differe. Sans cette
+    contre-epreuve, un ordre juste par hasard validerait une regle qui ne tient pas.
+
+    Silencieux si playwright est absent : un comportement se mesure dans un navigateur.
+    """
+    try:
+        import importlib
+        importlib.import_module("playwright.sync_api")
+    except ImportError:
+        return None
+    from playwright.sync_api import sync_playwright  # noqa: PLC0415
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from render_page import ensure_browser_path  # noqa: PLC0415
+        ensure_browser_path()
+    except Exception:  # noqa: BLE001 — l'auto-detection du navigateur est un confort, pas un du
+        pass
+
+    out = []
+
+    def cas(nom, attendu, obtenu, regle):
+        ok = attendu == obtenu
+        out.append({"fixture": nom, "verdict": "OK" if ok else "ECHEC",
+                    "attendu": str(attendu)[:120], "obtenu": str(obtenu)[:120],
+                    "regle": regle,
+                    "detail": "" if ok else f"attendu {attendu!r}, obtenu {obtenu!r}"[:300]})
+
+    def proteger(nom, regle, fn):
+        """Un composant qui LEVE est un composant EN ECHEC, pas un banc casse.
+
+        Mesure du 02/09 : rejoue sur l'asset d'avant correctif, `api.etat()` n'existe pas et
+        l'exception emportait les cas suivants — le banc rendait une trace Playwright au lieu
+        d'un compte. Chaque section porte donc sa garde, et une panne se compte comme un echec
+        nomme."""
+        try:
+            fn()
+        except Exception as erreur:  # noqa: BLE001 — toute panne se compte, aucune n'arrete
+            out.append({"fixture": nom, "verdict": "ECHEC", "attendu": "section jouee",
+                        "obtenu": type(erreur).__name__, "regle": regle,
+                        "detail": str(erreur).splitlines()[0][:300]})
+
+    fichiers = ("tf-tri-milliers.html", "tf-facettes-ordre.html", "tf-etat-rejoue.html",
+                "tf-th-sticky-preserve.html", "tf-valeur-composite.html")
+    manquantes = [n for n in fichiers if not (FIXTURES / n).exists()]
+    for n in manquantes:
+        out.append({"fixture": n, "verdict": "ABSENTE", "attendu": "fixture présente",
+                    "obtenu": "absente", "regle": "filtres (runtime)", "detail": ""})
+    if manquantes:
+        return out
+
+    with sync_playwright() as pw:
+        navigateur = pw.chromium.launch()
+        page = navigateur.new_page(viewport={"width": 1280, "height": 900})
+
+        # ---- TF-0768 : le tri lit une VALEUR, pas un texte formate ----------------------
+        def section_tri():
+            page.goto((FIXTURES / "tf-tri-milliers.html").resolve().as_uri())
+            page.wait_for_load_state("load")
+            page.evaluate("() => document.querySelectorAll('#volumes thead th')[1].click()")
+            rendu = page.evaluate("() => [...document.querySelectorAll('#volumes tbody tr')]"
+                                  ".map(tr => tr.cells[1].textContent.trim())")
+            attendu = page.evaluate(
+                "() => [...document.querySelectorAll('#volumes tbody tr')]"
+                ".map(tr => tr.cells[1].textContent.trim())"
+                ".sort((a, b) => parseFloat(a.replace(/\\s/g, '')) - parseFloat(b.replace(/\\s/g, '')))")
+            cas("tf-tri-milliers · ordre numerique", attendu, rendu, "TF-0768 tri")
+            naif = page.evaluate("() => window.__ordreNaif(1)")
+            cas("tf-tri-milliers · l'ancienne lecture DIFFERE (sens rouge)", True, naif != rendu,
+                "TF-0768 contre-epreuve")
+            page.evaluate("() => document.querySelectorAll('#volumes thead th')[3].click()")
+            debits = page.evaluate("() => [...document.querySelectorAll('#volumes tbody tr')]"
+                                   ".map(tr => tr.cells[3].textContent.trim())")
+            cas("tf-tri-milliers · data-v prime sur le texte",
+                ["un", "deux", "trois", "quatre", "cinq", "six"], debits, "TF-0768 cle declaree")
+
+        proteger("tf-tri-milliers.html", "TF-0768", section_tri)
+
+        # ---- TF-0781 / TF-0782 : ordre des facettes, et facette de la colonne cle -------
+        def section_facettes():
+            page.goto((FIXTURES / "tf-facettes-ordre.html").resolve().as_uri())
+            page.wait_for_load_state("load")
+            mois = page.evaluate("() => [...document.querySelectorAll('#fenetres thead th')[1]"
+                                 ".querySelectorAll('.tf-opts label')].map(l => l.textContent.trim())")
+            cas("tf-facettes-ordre · mois chronologiques",
+                ["août 2025", "déc. 2025", "janv. 2026", "avr. 2026"], mois, "TF-0781 ordre")
+            alpha = page.evaluate("() => window.__ordreAlphabetique(1)")
+            cas("tf-facettes-ordre · l'ordre alphabetique DIFFERE (sens rouge)", True, alpha != mois,
+                "TF-0781 contre-epreuve")
+            cle = page.evaluate("() => { const th = document.querySelectorAll('#fenetres thead th')[0];"
+                                " const p = th.querySelector('.tf-panel');"
+                                " return { bouton: !!th.querySelector('.tf-btn'),"
+                                "          forme: p && p.getAttribute('data-tf-forme'),"
+                                "          valeurs: p ? p.querySelectorAll('.tf-opt').length : 0 }; }")
+            cas("tf-facettes-ordre · la colonne CLE porte sa facette",
+                {"bouton": True, "forme": "liste", "valeurs": 8}, cle, "TF-0782 existence")
+            exempt = page.evaluate("() => { const th = document.querySelectorAll('#fenetres thead th')[3];"
+                                   " const ex = (window.__tf.exemptions || [])[0] || {};"
+                                   " return { bouton: !!th.querySelector('.tf-btn'),"
+                                   "          motif: (ex.motif || '').length > 20,"
+                                   "          colonne: ex.colonne }; }")
+            cas("tf-facettes-ordre · exemption DECLAREE avec motif",
+                {"bouton": False, "motif": True, "colonne": "Référence"}, exempt, "TF-0782 exemption")
+            # TF-1052 : la forme se lit sur le <th> de CHAQUE colonne a facette (et pas sur
+            # l'exemptee) ; TF-1051 : la colonne a valeur unique le DIT dans l'en-tete, sans
+            # clic — et seulement elle (sens rouge : une colonne a plusieurs valeurs n'a rien).
+            formes = page.evaluate("() => [...document.querySelectorAll('#fenetres thead th')]"
+                                   ".map(th => th.getAttribute('data-tf-forme'))")
+            cas("tf-facettes-ordre · data-tf-forme publie sur chaque <th> a facette",
+                ["liste", "liste", "liste", None, "unique"], formes, "TF-1052 forme")
+            unique = page.evaluate("""() => {
+              const ths = document.querySelectorAll('#fenetres thead th');
+              const vue = el => !!el && el.getBoundingClientRect().width > 0
+                                     && getComputedStyle(el).visibility !== 'hidden';
+              return { devise: vue(ths[4].querySelector('.tf-unique')),
+                       ouverts: [...document.querySelectorAll('#fenetres .tf-panel')]
+                                  .filter(p => !p.hidden).length,
+                       autres: [0, 1, 2].filter(i => ths[i].querySelector('.tf-unique')).length };
+            }""")
+            cas("tf-facettes-ordre · valeur unique LISIBLE dans l'en-tete sans clic",
+                {"devise": True, "ouverts": 0, "autres": 0}, unique, "TF-1051 en-tete")
+            refait = page.evaluate("() => { window.__tf.rafraichir();"
+                                   " return document.querySelectorAll('#fenetres thead th')[4]"
+                                   ".querySelectorAll('.tf-unique').length; }")
+            cas("tf-facettes-ordre · la note d'en-tete ne s'empile pas au rafraichissement",
+                1, refait, "TF-1051 rafraichir")
+
+        proteger("tf-facettes-ordre.html", "TF-0781/0782", section_facettes)
+
+        # ---- TF-0769 : l'etat se lit, se rejoue, et survit a un re-rendu ----------------
+        def section_etat():
+            page.goto((FIXTURES / "tf-etat-rejoue.html").resolve().as_uri())
+            page.wait_for_load_state("load")
+            vu = page.evaluate("""() => {
+              const th = document.querySelectorAll('#lots thead th')[1];
+              const cb = [...th.querySelectorAll('.tf-opt')].find(x => x.value === 'livré');
+              cb.checked = false;
+              cb.dispatchEvent(new Event('change', { bubbles: true }));
+              return { etat: window.__tf.etat(),
+                       visibles: [...document.querySelectorAll('#lots tbody tr')]
+                         .filter(tr => !tr.hasAttribute('data-tf-hidden')
+                                    && !tr.hasAttribute('data-tf-empty')).length };
+            }""")
+            cas("tf-etat-rejoue · etat() nomme les valeurs exclues",
+                {"Statut": {"exclues": ["livré"]}}, vu["etat"]["colonnes"], "TF-0769 etat")
+            cas("tf-etat-rejoue · trois lignes visibles apres exclusion", 3, vu["visibles"],
+                "TF-0769 etat")
+            apres = page.evaluate("""() => {
+              document.getElementById('rerendre').click();
+              window.__tf.rafraichir();
+              return { caches: document.querySelectorAll('#lots tbody tr[data-tf-hidden]').length,
+                       restant: [...document.querySelectorAll('#lots tbody tr')]
+                         .filter(tr => !tr.hasAttribute('data-tf-hidden')
+                                    && !tr.hasAttribute('data-tf-empty')).length,
+                       etat: window.__tf.etat().colonnes };
+            }""")
+            cas("tf-etat-rejoue · la selection SURVIT au re-rendu",
+                {"caches": 2, "restant": 4, "exclues": ["livré"]},
+                {"caches": apres["caches"], "restant": apres["restant"],
+                 "exclues": (apres["etat"].get("Statut") or {}).get("exclues")},
+                "TF-0769 rafraichir")
+            meme = page.evaluate(
+                "() => FactoryTableFilters.init(document.getElementById('lots')) === window.__tf")
+            cas("tf-etat-rejoue · un second init rend l'INSTANCE, plus null (sens rouge)", True, meme,
+                "TF-0769 re-init")
+            rejoue = page.evaluate("""() => {
+              const t = document.getElementById('lots');
+              const etat = window.__tf.etat();
+              window.__tf.detruire();
+              const api = FactoryTableFilters.init(t, { etat: etat });
+              return { exclues: (api.etat().colonnes['Statut'] || {}).exclues,
+                       caches: t.querySelectorAll('tbody tr[data-tf-hidden]').length };
+            }""")
+            cas("tf-etat-rejoue · init(table, { etat }) rejoue la selection",
+                {"exclues": ["livré"], "caches": 2}, rejoue, "TF-0769 rejouabilite")
+
+        proteger("tf-etat-rejoue.html", "TF-0769", section_etat)
+
+        # ---- TF-0899 : l ancrage du panneau n ECRASE PLUS le thead collant du socle -----
+        def section_ancrage():
+            page.goto((FIXTURES / "tf-th-sticky-preserve.html").resolve().as_uri())
+            page.wait_for_load_state("load")
+            colle = page.evaluate(
+                "() => { const th = document.querySelectorAll('#colle thead th')[0];"
+                " return { calculee: getComputedStyle(th).position,"
+                "          en_ligne: th.style.position || '' }; }")
+            cas("tf-th-sticky-preserve · le thead collant SURVIT a init",
+                {"calculee": "sticky", "en_ligne": ""}, colle, "TF-0899 ancrage")
+            naive = page.evaluate("() => window.__poseNaive()")
+            cas("tf-th-sticky-preserve · l ancienne pose DIFFERE (sens rouge)",
+                True, naive == "relative" and naive != colle["calculee"],
+                "TF-0899 contre-epreuve")
+            libre = page.evaluate(
+                "() => getComputedStyle(document.querySelectorAll('#libre thead th')[0]).position")
+            cas("tf-th-sticky-preserve · un th `static` recoit toujours son ancrage",
+                "relative", libre, "TF-0899 affordance conservee")
+            ancre = page.evaluate("""() => {
+              const res = {};
+              for (const id of ['colle', 'libre']) {
+                const th = document.querySelectorAll('#' + id + ' thead th')[0];
+                th.querySelector('.tf-btn').click();
+                const p = th.querySelector('.tf-panel');
+                res[id] = !p.hidden && p.offsetParent === th;
+              }
+              return res;
+            }""")
+            cas("tf-th-sticky-preserve · le panneau reste ancre dans son th (deux cas)",
+                {"colle": True, "libre": True}, ancre, "TF-0899 ancrage")
+
+        proteger("tf-th-sticky-preserve.html", "TF-0899", section_ancrage)
+
+        # ---- TF-2195 : valeur de facette DECLAREE, `hidden` respecte, saisie qui filtre ---
+        def section_valeur_composite():
+            page.goto((FIXTURES / "tf-valeur-composite.html").resolve().as_uri())
+            page.wait_for_load_state("load")
+            th = "document.querySelectorAll('#interventions thead th')[0]"
+            cases = (f"() => [...{th}.querySelectorAll('.tf-opts label')]"
+                     ".filter(l => getComputedStyle(l).display !== 'none').map(l => l.textContent.trim())")
+            lignes = ("() => [...document.querySelectorAll('#interventions tbody tr')]"
+                      ".filter(tr => getComputedStyle(tr).display !== 'none'"
+                      " && !tr.hasAttribute('data-tf-empty')).length")
+            cas("tf-valeur-composite · la facette lit data-tf-valeur : 3 agents, 3 cases",
+                ["Agent A", "Agent B", "Agent C"], page.evaluate(cases), "TF-2195 valeur")
+            cas("tf-valeur-composite · l'ancienne lecture (texte entier) en donnait plus (sens rouge)",
+                True, page.evaluate("() => window.__valeursTexteEntier(0)") > 3, "TF-2195 contre-epreuve")
+            page.evaluate(f"() => {th}.querySelector('.tf-btn').click()")
+            page.fill("#interventions thead th .tf-search", "agent b")
+            cas("tf-valeur-composite · la saisie masque les cases qui ne correspondent pas ([hidden] respecte)",
+                ["Agent B"], page.evaluate(cases), "TF-2195 hidden")
+            cas("tf-valeur-composite · la saisie filtre aussi les LIGNES (3 sur 8)",
+                3, page.evaluate(lignes), "TF-2195 saisie")
+            cas("tf-valeur-composite · le declencheur signale le filtre actif pendant la saisie",
+                True, page.evaluate(f"() => {th}.querySelector('.tf-btn').classList.contains('tf-on')"),
+                "TF-2195 etat actif")
+            page.fill("#interventions thead th .tf-search", "zzz")
+            cas("tf-valeur-composite · une saisie sans correspondance vide le tableau et propose de tout reafficher",
+                {"lignes": 0, "bouton": True},
+                {"lignes": page.evaluate(lignes),
+                 "bouton": page.evaluate("() => !!document.querySelector('#interventions tr[data-tf-empty] .tf-reset')")},
+                "TF-2195 ligne vide")
+            page.evaluate("() => document.querySelector('#interventions tr[data-tf-empty] .tf-reset').click()")
+            cas("tf-valeur-composite · « Tout reafficher » vide la saisie : 8 lignes, 3 cases, champ vide",
+                {"lignes": 8, "cases": 3, "champ": ""},
+                {"lignes": page.evaluate(lignes), "cases": len(page.evaluate(cases)),
+                 "champ": page.input_value("#interventions thead th .tf-search")},
+                "TF-2195 reinitialisation")
+
+        proteger("tf-valeur-composite.html", "TF-2195", section_valeur_composite)
+
+        page.close()
+        navigateur.close()
+    return out
+
+
+# TF-0909 (lot Produit-10 20260908a) — L30 : une page de COUVERTURE affiche son DENOMINATEUR.
+# Jugee dans sa propre branche, et sur des COMPTES EXACTS : la regle porte quatre constats
+# distincts (couverture partielle, denominateur jamais affiche, aucun compte de manquants,
+# renvoi hors page) et un ensemble de codes ne dirait pas lequel a mordu. Comme pour S1, on ne
+# compare QUE les codes L30 : ces fixtures sont minimales, et le bruit des autres regles de
+# lisibilite masquerait le seul point qu'elles prouvent.
+CAS_COUVERTURE = {
+    # la MEME page, rendue lisible : denominateur declare, affiche, manquants comptes
+    "l30-couverture-declaree.html": {"fails": 0, "warns": 0},
+    # la forme exacte du cas paye : 342 declares, 4 rendus, rien d'affiche, rien de compte
+    "l30-couverture-muette.html": {"fails": 3, "warns": 1},
+    # le cas paye ne portait AUCUN marquage — c'est ce qui l'a laisse passer
+    "l30-mapping-non-declare.html": {"fails": 0, "warns": 2},
+}
+
+
+def run_couverture():
+    """Cas a double sens de L30 (TF-0909), en comptes exacts de constats L30."""
+    resultats = []
+    for nom, attendu in CAS_COUVERTURE.items():
+        chemin = FIXTURES / nom
+        if not chemin.exists():
+            resultats.append({"fixture": nom, "verdict": "ABSENTE",
+                              "attendu": f"{attendu['fails']} FAIL / {attendu['warns']} WARN",
+                              "obtenu": "absente", "regle": "L30", "detail": "fixture manquante"})
+            continue
+        fails, warns = check(chemin.read_text(encoding="utf-8"), regles="L")
+        f30 = [x for x in fails if x.startswith("L30 (couverture)")]
+        w30 = [x for x in warns if x.startswith("L30 (couverture)")]
+        ok = len(f30) == attendu["fails"] and len(w30) == attendu["warns"]
+        resultats.append({
+            "fixture": nom,
+            "verdict": "OK" if ok else "ECHEC",
+            "attendu": f"{attendu['fails']} FAIL / {attendu['warns']} WARN",
+            "obtenu": f"{len(f30)} FAIL / {len(w30)} WARN",
+            "regle": "L30 couverture",
+            "detail": "" if ok else " | ".join(f30 + w30)[:400],
+        })
+    return resultats
+
+
+# TF-0901 — complement STATIQUE de L29 : un script embarque qui pose `style.position` alors que
+# la feuille declare un `<th>` collant. Comptes exacts d'avertissements de cette seule famille :
+# les deux fixtures ne different QUE par la garde sur la position calculee, et la verte existe
+# pour verrouiller que l'avertissement n'accuse PAS le correctif — un controle qui accuse ce
+# qu'il prescrit se fait eteindre.
+CAS_L29_TER = {
+    "l29t-pose-nue.html": 1,
+    "l29t-pose-gardee.html": 0,
+}
+
+
+def run_l29_ter():
+    """Cas a double sens du complement statique de L29 (TF-0901)."""
+    resultats = []
+    for nom, attendu in CAS_L29_TER.items():
+        chemin = FIXTURES / nom
+        if not chemin.exists():
+            resultats.append({"fixture": nom, "verdict": "ABSENTE", "attendu": attendu,
+                              "obtenu": "absente", "regle": "L29 ter", "detail": "fixture manquante"})
+            continue
+        fails, warns = check(chemin.read_text(encoding="utf-8"), regles="L")
+        n = len([x for x in warns if x.startswith("L29 ter un script")])
+        # La fixture doit rester VERTE par ailleurs : un echec L parasite rendrait le cas
+        # trompeur — on croirait mesurer la pose de position, on mesurerait un oubli de gabarit.
+        parasites = [x for x in fails if x.startswith("L")]
+        ok = n == attendu and not parasites
+        resultats.append({
+            "fixture": nom, "verdict": "OK" if ok else "ECHEC",
+            "attendu": f"{attendu} avert. L29 ter", "obtenu": f"{n} avert. L29 ter",
+            "regle": "L29 ter (pose en ligne)",
+            "detail": "" if ok else " | ".join(parasites + warns)[:400],
+        })
+    return resultats
+
+
+# TF-1049 (11/09) — la police Syne se juge sur sa DÉCLARATION, jamais sur le mot. Rouge : la
+# feuille la déclare. Verte : le texte cite la règle « jamais Syne » sans rien déclarer — le
+# cas de la page du registre du pilot, restée rouge une journée.
+CAS_SYNE = {
+    "syne-declaree-feuille.html": True,
+    "syne-citee-en-texte.html": False,
+}
+
+
+def run_syne():
+    """Cas a double sens de la règle Syne (TF-1049)."""
+    resultats = []
+    for nom, attendu in CAS_SYNE.items():
+        chemin = FIXTURES / nom
+        if not chemin.exists():
+            resultats.append({"fixture": nom, "verdict": "ABSENTE", "attendu": attendu,
+                              "obtenu": "absente", "regle": "Syne", "detail": "fixture manquante"})
+            continue
+        fails, _ = check(chemin.read_text(encoding="utf-8"), regles="charte")
+        obtenu = any(f.startswith("Police Syne") for f in fails)
+        # la fixture est charte-verte par ailleurs : un autre échec rendrait le cas trompeur
+        parasites = [f for f in fails if not f.startswith("Police Syne")]
+        ok = obtenu == attendu and not parasites
+        resultats.append({
+            "fixture": nom, "verdict": "OK" if ok else "ECHEC",
+            "attendu": "Syne déclarée" if attendu else "aucun échec",
+            "obtenu": "Syne déclarée" if obtenu else "aucun échec",
+            "regle": "Syne (déclaration)",
+            "detail": "" if ok else " | ".join(fails)[:400],
+        })
+    return resultats
+
+
+def run_kpi_perimetre():
+    """TF-0970 (08/09) — une carte ne filtre QUE le tableau qu'elle désigne.
+
+    L'ancien composant appliquait l'attribut et la valeur de LA carte active à tous les tableaux :
+    un clic sur une carte du mapping vidait le tableau des mesures DAX (160 → 0) sur une page
+    livrée. Sens vert : après un clic sur « À corriger » du mapping, le mapping passe à 2 lignes et
+    les mesures restent à 4. Sens rouge : ce que l'ancien couplage aurait laissé (0) en diffère.
+    Puis une carte des mesures n'efface pas le filtre du mapping (état par tableau)."""
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        return []
+    page_f = FIXTURES / "kpi-perimetre-par-tableau.html"
+    if not page_f.exists():
+        return [{"fixture": page_f.name, "verdict": "ABSENTE", "attendu": "fixture présente",
+                 "obtenu": "absente", "regle": "TF-0970", "detail": ""}]
+    out = []
+
+    def cas(nom, attendu, obtenu, regle):
+        ok = attendu == obtenu
+        out.append({"fixture": nom, "verdict": "OK" if ok else "ECHEC", "attendu": str(attendu),
+                    "obtenu": str(obtenu), "regle": regle,
+                    "detail": "" if ok else f"attendu {attendu!r}, obtenu {obtenu!r}"})
+    try:
+        with sync_playwright() as pw:
+            nav = pw.chromium.launch()
+            page = nav.new_page(viewport={"width": 1280, "height": 900})
+            page.goto(page_f.resolve().as_uri())
+            page.wait_for_load_state("load")
+            r = page.evaluate("""() => {
+              const cartes = document.querySelectorAll('button[data-kpi-filtre]');
+              const repos = { mapping: __visibles('mapping'), mesures: __visibles('mesures') };
+              cartes[0].click();
+              const apres = { mapping: __visibles('mapping'), mesures: __visibles('mesures') };
+              const couple = __visiblesCouples('mesures', cartes[0]);
+              cartes[2].click();
+              const deux = { mapping: __visibles('mapping'), mesures: __visibles('mesures'),
+                             presses: [...cartes].map(c => c.getAttribute('aria-pressed')) };
+              return { repos, apres, couple, deux };
+            }""")
+            nav.close()
+    except Exception as erreur:  # noqa: BLE001 — une panne se compte, elle n'arrete rien
+        return [{"fixture": page_f.name, "verdict": "ECHEC", "attendu": "section jouee",
+                 "obtenu": type(erreur).__name__, "regle": "TF-0970", "detail": str(erreur)[:300]}]
+    cas("kpi-perimetre · au repos", {"mapping": 5, "mesures": 4}, r["repos"], "TF-0970 repos")
+    cas("kpi-perimetre · une carte du mapping ne touche pas les mesures",
+        {"mapping": 2, "mesures": 4}, r["apres"], "TF-0970 perimetre")
+    cas("kpi-perimetre · l'ancien couplage DIFFERE (sens rouge)", True,
+        r["couple"] != r["apres"]["mesures"], "TF-0970 contre-epreuve")
+    cas("kpi-perimetre · deux tableaux filtres ensemble, etat par tableau",
+        {"mapping": 2, "mesures": 2, "presses": ["true", "false", "true"]}, r["deux"],
+        "TF-0970 etat par tableau")
+    return out
+
+
+def run_capture_tuiles():
+    """TF-1131 (15/09) — une capture qu'on ne peut pas lire n'est pas une pièce de revue.
+
+    La capture pleine page d'un livrable, réduite à l'écran du relecteur, ne laissait rien lire
+    (facteurs 9,5 et 23) ; la revue s'est déclarée faite et cinq défauts sont passés. Au-delà de
+    4:1, render_page produit d'office des tuiles d'un écran. Sens rouge : la page très haute
+    dépasse bien 4:1 (la capture pleine page est illisible). Sens vert : ses tuiles existent, en
+    nombre exact, chacune plus large que haute. Témoin : une page courte n'a pas de tuile."""
+    try:
+        import importlib
+        importlib.import_module("playwright.sync_api")
+    except ImportError:
+        return []
+    import subprocess
+    import tempfile
+    rendu = str(Path(__file__).resolve().parent / "render_page.py")
+    out = []
+
+    def jouer(nom):
+        dossier = tempfile.mkdtemp(prefix="self-test-tuiles-")
+        r = subprocess.run([sys.executable, "-X", "utf8", rendu, str(FIXTURES / nom), "--widths", "1280",
+                            "--output", "json", "--out", dossier],
+                           capture_output=True, text=True, encoding="utf-8")
+        try:
+            cap = json.loads(r.stdout)["breakpoints"]["1280"]["capture"]
+        except Exception:  # noqa: BLE001 — une sortie illisible se compte comme un échec
+            cap = None
+        return cap, dossier
+
+    def cas(nom, ok, attendu, obtenu, regle):
+        out.append({"fixture": nom, "verdict": "OK" if ok else "ECHEC", "attendu": attendu,
+                    "obtenu": str(obtenu)[:160], "regle": regle, "detail": ""})
+
+    cap, dossier = jouer("capture-page-tres-haute.html")
+    if cap is None:
+        cas("capture-page-tres-haute", False, "sortie JSON", "illisible", "TF-1131")
+        return out
+    cas("capture-page-tres-haute · pleine page au-delà de 4:1 (sens rouge)", cap.get("ratio", 0) > 4,
+        "ratio > 4", cap.get("ratio"), "TF-1131 contre-epreuve")
+    attendu_n = -(-cap.get("hauteur_css", 0) // 900)
+    tuiles = cap.get("tuiles") or []
+    presentes = [t for t in tuiles if (Path(dossier) / t).exists()]
+    cas("capture-page-tres-haute · une tuile par écran, toutes produites",
+        len(tuiles) == attendu_n and len(presentes) == attendu_n and attendu_n >= 2,
+        f"{attendu_n} tuile(s)", f"{len(tuiles)} annoncée(s), {len(presentes)} sur disque", "TF-1131 tuiles")
+    try:
+        from PIL import Image
+        tailles = [Image.open(Path(dossier) / t).size for t in presentes]
+        lisibles = all(w >= h for w, h in tailles) and bool(tailles)
+        cas("capture-page-tres-haute · chaque tuile plus large que haute (lisible sans réduction)",
+            lisibles, "largeur ≥ hauteur", tailles[:2], "TF-1131 lisibilite")
+    except ImportError:
+        pass
+    court, _ = jouer("a5-feuille-parsable.html")
+    cas("page courte · aucune tuile (témoin)", bool(court) and not court.get("tuiles"),
+        "pas de tuile", (court or {}).get("ratio"), "TF-1131 temoin")
+
+    # TF-1139 (15/09) — LE SEUIL DE HAUTEUR, dans ses deux sens et en TEMPS. Le fait payé :
+    # quatre exécutions, six échelles de 0,4 à 0,12, délais de 45 s à 300 s, AUCUNE image, et
+    # deux passes arrêtées à la main après plus de trente minutes — pour un verdict jamais rendu.
+    # Sens rouge : au-delà du seuil, aucune capture n'est TENTÉE et le constat sort nommé et
+    # chiffré. Sens vert : la page très haute ci-dessus est sous le seuil et reste capturée — un
+    # seuil posé trop bas retirerait la capture à des pages qui l'obtiennent. Et la durée est
+    # mesurée : c'est elle, pas le message, qui prouve qu'aucune tentative n'a eu lieu.
+    import time as _time
+    t0 = _time.monotonic()
+    haute, _ = jouer("capture-page-au-dela-du-seuil.html")
+    duree = _time.monotonic() - t0
+    if haute is None:
+        cas("capture-au-dela-du-seuil", False, "sortie JSON", "illisible", "TF-1139")
+        return out
+    cas("capture au-delà du seuil · aucune capture faite, constat nommé (sens rouge)",
+        haute.get("faite") is False and haute.get("trop_haute") is True
+        and "trop haute" in (haute.get("motif") or ""),
+        "faite=False, trop_haute=True, motif nommé",
+        f"faite={haute.get('faite')}, trop_haute={haute.get('trop_haute')}", "TF-1139 constat")
+    cas("capture au-delà du seuil · la hauteur ET le seuil sont publiés",
+        isinstance(haute.get("hauteur_css"), int) and haute.get("hauteur_css", 0) > 50_000
+        and haute.get("hauteur_max") == 50_000,
+        "hauteur mesurée > seuil, seuil publié",
+        f"{haute.get('hauteur_css')} px / seuil {haute.get('hauteur_max')}", "TF-1139 seuil publié")
+    cas("capture au-delà du seuil · le remède annoncé est de DÉCOUPER la page",
+        "DECOUPER" in (haute.get("motif") or ""), "le motif dit le geste",
+        (haute.get("motif") or "")[:80], "TF-1139 remède nommé")
+    cas("capture au-delà du seuil · rendu en secondes, pas en dizaines de minutes",
+        duree < 120, "< 120 s", f"{duree:.1f} s", "TF-1139 cout mesure")
+    cas("page très haute SOUS le seuil · toujours capturée (sens vert)",
+        bool(cap.get("tuiles")) and cap.get("hauteur_css", 0) < 50_000,
+        "capture produite sous le seuil",
+        f"{cap.get('hauteur_css')} px, {len(cap.get('tuiles') or [])} tuile(s)",
+        "TF-1139 seuil non abaissif")
+    return out
+
+
+RE_FERMANTE_NUE = re.compile(r"</(script|style)", re.I)
+
+
+def fermantes_nues(texte):
+    """TF-1062 — les balises fermantes EN CLAIR d'un asset inlinable (liste de n° de ligne)."""
+    return [i for i, ligne in enumerate(texte.splitlines(), 1) if RE_FERMANTE_NUE.search(ligne)]
+
+
+# TF-2094 — la porte `static_cache_gate` de forge-development (conductor/gates/static_cache_gate.py,
+# `_STATIC_REF`) lit TOUTE adresse locale d'attribut href|src qui pointe un .css/.js/.mjs sans version
+# (`?v=`, `?h=`…) ni empreinte dans le nom. Transcrite ici, sans l'exemption des adresses externes
+# ni celle des adresses versionnees : un asset qui s'inline ne doit en ecrire AUCUNE, meme en commentaire.
+RE_ADRESSE_STATIQUE = re.compile(
+    r"""(?:href|src)\s*=\s*(?P<q>["'])(?P<v>[^"']*?\.(?:css|js|mjs)(?![A-Za-z0-9])[^"']*)(?P=q)""", re.I)
+
+
+def adresses_statiques_nues(texte):
+    """TF-2094 — les adresses locales non versionnees ecrites dans un asset (liste de n° de ligne)."""
+    return [i for i, ligne in enumerate(texte.splitlines(), 1)
+            if any(not m.group("v").lower().startswith(("http://", "https://", "//", "data:", "blob:"))
+                   and "?" not in m.group("v") for m in RE_ADRESSE_STATIQUE.finditer(ligne))]
+
+
+
+def run_echeance_forme_ancienne():
+    """D-4 (b), decision humaine du 16/09/2026 — une forme ancienne est admise JUSQU A UNE DATE.
+
+    Quatre sens, et le quatrieme est celui qui empeche la donnee de devenir une porte de sortie :
+      1. avant la date, la famille garde sa severite declaree (avertissement) ;
+      2. apres la date, elle DURCIT en bloquant, sans qu aucune ligne de code ait change ;
+      3. sans echeance declaree, rien ne bouge et le fait est DIT, jamais un blocage par accident ;
+      4. une echeance ne peut jamais ADOUCIR une famille bloquante — le sens est unique, sinon la
+         premiere urgence venue s en servirait pour eteindre un controle.
+    """
+    import importlib
+    from datetime import date
+    rp = importlib.import_module("render_page")
+    out = []
+
+    def cas(nom, attendu, obtenu, regle="D-4 (b)"):
+        ok = attendu == obtenu
+        out.append({"fixture": nom, "verdict": "OK" if ok else "ECHEC", "attendu": str(attendu),
+                    "obtenu": str(obtenu), "regle": regle,
+                    "detail": "" if ok else f"attendu {attendu!r}, obtenu {obtenu!r}"})
+
+    depassee_avant, limite, jours = rp._echeance_depassee("overlap_en_bloc", date(2026, 10, 1))
+    cas("echeance-avant-la-date : encore admise", (False, "2026-12-16"), (depassee_avant, limite))
+    cas("echeance-avant-la-date : jours restants comptes", True, isinstance(jours, int) and jours > 0)
+
+    depassee_apres, _l, jours_apres = rp._echeance_depassee("overlap_en_bloc", date(2027, 1, 5))
+    cas("echeance-apres-la-date : depassee", True, depassee_apres)
+    cas("echeance-apres-la-date : le retard est compte", True, isinstance(jours_apres, int) and jours_apres < 0)
+
+    cas("famille sans echeance : rien ne bouge, et c est dit", (False, None, None),
+        rp._echeance_depassee("v1_overflow"))
+    cas("la phrase du constat nomme la date", True, "2026-12-16" in rp._phrase_echeance("overlap_en_bloc"))
+    cas("la phrase sans echeance le DIT", True, "Aucune echeance" in rp._phrase_echeance("v1_overflow"))
+
+    # SENS UNIQUE : une echeance posee sur une famille BLOQUANTE ne la rend pas avertissante.
+    familles_test = [("famille_bloquante", "libelle", "bloquant"), ("famille_avertie", "libelle", "avertissement")]
+    vraies = rp.FAMILLES
+    try:
+        rp.FAMILLES = familles_test
+        original = rp._echeance_depassee
+        rp._echeance_depassee = lambda cle, aujourdhui=None: (True, "2026-01-01", -1)
+        severites = {c: sev for c, _l, sev in rp._familles_apres_echeances()}
+    finally:
+        rp.FAMILLES = vraies
+        rp._echeance_depassee = original
+    cas("sens unique : une echeance DURCIT un avertissement", "bloquant", severites["famille_avertie"])
+    cas("sens unique : une echeance n ADOUCIT jamais un bloquant", "bloquant", severites["famille_bloquante"])
+    return out
+
+def run_assets_inlinables():
+    """TF-1062 (11/09) — un asset qui s'inline ne porte aucune balise fermante EN CLAIR.
+
+    find-in-page.js l'écrivait dans le commentaire même qui expliquait pourquoi l'échapper : une
+    copie inlinée à la main était coupée à cette ligne, et son câblage d'exemple devenait du vrai
+    DOM — oracle-a11y a compté trois identifiants dupliqués, et il avait raison. Le poseur échappe
+    la séquence ; une copie manuelle, non. La source doit donc tenir seule.
+    Sens rouge : la ligne d'avant correctif, verbatim, est reconnue."""
+    out = []
+    for chemin in sorted((FIXTURES.parent / "assets").glob("*.[jc]s*")):
+        if chemin.suffix not in (".js", ".css"):
+            continue
+        lignes = fermantes_nues(chemin.read_text(encoding="utf-8"))
+        out.append({"fixture": f"assets/{chemin.name}", "verdict": "OK" if not lignes else "ECHEC",
+                    "attendu": "aucune fermante en clair", "obtenu": f"lignes {lignes}" if lignes else "aucune",
+                    "regle": "TF-1062 asset inlinable", "detail": ""})
+    # TF-2094 — le commentaire d'usage de find-in-page.js est copie A L'IDENTIQUE dans chaque page
+    # autoportante (composant embarque, scelle par empreinte) : il ne doit pas ecrire d'adresse
+    # statique nue, que static_cache_gate de forge-development lit comme `statique-nu` (2 faux
+    # constats mesures le 03/11/2026 sur les projections ARCHITECTURE.html et MODELE-DONNEES.html).
+    # TF-2175 — la regle vaut pour TOUS les assets inlinables : source-reader.js portait la meme ligne
+    # (`<script src="source-reader.js">`, ligne 34), vue le 05/11/2026 pendant TF-2094 ; la garde ne
+    # lisait que find-in-page.js, donc la meme faute pouvait vivre dans n'importe quel autre asset.
+    for chemin in sorted((FIXTURES.parent / "assets").glob("*.[jc]s*")):
+        if chemin.suffix not in (".js", ".css"):
+            continue
+        nues = adresses_statiques_nues(chemin.read_text(encoding="utf-8"))
+        out.append({"fixture": f"assets/{chemin.name}", "verdict": "OK" if not nues else "ECHEC",
+                    "attendu": "aucune adresse statique nue (href|src vers .js/.css sans version)",
+                    "obtenu": f"lignes {nues}" if nues else "aucune",
+                    "regle": "TF-2094 static_cache_gate", "detail": ""})
+    ligne_avant = ' *   <script src="find-in-page.js"><\\/script>'
+    # TF-2175 : la ligne d'avant correctif de source-reader.js, verbatim, est reconnue elle aussi.
+    vu_nu = (adresses_statiques_nues(ligne_avant) == [1]
+             and adresses_statiques_nues(' *   <script src="source-reader.js"><\\/script>') == [1])
+    ligne_versionnee = ' *   <script src="find-in-page.js?v=3f9a1c"><\\/script>'
+    muet_versionnee = adresses_statiques_nues(ligne_versionnee) == []
+    out.append({"fixture": "ligne d'avant correctif TF-2094 (sens rouge) + sa forme versionnee (sens vert)",
+                "verdict": "OK" if vu_nu and muet_versionnee else "ECHEC",
+                "attendu": "nue reconnue, versionnee muette",
+                "obtenu": f"nue {'reconnue' if vu_nu else 'muette'}, versionnee {'muette' if muet_versionnee else 'accusee'}",
+                "regle": "TF-2094 contre-epreuve", "detail": ""})
+    rouge = " * Câblage minimal (RA-1, 13/08 : la séquence « </script » est ÉCHAPPÉE en <\\/script> dans"
+    vu = fermantes_nues(rouge) == [1]
+    out.append({"fixture": "ligne d'avant correctif (sens rouge)", "verdict": "OK" if vu else "ECHEC",
+                "attendu": "reconnue", "obtenu": "reconnue" if vu else "muette",
+                "regle": "TF-1062 contre-epreuve", "detail": ""})
+    return out
+
+
+# T3 d'oracle-tokens (factory-forge-design), transcrit ici : proprietes d'espacement, valeurs en
+# px, multiples de 4. Les valeurs qui passent par un jeton, un calcul ou un pourcentage sont hors
+# champ — c'est la meme clause d'exemption que l'oracle, et pas une tolerance de plus.
+#
+# TF-1193 (20/09/2026) — LA BORNE DE GAUCHE ACCEPTE AUSSI UN GUILLEMET. Un style EN LIGNE
+# commence juste apres le guillemet ouvrant (`style="padding-left:14px"`), sans `;` ni espace
+# devant : la transcription ne voyait pas ces declarations, T3 si. Mesure sur
+# factory-schemas/assets/exemple-reference.html : 48 ecarts vus ici contre 52 rendus par
+# l'oracle — les quatre manquants etaient quatre `<ul style="padding-left:14px">`. Une
+# transcription qui compte moins que la regle qu'elle transcrit endort le banc.
+RE_ESPACEMENT = re.compile(
+    r"(?:^|[;{\s\"'])(margin|padding|gap|row-gap|column-gap)(-top|-right|-bottom|-left|-block|-inline)?\s*:\s*([^;}\"']+)",
+    re.I)
+RE_EXEMPT = re.compile(r"var\(\s*--|calc\(|clamp\(|auto|%")
+
+
+def espacements_hors_echelle(texte):
+    """Les espacements en px qui ne sont pas multiples de 4 : [(ligne, « propriete: valeur »)]."""
+    trouves = []
+    for i, ligne in enumerate(texte.splitlines(), 1):
+        for m in RE_ESPACEMENT.finditer(ligne):
+            if RE_EXEMPT.search(m.group(3)):
+                continue
+            for px in re.finditer(r"(-?[\d.]+)px", m.group(3)):
+                valeur = abs(float(px.group(1)))
+                if valeur and valeur % 4:
+                    trouves.append((i, f"{m.group(1)}{m.group(2) or ''}: {px.group(0)}"))
+    return trouves
+
+
+def run_assets_echelle_4pt():
+    """TF-1191 (17/09/2026) — UN COMPOSANT DU SOCLE NE POSE PAS D'ESPACEMENT HORS ECHELLE 4 PT.
+
+    LE FAIT PAYE. Le socle rend l'infobulle structuree OBLIGATOIRE des qu'une legende porte plus
+    de deux objets (composants.md, composant 13 ; lisibilite.md L3 g). Un produit l'a posee par la
+    voie prescrite, et `oracle-tokens` de factory-forge-design a rendu FAIL sur sa page : T3
+    majeur, « espacement 10px hors echelle 4pt sur padding », T3 majeur, « 14px » — les deux dans
+    le bloc que le poseur venait d'ecrire, sur une page qui avait recale 57 espacements la veille
+    pour passer au vert. Suivre une regle rouge du socle faisait echouer un autre oracle du meme
+    ecosysteme : deux regles inconciliables sur une page qui les respecte toutes deux.
+
+    Ce cas joue T3 sur les SOURCES des composants (assets/), la ou le poseur les prend. Deux sens :
+      · sens vert : aucun asset ne pose d'espacement hors echelle ;
+      · sens rouge : la declaration d'avant correctif, verbatim, est reconnue — et pour les deux
+        valeurs, sinon un correctif a moitie fait passerait pour complet.
+
+    TF-1193 (20/09/2026) — LE PERIMETRE S'ETEND A CE QUI EST PRESCRIT A LA COPIE. Ce cas ne
+    jouait que `assets/`. Or un auteur ne prend pas seulement un composant pose : il COPIE
+    l'extrait CSS d'une reference (composants.md, composant-recherche.md) et il part d'un canevas
+    de factory-schemas. Remesure du 20/09 sur les sept fichiers restes hors du banc : 124
+    espacements hors echelle (117 avec la borne de gauche d'avant, qui ne voyait pas les styles
+    EN LIGNE — voir RE_ESPACEMENT). Toute page derivee de l'un d'eux rougissait a T3 sans que
+    rien, ici, ne le dise. Les trois sources sont desormais jugees ensemble.
+
+    CE QUE CE CAS NE VOIT TOUJOURS PAS : les valeurs qui passent par un jeton, un calcul ou un
+    pourcentage (meme clause d'exemption que l'oracle), les espacements ecrits dans un attribut
+    SVG (x, y, dx, dy — geometrie, pas espacement), et les pages produites par les skills, qui
+    relevent d'oracle-tokens sur le livrable.
+    """
+    out = []
+    # Les trois sources qu'un auteur prend : le composant qu'il POSE, l'extrait qu'il COPIE,
+    # le canevas dont il PART. Une reference manquante est un ECHEC, jamais un silence.
+    racine_skills = FIXTURES.parent.parent
+    sources = [("assets", sorted((FIXTURES.parent / "assets").iterdir()))]
+    sources.append(("references", [FIXTURES.parent / "references" / n
+                                   for n in ("composants.md", "composant-recherche.md")]))
+    canevas = racine_skills / "factory-schemas" / "assets"
+    sources.append(("factory-schemas/assets", sorted(canevas.iterdir()) if canevas.is_dir() else []))
+    for etiquette, chemins in sources:
+        if etiquette == "factory-schemas/assets" and not chemins:
+            out.append({"fixture": "factory-schemas/assets", "verdict": "ECHEC",
+                        "attendu": "canevas presents a cote du socle",
+                        "obtenu": f"dossier absent : {canevas}",
+                        "regle": "TF-1193 echelle 4pt (T3)", "detail": "un perimetre introuvable n'est pas un perimetre vert"})
+            continue
+        for chemin in chemins:
+            if chemin.suffix not in (".css", ".js", ".html", ".md"):
+                continue
+            if not chemin.is_file():
+                out.append({"fixture": f"{etiquette}/{chemin.name}", "verdict": "ECHEC",
+                            "attendu": "fichier present", "obtenu": "absent",
+                            "regle": "TF-1193 echelle 4pt (T3)", "detail": ""})
+                continue
+            ecarts = espacements_hors_echelle(chemin.read_text(encoding="utf-8"))
+            out.append({"fixture": f"{etiquette}/{chemin.name}", "verdict": "OK" if not ecarts else "ECHEC",
+                        "attendu": "0 espacement hors echelle 4pt",
+                        "obtenu": f"{len(ecarts)} : {ecarts[:3]}" if ecarts else "0",
+                        "regle": "TF-1191/1193 echelle 4pt (T3)", "detail": ""})
+    rouge = espacements_hors_echelle("  padding: 10px 14px;")
+    attendu = [(1, "padding: 10px"), (1, "padding: 14px")]
+    out.append({"fixture": "infobulle.css d'avant correctif (sens rouge)",
+                "verdict": "OK" if rouge == attendu else "ECHEC",
+                "attendu": str(attendu), "obtenu": str(rouge),
+                "regle": "TF-1191 contre-epreuve", "detail": ""})
+    # TF-1193, sens rouge du STYLE EN LIGNE : la declaration d'avant correctif, verbatim, telle
+    # qu'elle vivait dans exemple-reference.html. La borne de gauche d'avant ne la voyait pas —
+    # ce cas ECHOUERAIT si on la retrecissait, et le trou de quatre ecarts se rouvrirait en
+    # silence. Le `margin:0` de la meme declaration reste muet : zero est sur l'echelle.
+    ligne = '            <ul style="padding-left:14px;margin:0;">'
+    rouge_inline = espacements_hors_echelle(ligne)
+    attendu_inline = [(1, "padding-left: 14px")]
+    out.append({"fixture": "style EN LIGNE d'avant correctif (sens rouge)",
+                "verdict": "OK" if rouge_inline == attendu_inline else "ECHEC",
+                "attendu": str(attendu_inline), "obtenu": str(rouge_inline),
+                "regle": "TF-1193 contre-epreuve", "detail": "la borne de gauche accepte le guillemet ouvrant"})
+    # TF-1193, sens vert de la meme borne : une valeur SUR l'echelle, en ligne, reste muette —
+    # sinon le cas rouge ci-dessus passerait aussi avec une regle qui crie sur tout.
+    vert_inline = espacements_hors_echelle('<ul style="padding-left:16px;margin:0;">')
+    out.append({"fixture": "style EN LIGNE sur l'echelle (sens vert)",
+                "verdict": "OK" if vert_inline == [] else "ECHEC",
+                "attendu": "[]", "obtenu": str(vert_inline),
+                "regle": "TF-1193 contre-epreuve", "detail": ""})
+    return out
+
+
+def run_fins_de_ligne_declarees():
+    """TF-1193 (20/09/2026) — LA COPIE DE TRAVAIL TIENT LA FIN DE LIGNE QUE LE DEPOT DECLARE.
+
+    LE FAIT PAYE, le jour meme. Une passe outillee a recale 124 espacements dans huit fichiers du
+    parc. L'outil lisait chaque fichier par `Path.read_text()` — qui ramene DEJA tout a `\\n` — puis
+    le reecrivait par `Path.write_text()`, qui sous Windows retraduit chaque `\\n` en `\\r\\n`. La
+    garde « relire la fin de ligne du fichier » etait ECRITE dans l'outil et INERTE : elle mesurait
+    une chaine deja normalisee. Les huit copies de travail sont passees en CRLF alors que
+    `.gitattributes` declare `*.html`, `*.md`, `*.js`, `*.css`, `*.py` en `eol=lf`.
+
+    CE QUI L'A RATTRAPE, ET CE QUI NE L'A PAS VU. `git status` est reste MUET : le filtre `clean`
+    de git normalise a la validation, donc le blob committe etait juste et le diff vide — c'est la
+    COPIE DE TRAVAIL, celle qui s'execute et qui part, qui etait fausse. Un seul controle a parle,
+    `oracle-parite-assets` (P3), et seulement sur l'UNIQUE page du parc qui embarque des copies du
+    socle : trois blocs « contenu DERIVE de sa source », +116, +85 et +622 octets — exactement un
+    `\\r` par ligne. Les SEPT autres fichiers ont derive sans qu'aucune regle ne le dise.
+
+    Ce cas ferme le trou : les extensions que `.gitattributes` declare `eol=lf` sont relues sur
+    disque, dans l'arbre des skills, et aucune ne porte de CRLF. Deux sens :
+      · sens vert : le parc reel, fichier par fichier ;
+      · sens rouge : un texte porteur d'un CRLF est reconnu — sinon la regle ne juge rien.
+
+    CE QUE CE CAS NE VOIT PAS : les extensions absentes de `.gitattributes` (`.json`, `.jsonl` —
+    laissees libres a dessein, plusieurs sont ecrites en CRLF par des outils tiers), et ce qui vit
+    hors de l'arbre des skills.
+    """
+    racine_skills = FIXTURES.parent.parent
+    attributs = racine_skills.parent.parent / ".gitattributes"
+    out = []
+    if not attributs.exists():
+        out.append({"fixture": ".gitattributes", "verdict": "ECHEC",
+                    "attendu": "present a la racine du depot", "obtenu": f"absent : {attributs}",
+                    "regle": "TF-1193 fins de ligne",
+                    "detail": "un perimetre introuvable n'est pas un perimetre vert"})
+        return out
+    suffixes = set()
+    for ligne in attributs.read_text(encoding="utf-8").splitlines():
+        nu = ligne.strip()
+        if nu.startswith("#") or "eol=lf" not in nu:
+            continue
+        motif = nu.split()[0]
+        if motif.startswith("*."):
+            suffixes.add(motif[1:])
+    if not suffixes:
+        out.append({"fixture": ".gitattributes", "verdict": "ECHEC",
+                    "attendu": "au moins une extension declaree eol=lf",
+                    "obtenu": "aucune", "regle": "TF-1193 fins de ligne", "detail": ""})
+        return out
+    coupables = []
+    for chemin in sorted(racine_skills.rglob("*")):
+        if chemin.suffix not in suffixes or not chemin.is_file():
+            continue
+        if any(p in {"__pycache__", "node_modules", ".venv", ".pytest_cache"} for p in chemin.parts):
+            continue
+        try:
+            brut = chemin.read_bytes()
+        except OSError:
+            continue
+        n = brut.count(b"\r\n")
+        if n:
+            coupables.append(f"{chemin.relative_to(racine_skills).as_posix()} ({n} CRLF)")
+    out.append({"fixture": f"arbre des skills · {' '.join(sorted(suffixes))}",
+                "verdict": "OK" if not coupables else "ECHEC",
+                "attendu": "0 fichier en CRLF sous les extensions declarees eol=lf",
+                "obtenu": "0" if not coupables else f"{len(coupables)} : {coupables[:5]}",
+                "regle": "TF-1193 fins de ligne", "detail": ""})
+    # Sens rouge : la forme exacte d'avant correctif — une ligne terminee par CRLF.
+    rouge = b'<ul style="padding-left:16px">\r\n</ul>\r\n'
+    out.append({"fixture": "contenu porteur de CRLF (sens rouge)",
+                "verdict": "OK" if rouge.count(b"\r\n") == 2 else "ECHEC",
+                "attendu": "2 CRLF reconnus", "obtenu": str(rouge.count(b"\r\n")),
+                "regle": "TF-1193 contre-epreuve",
+                "detail": "la mesure compte les octets, jamais un texte deja normalise a la lecture"})
+    return out
+
+
+def _creer_jonction(lien, cible):
+    """Crée `lien` vers `cible` (jonction sous Windows, lien symbolique ailleurs) ; vrai si elle existe.
+
+    TF-2478 : `cmd /c mklink` écrit « Jonction créée pour … » dans la page de code OEM de la console
+    (cp850, où « é » vaut l'octet 0x82). Lire cette sortie avec `text=True` la décode dans l'encodage
+    par défaut de Python : sous `PYTHONUTF8=1`, le fil de lecture lève UnicodeDecodeError (octet 0x82 en
+    position 11) et l'imprime en tête de la recette. Un décodage explicite en UTF-8 lèverait la même
+    erreur, l'octet n'étant pas de l'UTF-8 ; on ne lit donc que le code de retour, la sortie reste en octets.
+    """
+    if os.name == "nt":
+        return subprocess.run(["cmd", "/c", "mklink", "/J", str(lien), str(cible)],
+                              capture_output=True).returncode == 0
+    os.symlink(cible, lien)
+    return True
+
+
+def run_poseur_composants():
+    """TF-0890 — LE POSEUR DE COMPOSANTS S'IMPORTE, ET POSE HORS DU DEPOT DES SKILLS.
+
+    Le module exportait `blocCanonique`, `echapper` et `sha`, mais son analyse d'arguments
+    s'executait A L'IMPORT : tout `import { blocCanonique }` terminait le processus avec le code
+    2 AVANT le premier appel. Et `--ecrire` ne parcourait que l'arbre des skills. Un produit qui
+    voulait embarquer trois composants du socle dans son livrable a donc REIMPLEMENTE le format
+    du bloc en Python — marqueurs, echappement de la balise de script fermante, attributs
+    `data-composant` et `data-empreinte`. Copie conforme au format, produite par un SECOND
+    OUTIL : la classe de defaut exacte que ce script existe pour eliminer.
+
+    QUATRE CAS, chacun a double sens :
+      1. l'import ne tue plus le processus (sens rouge : c'etait exit 2) — et il rend un bloc
+         canonique identique a celui que produit la ligne de commande ;
+      2. la garde n'a PAS supprime le controle d'usage : execute sans drapeau, le script rend
+         toujours 2 (sinon on aurait echange un defaut contre un autre) ;
+      3. `--poser` pose dans une page QUELCONQUE, hors de l'arbre des skills : la feuille avant
+         la fermeture de l'en-tete, le script avant celle du corps ;
+      4. `--constat <page>` rejoue la parite sur ce meme fichier — PASS tel quel, et FAIL des
+         qu'un octet du bloc bouge. C'est ce quatrieme cas qui prouve que la parite est jouable
+         des DEUX cotes par le meme code.
+    Silencieux si node est absent : le poseur est un module Node.
+    """
+    if not shutil.which("node"):
+        return None
+    import os
+    import subprocess
+    import tempfile
+    poseur = str(Path(__file__).resolve().parent / "embarquer-composants.mjs")
+    out = []
+
+    def cas(nom, attendu, obtenu, regle, detail=""):
+        ok = attendu == obtenu
+        out.append({"fixture": nom, "verdict": "OK" if ok else "ECHEC",
+                    "attendu": str(attendu)[:96], "obtenu": str(obtenu)[:96], "regle": regle,
+                    "detail": "" if ok else (detail or f"attendu {attendu!r}, obtenu {obtenu!r}")[:300]})
+
+    # ---- 1 et 2 : le module s'importe, et le script refuse toujours un appel sans drapeau ----
+    script = ("import { blocCanonique } from " + json.dumps(Path(poseur).resolve().as_uri())
+              + "; process.stdout.write(blocCanonique('sonde.js', 'const a = 1;'));")
+    imp = subprocess.run(["node", "--input-type=module", "-e", script],
+                         capture_output=True, text=True, encoding="utf-8")
+    cas("poseur · l'import n'arrete plus le processus (sens rouge : exit 2)",
+        0, imp.returncode, "TF-0890 API", (imp.stderr or "").splitlines()[-1:] and imp.stderr[-280:])
+    cas("poseur · l'import rend bien le bloc canonique",
+        True, "COMPOSANT-EMBARQUE:DEBUT sonde.js" in imp.stdout
+              and 'data-composant="sonde.js"' in imp.stdout, "TF-0890 API")
+    nu = subprocess.run(["node", poseur], capture_output=True, text=True, encoding="utf-8")
+    cas("poseur · sans drapeau, l'usage est toujours refuse (la garde n'a rien eteint)",
+        2, nu.returncode, "TF-0890 point d'entree", nu.stderr[-280:])
+
+    # ---- 5 (TF-1416, 01/10/2026) : appele par une JONCTION ou un lien vers le skill ----------
+    # La garde de point d'entree comparait le chemin resolu du module au chemin de la jonction :
+    # main() ne s'executait pas, rien n'etait pose, et le script sortait 0 sans message. Mesure le
+    # 24/09 sur un profil dont le dossier des skills est une jonction. Silencieux si le lien ne se
+    # cree pas sur ce poste.
+    lien_dir = tempfile.mkdtemp(prefix="self-test-jonction-")
+    lien = Path(lien_dir) / "skill"
+    skill = Path(poseur).resolve().parent.parent
+    try:
+        cree = _creer_jonction(lien, skill)
+        if cree:
+            page_j = Path(lien_dir) / "page-jonction.html"
+            page_j.write_text('<!DOCTYPE html>\n<html lang="fr">\n<head>\n<title>Essai</title>\n'
+                              "</head>\n<body>\n</body>\n</html>\n", encoding="utf-8")
+            pj = subprocess.run(["node", str(lien / "scripts" / "embarquer-composants.mjs"), "--poser",
+                                 str(page_j), "--composants", "table-filters.js"],
+                                capture_output=True, text=True, encoding="utf-8")
+            cas("poseur · appele par une jonction, il pose (sens rouge : rien pose, exit 0)",
+                True, pj.returncode == 0
+                and 'data-composant="table-filters.js"' in page_j.read_text(encoding="utf-8"),
+                "TF-1416 point d'entree", (pj.stderr or pj.stdout)[-280:])
+    finally:
+        if lien.exists() or os.path.islink(lien):
+            if os.name == "nt":
+                os.rmdir(lien)
+            else:
+                os.unlink(lien)
+        shutil.rmtree(lien_dir, ignore_errors=True)
+
+    # ---- 3 et 4 : poser hors de l'arbre des skills, puis rejouer la parite dessus ------------
+    atelier = tempfile.mkdtemp(prefix="self-test-poseur-")
+    try:
+        page = Path(atelier) / "livrable-hors-skills.html"
+        page.write_text(
+            '<!DOCTYPE html>\n<html lang="fr">\n<head>\n<meta charset="UTF-8">\n'
+            "<title>Factory — pose hors depot · essai — 20260908a</title>\n</head>\n"
+            "<body>\n<h1>Essai</h1>\n</body>\n</html>\n", encoding="utf-8")
+        pose = subprocess.run(
+            ["node", poseur, "--poser", str(page),
+             "--composants", "table-filters.css,table-filters.js"],
+            capture_output=True, text=True, encoding="utf-8")
+        cas("poseur · --poser aboutit sur une page hors arbre des skills",
+            0, pose.returncode, "TF-0890 --poser", (pose.stderr or pose.stdout)[-280:])
+        html = page.read_text(encoding="utf-8")
+        place = {
+            "style avant la fermeture de l'en-tete":
+                0 < html.find('data-composant="table-filters.css"') < html.find("</head>"),
+            "script avant la fermeture du corps":
+                html.find("</head>") < html.find('data-composant="table-filters.js"') < html.find("</body>"),
+        }
+        cas("poseur · chaque bloc est pose la ou il doit vivre",
+            {k: True for k in place}, place, "TF-0890 --poser")
+
+        vert = subprocess.run(["node", poseur, "--constat", str(page)],
+                              capture_output=True, text=True, encoding="utf-8")
+        cas("poseur · --constat rejoue la parite hors arbre des skills (sens vert)",
+            0, vert.returncode, "TF-0890 parite", vert.stdout[-280:])
+        # SENS ROUGE : un seul octet du bloc suffit a rompre la parite. Sans ce cas, un `--constat`
+        # qui rendrait 0 sur n'importe quoi passerait pour une preuve.
+        page.write_text(html.replace("data-composant=\"table-filters.js\"",
+                                     "data-composant=\"table-filters.js\" data-derive=\"1\"", 1),
+                        encoding="utf-8")
+        rouge = subprocess.run(["node", poseur, "--constat", str(page)],
+                               capture_output=True, text=True, encoding="utf-8")
+        cas("poseur · un octet modifie ROMPT la parite (sens rouge)",
+            (1, True), (rouge.returncode, "PÉRIMÉE" in rouge.stdout), "TF-0890 parite",
+            rouge.stdout[-280:])
+
+        # ---- TF-1486 (28/09/2026) : une page extraite en CRLF garde sa parite ---------------
+        # Mesure de l'agent « harnais » : 4 faux ecarts sur deux pages dont les empreintes
+        # egalaient celles du socle installe — seules les fins de ligne avaient change. Sens vert :
+        # la page conforme, reecrite en CRLF, passe. Sens rouge : la meme page en CRLF avec un
+        # octet derive echoue toujours — la normalisation ne neutralise QUE la fin de ligne.
+        page_crlf = Path(atelier) / "livrable-crlf.html"
+        page_crlf.write_bytes(html.replace("\r\n", "\n").replace("\n", "\r\n").encode("utf-8"))
+        crlf = subprocess.run(["node", poseur, "--constat", str(page_crlf)],
+                              capture_output=True, text=True, encoding="utf-8")
+        cas("poseur · une page conforme en CRLF garde sa parite (sens vert)",
+            0, crlf.returncode, "TF-1486 fins de ligne", crlf.stdout[-280:])
+        page_crlf.write_bytes(html.replace("\r\n", "\n").replace(
+            "data-composant=\"table-filters.js\"",
+            "data-composant=\"table-filters.js\" data-derive=\"1\"", 1).replace("\n", "\r\n").encode("utf-8"))
+        crlf_r = subprocess.run(["node", poseur, "--constat", str(page_crlf)],
+                                capture_output=True, text=True, encoding="utf-8")
+        cas("poseur · en CRLF, un octet modifie ROMPT toujours la parite (sens rouge)",
+            (1, True), (crlf_r.returncode, "PÉRIMÉE" in crlf_r.stdout), "TF-1486 fins de ligne",
+            crlf_r.stdout[-280:])
+
+        # ---- TF-0926 : la FEUILLE DU GABARIT, source synthetique `boilerplate.css` ----------
+        #
+        # Deux fixtures du socle portaient une copie FIGEE du CSS de `assets/boilerplate.html`,
+        # prise le 21/08 : 91 lignes du gabarit y manquaient, dont le token --hh et le registre
+        # rouge. Rien ne les rattachait a leur source — meme classe de defaut que la copie
+        # embarquee d'un composant, dans le depot meme qui edicte la parite. La feuille du
+        # gabarit n'est pas un fichier `.css` (elle vit DANS le HTML, et l'en sortir changerait
+        # le gabarit que tout auteur copie) : le poseur l'expose donc comme source SYNTHETIQUE.
+        # Les deux sens, sur une page hors arbre des skills, comme au-dessus.
+        page2 = Path(atelier) / "livrable-feuille-de-gabarit.html"
+        page2.write_text(
+            '<!DOCTYPE html>\n<html lang="fr">\n<head>\n<meta charset="UTF-8">\n'
+            "<title>Factory — feuille du gabarit · essai — 20260908a</title>\n</head>\n"
+            "<body>\n<h1>Essai</h1>\n</body>\n</html>\n", encoding="utf-8")
+        pose2 = subprocess.run(
+            ["node", poseur, "--poser", str(page2), "--composants", "boilerplate.css"],
+            capture_output=True, text=True, encoding="utf-8")
+        cas("poseur · la feuille du gabarit se pose comme un composant",
+            0, pose2.returncode, "TF-0926 gabarit", (pose2.stderr or pose2.stdout)[-280:])
+        html2 = page2.read_text(encoding="utf-8")
+        cas("poseur · la feuille posee porte bien le CSS du gabarit",
+            True, 'data-composant="boilerplate.css"' in html2 and "--hh:" in html2,
+            "TF-0926 gabarit")
+        vert2 = subprocess.run(["node", poseur, "--constat", str(page2)],
+                               capture_output=True, text=True, encoding="utf-8")
+        cas("poseur · la feuille posee est a la parite de son gabarit (sens vert)",
+            0, vert2.returncode, "TF-0926 parite", vert2.stdout[-280:])
+        # SENS ROUGE : la copie FIGEE. On rejoue exactement ce qui s'est passe — une ligne du
+        # gabarit retiree de la copie, sans toucher au gabarit — et la parite doit le dire.
+        page2.write_text(html2.replace("--hh: 64px;", "", 1), encoding="utf-8")
+        rouge2 = subprocess.run(["node", poseur, "--constat", str(page2)],
+                                capture_output=True, text=True, encoding="utf-8")
+        cas("poseur · une copie FIGEE de la feuille du gabarit rend un constat (sens rouge)",
+            (1, True), (rouge2.returncode, "PÉRIMÉE" in rouge2.stdout), "TF-0926 parite",
+            rouge2.stdout[-280:])
+    finally:
+        shutil.rmtree(atelier, ignore_errors=True)
+    return out
+
+
+def run_capture_manquee():
+    """TF-0897 — UNE CAPTURE QUI ECHOUE N'EST PAS UNE PANNE DE L'OUTIL.
+
+    La branche d'echec de capture etait ecrite, mesuree et rendue au JSON (`capture.faite` a
+    False, `png` a None, largeur portee a `captures_manquees`) : la sortie TEXTE la traversait
+    quand meme en `Path(None)`. TypeError, exit 1, traceback dans le journal R-32, et AUCUN
+    verdict pour la largeur concernee — alors que toutes les familles lues dans le DOM etaient
+    deja mesurees. Mesure du 07/09/2026 : page de 188 Ko (~13 500 px de haut) a 768 px et
+    echelle 2, reproduit deux fois ; le meme appel en echelle 1 rendait PASS.
+
+    Les deux sens, sur la MEME page et par le seul delai de capture :
+      · VERT  — delai normal : la capture aboutit, l'en-tete de largeur nomme le PNG ;
+      · ROUGE — delai d'une milliseconde : la capture ne peut PAS aboutir. L'outil doit rendre
+        son verdict quand meme, nommer « capture NON FAITE », imprimer le motif et declarer la
+        largeur au non_juge — et surtout ne PAS lever. Un traceback ici est le defaut lui-meme.
+    """
+    try:
+        import importlib
+        importlib.import_module("playwright.sync_api")
+    except ImportError:
+        return None
+    import subprocess
+    import tempfile
+    rendu = str(Path(__file__).resolve().parent / "render_page.py")
+    page = FIXTURES / "a5-feuille-parsable.html"
+    if not page.exists():
+        return [{"fixture": page.name, "verdict": "ABSENTE", "attendu": "fixture présente",
+                 "obtenu": "absente", "regle": "TF-0897", "detail": ""}]
+    captures = tempfile.mkdtemp(prefix="self-test-capture-")
+    out = []
+
+    def jouer(delai):
+        return subprocess.run(
+            [sys.executable, "-X", "utf8", rendu, str(page), "--widths", "768",
+             "--timeout", str(delai), "--out", captures],
+            capture_output=True, text=True, encoding="utf-8")
+
+    normal = jouer(30_000)
+    ok_vert = ("Traceback" not in (normal.stderr or "")
+               and "capture NON FAITE" not in normal.stdout
+               and "Verdict :" in normal.stdout)
+    out.append({"fixture": "capture aboutie · delai normal",
+                "verdict": "OK" if ok_vert else "ECHEC",
+                "attendu": "PNG nomme, aucun traceback", "regle": "TF-0897 sens vert",
+                "obtenu": "conforme" if ok_vert else "verdict ou capture manquants",
+                "detail": "" if ok_vert else (normal.stderr or normal.stdout)[-300:]})
+
+    rate = jouer(1)
+    manques = ["capture NON FAITE" in rate.stdout,
+               "capture impossible a 768 px" in rate.stdout,
+               "Verdict :" in rate.stdout,
+               "NON JUGEES a 768 px" in rate.stdout,
+               "Traceback" not in (rate.stderr or "")]
+    ok_rouge = all(manques)
+    out.append({"fixture": "capture impossible · delai 1 ms",
+                "verdict": "OK" if ok_rouge else "ECHEC",
+                "attendu": "constat declare, verdict rendu, aucun traceback",
+                "regle": "TF-0897 sens rouge",
+                "obtenu": "conforme" if ok_rouge else f"controles tenus : {manques}",
+                "detail": "" if ok_rouge else (rate.stderr or rate.stdout)[-300:]})
+    shutil.rmtree(captures, ignore_errors=True)
+    return out
+
+
+def run_sections_masquees():
+    """TF-1282 — UNE SECTION MASQUEE NE PERD PLUS LA CAPTURE DE PAGE, ET SE PEINT VRAIMENT.
+
+    Mesure du 21/09 et du 01/10/2026 : sur une page a onglets, `--sections` sur une vue
+    masquee par une regle CSS (pas par l'attribut `hidden`) levait une erreur rattrapee par
+    le MEME `except` que la capture de page — qui ecrasait alors une capture de page deja
+    reussie (`capture NON FAITE` alors que le PNG existe). La fixture porte trois vues :
+      · vue A, active d'office — capturee dans tous les cas ;
+      · vue B, masquee par `.vue{display:none}` — DOIT se peindre vraiment une fois le
+        `display` force sur elle (TF-1282, mecanisme 2) ;
+      · vue C, boite nulle posee en style INLINE — reste non peinte meme une fois affichee,
+        et son echec doit nommer la CAUSE (« NON PEINTE »), pas un delai (mecanisme 3).
+    Dans tous les cas, la capture de PAGE ENTIERE ne doit JAMAIS se dire « NON FAITE »
+    (mecanisme 1) : avant TF-1282, l'echec de la vue C a lui seul suffisait a l'effacer.
+    """
+    try:
+        import importlib
+        importlib.import_module("playwright.sync_api")
+    except ImportError:
+        return None
+    import tempfile
+    rendu = str(Path(__file__).resolve().parent / "render_page.py")
+    page = FIXTURES / "tf1282-onglet-masque-par-css.html"
+    if not page.exists():
+        return [{"fixture": page.name, "verdict": "ABSENTE", "attendu": "fixture présente",
+                 "obtenu": "absente", "regle": "TF-1282", "detail": ""}]
+    captures = tempfile.mkdtemp(prefix="self-test-sections-")
+    out = []
+    r = subprocess.run(
+        [sys.executable, "-X", "utf8", rendu, str(page), "--widths", "900",
+         "--sections", "section.vue", "--out", captures],
+        capture_output=True, text=True, encoding="utf-8")
+    stdout = r.stdout or ""
+
+    # Mecanisme 1 — la capture de PAGE n'est JAMAIS perdue a cause de l'echec d'une section.
+    page_preservee = ("capture NON FAITE" not in stdout and "Verdict :" in stdout
+                       and "Traceback" not in (r.stderr or ""))
+    out.append({"fixture": "section masquee · capture de page preservee",
+                "verdict": "OK" if page_preservee else "ECHEC",
+                "attendu": "page jamais NON FAITE, aucun traceback", "regle": "TF-1282 mecanisme 1",
+                "obtenu": "conforme" if page_preservee else "capture de page perdue ou traceback",
+                "detail": "" if page_preservee else stdout[-400:] + (r.stderr or "")[-400:]})
+
+    # Mecanisme 2 — la vue B, masquee par une regle CSS, se peint VRAIMENT : son PNG existe.
+    png_b = Path(captures) / f"{page.stem}-w900-section02.png"
+    vue_b_peinte = png_b.exists() and png_b.stat().st_size > 0
+    out.append({"fixture": "section masquee par CSS · peinte pour de bon",
+                "verdict": "OK" if vue_b_peinte else "ECHEC",
+                "attendu": "PNG de la vue B produit", "regle": "TF-1282 mecanisme 2",
+                "obtenu": "conforme" if vue_b_peinte else "PNG de la vue B absent",
+                "detail": "" if vue_b_peinte else f"attendu : {png_b}"})
+
+    # Mecanisme 3 — la vue C, boite nulle, echoue en nommant la CAUSE, pas un delai.
+    cause_nommee = ("NON PEINTE" in stdout and "boite 0" in stdout
+                     and "TimeoutError" not in stdout)
+    out.append({"fixture": "section non peinte · cause nommee",
+                "verdict": "OK" if cause_nommee else "ECHEC",
+                "attendu": "motif « NON PEINTE » avec boite nulle, pas TimeoutError",
+                "regle": "TF-1282 mecanisme 3",
+                "obtenu": "conforme" if cause_nommee else "cause non nommee ou TimeoutError lu",
+                "detail": "" if cause_nommee else stdout[-400:]})
+    shutil.rmtree(captures, ignore_errors=True)
+    return out
+
+
+def run_bandeau_collant_section():
+    """TF-1356 — LE MECANISME DE NEUTRALISATION DES COLLANTS JOUE AUSSI PAR SECTION.
+
+    Mesure du 24/09/2026 : `render_page.py --sections` peignait le bandeau `position: sticky`
+    du socle PAR-DESSUS le haut de chaque section capturee (4 lignes sur 7 d'un tableau
+    invisibles), parce que le mecanisme qui neutralise les elements collants le temps d'une
+    capture (deja applique a la capture d'UN SEUL element, V9 / TF-1192) n'etait JAMAIS appele
+    dans la boucle de capture PAR SECTION — aucune trace de neutralisation n'existait pour une
+    section, quel que soit le gabarit. Preuve : le JSON nomme desormais le bandeau neutralise
+    (`sections_collants_neutralises`), ce qu'aucune version precedente ne pouvait produire
+    puisque le champ lui-meme n'existait pas hors du chemin V9.
+    """
+    try:
+        import importlib
+        importlib.import_module("playwright.sync_api")
+    except ImportError:
+        return None
+    import tempfile
+    rendu = str(Path(__file__).resolve().parent / "render_page.py")
+    page = FIXTURES / "tf1356-bandeau-collant-section.html"
+    if not page.exists():
+        return [{"fixture": page.name, "verdict": "ABSENTE", "attendu": "fixture présente",
+                 "obtenu": "absente", "regle": "TF-1356", "detail": ""}]
+    captures = tempfile.mkdtemp(prefix="self-test-bandeau-")
+    r = subprocess.run(
+        [sys.executable, "-X", "utf8", rendu, str(page), "--widths", "900",
+         "--sections", "section.chap", "--out", captures, "--output", "json"],
+        capture_output=True, text=True, encoding="utf-8")
+    try:
+        cap = json.loads(r.stdout)["breakpoints"]["900"]["capture"]
+    except Exception:  # noqa: BLE001 — une sortie illisible se compte comme un échec
+        cap = None
+    neutralises = (cap or {}).get("sections_collants_neutralises") or {}
+    noms = neutralises.get("1") or []
+    nomme = any("bandeau" in n for n in noms)
+    section_peinte = (Path(captures) / f"{page.stem}-w900-section01.png").exists()
+    ok = nomme and section_peinte
+    shutil.rmtree(captures, ignore_errors=True)
+    return [{"fixture": "section sous bandeau collant · neutralisation nommee",
+             "verdict": "OK" if ok else "ECHEC",
+             "attendu": "section capturee, header.bandeau neutralise et nomme",
+             "regle": "TF-1356 mecanisme",
+             "obtenu": noms or "aucun",
+             "detail": "" if ok else (r.stderr or r.stdout)[-300:]}]
+
+
+def run_etat_initial_non_juge():
+    """TF-1370 — SEUL L'ETAT INITIAL EST JUGE, ET LE RAPPORT LE DIT DESORMAIS.
+
+    Mesure Produit-68 du 24/09/2026 (RG-9, ledger seq 214) : sur une page a sept vues, six
+    n'ont jamais ete rendues — paragraphes brides, tableau rogne, schema absent — et le verdict
+    est quand meme sorti PASS aux sept largeurs, sans un mot sur ce qui n'avait pas ete regarde.
+    Aucune des lignes publiees par `render_page.py` ne le disait.
+
+    Deux sens, sur la MEME fixture : sans aucun flag, le message dit qu'AUCUNE interaction
+    n'est rejouee ; avec `--etats-ouverts`, le MEME message nomme ce qui l'est EN PLUS — l'un
+    ne doit pas se lire comme l'autre.
+    """
+    try:
+        import importlib
+        importlib.import_module("playwright.sync_api")
+    except ImportError:
+        return None
+    import tempfile
+    rendu = str(Path(__file__).resolve().parent / "render_page.py")
+    page = FIXTURES / "a5-feuille-parsable.html"
+    if not page.exists():
+        return [{"fixture": page.name, "verdict": "ABSENTE", "attendu": "fixture présente",
+                 "obtenu": "absente", "regle": "TF-1370", "detail": ""}]
+    out = []
+
+    def non_juge_etat(args_en_plus):
+        dossier = tempfile.mkdtemp(prefix="self-test-etat-initial-")
+        r = subprocess.run(
+            [sys.executable, "-X", "utf8", rendu, str(page), "--widths", "900",
+             "--out", dossier, "--output", "json", *args_en_plus],
+            capture_output=True, text=True, encoding="utf-8")
+        shutil.rmtree(dossier, ignore_errors=True)
+        try:
+            lignes = json.loads(r.stdout).get("non_juge") or []
+        except Exception:  # noqa: BLE001 — une sortie illisible se compte comme un échec
+            return None
+        return " ".join(n for n in lignes if n.startswith("ETAT DE LA PAGE"))
+
+    sans_flag = non_juge_etat([]) or ""
+    ok_defaut = ("l'etat INITIAL" in sans_flag and "aucune interaction n'est rejouee" in sans_flag
+                 and "TF-1370" in sans_flag)
+    out.append({"fixture": "etat initial · aucun flag · avertissement publie",
+                "verdict": "OK" if ok_defaut else "ECHEC",
+                "attendu": "ETAT INITIAL, aucune interaction rejouee, TF-1370",
+                "regle": "TF-1370 defaut", "obtenu": sans_flag[:160] or "absent",
+                "detail": "" if ok_defaut else sans_flag})
+
+    avec_flag = non_juge_etat(["--etats-ouverts"]) or ""
+    ok_nuance = ("rejoue EN PLUS" in avec_flag and "tout-deplie" in avec_flag
+                 and "TF-1370" in avec_flag)
+    out.append({"fixture": "etat initial · --etats-ouverts · avertissement nuance",
+                "verdict": "OK" if ok_nuance else "ECHEC",
+                "attendu": "rejoue EN PLUS l'etat tout-deplie, TF-1370",
+                "regle": "TF-1370 nuance matrice", "obtenu": avec_flag[:160] or "absent",
+                "detail": "" if ok_nuance else avec_flag})
+    return out
+
+
+def run_scenes_declarees():
+    """TF-2299 — UNE PAGE A SCENES SE JOUE SCENE PAR SCENE (lot Produit-81 du 09/11/2026, RA-04).
+
+    Cinq animations de sept ou huit scenes : 32 scenes sur 37 jamais rendues ni mesurees, car
+    `render_page.py` ne jugeait que l'etat initial. Une planche de captures ecrite a la main y a
+    trouve deux defauts que tous les juges avaient laisses passer.
+
+    Trois fixtures, trois sens. ROUGE : sept scenes, la quatrieme porte une adresse insecable ; la
+    scene visible au chargement est saine, donc l'etat initial rend PASS (c'est le silence d'avant)
+    et seul le parcours des scenes montre le defaut. VERTE : les memes sept scenes, l'adresse se
+    coupe, tout est joue et rien ne bloque ; le corps de page, qui porte `data-scene`, n'est pas
+    compte comme une scene. INATTEIGNABLES : trois scenes declarees, aucun lecteur ; les deux
+    scenes cachees doivent etre nommees NON JOUEES, jamais couvertes par un vert.
+    """
+    try:
+        import importlib
+        importlib.import_module("playwright.sync_api")
+    except ImportError:
+        return None
+    import tempfile
+    rendu = str(Path(__file__).resolve().parent / "render_page.py")
+    out = []
+
+    def jouer(nom):
+        page = FIXTURES / nom
+        if not page.exists():
+            return page, None, ""
+        dossier = tempfile.mkdtemp(prefix="self-test-scenes-")
+        r = subprocess.run(
+            [sys.executable, "-X", "utf8", rendu, str(page), "--widths", "390,1280",
+             "--scale", "1", "--out", dossier, "--output", "json"],
+            capture_output=True, text=True, encoding="utf-8")
+        pngs = sorted(p.name for p in Path(dossier).glob("*-scene*.png"))
+        shutil.rmtree(dossier, ignore_errors=True)
+        try:
+            return page, json.loads(r.stdout), pngs
+        except Exception:  # noqa: BLE001 — une sortie illisible se compte comme un échec
+            return page, None, (r.stderr or r.stdout)[-300:]
+
+    def absente(page):
+        return [{"fixture": page.name, "verdict": "ABSENTE", "attendu": "fixture présente",
+                 "obtenu": "absente", "regle": "TF-2299", "detail": ""}]
+
+    # ROUGE : l'etat initial est vert, le defaut ne vit que dans la scene « 3 ».
+    page, rapport, pngs = jouer("scenes-rouge.html")
+    if not page.exists():
+        return absente(page)
+    bp = (rapport or {}).get("breakpoints") or {}
+    initial = [bp.get(w, {}).get("blocking") for w in ("390", "1280")]
+    par_scene = {w: {n: s.get("blocking") for n, s in
+                     ((bp.get(w) or {}).get("scenes") or {}).get("scenes", {}).items()}
+                 for w in ("390", "1280")}
+    fautives = {w: sorted(n for n, b in par_scene[w].items() if b) for w in par_scene}
+    ok = (rapport is not None and rapport.get("verdict") == "FAIL" and initial == [0, 0]
+          and fautives == {"390": ["3"], "1280": ["3"]}
+          and all(len(par_scene[w]) == 7 for w in par_scene) and len(pngs) == 14)
+    out.append({"fixture": "scenes-rouge · defaut dans la scene 4 seule, etat initial vert",
+                "verdict": "OK" if ok else "ECHEC",
+                "attendu": "FAIL, etat initial 0 bloquant, seule la scene 3 bloque, 7 scenes x 2 largeurs",
+                "regle": "TF-2299 rouge",
+                "obtenu": (f"{rapport.get('verdict') if rapport else 'illisible'}, initial {initial}, "
+                           f"scenes fautives {fautives}, {len(pngs) if isinstance(pngs, list) else 0} PNG"),
+                "detail": "" if ok else str(pngs)[:300]})
+
+    # VERTE : tout est joue, rien ne bloque, le corps de page n'est pas une scene.
+    page, rapport, pngs = jouer("scenes-verte.html")
+    if not page.exists():
+        return out + absente(page)
+    bp = (rapport or {}).get("breakpoints") or {}
+    jeux = [(bp.get(w) or {}).get("scenes") or {} for w in ("390", "1280")]
+    jouees = [sum(1 for s in j.get("scenes", {}).values() if s.get("applique")) for j in jeux]
+    declarees = [j.get("declarees") for j in jeux]
+    ligne = " ".join(n for n in (rapport or {}).get("non_juge", []) if n.startswith("SCENES (TF-2299)"))
+    ok = (rapport is not None and rapport.get("verdict") == "PASS" and jouees == [7, 7]
+          and declarees == [7, 7] and len(pngs) == 14
+          and "14 scene(s)-largeur jouee(s) sur 14" in ligne and "minuteur" in ligne
+          and "PAS mesure" in ligne and "SCENE NON JOUEE" not in " ".join(rapport["non_juge"]))
+    out.append({"fixture": "scenes-verte · sept scenes jouees, aucune ne bloque",
+                "verdict": "OK" if ok else "ECHEC",
+                "attendu": "PASS, 7 declarees (body exclu) et 7 jouees a chaque largeur, non_juge dit le non mesure",
+                "regle": "TF-2299 verte",
+                "obtenu": f"{(rapport or {}).get('verdict')}, declarees {declarees}, jouees {jouees}",
+                "detail": "" if ok else ligne[:300]})
+
+    # INATTEIGNABLES : deux scenes declarees qu'aucun geste n'affiche, nommees NON JOUEES.
+    page, rapport, pngs = jouer("scenes-inatteignables.html")
+    if not page.exists():
+        return out + absente(page)
+    bp = (rapport or {}).get("breakpoints") or {}
+    scenes = ((bp.get("390") or {}).get("scenes") or {}).get("scenes", {})
+    non_jouees = sorted(n for n, s in scenes.items() if not s.get("applique"))
+    lignes = [n for n in (rapport or {}).get("non_juge", []) if n.startswith("SCENE NON JOUEE")]
+    ok = (rapport is not None and non_jouees == ["1", "2"] and scenes.get("0", {}).get("applique")
+          and len(lignes) == 2 and all("NI RENDUE NI MESUREE" in n for n in lignes))
+    out.append({"fixture": "scenes-inatteignables · deux scenes cachees nommees non jouees",
+                "verdict": "OK" if ok else "ECHEC",
+                "attendu": "scenes 1 et 2 NON JOUEES, une ligne chacune au non_juge, largeurs comprises",
+                "regle": "TF-2299 couverture",
+                "obtenu": f"non jouees {non_jouees}, {len(lignes)} ligne(s) au non_juge",
+                "detail": "" if ok else str(lignes)[:300]})
+    return out
+
+
+def run_thead_colle():
+    """TF-0900 — LE CONTENEUR DE TABLEAU CONTRE LE THEAD COLLANT, mesure d'execution.
+
+    Un ancetre dont l'`overflow` n'est pas `visible` devient la boite de defilement de tout
+    `position: sticky` de son sous-arbre. `.table-hote { overflow-x: auto }`, pose a toutes les
+    largeurs par le socle, DEFAISAIT donc a lui seul le geste L29 pose vingt lignes plus bas
+    dans le meme gabarit : le thead se figeait sous le haut de SON TABLEAU (+67 px au repos,
+    une ligne recouverte en permanence) et quittait l'ecran avec lui (-96 px apres 200 px de
+    defilement, mesure du 07/09/2026 sur quatre tableaux).
+
+    Aucun oracle statique ne pouvait le voir : la feuille DECLARE bien `position: sticky` et
+    `top: var(--hh)`, et L29 juge des declarations. Ce qui est faux, c'est le REFERENTIEL de ce
+    top — et un referentiel ne se lit qu'apres defilement, dans un navigateur.
+
+    Les deux fixtures ne different QUE par la ligne `.table-hote { overflow-x: … }` :
+      · VERTE — apres 400 px de defilement, le bord haut du premier `<th>` vaut `--hh` (104 px)
+        a 4 px pres : le thead est colle sous l'en-tete de page, comme L29 le prescrit ;
+      · ROUGE — le meme document avec le conteneur defilant : le banc EXIGE que la mesure en
+        differe. Sans ce sens rouge, une page qui n'aurait jamais colle passerait pour verte.
+    """
+    try:
+        import importlib
+        importlib.import_module("playwright.sync_api")
+    except ImportError:
+        return None
+    from playwright.sync_api import sync_playwright  # noqa: PLC0415
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from render_page import ensure_browser_path  # noqa: PLC0415
+        ensure_browser_path()
+    except Exception:  # noqa: BLE001 — l'auto-detection du navigateur est un confort, pas un du
+        pass
+
+    out = []
+    fichiers = ("l29-table-hote-socle.html", "l29-table-hote-defilante.html")
+    manquantes = [n for n in fichiers if not (FIXTURES / n).exists()]
+    for n in manquantes:
+        out.append({"fixture": n, "verdict": "ABSENTE", "attendu": "fixture présente",
+                    "obtenu": "absente", "regle": "L29 (runtime)", "detail": ""})
+    if manquantes:
+        return out
+
+    HH = 104          # valeur du token --hh dans les deux fixtures
+    TOLERANCE = 4     # px — l'arrondi de peinture, pas un assouplissement
+
+    def mesurer(nom):
+        """Le tableau est amene 300 px AU-DESSUS du bord haut de la fenetre, son corps restant
+        a l'ecran : c'est exactement la situation ou un thead collant doit etre visible."""
+        page.goto((FIXTURES / nom).resolve().as_uri())
+        page.wait_for_load_state("load")
+        return page.evaluate("""() => {
+          const t = document.getElementById('lots');
+          window.scrollTo(0, t.getBoundingClientRect().top + window.scrollY + 300);
+          const th = document.querySelector('#lots thead th');
+          const r = th.getBoundingClientRect();
+          const tr = t.getBoundingClientRect();
+          return { top: Math.round(r.top),
+                   tableau_a_l_ecran: tr.bottom > 0 && tr.top < window.innerHeight };
+        }""")
+
+    with sync_playwright() as pw:
+        navigateur = pw.chromium.launch()
+        page = navigateur.new_page(viewport={"width": 1280, "height": 800})
+        try:
+            vert = mesurer("l29-table-hote-socle.html")
+            rouge = mesurer("l29-table-hote-defilante.html")
+        except Exception as erreur:  # noqa: BLE001 — une panne se compte, elle n'arrete pas
+            out.append({"fixture": "l29-table-hote-*.html", "verdict": "ECHEC",
+                        "attendu": "section jouee", "obtenu": type(erreur).__name__,
+                        "regle": "TF-0900", "detail": str(erreur).splitlines()[0][:300]})
+            navigateur.close()
+            return out
+        page.close()
+        navigateur.close()
+
+    ok_vert = vert["tableau_a_l_ecran"] and abs(vert["top"] - HH) <= TOLERANCE
+    out.append({"fixture": "l29-table-hote-socle.html", "verdict": "OK" if ok_vert else "ECHEC",
+                "attendu": f"th colle a --hh ({HH} px ± {TOLERANCE})", "obtenu": f"{vert['top']} px",
+                "regle": "TF-0900 collage",
+                "detail": "" if ok_vert else
+                          f"le thead ne se colle pas sous l'en-tete de page : {vert['top']} px "
+                          f"au lieu de {HH}, tableau a l'ecran = {vert['tableau_a_l_ecran']}"})
+    ok_rouge = (rouge["tableau_a_l_ecran"] and abs(rouge["top"] - HH) > TOLERANCE
+                and rouge["top"] < 0)
+    out.append({"fixture": "l29-table-hote-defilante.html", "verdict": "OK" if ok_rouge else "ECHEC",
+                "attendu": f"th HORS de l'ecran (sens rouge, ni {HH} px, ni >= 0)",
+                "obtenu": f"{rouge['top']} px", "regle": "TF-0900 contre-epreuve",
+                "detail": "" if ok_rouge else
+                          "le conteneur defilant ne casse plus le collage : la mesure ne "
+                          "discrimine plus rien, la fixture verte ne prouve plus rien"})
+    return out
+
+
+def run_infobulle_runtime():
+    """TF-0935 — le composant d'INFOBULLE, joue dans un navigateur.
+
+    Un `title` de sept objets concatenes en 700 caracteres est conforme a L3 sous toutes ses
+    formes et illisible : « formatte tous les tooltips, puces et sous-puces », dit le retour
+    humain. La regle statique (L3 quater) refuse le bloc ; ce banc prouve que le socle sait
+    faire ce qu'il exige. Quatre cas, chacun avec son sens :
+
+      · sept objets et neuf sous-precisions rendent SEPT puces et NEUF sous-puces ;
+      · l'infobulle d'une cible collee au bord droit reste DANS l'ecran ;
+      · le `title` natif est retire pendant l'affichage puis RESTITUE — un `title` perdu est un
+        contenu perdu a l'impression et pour les technologies d'assistance ;
+      · CONTRE-EPREUVE : un `title` d'une seule ligne rend un paragraphe, pas une fausse liste a
+        une puce. Sans ce cas, un composant qui met tout en puces passerait pour correct.
+
+    Silencieux si playwright est absent : un comportement se mesure dans un navigateur.
+    """
+    try:
+        import importlib
+        importlib.import_module("playwright.sync_api")
+    except ImportError:
+        return None
+    from playwright.sync_api import sync_playwright  # noqa: PLC0415
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from render_page import ensure_browser_path  # noqa: PLC0415
+        ensure_browser_path()
+    except Exception:  # noqa: BLE001 — l'auto-detection du navigateur est un confort, pas un du
+        pass
+
+    out = []
+    fixture = FIXTURES / "tf-infobulle-structuree.html"
+    if not fixture.exists():
+        return [{"fixture": fixture.name, "verdict": "ABSENTE", "attendu": "fixture présente",
+                 "obtenu": "absente", "regle": "infobulle (runtime)", "detail": ""}]
+
+    def cas(nom, attendu, obtenu, regle):
+        ok = attendu == obtenu
+        out.append({"fixture": nom, "verdict": "OK" if ok else "ECHEC",
+                    "attendu": str(attendu)[:120], "obtenu": str(obtenu)[:120],
+                    "regle": regle,
+                    "detail": "" if ok else f"attendu {attendu!r}, obtenu {obtenu!r}"[:300]})
+
+    with sync_playwright() as pw:
+        navigateur = pw.chromium.launch()
+        page = navigateur.new_page(viewport={"width": 1280, "height": 900})
+        try:
+            page.goto(fixture.resolve().as_uri())
+            page.wait_for_load_state("load")
+
+            # -- puces et sous-puces reconstruites depuis le SEUL `title` -----------------
+            page.evaluate("() => window.FactoryInfobulle.ouvrir(document.getElementById('riche'))")
+            compte = page.evaluate(
+                "() => ({ puces: document.querySelectorAll('#infobulle > ul > li').length,"
+                "        sous: document.querySelectorAll('#infobulle > ul > li ul > li').length })")
+            cas("tf-infobulle-structuree · puces", {"puces": 7, "sous": 9}, compte,
+                "TF-0935 structure")
+
+            # -- l'infobulle reste dans l'ecran ------------------------------------------
+            page.evaluate("() => window.FactoryInfobulle.fermer()")
+            page.evaluate("() => window.FactoryInfobulle.ouvrir(document.getElementById('bord'))")
+            dedans = page.evaluate(
+                "() => { const r = document.getElementById('infobulle').getBoundingClientRect();"
+                "  return r.left >= 0 && r.top >= 0 && r.right <= window.innerWidth"
+                "      && r.bottom <= window.innerHeight; }")
+            cas("tf-infobulle-structuree · dans l'ecran", True, dedans, "TF-0935 placement")
+
+            # -- le `title` natif : retire pendant, RESTITUE apres ------------------------
+            page.evaluate("() => window.FactoryInfobulle.fermer()")
+            # L'attendu du `title` restitue est le `title` INITIAL, releve dans la page : le
+            # comparer a une constante recopiee ici ferait passer une fixture editee.
+            avant = page.evaluate(
+                "() => document.getElementById('riche').getAttribute('title')")
+            page.evaluate("() => window.FactoryInfobulle.ouvrir(document.getElementById('riche'))")
+            pendant = page.evaluate(
+                "() => document.getElementById('riche').hasAttribute('title')")
+            page.evaluate("() => window.FactoryInfobulle.fermer()")
+            apres = page.evaluate(
+                "() => document.getElementById('riche').getAttribute('title')")
+            cas("tf-infobulle-structuree · title neutralise puis restitue",
+                {"pendant": False, "restitue": True},
+                {"pendant": pendant, "restitue": apres == avant and bool(avant)},
+                "TF-0935 title")
+
+            # -- CONTRE-EPREUVE : une ligne = un paragraphe, pas une puce -----------------
+            page.evaluate("() => window.FactoryInfobulle.ouvrir(document.getElementById('plat'))")
+            forme = page.evaluate(
+                "() => ({ p: document.querySelectorAll('#infobulle > p').length,"
+                "        ul: document.querySelectorAll('#infobulle > ul').length })")
+            cas("tf-infobulle-structuree · une ligne reste un paragraphe (sens rouge)",
+                {"p": 1, "ul": 0}, forme, "TF-0935 contre-epreuve")
+        except Exception as erreur:  # noqa: BLE001 — toute panne se compte, aucune n'arrete
+            out.append({"fixture": fixture.name, "verdict": "ECHEC",
+                        "attendu": "banc joue", "obtenu": type(erreur).__name__,
+                        "regle": "infobulle (runtime)",
+                        "detail": str(erreur).splitlines()[0][:300]})
+        finally:
+            navigateur.close()
+    return out
+
+
+def run_table_arbre_runtime():
+    """TF-0952 (08/09/2026) — UNE HIERARCHIE RENDUE EN TABLEAU SE PLIE, ET LE SOCLE SAIT LE FAIRE.
+
+    LE FAIT PAYE, ET IL EST MESURE. Un livrable rendait deux hierarchies (schema > table >
+    colonne) dans des tableaux. Les lignes portaient DEJA `data-niveau`, et l'indentation etait
+    faite d'espaces insecables. Mesure a l'ouverture : 134 lignes visibles d'un coup sur la
+    premiere, 296 sur la seconde — aucun pliage, aucun compte d'enfants sur la ligne parente. Le
+    destinataire a du citer un composant EXTERNE pour se faire comprendre. Le socle n'avait aucun
+    composant de tableau arborescent : chaque livrable qui en avait besoin le reecrivait, ou
+    renoncait.
+
+    POURQUOI UN BANC D'EXECUTION : le defaut n'est pas dans le HTML — la page est conforme, avec
+    ou sans pliage. Il est dans ce que le lecteur RECOIT a l'ouverture. Seul un navigateur le dit.
+
+    QUATRE CAS, ET LE DERNIER EST CELUI QUI JUSTIFIE L'ARBITRAGE DE TF-0953 :
+      · a l'arrivee, seules les RACINES sont visibles (3 sur 48) — c'est tout l'interet ;
+      · « tout deplier » rend les 48, « tout replier » ramene a 3 ;
+      · deplier UNE racine n'ouvre qu'ELLE : ses tables paraissent, pas les colonnes de ses
+        tables. Sans ce cas, un composant qui deplierait tout au premier clic passerait ;
+      · le pliage SURVIT au passage du composant de filtres. C'est la cohabitation qui etait
+        impossible avant l'arbitrage partage, et qui obligeait un produit a poser un
+        MutationObserver sur `hidden`.
+
+    SENS ROUGE : la MEME page avec `data-arbre="off"` — le composant ne s'initialise pas, et le
+    lecteur recoit les 48 lignes d'un coup, sans un chevron. C'est l'etat du livrable d'origine.
+    """
+    try:
+        import importlib
+        importlib.import_module("playwright.sync_api")
+    except ImportError:
+        return None
+    from playwright.sync_api import sync_playwright  # noqa: PLC0415
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from render_page import ensure_browser_path  # noqa: PLC0415
+        ensure_browser_path()
+    except Exception:  # noqa: BLE001
+        pass
+    fixture = FIXTURES / "tf-table-arbre.html"
+    if not fixture.exists():
+        return [{"fixture": fixture.name, "verdict": "ABSENTE", "attendu": "fixture présente",
+                 "obtenu": "absente", "regle": "TF-0952", "detail": ""}]
+    import tempfile
+    tmp = Path(tempfile.mkdtemp(prefix="self-test-arbre-"))
+    eteinte = tmp / "arbre-eteint.html"
+    eteinte.write_text(fixture.read_text(encoding="utf-8").replace('id="t1" data-arbre>',
+                                                                   'id="t1" data-arbre="off">'),
+                       encoding="utf-8")
+    out = []
+
+    def cas(nom, attendu, obtenu, regle):
+        ok = attendu == obtenu
+        out.append({"fixture": nom, "verdict": "OK" if ok else "ECHEC",
+                    "attendu": str(attendu)[:120], "obtenu": str(obtenu)[:120], "regle": regle,
+                    "detail": "" if ok else f"attendu {attendu!r}, obtenu {obtenu!r}"[:300]})
+
+    with sync_playwright() as pw:
+        navigateur = pw.chromium.launch()
+        page = navigateur.new_page(viewport={"width": 1280, "height": 900})
+        try:
+            page.goto(fixture.resolve().as_uri())
+            page.wait_for_load_state("load")
+            vues = lambda: page.evaluate("() => window.BancArbre.vues()")  # noqa: E731
+            cas("tf-table-arbre · à l'arrivée, seules les racines",
+                {"vues": 3, "total": 48}, {"vues": vues(), "total": 48}, "TF-0952 pliage")
+            page.evaluate("() => window.__arbre.deplierTout()")
+            depliees = vues()
+            page.evaluate("() => window.__arbre.plierTout()")
+            cas("tf-table-arbre · tout déplier / tout replier",
+                {"deplie": 48, "replie": 3}, {"deplie": depliees, "replie": vues()},
+                "TF-0952 commandes")
+            page.evaluate("() => window.__arbre.deplier('s1')")
+            cas("tf-table-arbre · déplier une racine n'ouvre qu'elle",
+                {"vues": 6, "table": True, "colonne": False},
+                {"vues": vues(),
+                 "table": page.evaluate("() => window.BancArbre.estVue('s1.baux')"),
+                 "colonne": page.evaluate("() => window.BancArbre.estVue('s1.baux.identifiant')")},
+                "TF-0952 profondeur")
+            avant = vues()
+            page.evaluate("() => { if (window.__tf) window.__tf.appliquer(); }")
+            cas("tf-table-arbre · le pliage survit au composant de filtres",
+                {"vues": avant, "repliee": False},
+                {"vues": vues(),
+                 "repliee": page.evaluate("() => window.BancArbre.estVue('s2.baux')")},
+                "TF-0952 cohabitation")
+            # SENS ROUGE : le composant eteint — l'etat du livrable d'origine.
+            page.goto(eteinte.resolve().as_uri())
+            page.wait_for_load_state("load")
+            cas("tf-table-arbre · composant éteint : tout d'un coup (sens rouge)",
+                {"vues": 48, "chevrons": 0},
+                {"vues": vues(),
+                 "chevrons": page.evaluate(
+                     "() => document.querySelectorAll('button[data-arbre-chevron]').length")},
+                "TF-0952 reproduction")
+        except Exception as erreur:  # noqa: BLE001
+            out.append({"fixture": fixture.name, "verdict": "ECHEC", "attendu": "banc joué",
+                        "obtenu": type(erreur).__name__, "regle": "TF-0952",
+                        "detail": str(erreur).splitlines()[0][:300]})
+        finally:
+            navigateur.close()
+    return out
+
+
+def run_visibilite_lignes():
+    """TF-0953 (08/09/2026) — LA VISIBILITE D'UNE LIGNE EST UNE DISJONCTION, ARBITREE A UN SEUL
+    ENDROIT.
+
+    LE FAIT PAYE. Deux composants du socle calculaient chacun, pour leur compte, si une ligne
+    devait etre vue : `kpi-filter.js` posait `tr.hidden` depuis SA liste d'attributs, ecrite en
+    dur ; `table-filters.js` forcait `style.display = ''` sur toute ligne passant son filtre.
+    Aucun des deux ne laissait de place a un TROISIEME mecanisme. Un produit qui avait besoin
+    d'un pliage d'arbre n'a eu d'autre issue qu'un MutationObserver sur `hidden` — pour
+    reappliquer son pliage APRES chaque passage des filtres — puis un depliage complet de
+    l'arbre a chaque changement de filtre, pour ne jamais cacher un resultat. Deux
+    contournements qui ne devraient pas exister.
+
+    POURQUOI UN BANC D'EXECUTION ET PAS UNE REGLE DE MARQUAGE : le defaut n'est pas dans le HTML,
+    il est dans ce que le JavaScript FAIT a l'ouverture. Aucun oracle de marquage ne le voit — la
+    page est parfaitement conforme avant comme apres.
+
+    DEUX SENS, ET LE SECOND EST LA REPRODUCTION DU DEFAUT :
+      (1) VERT  — `visibilite-arbitree.html` charge le composant d'arbitrage. Une ligne pliee par
+                  l'arbre reste pliee quand le filtre par indicateur passe, ET quand le composant
+                  de filtres de tableau repasse. Les deux composants sont eprouves, parce que
+                  chacun ecrasait a sa maniere : l'un par `hidden`, l'autre par `style.display` ;
+      (2) ROUGE — `visibilite-sans-arbitrage.html`, la MEME page et le MEME pliage SANS le
+                  composant : la ligne pliee REAPPARAIT. Sans ce sens, un vert obtenu par une
+                  mesure devenue muette serait indistinguable d'un vert obtenu par le correctif.
+
+    LE TEMOIN QUI EMPECHE LE VERT DE MENTIR : une ligne que le filtre exclut VRAIMENT doit rester
+    masquee dans les deux pages. Un arbitrage qui rendrait tout visible passerait les deux cas
+    ci-dessus et casserait le filtrage.
+
+    Silencieux si playwright est absent : un comportement se mesure dans un navigateur.
+    """
+    try:
+        import importlib
+        importlib.import_module("playwright.sync_api")
+    except ImportError:
+        return None
+    from playwright.sync_api import sync_playwright  # noqa: PLC0415
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from render_page import ensure_browser_path  # noqa: PLC0415
+        ensure_browser_path()
+    except Exception:  # noqa: BLE001 — l'auto-detection du navigateur est un confort, pas un dû
+        pass
+
+    out = []
+
+    def cas(nom, attendu, obtenu, regle):
+        ok = attendu == obtenu
+        out.append({"fixture": nom, "verdict": "OK" if ok else "ECHEC",
+                    "attendu": str(attendu)[:120], "obtenu": str(obtenu)[:120],
+                    "regle": regle,
+                    "detail": "" if ok else f"attendu {attendu!r}, obtenu {obtenu!r}"[:300]})
+
+    def jouer(fichier):
+        """Plie deux sous-arbres, passe les DEUX filtres, et rend ce qui est encore vu."""
+        cible = FIXTURES / fichier
+        if not cible.exists():
+            return {"absente": True}
+        with sync_playwright() as pw:
+            navigateur = pw.chromium.launch()
+            page = navigateur.new_page(viewport={"width": 1280, "height": 900})
+            try:
+                page.goto(cible.resolve().as_uri())
+                page.wait_for_load_state("load")
+                # r3 et r4 sont les enfants de r2 ; r6 est l'enfant de r5.
+                page.evaluate("() => { window.BancArbre.plier('r2'); window.BancArbre.plier('r5'); }")
+                plie_avant = page.evaluate("() => window.BancArbre.estVue('r3')")
+                # (a) le filtre par indicateur : il RECALCULE `hidden` sur chaque ligne.
+                page.evaluate("() => document.querySelector('button[data-kpi-filtre]').click()")
+                apres_kpi = page.evaluate("() => window.BancArbre.estVue('r3')")
+                # (b) le composant de filtres de tableau : il force `style.display` sur chaque
+                #     ligne qui passe son filtre. Sans filtre pose, TOUTES passent.
+                page.evaluate("() => { if (window.__tf) window.__tf.appliquer(); }")
+                apres_filtres = page.evaluate("() => window.BancArbre.estVue('r6')")
+                # TEMOIN : r4 est exclu par le filtre lui-meme (statut « ecart »).
+                exclu = page.evaluate("() => window.BancArbre.estVue('r4')")
+                return {"plie_avant": plie_avant, "apres_kpi": apres_kpi,
+                        "apres_filtres": apres_filtres, "exclu": exclu}
+            except Exception as erreur:  # noqa: BLE001
+                return {"erreur": type(erreur).__name__ + " · " + str(erreur).splitlines()[0][:160]}
+            finally:
+                navigateur.close()
+
+    vert = jouer("visibilite-arbitree.html")
+    rouge = jouer("visibilite-sans-arbitrage.html")
+    for nom, res in (("visibilite-arbitree.html", vert), ("visibilite-sans-arbitrage.html", rouge)):
+        if res.get("absente"):
+            out.append({"fixture": nom, "verdict": "ABSENTE", "attendu": "fixture présente",
+                        "obtenu": "absente", "regle": "TF-0953", "detail": ""})
+        elif res.get("erreur"):
+            out.append({"fixture": nom, "verdict": "ECHEC", "attendu": "banc joué",
+                        "obtenu": "panne", "regle": "TF-0953", "detail": res["erreur"]})
+    if vert.get("absente") or vert.get("erreur") or rouge.get("absente") or rouge.get("erreur"):
+        return out
+
+    # (1) SENS VERT — le pliage survit aux DEUX composants.
+    cas("visibilite-arbitree · pliage puis filtre par indicateur",
+        {"plie": False, "apres_kpi": False}, {"plie": vert["plie_avant"], "apres_kpi": vert["apres_kpi"]},
+        "TF-0953 disjonction")
+    cas("visibilite-arbitree · pliage puis filtres de tableau",
+        False, vert["apres_filtres"], "TF-0953 disjonction")
+    # (2) SENS ROUGE — sans arbitrage, la ligne pliée REVIENT. C'est le défaut du produit.
+    cas("visibilite-sans-arbitrage · la ligne pliée réapparaît (sens rouge)",
+        True, rouge["apres_kpi"] or rouge["apres_filtres"], "TF-0953 reproduction")
+    # (3) TÉMOIN — le filtre filtre encore, dans les deux pages.
+    cas("visibilite · témoin : la ligne exclue par le filtre reste masquée",
+        {"arbitree": False, "sans": False}, {"arbitree": vert["exclu"], "sans": rouge["exclu"]},
+        "TF-0953 témoin")
+    return out
+
+
+def _page_hote_du_canevas(legende_en_glyphes=False):
+    """Fabrique une page hote portant le canevas differentiel, 40 cartes et 274 puces.
+
+    La page est GENEREE depuis le canevas, jamais recopiee : une fixture figee derive de sa
+    source le jour ou le canevas change, et c'est le defaut que le controle de parite des
+    composants embarques (TF-0784) existe deja pour attraper ailleurs. Ici, la seule facon de
+    ne pas le payer est de ne pas creer la copie.
+
+    `legende_en_glyphes=True` rend la LEGENDE telle qu'elle etait avant TF-0938 — trois glyphes
+    « caractere teinte » a la place des trois pastilles. C'est le sens rouge : la meme page, la
+    meme couleur, un porteur different.
+    """
+    socle = Path(__file__).resolve().parents[2] / "factory-page-html" / "assets" / "boilerplate.html"
+    canevas = (Path(__file__).resolve().parents[2] / "factory-schemas" / "assets"
+               / "template-schema-differentiel.html")
+    if not socle.exists() or not canevas.exists():
+        return None
+    bp = socle.read_text(encoding="utf-8")
+    frag = canevas.read_text(encoding="utf-8")
+    # Le VRAI <style> du canevas est seul sur sa ligne ; celui du commentaire d'en-tete est suivi
+    # d'un espace. Prendre la premiere occurrence brute embarquerait la fin du commentaire.
+    i = frag.index("\n<style>\n")
+    sty = frag[i:frag.index("</style>") + len("</style>")]
+    corps = frag[frag.index("<!-- La LÉGENDE"):]
+    if legende_en_glyphes:
+        corps = re.sub(r'<b class="tbl-pastille (est-[a-z]+)" aria-hidden="true"></b>',
+                       lambda m: '<b style="color:var(--%s)">▭</b>' % {
+                           "est-creee": "blue", "est-modifiee": "amber",
+                           "est-reprise": "muted"}[m.group(1)], corps)
+    etats = ["est-creee", "est-modifiee", "est-reprise"]
+    libelles = {"est-creee": "creee", "est-modifiee": "etendue",
+                "est-reprise": "reprise sans changement"}
+    noms = ["dim_client", "fait_contrat_mois", "dim_batiment", "fait_loyer_quotidien",
+            "dim_calendrier", "stg_avenant_locatif", "dim_unite_locative",
+            "fait_charge_recuperable", "dim_bail", "ref_indice_revision"]
+    cols = ["identifiant_technique_de_la_ligne", "date_de_debut_avenant_actif",
+            "montant_hors_taxes_annuel", "code_postal_du_batiment",
+            "libelle_long_du_type_de_bail", "cle_de_substitution_du_contrat",
+            "horodatage_de_chargement_source", "indicateur_de_renouvellement_automatique"]
+    glyphes = {"est-ajoutee": "＋", "est-corrigee": "✎", "est-reprise": "●"}
+    cartes = []
+    for k in range(40):
+        etat, nom = etats[k % 3], "%s_%d" % (noms[k % len(noms)], k)
+        puces = []
+        for j in range((k % 9) + 3):
+            col = cols[(k + j) % len(cols)]
+            cl = ["est-ajoutee", "est-corrigee", "est-reprise"][(k + j) % 3]
+            puces.append(
+                '<li class="col %s"><span class="col-g" aria-hidden="true">%s</span>'
+                '<span class="col-n" title="%s\n  type : varchar(64)\n'
+                '  source : systeme amont, champ homonyme">%s</span></li>'
+                % (cl, glyphes[cl], col, col))
+        cartes.append(
+            '<article class="tbl-card %s"><p class="tbl-nom">silver.%s</p>'
+            '<p class="tbl-etat">%s — une ligne par contrat et par mois</p><ul>%s</ul>'
+            '<p class="tbl-cle">cle de substitution : sk_%s — hachage stable des cles '
+            'naturelles</p></article>'
+            % (etat, nom, libelles[etat], "".join(puces), nom))
+    corps = re.sub(r'<div class="tbl-grid">.*?</div>\s*$',
+                   '<div class="tbl-grid">%s</div>' % "".join(cartes), corps, flags=re.S)
+    page = bp.replace("</head>", sty + "\n</head>")
+    ancre = "<h1>{Titre du livrable}</h1>"
+    # TF-2679 (V28) : le canevas se pose APRES l'en-tete, dans le `.wrap`, et non dans le bloc flex a largeur
+    # intrinseque qui porte le titre : la grille `auto-fill` s'y calait sur ~860 px d'une fenetre de 1 440 a 1 920
+    # (35 a 78 % du cadre vide a droite), un defaut de la page HOTE et non du canevas que ce cas mesure. Le canevas,
+    # ses cartes, sa legende et leurs mesures V2 et V4 sont inchanges ; seule la place de l'insertion change.
+    j = page.index("</header>", page.index(ancre)) + len("</header>")
+    return page[:j] + "\n" + corps + "\n" + page[j:]
+
+
+def run_canevas_modele_donnees():
+    """TF-0941 (08/09/2026) — LE CANEVAS ERD POSE SES PROPRES DECLARATIONS, ET C'EST MESURE.
+
+    LE FAIT. Insere dans une page de donnees, le canevas « modele de donnees » declenchait une
+    volee de constats du socle, que le produit levait A LA MAIN, chez lui, a chaque
+    instanciation. Personne ne les avait jamais mesures sur le GABARIT lui-meme : c'est une page
+    complete, mais aucune recette ne la rendait. Mesure du 08/09, aux quatre largeurs :
+    **11, 12, 12 et 18 bloquants** — 11 chevauchements V4 (une etiquette de cardinalite sur son
+    arete, et deux aretes qui se croisent), 1 a 5 « contenu rogne » sur le conteneur mis a
+    l'echelle par `fitSchema`, 2 debordements V1 du dictionnaire a 390 px.
+
+    CE QUI A CHANGE, ET AUCUN N'EST UN ASSOUPLISSEMENT :
+      · l'etiquette de cardinalite chevauche SON arete par construction du dessin, et deux aretes
+        d'un graphe relationnel peuvent devoir passer par le meme couloir — `data-overlap-ok` est
+        pose sur les ARETES ET LEURS ETIQUETTES SEULES ; les cartes, elles, restent jugees ;
+      · `fitSchema` met le schema a l'echelle et fixe la hauteur du conteneur a la hauteur mise a
+        l'echelle : le socle lit un contenu plus haut que sa boite. Rien n'est masque —
+        `data-rognage-assume` le declare, DANS le gabarit ;
+      · le dictionnaire se REPLIE sous 900 px (une ligne devient un bloc etiquete, comme le repli
+        en cartes du socle) au lieu de deborder, et la coupure des noms techniques porte une
+        classe qui DIT son usage (`.dd-mono`), jamais la colonne de note qui est de la prose.
+
+    DEUX SENS : le gabarit LIVRE rend 0 bloquant aux quatre largeurs ; le MEME gabarit prive de
+    ses deux declarations les fait revenir. Sans le second, une page qui aurait cesse de dessiner
+    ses aretes passerait pour corrigee.
+    """
+    try:
+        import importlib
+        importlib.import_module("playwright.sync_api")
+    except ImportError:
+        return None
+    canevas = (Path(__file__).resolve().parents[2] / "factory-schemas" / "assets"
+               / "template-modele-donnees.html")
+    if not canevas.exists():
+        return [{"fixture": "canevas modele de donnees", "verdict": "ECHEC",
+                 "attendu": "gabarit present", "obtenu": "absent", "regle": "TF-0941",
+                 "detail": str(canevas)}]
+    import tempfile
+    rendu = str(Path(__file__).resolve().parent / "render_page.py")
+    tmp = Path(tempfile.mkdtemp(prefix="self-test-erd-"))
+    livre = canevas.read_text(encoding="utf-8")
+    # Le sens ROUGE ne reecrit pas le gabarit : il lui RETIRE ses deux declarations. La page
+    # reste la meme a l'octet pres par ailleurs, donc ce qui revient vient bien de leur absence.
+    sans = livre.replace(" data-overlap-ok", "")
+    sans = re.sub(r' data-rognage-assume="[^"]*"', "", sans)
+    out = []
+    for nom, contenu, attendu in (("canevas modele de donnees · livre", livre, 0),
+                                  ("canevas modele de donnees · sans ses declarations (sens rouge)",
+                                   sans, 1)):
+        cible = tmp / ("erd-%s.html" % ("livre" if attendu == 0 else "nu"))
+        cible.write_text(contenu, encoding="utf-8")
+        r = subprocess.run([sys.executable, "-X", "utf8", rendu, str(cible), "--output", "json",
+                            "--out", str(tmp)], capture_output=True, text=True, encoding="utf-8")
+        try:
+            bps = json.loads(r.stdout)["breakpoints"]
+        except Exception:
+            out.append({"fixture": nom, "verdict": "ECHEC", "attendu": "rendu lisible",
+                        "obtenu": "illisible", "regle": "TF-0941",
+                        "detail": (r.stderr or r.stdout or "")[:160]})
+            continue
+        bloquants = sum(int(b.get("blocking") or 0) for b in bps.values())
+        largeurs = len(bps)
+        if attendu == 0:
+            ok = bloquants == 0
+            out.append({"fixture": nom, "verdict": "OK" if ok else "ECHEC",
+                        "attendu": "0 bloquant sur %d largeurs" % largeurs,
+                        "obtenu": "%d bloquant(s)" % bloquants, "regle": "TF-0941 gabarit livre",
+                        "detail": "" if ok else "largeurs %s" % ",".join(sorted(bps))})
+        else:
+            ok = bloquants >= largeurs
+            out.append({"fixture": nom, "verdict": "OK" if ok else "ECHEC",
+                        "attendu": "au moins 1 bloquant par largeur (%d)" % largeurs,
+                        "obtenu": "%d bloquant(s)" % bloquants, "regle": "TF-0941 sens rouge",
+                        "detail": "" if ok else "retirer les declarations ne fait plus rien "
+                                                "revenir : la mesure est devenue muette"})
+    return out
+
+
+# TF-1660 — les valeurs d'une INSTANCE plausible du gabarit multi-bandes. Un trou laisse vide
+# serait jugé par L11 : chaque {{PLACEHOLDER}} du gabarit reçoit une valeur, et le cas le vérifie.
+INSTANCE_MULTI_BANDES = {
+    "TITRE_PAGE": "Factory - Brief Produit-A - Architecture detaillee - 20261014a",
+    "EYEBROW": "Brief d'architecture · Produit-A",
+    "H1_DEBUT": "La chaîne de", "H1_ACCENT": "livraison", "H1_FIN": "du produit",
+    "LEDE": "Cette page permet de décider où placer le contrôle humain dans la chaîne de "
+            "livraison du produit.",
+    "VERSION": "V1a · 14 octobre 2026", "TYPE": "Brief d'architecture",
+    "PERIMETRE": "Chaîne de livraison", "TITRE_SECTION": "Vue d'ensemble de la chaîne",
+    "INTRO_SECTION": "Le schéma se lit de haut en bas. Chaque bande regroupe les éléments d'une "
+                     "même couche, et les flèches suivent des couloirs dédiés.",
+    "TITRE_SCHEMA": "Chaîne de livraison par couches",
+    "DESC_SCHEMA": "Cinq bandes, des entrées jusqu'aux intégrations externes.",
+    "NOM_BANDE_1": "Entrées et acteurs", "NOM_BANDE_2": "Pipelines",
+    "NOM_BANDE_3": "Environnements", "NOM_BANDE_4": "Observabilité",
+    "NOM_BANDE_5": "Intégrations numérotées", "NOM_SOURCE_1": "Dépôt de code",
+    "TRIGGER": "push sur main", "EFFET": "lance le pipeline M1", "OWNER": "équipe produit",
+    "TITRE_SOURCE_1": "Dépôt de code", "SOUSTITRE_1": "Branche principale",
+    "LIGNE_1": "git · revue obligatoire", "LIGNE_2": "2 relecteurs",
+    "NOM_ACTEUR": "Responsable de mise en production", "PROFIL": "lead technique",
+    "ACTION": "approuve la promotion", "GROUPE": "grp-mep", "TITRE_ACTEUR": "Approbateur MEP",
+    "SOUSTITRE_ACTEUR": "Lead technique", "LIGNE_1_ACTEUR": "approuve la promotion",
+    "LIGNE_2_ACTEUR": "groupe grp-mep",
+    "TOOLTIP_FLECHE_1": "Déclenchement | Un push sur main lance M1 | Aucune action humaine",
+    "NOM_PIPELINE": "M1 · Construction", "POOL": "pool-linux", "SP": "sc-dev",
+    "VG": "vg-commun", "ETAPES": "build, tests, analyse", "ARTEFACT": "image.tar",
+    "TITRE_PIPELINE": "M1 · Construction", "CHEMIN_YAML": "ci/build.yml",
+    "TRIGGER_PIPELINE": "push sur main", "POOL_PIPELINE": "pool-linux", "SC_PIPELINE": "sc-dev",
+    "ETAPE_1": "build et tests", "ETAPE_2": "analyse statique",
+    "ARTEFACT_PIPELINE": "image conteneur", "REF_INTEGRATIONS": "Réf. intégrations 1", "N": "1",
+    "NOM_INTEGRATION": "Registre d'images", "DESCRIPTION_INTEG": "Stocke les images construites",
+    "PIPELINES_REFERENTS": "M1", "NOM_INTEG": "Registre d'images",
+    "SOUSTITRE_INTEG": "Images signées", "PIPELINES_REF": "M1",
+    "LEGENDE_FIGURE": "Chaîne de livraison par couches, des entrées aux intégrations.",
+    "TYPE_FOOTER": "Brief d'architecture", "AUDIENCE": "Équipe produit",
+}
+
+
+def run_gabarit_multi_bandes():
+    """TF-1660 (lot Produit-81 20261013b, RT-5) — LE GABARIT INSTANCIE PASSE LES DEUX ORACLES.
+
+    LE FAIT. La page instanciee telle que le gabarit `template-multi-bandes.html` la prescrit
+    rendait des bloquants des la premiere execution, et il a fallu six cycles de correction chez
+    le produit pour atteindre PASS sans changer une couleur rendue. Mesure du 14/10/2026 sur une
+    instance du gabarit de ce depot, aux six largeurs par defaut : 11, 11, 11, 11, 9 et 9
+    bloquants — 9 V4 de contenance (la pastille de bande et son titre, le cadre `svg-frame` et
+    ce qu'il contient, le N de la legende sur son cercle) et 2 L2 (bride de 820 px posee sur
+    `.lede` et `.section-intro`). Le gabarit lui-meme passait `check_html.py` : ses deux
+    exemptions de gabarit a trous tombent a l'instanciation, et personne n'avait juge l'instance.
+
+    CE QUI A CHANGE DANS LE GABARIT : pastilles et N de legende en `<g>` titres (TF-0424) ; le
+    cadre declare PAR PAIRES ce qu'il contient (`data-overlap-ok`, TF-1146), les pipelines
+    restant juges entre eux ; la mesure de lecture posee sur un conteneur declare
+    (`data-mesure-lecture`, `data-colonne-ok`).
+
+    DEUX SENS : l'instance rend 0 echec `check_html.py` et 0 bloquant aux six largeurs ; la MEME
+    instance privee de ses declarations `data-overlap-ok` fait revenir des bloquants a chaque
+    largeur — sans ce second sens, un gabarit qui aurait cesse de dessiner son cadre passerait.
+    """
+    try:
+        import importlib
+        importlib.import_module("playwright.sync_api")
+    except ImportError:
+        return None
+    gabarit = (Path(__file__).resolve().parents[2] / "factory-schemas" / "assets"
+               / "template-multi-bandes.html")
+    if not gabarit.exists():
+        return [{"fixture": "gabarit multi-bandes", "verdict": "ECHEC",
+                 "attendu": "gabarit present", "obtenu": "absent", "regle": "TF-1660",
+                 "detail": str(gabarit)}]
+    import tempfile
+    brut = gabarit.read_text(encoding="utf-8")
+    # TF-2458 — le pied du gabarit (MARQUE_FOOTER, ANNEE_REF) n'est plus une valeur d'instance ecrite
+    # ici : TF-2350 l'a rendu a l'emetteur, que `lire-signature.mjs` lit. La recette l'instancie avec
+    # la signature de la FIXTURE de factory-schemas (emetteur fictif), comme le fait le self-test du skill.
+    valeurs = dict(INSTANCE_MULTI_BANDES)
+    lecteur = gabarit.parents[1] / "scripts" / "lire-signature.mjs"
+    fixture_sig = gabarit.parents[1] / "fixtures" / "signature"
+    try:
+        lu = subprocess.run(["node", str(lecteur), "--marque=" + str(fixture_sig), "--compact"],
+                            capture_output=True, text=True, encoding="utf-8", timeout=30)
+        signature = json.loads(lu.stdout)
+        valeurs["MARQUE_FOOTER"] = signature["footer"]["marque"]
+        valeurs["ANNEE_REF"] = signature["annee_reference"]
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError):
+        pass   # signature illisible : les deux trous restent, et le cas « instance complete » les dit
+    instance = re.sub(r"\{\{([A-Z_0-9]+)\}\}",
+                      lambda m: valeurs.get(m.group(1), m.group(0)), brut)
+    out = []
+    restes = sorted(set(re.findall(r"\{\{[A-Z_0-9]+\}\}", instance)))
+    out.append({"fixture": "gabarit multi-bandes · instance complete",
+                "verdict": "OK" if not restes else "ECHEC", "attendu": "0 trou",
+                "obtenu": len(restes), "regle": "TF-1660",
+                "detail": "" if not restes else "trous sans valeur : " + " ".join(restes)})
+    fails, _ = check(instance)
+    out.append({"fixture": "gabarit multi-bandes · instance · check_html",
+                "verdict": "OK" if not fails else "ECHEC", "attendu": "0 echec",
+                "obtenu": len(fails), "regle": "TF-1660",
+                "detail": "" if not fails else " · ".join(f[:90] for f in fails[:3])})
+    rendu = str(Path(__file__).resolve().parent / "render_page.py")
+    tmp = Path(tempfile.mkdtemp(prefix="self-test-multi-bandes-"))
+    sans = instance.replace(" data-overlap-ok=", " data-sans-declaration=")
+    try:
+        for nom, contenu, attendu in (("gabarit multi-bandes · instance · rendu", instance, 0),
+                                      ("gabarit multi-bandes · sans data-overlap-ok (sens rouge)",
+                                       sans, 1)):
+            cible = tmp / ("mb-%s.html" % ("instance" if attendu == 0 else "nue"))
+            cible.write_text(contenu, encoding="utf-8")
+            r = subprocess.run([sys.executable, "-X", "utf8", rendu, str(cible), "--output",
+                                "json", "--out", str(tmp)],
+                               capture_output=True, text=True, encoding="utf-8")
+            try:
+                bps = json.loads(r.stdout)["breakpoints"]
+            except Exception:
+                out.append({"fixture": nom, "verdict": "ECHEC", "attendu": "rendu lisible",
+                            "obtenu": "illisible", "regle": "TF-1660",
+                            "detail": (r.stderr or r.stdout or "")[:160]})
+                continue
+            par_largeur = {w: int(b.get("blocking") or 0) for w, b in bps.items()}
+            total = sum(par_largeur.values())
+            if attendu == 0:
+                ok = total == 0
+                attente = "0 bloquant sur %d largeurs" % len(bps)
+            else:
+                ok = all(n >= 1 for n in par_largeur.values())
+                attente = "au moins 1 bloquant a chaque largeur (%d)" % len(bps)
+            out.append({"fixture": nom, "verdict": "OK" if ok else "ECHEC", "attendu": attente,
+                        "obtenu": "%d bloquant(s)" % total, "regle": "TF-1660",
+                        "detail": "" if ok else json.dumps(par_largeur)})
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    return out
+
+
+def run_canevas_differentiel():
+    """TF-0938 (08/09/2026) — LE CANEVAS DIFFERENTIEL TIENT SES PROPRES REGLES, MESURE.
+
+    CE QUE L'ITEM DEMANDAIT, ET CE QUE LA MESURE A REPONDU. La demande etait d'EXCLURE de V4
+    les enfants d'une meme `.tbl-card`, comme le sont deja les formes d'un groupe SVG titre.
+    Mesure faite ici, canevas insere dans une page hote de 40 cartes et 274 puces, AUX QUATRE
+    LARGEURS (1920, 1280, 768, 390) : **zero constat V4**, a chacune. Deuxieme mesure
+    concordante apres celle de la campagne precedente. Aucune exclusion n'est donc posee — un
+    oracle ne s'assouplit pas sur une hypothese, et une exclusion posee « au cas ou » rendrait
+    aveugle un jour ou une carte se cassera vraiment.
+
+    CE QUE LA MEME MESURE A TROUVE, ET QUE PERSONNE NE CHERCHAIT : **1 bloquant V2 a chacune des
+    quatre largeurs**, dans le canevas lui-meme. La legende rendait ses trois etats de table par
+    un glyphe « ▭ » teinte ; l'ambre du socle (#D97706) sur le fond du socle donne 3,08:1, sous
+    les 4,5:1 qu'un TEXTE doit tenir. Le bleu, le rouge et le gris passaient — l'ambre seul
+    echouait. Le canevas est passe a une PASTILLE (un cadre dont la bordure porte l'etat, comme
+    la carte qu'elle legende) : la meme couleur, jugee par la regle qui lui convient (WCAG
+    1.4.11, 3:1, tenu), et non plus par celle du texte.
+
+    POURQUOI CE CAS EXISTE PLUTOT QU'UN SIMPLE CORRECTIF : le canevas est un FRAGMENT. Aucune
+    recette ne le rendait, donc aucune ne mesurait ce qu'il produit une fois pose. Le trou n'est
+    pas la couleur, c'est qu'un gabarit du parc pouvait echouer aux quatre largeurs sans que
+    rien ne le dise.
+
+    DEUX SENS :
+      (1) VERT  — le canevas TEL QU'IL EST LIVRE, pose dans une page hote : zero bloquant aux
+                  quatre largeurs. Avant le correctif, ce sens rend 1 bloquant a chacune ;
+      (2) ROUGE — la MEME page, la MEME couleur, la legende rendue par le glyphe teinte d'avant :
+                  V2 crie. Sans lui, on ne saurait pas si le vert vient du correctif ou d'une
+                  mesure devenue muette.
+    """
+    try:
+        import importlib
+        importlib.import_module("playwright.sync_api")
+    except ImportError:
+        return None
+    page = _page_hote_du_canevas()
+    if page is None:
+        return [{"fixture": "canevas differentiel", "verdict": "ECHEC",
+                 "attendu": "canevas et socle presents", "obtenu": "absents",
+                 "regle": "TF-0938", "detail": "template-schema-differentiel.html introuvable"}]
+    import tempfile
+    rendu = str(Path(__file__).resolve().parent / "render_page.py")
+    tmp = Path(tempfile.mkdtemp(prefix="self-test-canevas-"))
+    out = []
+    for nom, glyphes, attendu in (("canevas differentiel · livre", False, 0),
+                                  ("canevas differentiel · legende en glyphes (sens rouge)", True, 1)):
+        cible = tmp / ("canevas-%s.html" % ("glyphes" if glyphes else "livre"))
+        cible.write_text(_page_hote_du_canevas(glyphes), encoding="utf-8")
+        r = subprocess.run([sys.executable, "-X", "utf8", rendu, str(cible), "--output", "json",
+                            "--out", str(tmp)], capture_output=True, text=True, encoding="utf-8")
+        try:
+            bps = json.loads(r.stdout)["breakpoints"]
+        except Exception:
+            out.append({"fixture": nom, "verdict": "ECHEC", "attendu": "rendu lisible",
+                        "obtenu": "illisible", "regle": "TF-0938",
+                        "detail": (r.stderr or r.stdout or "")[:160]})
+            continue
+        v4 = sum(len(b["issues"]["v4_overlap"]) for b in bps.values())
+        v2 = sum(len(b["issues"]["v2_contrast"]) for b in bps.values())
+        bloquants = sum(int(b.get("blocking") or 0) for b in bps.values())
+        largeurs = len(bps)
+        if not glyphes:
+            # Le sens VERT porte AUSSI le constat de la demande initiale : V4 doit rester a zero,
+            # sinon l'exclusion refusee ci-dessus deviendrait justifiee et il faudrait le savoir.
+            ok = bloquants == 0 and v4 == 0
+            out.append({"fixture": nom, "verdict": "OK" if ok else "ECHEC",
+                        "attendu": "0 bloquant · 0 V4 sur %d largeurs" % largeurs,
+                        "obtenu": "%d bloquant(s) · %d V4" % (bloquants, v4),
+                        "regle": "TF-0938 canevas pose",
+                        "detail": "" if ok else "40 cartes / 274 puces, largeurs %s"
+                                                % ",".join(sorted(bps))})
+        else:
+            ok = v2 >= largeurs
+            out.append({"fixture": nom, "verdict": "OK" if ok else "ECHEC",
+                        "attendu": "au moins 1 V2 par largeur (%d)" % largeurs,
+                        "obtenu": "%d V2" % v2, "regle": "TF-0938 sens rouge",
+                        "detail": "" if ok else "le glyphe teinte ne fait plus crier V2 : la "
+                                                "mesure est devenue muette, le vert ne prouve rien"})
+    return out
+
+
+def run_mesure_de_bruit():
+    """TF-1225 (14/09/2026) — UNE COMMANDE REND LE TAUX D'ACCUSATION D'UNE REGLE SUR UN PARC.
+
+    LE FAIT PAYE. A environ 30 s par page, les mesures de bruit de TF-0847 et de V15 n'ont porte
+    que sur 79 et 82 des 471 pages consommatrices. `mesurer_bruit.py` rend toutes les familles
+    d'un seul rendu par page, en parallele, et garde chaque rendu en cache par empreinte (page +
+    outil + largeurs). Trois cas, sur deux fixtures V19 copiees dans un atelier jetable :
+      · le compte est juste : 1 page accusee sur 2 pour `mot_coupe`, taux 0,5 ;
+      · la seconde passe ne rend RIEN : les 2 pages viennent du cache ;
+      · sens rouge du cache : une page modifiee d'un octet est rendue a nouveau (1 sur 2 du cache).
+    Silencieux si playwright est absent.
+    """
+    try:
+        import importlib
+        importlib.import_module("playwright.sync_api")
+    except ImportError:
+        return None
+    import tempfile
+    outil = str(Path(__file__).resolve().parent / "mesurer_bruit.py")
+    atelier = Path(tempfile.mkdtemp(prefix="self-test-bruit-"))
+    out = []
+    try:
+        parc = atelier / "parc"
+        parc.mkdir()
+        for nom in ("v19-mot-coupe-sans-trait-union.html", "v19-mot-entier-colonne-large.html"):
+            shutil.copy(FIXTURES / nom, parc / nom)
+        cache = atelier / "cache"
+
+        def passe():
+            r = subprocess.run([sys.executable, "-X", "utf8", outil, str(parc), "--familles", "mot_coupe",
+                                "--jobs", "2", "--cache", str(cache), "--output", "json"],
+                               capture_output=True, text=True, encoding="utf-8")
+            try:
+                return json.loads(r.stdout)["apres"]
+            except Exception:  # noqa: BLE001
+                return {"erreur": (r.stderr or r.stdout)[-200:]}
+
+        p1 = passe()
+        f1 = (p1.get("familles") or {}).get("mot_coupe", {})
+        ok = p1.get("mesurees") == 2 and f1.get("pages_accusees") == 1 and f1.get("taux") == 0.5
+        out.append({"fixture": "mesure de bruit · compte et taux", "verdict": "OK" if ok else "ECHEC",
+                    "attendu": "2 mesurees, 1 accusee, taux 0.5",
+                    "obtenu": f"{p1.get('mesurees')} mesurees, {f1.get('pages_accusees')} accusee(s), taux {f1.get('taux')}",
+                    "regle": "TF-1225 mesure de bruit", "detail": "" if ok else str(p1)[:300]})
+        p2 = passe()
+        ok = p2.get("depuis_cache") == 2
+        out.append({"fixture": "mesure de bruit · seconde passe prise au cache", "verdict": "OK" if ok else "ECHEC",
+                    "attendu": 2, "obtenu": p2.get("depuis_cache"), "regle": "TF-1225 cache par empreinte",
+                    "detail": "" if ok else str(p2)[:300]})
+        page = parc / "v19-mot-entier-colonne-large.html"
+        page.write_text(page.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+        p3 = passe()
+        ok = p3.get("depuis_cache") == 1
+        out.append({"fixture": "mesure de bruit · page modifiee rendue a nouveau (sens rouge)",
+                    "verdict": "OK" if ok else "ECHEC", "attendu": 1, "obtenu": p3.get("depuis_cache"),
+                    "regle": "TF-1225 cache par empreinte", "detail": "" if ok else str(p3)[:300]})
+    finally:
+        shutil.rmtree(atelier, ignore_errors=True)
+    return out
+
+
+def badges_non_cables(css: str, gabarit: str) -> list[str]:
+    """Les jetons qu'une variante `.badge.<x>` emploie sans que le gabarit les pose dans ses
+    trois projections (clair, sombre, impression) — rend « variante : --jeton (n projection(s)) »."""
+    ecarts = []
+    for m in re.finditer(r"\.badge\.([\w-]+)\s*\{([^}]*)\}", css):
+        for jeton in re.findall(r"var\(--([\w-]+)", m.group(2)):
+            n = len(re.findall(r"--" + re.escape(jeton) + r"\s*:", gabarit))
+            if n < 3:
+                ecarts.append(f"{m.group(1)} : --{jeton} ({n} projection(s))")
+    return ecarts
+
+
+def run_badge_defavorable():
+    """TF-1263 (15/09/2026) — LE SOCLE PORTE UNE VARIANTE DE BADGE POUR UN ETAT DEFAVORABLE.
+
+    LE FAIT PAYE. composants.md §2 ne portait que trois variantes (ok, part, info) ; 9 occurrences
+    de `badge ko` ecrites dans la bibliotheque du pilot avant que la classe existe se rendaient en
+    texte nu, et chaque consommateur reinventait son rouge. La variante `ko` est desormais au
+    catalogue, cablee sur les jetons rouges du gabarit.
+      · sens vert : la variante `ko` existe, et toute variante du catalogue n'emploie que des
+        jetons poses dans les trois projections du gabarit ;
+      · sens rouge : une variante cablee sur un jeton que le gabarit ne pose pas est vue.
+    """
+    racine = FIXTURES.parent
+    comp = (racine / "references" / "composants.md").read_text(encoding="utf-8")
+    gabarit = (racine / "assets" / "boilerplate.html").read_text(encoding="utf-8")
+    section = comp.split("## 2 —", 1)[-1].split("\n## 3 —", 1)[0]
+    out = []
+    a_ko = bool(re.search(r"\.badge\.ko\s*\{", section)) and 'class="badge ko"' in section
+    out.append({"fixture": "composants.md §2 · variante ko", "verdict": "OK" if a_ko else "ECHEC",
+                "attendu": "regle .badge.ko et exemple HTML", "obtenu": str(a_ko),
+                "regle": "TF-1263 badge defavorable", "detail": ""})
+    ecarts = badges_non_cables(section, gabarit)
+    out.append({"fixture": "composants.md §2 · jetons des variantes", "verdict": "OK" if not ecarts else "ECHEC",
+                "attendu": "0 jeton absent du gabarit", "obtenu": "; ".join(ecarts) or "0",
+                "regle": "TF-1263 badge defavorable", "detail": ""})
+    rouge = badges_non_cables(".badge.zz { --_dot: var(--rouge-maison); background: var(--red-fill); }", gabarit)
+    ok = rouge == ["zz : --rouge-maison (0 projection(s))"]
+    out.append({"fixture": "sens rouge · variante sur un rouge maison", "verdict": "OK" if ok else "ECHEC",
+                "attendu": "le jeton --rouge-maison nomme, --red-fill accepte", "obtenu": str(rouge),
+                "regle": "TF-1263 badge defavorable", "detail": ""})
+    return out
+
+
+def run_dates_jjmm():
+    """TF-1904 (RA-15, lot Produit-79 20261018a) — L3 ne lit plus une date « JJ/MM » comme une note.
+
+    LE FAIT PAYE. Seize echecs L3 bloquants sur des dates de semaine en cellule, levees par une
+    legende de colonne qui n'apprenait rien. Les deux fixtures portent les MEMES valeurs ; seuls
+    changent les en-tetes (qui nomment une date, ou une note) et les `<time datetime>`.
+      · sens vert : 0 echec L3 « valeur sans bareme » (en-tetes de date + `<time datetime>`) ;
+      · sens rouge : les 6 notes sous « Resultat », « Note du jury », « Score semaine » restent
+        refusees, et le message du refus nomme les deux remedes (TF-1013 : la verte les joue).
+    """
+    out = []
+    for nom, attendu in (("l3-date-jjmm-colonne-date.html", 0), ("l3-date-jjmm-colonne-resultat.html", 6)):
+        fails, _ = check((FIXTURES / nom).read_text(encoding="utf-8"), regles="L")
+        vus = [f for f in fails if f.startswith("L3 valeur sans barème lié")]
+        ok = len(vus) == attendu
+        if attendu:
+            ok = ok and all("<time datetime=" in f and "en-tête de colonne" in f for f in vus)
+        out.append({"fixture": nom, "verdict": "OK" if ok else "ECHEC",
+                    "attendu": f"TF-1904 {attendu} échec(s) L3 valeur sans barème",
+                    "obtenu": f"{len(vus)} échec(s)", "regle": "L3 date JJ/MM",
+                    "detail": "" if ok else " | ".join(vus)[:300]})
+    return out
+
+
+def run_kpi_hors_page_conteneur():
+    """TF-1905 (RA-16, lot Produit-79 20261018a) — l'exemption `data-kpi-hors-page` du CONTENEUR vaut
+    pour ses tuiles, comme le barème de groupe de TF-0231 pour L3.
+
+    LE FAIT PAYE. L'attribut posé sur la rangée de quatre tuiles était sans effet sur L13 : il a fallu
+    le répéter sur chacune. Les trois fixtures portent la MEME page (une liste de 8 lignes sous une
+    rangée de quatre tuiles) ; seul change l'attribut de la rangée :
+      · motif posé sur la rangée : 0 avertissement L13 (HEAD : 4) ;
+      · aucun attribut : 4 avertissements, la règle mord encore ;
+      · attribut VIDE sur la rangée : 4 avertissements — un motif vide ne déclare rien, à aucun niveau.
+    """
+    out = []
+    for nom, attendu in (("l13-kpi-exemption-du-conteneur.html", 0), ("l13-kpi-sans-exemption.html", 4),
+                         ("l13-kpi-exemption-vide.html", 4)):
+        fails, warns = check((FIXTURES / nom).read_text(encoding="utf-8"), regles="L")
+        vus = [w for w in warns if w.startswith("L13 ")]
+        n = int(vus[0].split()[1]) if vus else 0
+        ok = n == attendu and not [f for f in fails if f.startswith("L13")]
+        out.append({"fixture": nom, "verdict": "OK" if ok else "ECHEC",
+                    "attendu": f"TF-1905 {attendu} KPI signalé(s) par L13",
+                    "obtenu": f"{n} KPI signalé(s)", "regle": "L13 kpi hors page",
+                    "detail": "" if ok else " | ".join(vus)[:300]})
+    return out
+
+
+def _rendre_json(nom, largeurs, captures):
+    """Rend la fixture `nom` aux `largeurs` par render_page.py et rend son rapport JSON (ou None)."""
+    import subprocess
+    r = subprocess.run([sys.executable, "-X", "utf8", str(Path(__file__).resolve().parent / "render_page.py"),
+                        str(FIXTURES / nom), "--widths", ",".join(str(w) for w in largeurs),
+                        "--output", "json", "--out", captures],
+                       capture_output=True, text=True, encoding="utf-8")
+    try:
+        return json.loads(r.stdout)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+# TF-1909 (RA-17, lot Produit-79 20261018b) — V23, LE CONTENU CONTRE LA FENETRE. Fixture -> {largeur: constats
+# attendus de la famille `contenu_etroit`}. La rouge est la page dont TOUS les chapitres portent `.chap.lire` :
+# 1 080 px + gouttieres = 1 128 px, soit 88 % de 1 280 (rien), 59 % de 1 920 et 29 % de 3 840 (le « 28 % »
+# du retour). Les trois vertes jouent les trois sorties que le message nomme : le token du socle (qui vaut
+# EXACTEMENT 75 % a 2 560 et 3 840 : la tolerance d'arrondi est prouvee par ce cas), un passage de lecture
+# insere dans une page dont un autre bloc est large, une colonne etroite DECLAREE.
+CAS_CONTENU_FENETRE = {
+    "v23-contenu-etroit-centre.html": {1280: 0, 1920: 1, 2560: 1, 3840: 1},
+    "v23-contenu-pleine-largeur.html": {1280: 0, 1920: 0, 2560: 0, 3840: 0},
+    "v23-passage-de-lecture-dans-page-large.html": {1280: 0, 1920: 0, 2560: 0, 3840: 0},
+    "v23-colonne-declaree.html": {1280: 0, 1920: 0, 2560: 0, 3840: 0},
+}
+
+
+def run_v23_contenu_fenetre():
+    """TF-1909 — le contenu principal occupe 75 % de la fenetre au moins (regle E4), aux largeurs de bureau.
+    Silencieux si playwright est absent (voir run_rendu_large)."""
+    try:
+        import importlib
+        importlib.import_module("playwright.sync_api")
+    except ImportError:
+        return None
+    import tempfile
+    captures = tempfile.mkdtemp(prefix="self-test-v23-")
+    out = []
+    for nom, attendus in CAS_CONTENU_FENETRE.items():
+        d = _rendre_json(nom, sorted(attendus), captures)
+        for largeur, attendu in attendus.items():
+            etiquette = f"{nom} · {largeur} px"
+            if d is None:
+                out.append({"fixture": etiquette, "verdict": "ECHEC", "attendu": attendu, "obtenu": 0,
+                            "regle": "contenu_etroit", "detail": "render_page illisible"})
+                continue
+            n = len(d["breakpoints"][str(largeur)]["issues"]["contenu_etroit"])
+            out.append({"fixture": etiquette, "verdict": "OK" if n == attendu else "ECHEC",
+                        "attendu": attendu, "obtenu": n, "regle": "contenu_etroit (V23)",
+                        "detail": "" if n == attendu else f"{n} constat(s) contenu_etroit a {largeur} px"})
+    shutil.rmtree(captures, ignore_errors=True)
+    return out
+
+
+# TF-1917 (RT-134, lot Produit-02 20261018d) — V24, LA BORNE BASSE DE LA MESURE DE LECTURE. Fixture -> {largeur:
+# constats attendus de la famille `prose_verticale`}. La rouge est la grille de quatre cartes de 270 px de texte
+# (conteneur de 1 280 px, 4 a 7 lignes par carte, 28 a 31 caracteres par ligne pleine) : 4 constats a chaque
+# largeur de bureau. Les trois vertes jouent ce que le message nomme (deux colonnes, colonne DECLAREE) et ce que
+# la regle ne juge pas (textes courts, tuiles de chiffre cle, legendes, cellules de tableau) ; la quatrieme est
+# la fixture historique d'une colonne de 34 ch dont la mesure de lecture est declaree (data-mesure-lecture) : le
+# seul cas legitime que la mesure du parc ait accuse, exclu explicitement.
+CAS_PROSE_VERTICALE = {
+    "v24-cartes-de-texte-etroites.html": {1280: 4, 1440: 4, 1920: 4},
+    "v24-cartes-sur-deux-colonnes.html": {1280: 0, 1440: 0, 1920: 0},
+    "v24-colonne-etroite-declaree.html": {1280: 0, 1440: 0, 1920: 0},
+    "v24-textes-courts-et-legendes.html": {1280: 0, 1440: 0, 1920: 0},
+    "v4-inline-freres-interligne.html": {1440: 0},
+    # Le bord de la lettre « plus de 3 lignes » : une colonne de 270 px porte un bloc de 3 lignes (non signale)
+    # et un bloc de 4 lignes (signale) : un seul constat, celui du second.
+    "v24-bord-trois-et-quatre-lignes.html": {1440: 1},
+}
+
+
+def run_v24_prose_verticale():
+    """TF-1917 — un bloc de prose de plus de 3 lignes sous 45 caracteres par ligne est signale (avertissement),
+    aux largeurs de bureau. Silencieux si playwright est absent (voir run_rendu_large)."""
+    try:
+        import importlib
+        importlib.import_module("playwright.sync_api")
+    except ImportError:
+        return None
+    import tempfile
+    captures = tempfile.mkdtemp(prefix="self-test-v24-")
+    out = []
+    for nom, attendus in CAS_PROSE_VERTICALE.items():
+        d = _rendre_json(nom, sorted(attendus), captures)
+        for largeur, attendu in attendus.items():
+            etiquette = f"{nom} · {largeur} px"
+            if d is None:
+                out.append({"fixture": etiquette, "verdict": "ECHEC", "attendu": attendu, "obtenu": 0,
+                            "regle": "prose_verticale", "detail": "render_page illisible"})
+                continue
+            n = len(d["breakpoints"][str(largeur)]["issues"]["prose_verticale"])
+            out.append({"fixture": etiquette, "verdict": "OK" if n == attendu else "ECHEC",
+                        "attendu": attendu, "obtenu": n, "regle": "prose_verticale (V24)",
+                        "detail": "" if n == attendu else f"{n} constat(s) prose_verticale a {largeur} px"})
+    shutil.rmtree(captures, ignore_errors=True)
+    return out
+
+
+# TF-2679 (factory-site, run forge-site-20261114a, 15/11/2026) — V28, L'EQUILIBRE HORIZONTAL DE L'ENCRE.
+# Fixture -> {largeur: constats attendus de la famille `equilibre_droite`}. La rouge est une grille a deux pistes de
+# largeur egale dont la piste de droite, RESERVEE, ne porte qu'un canevas vierge : L2, V23, V1, V2 et V4 y rendent 0
+# (c'est ce qui prouve que le defaut leur echappait), l'encre s'arrete a mi-page. Les trois vertes jouent les sorties
+# que le message nomme : un contenu utile dans la piste de droite, la colonne CENTREE (le blanc se repartit), la
+# colonne etroite DECLAREE sur son conteneur (son rectangle est retire de l'encre).
+CAS_EQUILIBRE = {
+    "equilibre-piste-reservee-vide.html": {1280: 1, 1920: 1},
+    "equilibre-deux-colonnes-pleines.html": {1280: 0, 1920: 0},
+    "equilibre-colonne-centree.html": {1280: 0, 1920: 0},
+    "equilibre-colonne-declaree.html": {1280: 0, 1920: 0},
+    # Un element COLLANT compte sur la hauteur de son parent : l'aside court et collant n'est pas une piste vide
+    # (verte) ; la MEME page sans `position: sticky` laisse la piste de droite vide sous l'aside (rouge jumelle,
+    # a 1 280 px, ou le texte n'occupe pas la piste).
+    "equilibre-aside-collant.html": {1280: 0, 1920: 0},
+    "equilibre-aside-non-collant.html": {1280: 1},
+}
+# Les familles qui, sur la rouge, ne doivent RIEN dire : le defaut leur echappe.
+FAMILLES_MUETTES_SUR_EQUILIBRE = ("v1_overflow", "v2_contrast", "v4_overlap", "l2_width", "l2_conteneur",
+                                  "contenu_etroit", "prose_etroite")
+
+
+def run_v28_equilibre():
+    """TF-2679 — V28 : plus du quart du cadre vide a droite, avec plus de 15 points d'ecart avec la gauche, par tranches de
+    40 px, sur plus de 600 px de haut. Silencieux si playwright, Pillow ou numpy est absent (voir run_rendu_large)."""
+    try:
+        import importlib
+        importlib.import_module("playwright.sync_api")
+        importlib.import_module("PIL")
+        importlib.import_module("numpy")
+    except ImportError:
+        return None
+    import tempfile
+    captures = tempfile.mkdtemp(prefix="self-test-v28-")
+    out = []
+    for nom, attendus in CAS_EQUILIBRE.items():
+        d = _rendre_json(nom, sorted(attendus), captures)
+        for largeur, attendu in attendus.items():
+            etiquette = f"{nom} · {largeur} px"
+            if d is None:
+                out.append({"fixture": etiquette, "verdict": "ECHEC", "attendu": attendu, "obtenu": 0,
+                            "regle": "equilibre_droite", "detail": "render_page illisible"})
+                continue
+            issues = d["breakpoints"][str(largeur)]["issues"]
+            n = len(issues["equilibre_droite"])
+            muettes = {k: len(issues[k]) for k in FAMILLES_MUETTES_SUR_EQUILIBRE if issues.get(k)} \
+                if nom.startswith("equilibre-piste") else {}
+            # D-234 (a) du porteur (23/11/2026, TF-2691) : V28 AVERTIT au lieu de bloquer, comme V25. Le constat reste compte
+            # (`n == attendu`) ; ce qui change est son poids. Deux gardes, une par sens : la famille n'est plus dans les
+            # familles bloquantes de l'outil (la jumelle sans `sticky` garde un verdict FAIL, mais par V23, pas par V28), et la
+            # rouge, dont les sept autres familles sont muettes, rend PASS sans cause bloquante (avant : verdict FAIL).
+            # Un V28 redevenu bloquant echoue sur l'une ou l'autre, un V28 devenu muet echoue sur `n`.
+            import render_page as rp  # noqa: PLC0415
+            poids = ("equilibre_droite" not in rp.BLOQUANTES and rp.SEVERITE.get("equilibre_droite") == "avertissement"
+                     and (not nom.startswith("equilibre-piste")
+                          or (d["verdict"] == "PASS" and d["breakpoints"][str(largeur)]["blocking"] == 0)))
+            ok = n == attendu and not muettes and poids
+            out.append({"fixture": etiquette, "verdict": "OK" if ok else "ECHEC",
+                        "attendu": attendu, "obtenu": n, "regle": "equilibre_droite (V28)",
+                        "detail": "" if ok else f"{n} constat(s) equilibre_droite a {largeur} px ; verdict {d['verdict']}, poids {'avertissement' if poids else 'BLOQUANT ou verdict inattendu'} ; autres familles non muettes : {muettes}"})
+    shutil.rmtree(captures, ignore_errors=True)
+    return out
+
+
+# TF-2677 (factory-site, run forge-site-20261114a, 15/11/2026) — UNE DISPENSE data-colonne-ok NE VAUT QUE
+# SUR LE CONTENEUR BRIDEUR. La v2 de la page avait posé data-colonne-ok sur <main>, avec un motif ecrit par l'agent :
+# `closest` dispensait la page entiere, et l'humain a vu sur une capture la moitie de la page vide a droite que L2
+# existe pour refuser. Trois cas : (rouge) la meme page que l2c-conteneur-cale-a-gauche avec la dispense sur <main>
+# aussi large que son parent → FAIL l2_conteneur, la dispense nommee IGNOREE au non_juge ; (verte) la dispense sur la
+# colonne elle-meme → PASS, son motif au non_juge ; (verte) <main> qui est lui-meme la carte etroite → PASS, dispense
+# valide listee sans motif.
+def run_dispenses_colonne():
+    """TF-2677 — la dispense data-colonne-ok n'est valide que sur le conteneur brideur lui-meme, et chaque dispense
+    figure au non_juge avec son motif. Silencieux si playwright est absent (voir run_rendu_large)."""
+    try:
+        import importlib
+        importlib.import_module("playwright.sync_api")
+    except ImportError:
+        return None
+    import tempfile
+    captures = tempfile.mkdtemp(prefix="self-test-dispenses-")
+    out = []
+
+    def cas(nom, ok, attendu, obtenu, detail=""):
+        out.append({"fixture": nom, "verdict": "OK" if ok else "ECHEC", "attendu": attendu, "obtenu": obtenu,
+                    "regle": "TF-2677 dispense data-colonne-ok", "detail": "" if ok else detail})
+    try:
+        def lire(nom):
+            d = _rendre_json(nom, [1440], captures)
+            if d is None:
+                return None, [], 0
+            lignes = [x for x in d.get("non_juge", []) if x.startswith("DISPENSES data-colonne-ok")]
+            return d, lignes, len(d["breakpoints"]["1440"]["issues"]["l2_conteneur"])
+        d, lignes, n = lire("l2c-dispense-sur-main.html")
+        cas("l2c-dispense-sur-main.html · dispense sur <main> = FAIL",
+            d is not None and d.get("verdict") == "FAIL" and n >= 1
+            and any("IGNOREE" in x and "mise en page voulue par la page" in x for x in lignes),
+            "FAIL, l2_conteneur >= 1, dispense IGNOREE nommee avec son motif",
+            "illisible" if d is None else f"{d.get('verdict')}, l2_conteneur {n}, {len(lignes)} ligne(s) DISPENSES",
+            "la dispense posee sur <main> eteint L2 pour toute la page, ou n'est pas nommee")
+        d, lignes, n = lire("l2-remede-colonne-declaree.html")
+        cas("l2-remede-colonne-declaree.html · dispense sur la colonne = PASS, motif dit",
+            d is not None and d.get("verdict") == "PASS" and n == 0
+            and any("note de cadrage lue en colonne, a dessein" in x and "IGNOREE" not in x for x in lignes),
+            "PASS, 0 l2_conteneur, motif au non_juge",
+            "illisible" if d is None else f"{d.get('verdict')}, l2_conteneur {n}, {len(lignes)} ligne(s) DISPENSES",
+            "la dispense posee sur le conteneur brideur ne passe plus, ou son motif n'est pas dit")
+        d, lignes, n = lire("session-changement-mdp.html")
+        cas("session-changement-mdp.html · <main> brideur lui-meme = dispense valide",
+            d is not None and d.get("verdict") == "PASS" and len(lignes) == 1 and "IGNOREE" not in lignes[0],
+            "PASS, une dispense listee, non ignoree",
+            "illisible" if d is None else f"{d.get('verdict')}, {len(lignes)} ligne(s) DISPENSES",
+            "<main> plus etroit que son parent est sa propre bride : sa dispense reste valide")
+    finally:
+        shutil.rmtree(captures, ignore_errors=True)
+    return out
+
+
+# TF-2707, TF-2700 et TF-2706 (factory-site, run forge-site-20261114a, 15/11/2026) — UNE MESURE PRISE PENDANT UNE
+# ANIMATION N'EST PAS UNE MESURE DE LA PAGE. render_page chargeait la page et mesurait 250 ms plus tard, a l'instant ou elle se
+# trouvait : une encre sombre a 1,01:1 sur un papier clair (fondu d'entree), « agent » a 1,76:1 (animation CSS infinie), 34 a 35
+# chevauchements V4 par largeur entre les scenes empilees d'une animation SVG. Fixture -> (verdict attendu, constats attendus
+# par famille, marqueur de non juge attendu ou None), aux deux largeurs. Chaque verte a sa rouge CONSERVEE : la meme page avec un
+# vrai defaut (encre pale au repos ; paragraphe statique pale ; deux libelles superposes DANS une scene) reste refusee.
+CAS_ANIMATIONS = {
+    "animation-fondu-entree-verte.html": ("PASS", {"v2_contrast": 0, "v9_actif_invisible": 0}, None),
+    "animation-fondu-entree-rouge.html": ("FAIL", {"v2_contrast": 1}, None),
+    "animation-boucle-texte-verte.html": ("PASS", {"v2_contrast": 0, "v9_actif_invisible": 0}, "TF-2700"),
+    "animation-boucle-texte-rouge.html": ("FAIL", {"v2_contrast": 1}, "TF-2700"),
+    "animation-scenes-empilees-verte.html": ("PASS", {"v4_overlap": 0}, "TF-2706"),
+    "animation-scenes-empilees-rouge.html": ("FAIL", {"v4_overlap": 1}, "TF-2706"),
+}
+
+
+def run_animations_au_repos():
+    """TF-2707 / TF-2700 / TF-2706 — une animation FINIE est menee a son terme avant la mesure, ce qu'une animation INFINIE fait varier
+    est range en non juge (jamais bloquant), des scenes empilees ne se jugent pas entre elles, et ce qu'aucune animation ne fait varier
+    reste juge. Silencieux si playwright est absent (voir run_rendu_large)."""
+    try:
+        import importlib
+        importlib.import_module("playwright.sync_api")
+    except ImportError:
+        return None
+    import tempfile
+    captures = tempfile.mkdtemp(prefix="self-test-animations-")
+    out = []
+    largeurs = (1280, 1920)
+    try:
+        for nom, (verdict, familles, marque) in CAS_ANIMATIONS.items():
+            d = _rendre_json(nom, list(largeurs), captures)
+            for largeur in largeurs:
+                etiquette = f"{nom} · {largeur} px"
+                if d is None:
+                    out.append({"fixture": etiquette, "verdict": "ECHEC", "attendu": verdict, "obtenu": "illisible",
+                                "regle": "TF-2707 / TF-2700 / TF-2706 animations", "detail": "render_page illisible"})
+                    continue
+                issues = d["breakpoints"][str(largeur)]["issues"]
+                obtenus = {f: len(issues.get(f, [])) for f in familles}
+                notes = [u.get("detail", "") for u in issues.get("unmeasured", [])]
+                ok = d["verdict"] == verdict and obtenus == familles \
+                    and (marque is None or any(marque in n for n in notes)) \
+                    and (marque is not None or not any("(TF-2700)" in n or "(TF-2706)" in n for n in notes))
+                out.append({"fixture": etiquette, "verdict": "OK" if ok else "ECHEC",
+                            "attendu": f"{verdict} {familles} non juge {marque}",
+                            "obtenu": f"{d['verdict']} {obtenus} non juge {'oui' if any(marque and marque in n for n in notes) else 'non'}",
+                            "regle": "TF-2707 / TF-2700 / TF-2706 animations",
+                            "detail": "" if ok else "la mesure doit se faire page reposee, ranger en non juge ce qu'une boucle infinie fait varier, et garder ce que rien n'anime"})
+    finally:
+        shutil.rmtree(captures, ignore_errors=True)
+    return out
+
+
+# TF-2300 (factory-marketing, 09/11/2026, D-181) — LE LECTEUR D'ANIMATION A SCENES EST UN COMPOSANT DU SOCLE. Ecrit une fois pour la serie
+# d'animations du 09/11 (deux passes de juges pour atteindre PASS, 31 espacements hors echelle), il vit dans assets/scene-player.js et
+# scene-player.css. Le banc le joue dans un navigateur : etat initial, lecture et pause, clavier, boutons, sommaire, mouvement reduit,
+# impression, manifeste faux (le composant ne s'arme pas et la page reste statique), et la page est jouee scene par scene par render_page.
+def run_scene_player():
+    """TF-2300 — comportement du composant scene-player. Silencieux si playwright est absent (voir run_rendu_large)."""
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        return None
+    import tempfile
+    out = []
+
+    def cas(nom, ok, detail=""):
+        out.append({"fixture": f"scene-player-verte.html · {nom}", "verdict": "OK" if ok else "ECHEC",
+                    "attendu": "conforme", "obtenu": "conforme" if ok else detail[:200], "regle": "TF-2300 scene-player",
+                    "detail": "" if ok else detail[:300]})
+    url = (FIXTURES / "scene-player-verte.html").resolve().as_uri()
+    with sync_playwright() as p:
+        nav = p.chromium.launch()
+        try:
+            page = nav.new_page(viewport={"width": 1280, "height": 900})
+            page.goto(url)
+            page.wait_for_load_state("networkidle")
+            visibles = lambda: page.evaluate("[...document.querySelectorAll('[data-scene]')].map(s => !s.hidden)")
+            etat = lambda: page.evaluate("document.querySelector('[data-scene-player]').getAttribute('data-etat')")
+            courante = lambda: page.evaluate("document.querySelector('[data-scene-player]').getAttribute('data-scene-courante')")
+            cas("etat initial : scene 0 seule visible, etat pret, 3 segments, compteur, annonce",
+                visibles() == [True, False, False] and etat() == "pret" and courante() == "0"
+                and page.evaluate("document.querySelectorAll('.sp-seg').length") == 3
+                and page.evaluate("document.querySelector('.sp-compteur').textContent") == "scène 1 sur 3"
+                and "Scène 1 sur 3" in page.evaluate("document.querySelector('.sp-annonce').textContent"),
+                f"{visibles()} {etat()} {courante()}")
+            cas("le lecteur ne porte pas data-scene (render_page TF-2299 le jouerait comme une scene)",
+                page.evaluate("document.querySelector('[data-scene-player]').hasAttribute('data-scene')") is False)
+            cas("fleche droite puis suivante : scenes 1 puis 2, suivante desactivee a la derniere",
+                (page.keyboard.press("ArrowRight") or True) and courante() == "1" and visibles() == [False, True, False]
+                and (page.click("[data-commande=suivante]") or True) and courante() == "2"
+                and page.evaluate("document.querySelector('[data-commande=suivante]').disabled") is True)
+            cas("fleche gauche et precedente : retour a la scene 0, precedente desactivee",
+                (page.keyboard.press("ArrowLeft") or True) and courante() == "1"
+                and (page.click("[data-commande=precedente]") or True) and courante() == "0"
+                and page.evaluate("document.querySelector('[data-commande=precedente]').disabled") is True)
+            cas("sommaire data-aller : la scene 2 s'affiche et le sommaire la marque aria-current",
+                (page.click("[data-aller='2']") or True) and courante() == "2"
+                and page.evaluate("document.querySelector(\"[data-aller='2']\").getAttribute('aria-current')") == "step")
+            page.click("[data-aller='0']")
+            page.click("[data-commande=lecture]")
+            cas("lecture : etat lecture, bouton « Pause » ; espace : pause, bouton « Reprendre »",
+                etat() == "lecture" and page.evaluate("document.querySelector('.sp-libelle').textContent") == "Pause"
+                and (page.keyboard.press("Space") or True) and etat() == "pause"
+                and page.evaluate("document.querySelector('.sp-libelle').textContent") == "Reprendre",
+                etat())
+            page.click("[data-aller='2']")
+            page.click("[data-commande=lecture]")
+            page.evaluate("document.querySelector('[data-scene-player]').setAttribute('data-test', '1')")
+            cas("impression : TOUTES les scenes s'impriment et les commandes disparaissent",
+                (page.emulate_media(media="print") or True)
+                and page.evaluate("[...document.querySelectorAll('[data-scene]')].every(s => getComputedStyle(s).display !== 'none')")
+                and page.evaluate("getComputedStyle(document.querySelector('.sp-commandes')).display") == "none")
+            page.emulate_media(media="screen")
+            page.close()
+            # Mouvement reduit : aucune lecture automatique ; les scenes se parcourent a la main.
+            ctx = nav.new_context(reduced_motion="reduce", viewport={"width": 1280, "height": 900})
+            reduit = ctx.new_page()
+            reduit.goto(url)
+            reduit.wait_for_load_state("networkidle")
+            reduit.click("[data-commande=lecture]")
+            cas("mouvement reduit : lecture sans effet (etat pret) et navigation a la main possible",
+                reduit.evaluate("document.querySelector('[data-scene-player]').getAttribute('data-etat')") == "pret"
+                and (reduit.click("[data-commande=suivante]") or True)
+                and reduit.evaluate("document.querySelector('[data-scene-player]').getAttribute('data-scene-courante')") == "1")
+            ctx.close()
+            # ROUGE : un manifeste qui ne compte pas les scenes (2 entrees pour 3) n'arme pas le composant, la page reste statique.
+            rouge = nav.new_page()
+            rouge.goto(url)
+            rouge.wait_for_load_state("networkidle")
+            retour = rouge.evaluate("""() => {
+              const el = document.querySelector('[data-scene-player]');
+              const c = el.cloneNode(true);
+              c.removeAttribute('data-scene-player-ready'); c.removeAttribute('data-etat');
+              c.querySelector('.sp-segments').innerHTML = '';
+              c.querySelector('script[data-scenes]').textContent = JSON.stringify([{titre: 'a', duree_ms: 1000}, {titre: 'b', duree_ms: 1000}]);
+              el.replaceWith(c);
+              return {arme: window.FactoryScenePlayer.init(c) !== null, pret: c.hasAttribute('data-scene-player-ready'), etat: c.hasAttribute('data-etat')};
+            }""")
+            cas("ROUGE manifeste faux (2 entrees, 3 scenes) : composant non arme, page statique",
+                retour == {"arme": False, "pret": False, "etat": False}, str(retour))
+            rouge.close()
+        finally:
+            nav.close()
+    # La page est jouee scene par scene par render_page (TF-2299) : trois scenes, aucune ne bloque.
+    captures = tempfile.mkdtemp(prefix="self-test-scene-player-")
+    try:
+        d = _rendre_json("scene-player-verte.html", [390, 1280], captures)
+        scenes = {w: ((d["breakpoints"][w].get("scenes") or {}).get("scenes") or {}) for w in ("390", "1280")} if d else {}
+        cas("render_page joue les 3 scenes a 390 et 1280 px et aucune ne bloque",
+            d is not None and all(len(s) == 3 and all(v.get("applique") for v in s.values()) for s in scenes.values())
+            and d["verdict"] == "PASS",
+            "illisible" if d is None else f"{d['verdict']} {({w: len(s) for w, s in scenes.items()})}")
+    finally:
+        shutil.rmtree(captures, ignore_errors=True)
+    return out
+
+
+def run_lot_a_check_html():
+    """Quatre règles de `check_html.py` du lot du 29/10/2026 — chacune jouée dans les deux sens.
+
+    TF-1962 (RT-11) : L3 « valeur sans légende » NOMME la classe réservée qui le déclenche et publie la
+    liste des classes réservées (la rouge : 3 échecs dont le message dit « pv » ; la verte, même page,
+    classe hors liste : 0 échec). Un score par classe (`sc`) nomme la sienne.
+    TF-1969 (RT-18) : L18 reconnaît un code de règle en lettres PUIS chiffres (ADR0501, OSP0901,
+    GDE0202-R05) ; ISO27001, SHA256 et HTTP404 ne sont pas accusés ; glosés (abbr title, lien, aria-label),
+    les mêmes codes passent.
+    TF-1970 (RT-19) : L27 juge aussi les en-têtes de LIGNE d'une page qui n'est pas déclarée de données
+    (avertissement) ; définis (data-definition, title, abbr title), ils passent.
+    TF-1967 (RT-16) : L12 lit l'énumération par virgules d'une cellule et la colonne dont les cellules
+    sœurs mêlent liste et prose (avertissements) ; en listes partout, rien.
+    """
+    out = []
+
+    def lire(nom):
+        return (FIXTURES / nom).read_text(encoding="utf-8")
+
+    def cas(nom, ok, attendu, obtenu, regle, detail=""):
+        out.append({"fixture": nom, "verdict": "OK" if ok else "ECHEC", "attendu": attendu,
+                    "obtenu": obtenu, "regle": regle, "detail": "" if ok else detail[:300]})
+
+    # --- TF-1962 : L3 nomme la classe réservée ---
+    fails, _ = check(lire("l3-classe-reservee-pv.html"), regles="L")
+    l3 = [f for f in fails if f.startswith("L3 valeur sans légende")]
+    nomme = [f for f in l3 if "classe réservée « pv »" in f and "classes de valeur réservées : badge, chip-val, kpi, pastille, pv, stat" in f]
+    cas("l3-classe-reservee-pv.html", len(l3) == 3 and len(nomme) == 3, "3 échecs L3 nommant « pv » et la liste",
+        f"{len(l3)} échec(s), {len(nomme)} nommant la classe", "TF-1962 L3 nomme la classe", " | ".join(fails))
+    fails, _ = check(lire("l3-classe-non-reservee.html"), regles="L")
+    cas("l3-classe-non-reservee.html", not [f for f in fails if f.startswith("L3")], "0 échec L3",
+        f"{len([f for f in fails if f.startswith('L3')])} échec(s) L3", "TF-1962 classe hors liste", " | ".join(fails))
+    score = ('<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8"><title>Factory — essai — 20261029a</title></head>'
+             '<body><main><p>Maturité : <span class="sc">3</span></p></main></body></html>')
+    fails, _ = check(score, regles="L")
+    l3s = [f for f in fails if f.startswith("L3 valeur sans barème lié")]
+    cas("score par classe (en mémoire)", len(l3s) == 1 and "classe réservée « sc »" in l3s[0],
+        "L3 barème nommant « sc »", f"{len(l3s)} échec(s)", "TF-1962 score par classe", " | ".join(fails))
+
+    # --- TF-1969 : L18 lit les codes de règle sans espace ---
+    # AVERTISSEMENT et non échec (mesure du 29/10/2026 : GR223, WRD0000, ATT00759 sur le parc) ; les formes
+    # historiques (`ADR 0009`) restent des échecs, joués par l18-identifiant-muet.
+    fails, warns = check(lire("l18-code-regle-nu.html"), regles="L")
+    w18 = [x for x in warns if x.startswith("L18 (jeton) code de règle sans glose")]
+    cas("l18-code-regle-nu.html",
+        len(w18) == 1 and "3 code(s)" in w18[0] and all(c in w18[0] for c in ("ADR0501", "OSP0901", "GDE0202-R05"))
+        and not [f for f in fails if f.startswith("L18")] and "ISO27001" not in w18[0] and "SHA256" not in w18[0],
+        "1 avertissement L18 nommant ADR0501, OSP0901, GDE0202-R05, 0 échec", f"{len(w18)} avertissement(s)",
+        "TF-1969 code de règle nu", " | ".join(warns + fails))
+    fails, warns = check(lire("l18-code-regle-glose.html"), regles="L")
+    cas("l18-code-regle-glose.html", not [x for x in warns + fails if x.startswith("L18")], "0 L18",
+        str([x[:40] for x in warns + fails if x.startswith("L18")]), "TF-1969 codes glosés", " | ".join(warns))
+
+    # --- TF-1970 : L27 juge les en-têtes de ligne hors page de données ---
+    fails, warns = check(lire("l27-entetes-de-ligne-muets.html"), regles="L")
+    w = [x for x in warns if x.startswith("L27 bis en-têtes de ligne sans définition")]
+    cas("l27-entetes-de-ligne-muets.html", len(w) == 1 and "4 sur 4" in w[0] and not [f for f in fails if f.startswith("L27")],
+        "1 avertissement L27 (4 sur 4), 0 échec", f"{len(w)} avertissement(s)", "TF-1970 en-têtes de ligne", " | ".join(warns))
+    fails, warns = check(lire("l27-entetes-de-ligne-definis.html"), regles="L")
+    cas("l27-entetes-de-ligne-definis.html", not [x for x in warns + fails if x.startswith("L27")], "0 L27",
+        str([x[:40] for x in warns + fails if x.startswith("L27")]), "TF-1970 en-têtes définis", " | ".join(warns))
+
+    # --- TF-1967 : L12 voit les virgules d'une cellule et la colonne de formes mêlées ---
+    fails, warns = check(lire("l12-cellule-formes-melees.html"), regles="L")
+    v = [x for x in warns if x.startswith("L12 (cellules, suite) énumération en cellule (virgules")]
+    m = [x for x in warns if x.startswith("L12 (cellules, suite) colonne de formes mêlées")]
+    cas("l12-cellule-formes-melees.html", len(v) == 1 and len(m) == 1 and not [f for f in fails if f.startswith("L12")],
+        "1 avertissement virgules + 1 colonne de formes mêlées, 0 échec", f"{len(v)} + {len(m)}",
+        "TF-1967 cellules", " | ".join(warns))
+    fails, warns = check(lire("l12-cellule-formes-uniformes.html"), regles="L")
+    cas("l12-cellule-formes-uniformes.html", not [x for x in warns + fails if x.startswith("L12")], "0 L12",
+        str([x[:40] for x in warns + fails if x.startswith("L12")]), "TF-1967 cellules en listes", " | ".join(warns))
+    return out
+
+
+# Cas de RENDU du lot du 29/10/2026 : (fixture, largeur, famille, attendu, arguments en plus).
+# `attendu` : un entier (compte exact) ou ("min", n).
+CAS_LOT_A_RENDU = [
+    # TF-1992 (RA-2) : V1 ne compte plus la bande de sommaire défilante que L25 prescrit ; hors sommaire, elle reste accusée.
+    ("v1-bande-sommaire-defilante.html", 390, "v1_overflow", 0, []),
+    ("v1-bande-sommaire-defilante.html", 390, "unmeasured", ("min", 1), []),
+    ("v1-bande-defilante-hors-sommaire.html", 390, "v1_overflow", ("min", 1), []),
+    # TF-1966 (RT-15) : V25, colonne large et vide face à une colonne étranglée (avertissement).
+    ("v25-colonne-large-et-vide.html", 1440, "colonnes_desequilibrees", 1, []),
+    ("v25-colonnes-equilibrees.html", 1440, "colonnes_desequilibrees", 0, []),
+    # TF-1963 (RT-12) : V26, un panneau déplié se mesure (fond transparent, recouvrement).
+    ("v26-panneau-transparent.html", 1440, "panneau_deplie", 1, []),
+    ("v26-panneau-recouvert.html", 1440, "panneau_deplie", 1, []),
+    ("v26-panneau-opaque.html", 1440, "panneau_deplie", 0, []),
+    # TF-1964 (RT-13) : le composant embarqué sur une page SANS jetons garde un panneau opaque, état ouvert.
+    ("v26-composant-sans-jetons.html", 1440, "panneau_deplie", 0, ["--etats-ouverts"]),
+    # TF-1965 (RT-14) : V27, les filtres de colonne ont une place dans le repli en cartes (ou une déclaration).
+    ("v27-filtres-masques-par-le-repli.html", 390, "filtres_masques_repli", 1, []),
+    ("v27-filtres-masques-par-le-repli.html", 1440, "filtres_masques_repli", 0, []),
+    ("v27-filtres-en-barre-dans-le-repli.html", 390, "filtres_masques_repli", 0, []),
+    ("v27-filtres-en-barre-dans-le-repli.html", 390, "v1_overflow", 0, ["--etats-ouverts"]),
+    ("v27-recherche-remplace-les-filtres.html", 390, "filtres_masques_repli", 0, []),
+]
+
+
+def run_lot_a_rendu():
+    """Les cas de rendu du lot du 29/10/2026 (V1 bande de sommaire, V25, V26, V27). Silencieux sans playwright."""
+    try:
+        import importlib
+        importlib.import_module("playwright.sync_api")
+    except ImportError:
+        return None
+    import subprocess
+    import tempfile
+    captures = tempfile.mkdtemp(prefix="self-test-lot-a-")
+    rendu = str(Path(__file__).resolve().parent / "render_page.py")
+    cache = {}
+    out = []
+    for nom, largeur, famille, attendu, extra in CAS_LOT_A_RENDU:
+        etiquette = f"{nom} · {largeur} px · {famille}" + (" · états ouverts" if extra else "")
+        cle = (nom, largeur, tuple(extra))
+        if cle not in cache:
+            r = subprocess.run([sys.executable, "-X", "utf8", rendu, str(FIXTURES / nom), "--widths", str(largeur),
+                                "--output", "json", "--out", captures, *extra],
+                               capture_output=True, text=True, encoding="utf-8")
+            try:
+                cache[cle] = json.loads(r.stdout)["breakpoints"][str(largeur)]["issues"]
+            except Exception:  # noqa: BLE001
+                cache[cle] = None
+        issues = cache[cle]
+        if issues is None:
+            out.append({"fixture": etiquette, "verdict": "ECHEC", "attendu": attendu, "obtenu": 0,
+                        "regle": famille, "detail": "render_page illisible"})
+            continue
+        # Une famille ABSENTE du rapport (outil d'avant la règle) vaut -1 : jamais un « 0 constat » vert.
+        n = len(issues[famille]) if famille in issues else -1
+        ok = (n >= attendu[1]) if isinstance(attendu, tuple) else (n == attendu)
+        out.append({"fixture": etiquette, "verdict": "OK" if ok else "ECHEC", "attendu": attendu, "obtenu": n,
+                    "regle": famille, "detail": "" if ok else f"{n} constat(s) {famille} à {largeur} px"})
+    shutil.rmtree(captures, ignore_errors=True)
+    return out
+
+
+def run_lot_a_composants():
+    """TF-1964 (RT-13) — un composant consomme des jetons que l'hôte ne déclare pas : repli ET alerte.
+
+    LE FAIT PAYÉ. `table-filters.css` lisait --surface, --muted, --r-sm et --sans sans repli ; une page
+    qui ne les déclarait pas rendait cinq panneaux de filtre au fond rgba(0,0,0,0), `--constat` et
+    check_html PASS. Deux barrières, jouées ici :
+      · la feuille du composant n'a plus AUCUN `var(--x)` sans valeur de repli (sens rouge : l'état
+        d'avant, `var(--surface)` nu, est reconnu) ;
+      · `embarquer-composants.mjs --constat` refuse un bloc CSS embarqué qui consomme sans repli un jeton
+        absent de la page, et `--poser` le dit à la pose ; la même page, jetons déclarés, passe.
+    Silencieux si node est absent.
+    """
+    if not shutil.which("node"):
+        return None
+    import subprocess
+    import tempfile
+    poseur = str(Path(__file__).resolve().parent / "embarquer-composants.mjs")
+    out = []
+
+    def cas(nom, attendu, obtenu, regle, detail=""):
+        ok = attendu == obtenu
+        out.append({"fixture": nom, "verdict": "OK" if ok else "ECHEC", "attendu": str(attendu)[:96],
+                    "obtenu": str(obtenu)[:96], "regle": regle,
+                    "detail": "" if ok else (detail or f"attendu {attendu!r}, obtenu {obtenu!r}")[:300]})
+
+    def sans_repli(css):
+        sans_commentaires = re.sub(r"/\*[\s\S]*?\*/", "", css)
+        return sorted({m.group(1) for m in re.finditer(r"var\(\s*(--[\w-]+)\s*\)", sans_commentaires)})
+
+    css = (FIXTURES.parent / "assets" / "table-filters.css").read_text(encoding="utf-8")
+    cas("assets/table-filters.css · aucun var() sans repli", [], sans_repli(css), "TF-1964 repli")
+    cas("l'état d'avant (var(--surface) nu) est reconnu (sens rouge)", ["--surface"],
+        sans_repli("background: var(--surface); color: var(--ink, CanvasText);"), "TF-1964 contre-épreuve")
+
+    atelier = tempfile.mkdtemp(prefix="self-test-jetons-")
+    try:
+        def page(nom, jetons):
+            chemin = Path(atelier) / nom
+            chemin.write_text('<!DOCTYPE html>\n<html lang="fr">\n<head>\n<meta charset="UTF-8">\n'
+                              "<title>Factory — jetons · essai — 20261029a</title>\n"
+                              f"<style>:root{{{jetons}}}</style>\n</head>\n<body>\n<h1>Essai</h1>\n</body>\n</html>\n",
+                              encoding="utf-8", newline="\n")
+            return chemin
+
+        def lancer(*args):
+            return subprocess.run(["node", poseur, *args], capture_output=True, text=True, encoding="utf-8")
+
+        nu = page("hote-sans-jetons.html", "--x:1")
+        p = lancer("--poser", str(nu), "--composants", "tuiles-indicateurs.css")
+        cas("poseur · --poser nomme les jetons que la page doit déclarer", (0, True),
+            (p.returncode, "ATTENTION : tuiles-indicateurs.css consomme sans repli" in p.stdout and "--surface" in p.stdout),
+            "TF-1964 --poser", p.stdout[-300:])
+        c = lancer("--constat", str(nu))
+        cas("poseur · --constat refuse un jeton consommé sans repli et absent (sens rouge)", (1, True),
+            (c.returncode, "SANS repli et absent(s) de la page" in c.stdout and "--surface" in c.stdout),
+            "TF-1964 --constat", c.stdout[-300:])
+        declares = ("--blue:#2563EB;--green:#15803D;--head:Montserrat;--ink:#0F172A;--line:#E6EAF2;"
+                    "--muted:#64748B;--r:12px;--red:#B91C1C;--surface:#FFFFFF")
+        garni = page("hote-avec-jetons.html", declares)
+        lancer("--poser", str(garni), "--composants", "tuiles-indicateurs.css")
+        c = lancer("--constat", str(garni))
+        cas("poseur · la même page, jetons déclarés, passe (sens vert)", 0, c.returncode, "TF-1964 --constat", c.stdout[-300:])
+        repli = page("hote-repli.html", "--x:1")
+        lancer("--poser", str(repli), "--composants", "table-filters.css")
+        c = lancer("--constat", str(repli))
+        cas("poseur · table-filters.css sur une page SANS jetons passe : chaque jeton porte son repli", 0,
+            c.returncode, "TF-1964 repli", c.stdout[-300:])
+    finally:
+        shutil.rmtree(atelier, ignore_errors=True)
+    return out
+
+
+def _cas_fa4(nom, regle, ok, attendu, obtenu, detail=""):
+    """Une ligne de rapport du lot FA4 (campagne du 10/11/2026), au format des autres bancs."""
+    return {"fixture": nom, "verdict": "OK" if ok else "ECHEC", "attendu": attendu,
+            "obtenu": obtenu, "regle": regle, "detail": "" if ok else str(detail)[:300]}
+
+
+def run_fa4_tf2353():
+    """TF-2353 (RA-203) — check_html ne juge pas le repli système dans un bloc @font-face.
+
+    LE FAIT PAYE. L'avertissement « font-family sans repli système » frappait les déclarations
+    @font-face, où un repli n'a pas de sens : une famille embarquée en base64 (règle A1) porte un nom,
+    jamais une pile. Un dossier du 16/09/2026 sortait 4 avertissements pour 2 familles, à lire et à
+    écarter à chaque livrable. Les deux sens : la verte (deux @font-face, tous les usages avec repli)
+    n'en sort aucun ; la rouge (un usage sans repli) en sort un, sur CET usage et non sur le @font-face.
+    La fixture `a5-polices-embarquees.html` (polices réelles en data:) est le témoin du parc.
+    """
+    out = []
+    RE = "font-family sans repli système"
+    for nom, attendu in (("a5-font-face-sans-repli.html", 0), ("a5-polices-embarquees.html", 0),
+                         ("a5-usage-sans-repli.html", 1)):
+        _, warns = check((FIXTURES / nom).read_text(encoding="utf-8"), regles="charte")
+        vus = [w for w in warns if w.startswith(RE)]
+        ok = len(vus) == attendu
+        if nom == "a5-usage-sans-repli.html":
+            ok = ok and "montserrat" in vus[0] and "inter" not in vus[0]
+        out.append(_cas_fa4(nom, "TF-2353 repli hors @font-face", ok,
+                            f"{attendu} avertissement(s) « sans repli système »", f"{len(vus)} : {vus[:2]}", vus))
+    return out
+
+
+def run_fa4_tf2391():
+    """TF-2391 — mesurer_bruit.py compte les défauts de SCÈNE que render_page.py mesure (reste de TF-2299).
+
+    LE FAIT. Depuis 1.44.0, `render_page.py` joue chaque scène déclarée d'une page et range ses
+    familles sous `breakpoints[w].scenes.scenes[nom].issues` ; `mesurer_bruit.py` ne lisait que
+    `breakpoints[w].issues` (l'état initial), si bien qu'un défaut de scène ne comptait pour aucune
+    famille : le taux d'accusation d'une règle sous-estimait le parc exactement là où 1.44.0 voit.
+    `scenes-rouge.html` porte un v1_overflow dans la seule scène 4 (état initial vert) : un compte
+    qui lit l'état initial rend 0 page accusée, un compte qui lit aussi les scènes en rend 1 sur 2
+    (`scenes-verte.html`, mêmes sept scènes sans défaut, est le témoin). Silencieux sans playwright.
+    """
+    try:
+        import importlib
+        importlib.import_module("playwright.sync_api")
+    except ImportError:
+        return []
+    import tempfile
+    outil = str(Path(__file__).resolve().parent / "mesurer_bruit.py")
+    atelier = Path(tempfile.mkdtemp(prefix="self-test-bruit-scenes-"))
+    out = []
+    try:
+        parc = atelier / "parc"
+        parc.mkdir()
+        for nom in ("scenes-rouge.html", "scenes-verte.html"):
+            shutil.copy(FIXTURES / nom, parc / nom)
+        r = subprocess.run([sys.executable, "-X", "utf8", outil, str(parc), "--familles", "v1_overflow",
+                            "--widths", "1280", "--jobs", "2", "--cache", str(atelier / "cache"),
+                            "--output", "json"], capture_output=True, text=True, encoding="utf-8")
+        try:
+            apres = json.loads(r.stdout)["apres"]
+        except Exception:  # noqa: BLE001
+            apres = {"erreur": (r.stderr or r.stdout)[-300:]}
+        f = (apres.get("familles") or {}).get("v1_overflow", {})
+        accusees = [Path(p).name for p in f.get("accusees", [])]
+        ok = apres.get("mesurees") == 2 and f.get("pages_accusees") == 1 and f.get("taux") == 0.5
+        out.append(_cas_fa4("scenes-rouge + scenes-verte · le défaut de scène est compté", "TF-2391 compte des scènes", ok,
+                            "2 mesurées, 1 accusée (v1_overflow), taux 0.5",
+                            f"{apres.get('mesurees')} mesurées, {f.get('pages_accusees')} accusée(s), taux {f.get('taux')}",
+                            apres))
+        out.append(_cas_fa4("scenes-rouge seule accusée (la verte n'est pas bruyante)", "TF-2391 compte des scènes",
+                            accusees == ["scenes-rouge.html"], "['scenes-rouge.html']", str(accusees)))
+        out.append(_cas_fa4("le constat est ventilé : 1 en scène, 0 à l'état initial", "TF-2391 ventilation",
+                            f.get("constats_en_scene") == 1 and f.get("constats") == 1,
+                            "constats 1, constats_en_scene 1", f"constats {f.get('constats')}, "
+                            f"constats_en_scene {f.get('constats_en_scene')}", f))
+    finally:
+        shutil.rmtree(atelier, ignore_errors=True)
+    return out
+
+
+def run_fa4_impression():
+    """TF-2364 (G1 « impression toujours claire ») et TF-2365 (marge basse de la page imprimée) — check_impression.py.
+
+    LE FAIT. G1 s'écrivait sans oracle qui le joue : un one-pager PASS à check_html et à render_page sortait
+    en cartes sombres sur papier blanc après un passage en thème sombre (706 177 pixels sur 1 169 883 en
+    écart). Un bandeau poussé à 0,1 mm du bord d'une feuille à hauteur figée n'était vu que par l'oracle
+    du produit. Quatre fixtures, chacune jugée pour UNE raison :
+      · `impression-sombre-rouge.html` : le bloc sombre n'est pas borné à l'écran, G1 tombe (≈ 100 % de pixels) ;
+      · `impression-fixe-verte.html` : deux feuilles A4 fixes, pied à 12 mm, thème sombre sous `screen` : PASS,
+        0 pixel d'écart, deux marges mesurées ;
+      · `impression-marge-rouge.html` : la même page, pied de la SECONDE feuille au bord : FAIL sur la page 2
+        seule, la page 1 reste verte, G1 reste vert (la marge ne dépend pas du thème) ;
+      · `lisibilite-verte.html` : aucun @page de taille fixe, aucun thème sombre : PASS, et la marge basse est
+        dite NON mesurée (jamais un PASS muet).
+    Silencieux sans playwright, pymupdf ou numpy (le script rend alors SKIP, motif écrit).
+    """
+    try:
+        import importlib
+        for m in ("playwright.sync_api", "pymupdf", "numpy"):
+            importlib.import_module(m)
+    except ImportError:
+        return []
+    outil = str(Path(__file__).resolve().parent / "check_impression.py")
+
+    def jouer(nom):
+        r = subprocess.run([sys.executable, "-X", "utf8", outil, str(FIXTURES / nom), "--output", "json"],
+                           capture_output=True, text=True, encoding="utf-8")
+        try:
+            return r.returncode, json.loads(r.stdout)
+        except Exception:  # noqa: BLE001
+            return r.returncode, {"erreur": (r.stderr or r.stdout)[-300:]}
+
+    out = []
+    code, j = jouer("impression-sombre-rouge.html")
+    g1 = (j.get("mesures") or {}).get("g1") or [{}]
+    ok = (code == 1 and j.get("verdict") == "FAIL" and g1[0].get("ratio", 0) > 0.5
+          and any(e.startswith("G1 : page 1") for e in j.get("echecs", [])) and not j.get("page_fixe"))
+    out.append(_cas_fa4("impression-sombre-rouge · le thème sombre sort à l'impression", "TF-2364 G1 impression claire", ok,
+                        "FAIL (exit 1), G1 page 1 en écart de plus de 50 % des pixels",
+                        f"exit {code}, {j.get('verdict')}, écart {g1[0].get('ratio')}", j))
+    code, j = jouer("impression-fixe-verte.html")
+    m = (j.get("mesures") or {})
+    ok = (code == 0 and j.get("verdict") == "PASS" and [x.get("differents") for x in m.get("g1", [])] == [0, 0]
+          and [x.get("marge_mm") for x in m.get("marge_basse", [])] and
+          all(x["marge_mm"] >= 5 for x in m.get("marge_basse", [])) and len(m.get("marge_basse", [])) == 2)
+    out.append(_cas_fa4("impression-fixe-verte · 0 pixel d'écart, deux marges de 12 mm", "TF-2364 G1 + TF-2365 marge basse", ok,
+                        "PASS (exit 0), 0 pixel d'écart sur 2 pages, 2 marges >= 5 mm",
+                        f"exit {code}, {j.get('verdict')}, g1 {[x.get('differents') for x in m.get('g1', [])]}, "
+                        f"marges {[x.get('marge_mm') for x in m.get('marge_basse', [])]}", j))
+    code, j = jouer("impression-marge-rouge.html")
+    m = (j.get("mesures") or {})
+    marges = [x.get("marge_mm") for x in m.get("marge_basse", [])]
+    ok = (code == 1 and j.get("verdict") == "FAIL" and len(marges) == 2 and marges[0] >= 5 and marges[1] < 5
+          and len(j.get("echecs", [])) == 1 and j["echecs"][0].startswith("marge basse : page 2"))
+    out.append(_cas_fa4("impression-marge-rouge · le pied de la page 2 finit à moins de 5 mm", "TF-2365 marge basse", ok,
+                        "FAIL (exit 1), un seul échec : la marge de la page 2 (< 5 mm), la page 1 saine",
+                        f"exit {code}, {j.get('verdict')}, marges {marges}, échecs {j.get('echecs')}", j))
+    code, j = jouer("lisibilite-verte.html")
+    dit = [n for n in j.get("non_juge", []) if n.startswith("LA MARGE BASSE n'est pas mesurée")]
+    ok = code == 0 and j.get("verdict") == "PASS" and j.get("page_fixe") is False and len(dit) == 1
+    out.append(_cas_fa4("lisibilite-verte · sans @page fixe, la marge est dite non mesurée", "TF-2365 périmètre", ok,
+                        "PASS (exit 0), page_fixe faux, une ligne « MARGE BASSE n'est pas mesurée » au non_juge",
+                        f"exit {code}, {j.get('verdict')}, page_fixe {j.get('page_fixe')}, {len(dit)} ligne(s)", j))
+    return out
+
+
+def run_fa4_tf2362():
+    """TF-2362 (RA-212) — check_completude.py accepte une source de DONNÉES et une cible PDF, par comparaison de chaînes.
+
+    LE FAIT. Le socle prescrit check_completude.py pour toute page issue d'un générateur, mais il ne comparait qu'un
+    HTML à un Markdown. Un kit généré depuis un module Python de données et livré en PDF n'avait aucun oracle : un
+    contrôle ad hoc (K10) a retrouvé 586 chaînes sur deux PDF et rendu FAIL sur une fiche amputée de 2 mots. Les deux
+    sens, sur une source JSON et sur son équivalent en module Python (lu par ast, jamais exécuté : la ligne
+    `os.environ[...]` du module lèverait), vers un HTML et vers un PDF imprimé de ce HTML :
+      · la verte (8 chaînes affichées) PASSE, apostrophe courbe de la source contre droite de la page comprise ;
+      · l'amputée (2 mots d'un item) ÉCHOUE et nomme `sections[1].items[2]` ;
+      · sans `--ignorer-cles`, un identifiant qui ne s'affiche pas est compté MANQUANT (le non_juge le dit) ;
+      · une source sans aucune chaîne rend SKIP (exit 2), jamais PASS ; `--source` et `--source-donnees` s'excluent ;
+      · une cible PDF sans source de données est refusée ; la césure de fin de ligne ne fait pas échouer une
+        chaîne présente, et n'en sauve pas une absente.
+    """
+    import tempfile
+    outil = str(Path(__file__).resolve().parent / "check_completude.py")
+    donnees = FIXTURES / "completude-donnees.json"
+    module = FIXTURES / "completude-contenu.py"
+    verte = FIXTURES / "completude-donnees-verte.html"
+    amputee = FIXTURES / "completude-donnees-amputee.html"
+    out = []
+
+    def jouer(*args):
+        r = subprocess.run([sys.executable, "-X", "utf8", outil, *map(str, args), "--output", "json"],
+                           capture_output=True, text=True, encoding="utf-8")
+        try:
+            return r.returncode, json.loads(r.stdout), r.stderr
+        except Exception:  # noqa: BLE001
+            return r.returncode, {}, (r.stderr or r.stdout)[-300:]
+
+    ign = ("--ignorer-cles", "id,classe")
+    code, j, _ = jouer(verte, "--source-donnees", donnees, *ign)
+    out.append(_cas_fa4("JSON → HTML vert · 9 chaînes retrouvées", "TF-2362 verte", code == 0 and j.get("verdict") == "PASS"
+                        and j.get("chaines_jugees") == 9 and j.get("chaines_retrouvees") == 9,
+                        "PASS, 9 jugées, 9 retrouvées", f"exit {code}, {j.get('verdict')}, {j.get('chaines_retrouvees')}/{j.get('chaines_jugees')}", j))
+    code, j, _ = jouer(amputee, "--source-donnees", donnees, *ign)
+    man = [m["chemin"] for m in j.get("chaines_manquantes", [])]
+    out.append(_cas_fa4("JSON → HTML amputé de 2 mots · l'item perdu est nommé", "TF-2362 rouge",
+                        code == 1 and j.get("verdict") == "FAIL" and man == ["completude-donnees.json:$.sections[1].items[2]"],
+                        "FAIL (exit 1), seule manquante : sections[1].items[2]", f"exit {code}, {j.get('verdict')}, {man}", j))
+    code, j, _ = jouer(verte, "--source-donnees", donnees)
+    man = [m["chemin"] for m in j.get("chaines_manquantes", [])]
+    out.append(_cas_fa4("sans --ignorer-cles · l'identifiant et la classe sont comptés manquants, et dits", "TF-2362 non_juge",
+                        code == 1 and any(c.endswith("$.classe") for c in man)
+                        and any(n.startswith("TOUTE CHAÎNE DE LA SOURCE EST CRUE AFFICHÉE") for n in j.get("non_juge", [])),
+                        "FAIL, $.classe manquante, non_juge « crue affichée »", f"exit {code}, {man[:3]}", j))
+    os_environ_absente = "VARIABLE_QUI_N_EXISTE_PAS_TF2362"
+    code, j, err = jouer(verte, "--source-donnees", module, *ign)
+    notes = " ".join(j.get("non_juge", []))
+    out.append(_cas_fa4("module Python → HTML vert · lu par ast sans exécution, expressions non lues dites", "TF-2362 module",
+                        code == 0 and j.get("verdict") == "PASS" and "2 expression(s) du module de contenu ne se lisent pas" in notes
+                        and os_environ_absente not in err,
+                        "PASS sans exécuter le module (2 expressions non lues dites)", f"exit {code}, {j.get('verdict')}, {err[-120:]}", notes[-200:]))
+    code, j, _ = jouer(amputee, "--source-donnees", module, *ign)
+    out.append(_cas_fa4("module Python → HTML amputé · FAIL", "TF-2362 module rouge",
+                        code == 1 and [m["chemin"].split(":", 1)[1] for m in j.get("chaines_manquantes", [])] == ["SECTIONS[1].items[2]"],
+                        "FAIL, SECTIONS[1].items[2]", f"exit {code}, {[m['chemin'] for m in j.get('chaines_manquantes', [])]}", j))
+
+    # Cas sans navigateur : source vide, exclusion des deux modes, PDF sans source de données, césure.
+    atelier = Path(tempfile.mkdtemp(prefix="self-test-completude-donnees-"))
+    try:
+        vide = atelier / "vide.json"
+        vide.write_text('{"nombre": 3, "actif": true}', encoding="utf-8")
+        code, j, _ = jouer(verte, "--source-donnees", vide)
+        out.append(_cas_fa4("source sans aucune chaîne · SKIP, jamais PASS", "TF-2362 source vide",
+                            code == 2 and j.get("verdict") == "SKIP", "SKIP (exit 2)", f"exit {code}, {j.get('verdict')}", j))
+        code, _, err = jouer(verte, "--source-donnees", donnees, "--source", FIXTURES / "completude-source.md")
+        out.append(_cas_fa4("--source et --source-donnees ensemble · refus (exit 2)", "TF-2362 exclusion",
+                            code == 2 and "s'excluent" in err, "exit 2, « s'excluent »", f"exit {code}, {err[-100:]}", err))
+        faux = atelier / "cible.pdf"
+        faux.write_bytes(b"%PDF-1.4\n")
+        code, _, err = jouer(faux, "--source", FIXTURES / "completude-source.md")
+        out.append(_cas_fa4("cible PDF avec une source Markdown · refus (exit 2)", "TF-2362 cible PDF",
+                            code == 2 and "--source-donnees" in err, "exit 2, renvoie à --source-donnees", f"exit {code}, {err[-100:]}", err))
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("check_completude_fa4", outil)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        present = mod.verifier_donnees("une inter-\nprétation juste", [("c", "interprétation")])
+        absent = mod.verifier_donnees("une inter-\npellation juste", [("c", "interprétation")])
+        out.append(_cas_fa4("césure de fin de ligne · la chaîne présente est retrouvée, l'absente reste manquante",
+                            "TF-2362 césure",
+                            present["verdict"] == "PASS" and present["retrouvees_a_un_trait_dunion_pres"] == 1
+                            and absent["verdict"] == "FAIL",
+                            "PASS (1 à un trait d'union près) puis FAIL", f"{present['verdict']} / {absent['verdict']}", present))
+
+        # La cible PDF : le HTML vert et l'amputé imprimés par Chromium, lus par pymupdf.
+        try:
+            import importlib
+            importlib.import_module("pymupdf")
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            return out
+        pdfs = {}
+        with sync_playwright() as p:
+            nav = p.chromium.launch()
+            try:
+                for nom, src in (("verte", verte), ("amputee", amputee)):
+                    pg = nav.new_page()
+                    pg.goto(src.resolve().as_uri())
+                    pg.wait_for_timeout(300)
+                    pdfs[nom] = atelier / f"{nom}.pdf"
+                    pg.pdf(path=str(pdfs[nom]), format="A4", print_background=True)
+                    pg.close()
+            finally:
+                nav.close()
+        code, j, _ = jouer(pdfs["verte"], "--source-donnees", donnees, *ign)
+        out.append(_cas_fa4("JSON → PDF vert · 9 chaînes retrouvées dans la couche texte", "TF-2362 PDF vert",
+                            code == 0 and j.get("verdict") == "PASS" and j.get("chaines_retrouvees") == 9,
+                            "PASS, 9 retrouvées", f"exit {code}, {j.get('verdict')}, {j.get('chaines_retrouvees')}", j))
+        code, j, _ = jouer(pdfs["amputee"], "--source-donnees", donnees, *ign)
+        man = [m["chemin"] for m in j.get("chaines_manquantes", [])]
+        out.append(_cas_fa4("JSON → PDF amputé de 2 mots · l'item perdu est nommé", "TF-2362 PDF rouge",
+                            code == 1 and man == ["completude-donnees.json:$.sections[1].items[2]"],
+                            "FAIL, sections[1].items[2] seule", f"exit {code}, {man}", j))
+        code, j, _ = jouer(pdfs["verte"], "--source-donnees", module, *ign)
+        out.append(_cas_fa4("module Python → PDF vert · PASS", "TF-2362 PDF module",
+                            code == 0 and j.get("verdict") == "PASS", "PASS", f"exit {code}, {j.get('verdict')}", j))
+    finally:
+        shutil.rmtree(atelier, ignore_errors=True)
+    return out
+
+
+def run_fa4_tf2352():
+    """TF-2352 (RA-202) — l'export PDF du socle embarque les polices de la charte depuis un cache local.
+
+    LE FAIT. Une page du socle déclare ses polices sans @font-face (règle A1) ; sur un poste qui ne les a pas, l'impression
+    PDF retombait sur Segoe UI et Consolas (12/09/2026 : AAAAAA+SegoeUI et DAAAAA+Consolas, puis DMSans9pt, Roboto et
+    JetBrainsMono depuis une copie de travail portant des @font-face). `exporter_pdf.py` pose les familles du cache local
+    dans une copie de travail et lit les polices du PDF. Trois sens :
+      · ROUGE — une famille qu'AUCUN poste n'a (« Essai Tf2352 », fabriquée dans une copie de la fixture) et qu'aucun cache
+        ne fournit : le PDF embarque la police système, l'export le dit (FAIL) ;
+      · ROUGE — le cache ne porte pas Montserrat (il ne tient que DM Sans) : sur un poste qui n'a pas Montserrat le titre
+        retombe sur la police système, FAIL ; sur un poste qui l'a, le rouge n'est pas rejouable et le cas le dit ;
+      · VERT — le cache du socle (factory-schemas/scripts/fonts) : PASS, Montserrat, Inter et JetBrains Mono embarquées, la
+        page source inchangée octet pour octet.
+    Silencieux sans playwright ni pymupdf.
+    """
+    try:
+        import importlib
+        for m in ("playwright.sync_api", "pymupdf"):
+            importlib.import_module(m)
+    except ImportError:
+        return []
+    import hashlib
+    import tempfile
+    outil = str(Path(__file__).resolve().parent / "exporter_pdf.py")
+    cache_socle = Path(__file__).resolve().parent.parent.parent / "factory-schemas" / "scripts" / "fonts"
+    if not cache_socle.is_dir():
+        return [_cas_fa4("cache de polices du socle", "TF-2352 export PDF", False, "factory-schemas/scripts/fonts présent",
+                         "absent", str(cache_socle))]
+    source = FIXTURES / "export-pdf-charte.html"
+    out = []
+    atelier = Path(tempfile.mkdtemp(prefix="self-test-export-pdf-"))
+
+    def jouer(page, pdf, *args):
+        r = subprocess.run([sys.executable, "-X", "utf8", outil, str(page), "--out", str(pdf), "--output", "json", *args],
+                           capture_output=True, text=True, encoding="utf-8")
+        try:
+            return r.returncode, json.loads(r.stdout)
+        except Exception:  # noqa: BLE001
+            return r.returncode, {"erreur": (r.stderr or r.stdout)[-300:]}
+
+    try:
+        essai = atelier / "essai.html"
+        essai.write_text(source.read_text(encoding="utf-8").replace("Montserrat", "Essai Tf2352"), encoding="utf-8")
+        code, j = jouer(essai, atelier / "essai.pdf")
+        ok = code == 1 and j.get("verdict") == "FAIL" and "Essai Tf2352" in j.get("familles_non_couvertes", []) and bool(j.get("repli"))
+        out.append(_cas_fa4("famille introuvable (aucun poste, aucun cache) · le repli système est embarqué et dit", "TF-2352 rouge", ok,
+                            "FAIL (exit 1), « Essai Tf2352 » non couverte, au moins une police de repli",
+                            f"exit {code}, {j.get('verdict')}, non couvertes {j.get('familles_non_couvertes')}, repli {j.get('repli')}", j))
+        cache_dm = atelier / "cache-dm-sans"
+        cache_dm.mkdir()
+        shutil.copy(cache_socle / "dm-sans-latin-400-normal.woff2", cache_dm)
+        code, j = jouer(source, atelier / "sans-montserrat.pdf", "--cache", str(cache_dm))
+        installee = code == 0 and not j.get("repli")
+        if installee:
+            out.append(_cas_fa4("cache sans Montserrat · rouge NON REJOUABLE ici (police installée sur ce poste)", "TF-2352 rouge", True,
+                                "FAIL sur un poste sans Montserrat", "PASS : Montserrat est installée sur ce poste, rouge non rejoué", j))
+        else:
+            ok = code == 1 and j.get("verdict") == "FAIL" and "Montserrat" in j.get("familles_non_couvertes", []) and bool(j.get("repli"))
+            out.append(_cas_fa4("cache sans Montserrat · le titre retombe sur la police système, FAIL", "TF-2352 rouge", ok,
+                                "FAIL (exit 1), Montserrat non couverte, une police de repli embarquée",
+                                f"exit {code}, {j.get('verdict')}, repli {j.get('repli')}", j))
+        avant = hashlib.sha256(source.read_bytes()).hexdigest()
+        voisins = sorted(p.name for p in FIXTURES.iterdir())
+        code, j = jouer(source, atelier / "charte.pdf")
+        noms = " ".join(j.get("polices_du_pdf", [])).lower()
+        ok = (code == 0 and j.get("verdict") == "PASS" and j.get("repli") == [] and "montserrat" in noms and "inter" in noms
+              and "jetbrainsmono" in noms and j.get("familles_posees") == ["Montserrat", "Inter", "JetBrains Mono"])
+        out.append(_cas_fa4("cache du socle · Montserrat, Inter et JetBrains Mono embarquées, aucun repli", "TF-2352 vert", ok,
+                            "PASS (exit 0), 3 familles posées, aucune police de repli",
+                            f"exit {code}, {j.get('verdict')}, polices {j.get('polices_du_pdf')}", j))
+        intact = hashlib.sha256(source.read_bytes()).hexdigest() == avant and sorted(p.name for p in FIXTURES.iterdir()) == voisins
+        out.append(_cas_fa4("la page source reste intacte, aucun fichier ne naît à côté d'elle (copie de travail temporaire)",
+                            "TF-2352 copie de travail", intact, "empreinte identique, mêmes fichiers dans fixtures/", "inchangée" if intact else "modifiée"))
+    finally:
+        shutil.rmtree(atelier, ignore_errors=True)
+    return out
+
+
+def run_scenes_adresse_independante_de_la_police():
+    """TF-2533 — l'adresse insécable de `scenes-rouge.html` déborde à 1 280 px QUELLE QUE SOIT la police à chasse fixe.
+
+    LE FAIT. Le 14/11/2026, quatre cas de scènes (TF-2299, TF-2391) rendaient rouge sur HEAD intact. La cause, mesurée :
+    la fixture portait une adresse de 126 caractères en `white-space: nowrap`, et son débordement à 1 280 px (le seul qui
+    sépare la scène 4 de l'état initial à cette largeur) dépendait de la police que le Chromium du poste donne à
+    `monospace` : scrollWidth 1 290 px sous Courier New, 1 280 (aucun débordement) sous Consolas, Cascadia Mono ou la
+    police `monospace` du poste. L'adresse compte désormais 222 caractères : même à 0,5 em par caractère (la chasse
+    fixe la plus étroite en usage), 14,4 px de corps, elle dépasse ce que l'écran laisse à droite de son départ.
+
+    Les deux sens sont joués sur la mesure du texte : l'ANCIENNE adresse (126 caractères) ne tient pas la barre et fait
+    échouer le contrôle ; l'adresse de la fixture la tient. La jumelle verte porte la MÊME adresse (elle ne diffère que
+    par la règle de coupure) : sinon sa verdure ne prouverait rien.
+    """
+    ancienne = ("https://documentation-interne.exemple-fixture.test/espaces/qualite/referentiels/"
+                "lignage-des-donnees/fiche-de-controle-2026.html")
+    corps, chasse_min, fenetre = 14.4, 0.5, 1280
+    depart = (fenetre - 960) / 2 + 20 + 32           # marge de .wrap (960 px centrés), son remplissage, celui de la scène
+    place = fenetre - depart
+
+    def tient_la_barre(adresse):
+        return len(adresse) * chasse_min * corps > place
+
+    def adresse_de(nom):
+        m = re.search(r'<code class="adresse">([^<]+)</code>', (FIXTURES / nom).read_text(encoding="utf-8"))
+        return m.group(1) if m else ""
+
+    rouge, verte = adresse_de("scenes-rouge.html"), adresse_de("scenes-verte.html")
+    return [
+        {"fixture": "scenes-rouge · l'ancienne adresse (126 caractères) ne tient pas la barre (SENS ROUGE)",
+         "verdict": "OK" if not tient_la_barre(ancienne) else "ECHEC",
+         "attendu": f"{len(ancienne)} car. × {chasse_min} em × {corps} px ≤ {place:.0f} px : débordement non garanti",
+         "obtenu": f"{len(ancienne) * chasse_min * corps:.0f} px", "regle": "TF-2533 adresse", "detail": ""},
+        {"fixture": "scenes-rouge · l'adresse déborde à 1 280 px sous toute police à chasse fixe (SENS VERT)",
+         "verdict": "OK" if rouge and tient_la_barre(rouge) else "ECHEC",
+         "attendu": f"> {place:.0f} px à 0,5 em par caractère", "obtenu": f"{len(rouge)} car., {len(rouge) * chasse_min * corps:.0f} px",
+         "regle": "TF-2533 adresse", "detail": ""},
+        {"fixture": "scenes-verte · même adresse que la rouge (elle ne diffère que par la règle de coupure)",
+         "verdict": "OK" if rouge and rouge == verte else "ECHEC",
+         "attendu": "adresses identiques", "obtenu": "identiques" if rouge == verte else "différentes",
+         "regle": "TF-2533 adresse", "detail": ""},
+    ]
+
+
+def run_page_servie():
+    """TF-2543 — la classe `page-servie` : les feuilles liées sont LUES, trois mesures du livrable autonome ne s'appliquent pas.
+
+    LE FAIT. Le 14/11/2026, l'accueil d'un produit web rendu par son serveur local échouait à six contrôles bloquants de
+    `check_html.py` (jetons en feuille liée, favicon en fichier, pas de @media print en ligne…) : le produit consignait une
+    dérogation à chaque run et l'oracle de forme n'y jugeait plus rien. `fixtures/page-servie-accueil.html` est le gabarit du
+    socle dont le `<style>` est devenu `page-servie-accueil.css` (sans @media print) et dont le favicon est un fichier.
+
+    Les deux sens, sur des pages jetables : ROUGE sous `page-lue` (3 échecs : `:root`, favicon non embarqué, @media print) ;
+    VERT sous `page-servie` (0 échec, les feuilles lues et les mesures non applicables dites au verdict) ; et la classe n'est
+    pas un passe-droit : un défaut DANS la feuille liée (police Syne) est jugé, une feuille sans `:root` laisse `:root absent`,
+    une feuille introuvable est NOMMÉE non lue (et `:root` n'est alors pas jugé), le favicon reste exigé.
+    """
+    import tempfile
+    from check_html import lire_feuilles_liees, non_juge as non_juge_check
+    out = []
+
+    def cas(nom, ok, attendu, obtenu, detail=""):
+        out.append({"fixture": nom, "verdict": "OK" if ok else "ECHEC", "attendu": attendu, "obtenu": obtenu,
+                    "regle": "TF-2543 page servie", "detail": "" if ok else str(detail)[:300]})
+
+    page = FIXTURES / "page-servie-accueil.html"
+    feuille = FIXTURES / "page-servie-accueil.css"
+    if not (page.is_file() and feuille.is_file()):
+        return [{"fixture": "page-servie-accueil", "verdict": "ABSENTE", "attendu": "fixtures présentes", "obtenu": "absentes",
+                 "regle": "TF-2543 page servie", "detail": ""}]
+    html = page.read_text(encoding="utf-8")
+    css = feuille.read_text(encoding="utf-8")
+    atelier = Path(tempfile.mkdtemp(prefix="self-test-page-servie-"))
+    try:
+        def poser(sous, page_html=html, css_texte=css, nom_css="page-servie-accueil.css"):
+            dossier = atelier / sous
+            dossier.mkdir()
+            (dossier / "accueil.html").write_text(page_html, encoding="utf-8")
+            if css_texte is not None:
+                (dossier / nom_css).write_text(css_texte, encoding="utf-8")
+            return dossier / "accueil.html"
+
+        def tete(messages, debut):
+            return [m for m in messages if m.startswith(debut)]
+
+        # ROUGE : sous page-lue, les trois mesures du livrable autonome échouent.
+        p = poser("lue")
+        f, _ = check(html, source=str(p), classe="page-lue")
+        vus = [d for d in (":root absent", "A2 favicon non embarqué", "@media print absent") if tete(f, d)]
+        cas("page-servie-accueil sous page-lue : :root, favicon non embarqué et @media print échouent (SENS ROUGE)",
+            len(vus) == 3 and len(f) == 3, "3 échecs", f"{len(f)} échec(s) : {[x[:30] for x in f]}", " | ".join(f))
+
+        # VERT : sous page-servie, 0 échec, feuilles lues et mesures non applicables dites.
+        f, _ = check(html, source=str(p), classe="page-servie")
+        _, lues, non_lues = lire_feuilles_liees(html, str(p))
+        notes = " ".join(non_juge_check("page-servie", "ligne de commande", (lues, non_lues)))
+        cas("page-servie-accueil sous page-servie : 0 échec, la feuille liée lue (SENS VERT)",
+            not f and lues == ["page-servie-accueil.css"] and not non_lues, "0 échec, 1 feuille lue",
+            f"{len(f)} échec(s), lues {lues}, non lues {non_lues}", " | ".join(f))
+        cas("page-servie : le verdict DIT les trois mesures non applicables et la feuille lue",
+            all(m in notes for m in ("A2 « favicon non embarqué »", "@media print absent", ":root absent", "page-servie-accueil.css", "CLASSE D'ARTEFACT page-servie")),
+            "classe, trois mesures, feuille lue nommées", notes[:160], notes)
+
+        # La classe se déclare aussi par la page.
+        declaree = html.replace("<head>", '<head>\n  <meta name="classe-artefact" content="page-servie">', 1)
+        pd = poser("declaree", declaree)
+        f, w = check(declaree, source=str(pd))
+        cas("page-servie déclarée par <meta name=\"classe-artefact\"> : même verdict qu'en ligne de commande",
+            not f and not tete(w, "classe d'artefact inconnue"), "0 échec, classe reconnue", f"{len(f)} échec(s)", " | ".join(f))
+
+        # Pas un passe-droit (1) : un défaut dans la feuille liée est jugé.
+        pasyne = poser("syne", html, css + "\nh1 { font-family: Syne, sans-serif; }\n")
+        f, _ = check(html, source=str(pasyne), classe="page-servie")
+        cas("page-servie : la police Syne posée DANS la feuille liée est refusée (la feuille est lue)",
+            len(tete(f, "Police Syne")) == 1, "1 échec « Police Syne »", f"{len(f)} échec(s)", " | ".join(f))
+        f, _ = check(html, source=str(pasyne), classe="page-lue")
+        cas("page-lue : la même feuille n'est pas lue (SENS ROUGE de la lecture)", not tete(f, "Police Syne"),
+            "aucun échec « Police Syne » : la feuille liée n'est pas lue", f"{len(f)} échec(s)", " | ".join(f))
+
+        # Pas un passe-droit (2) : :root reste exigé quand toutes les feuilles sont lues et aucune ne le porte.
+        sans_root = poser("sans-root", html, css.replace(":root", ":host"))
+        f, _ = check(html, source=str(sans_root), classe="page-servie")
+        cas("page-servie : une feuille lue sans :root laisse « :root absent » (la mesure n'est pas supprimée en bloc)",
+            len(tete(f, ":root absent")) == 1, "1 échec « :root absent »", f"{len(f)} échec(s)", " | ".join(f))
+
+        # Pas un passe-droit (3) : le favicon reste exigé.
+        html_sans_icone = re.sub(r'<link rel="icon"[^>]*>', "", html, count=1)
+        f, _ = check(html_sans_icone, source=str(poser("sans-icone", html_sans_icone)), classe="page-servie")
+        cas("page-servie : une page sans favicon échoue encore (A2 favicon absent)", len(tete(f, "A2 favicon absent")) == 1,
+            "1 échec « A2 favicon absent »", f"{len(f)} échec(s)", " | ".join(f))
+
+        # Une feuille introuvable se NOMME, et `:root` n'est alors pas jugé.
+        sans_feuille = poser("sans-feuille", html, None)
+        f, _ = check(html, source=str(sans_feuille), classe="page-servie")
+        _, lues, non_lues = lire_feuilles_liees(html, str(sans_feuille))
+        notes = " ".join(non_juge_check("page-servie", "ligne de commande", (lues, non_lues)))
+        cas("page-servie : une feuille introuvable est nommée non lue et « :root absent » n'est pas jugé",
+            not tete(f, ":root absent") and not lues and len(non_lues) == 1 and "NON LUES" in notes and "page-servie-accueil.css" in notes,
+            "0 « :root absent », 1 feuille non lue nommée", f"{len(f)} échec(s), non lues {non_lues}", notes)
+
+        # Un chemin absolu se résout par --racine-servie, et ne se devine pas sans elle.
+        absolu = html.replace('href="page-servie-accueil.css"', 'href="/static/css/page-servie-accueil.css"')
+        racine = atelier / "racine"
+        (racine / "static" / "css").mkdir(parents=True)
+        (racine / "static" / "css" / "page-servie-accueil.css").write_text(css, encoding="utf-8")
+        pa = poser("absolu", absolu, None)
+        f, _ = check(absolu, source=str(pa), classe="page-servie", racine_servie=str(racine))
+        _, lues_a, _ = lire_feuilles_liees(absolu, str(pa), str(racine))
+        _, lues_sans, non_lues_sans = lire_feuilles_liees(absolu, str(pa))
+        cas("page-servie : « /static/css/… » se résout par la racine servie, et reste non lue sans elle",
+            not f and len(lues_a) == 1 and not lues_sans and "racine" in (non_lues_sans[0][1] if non_lues_sans else ""),
+            "lue avec --racine-servie, non lue sans (motif : racine inconnue)", f"lues {lues_a}, sans racine {non_lues_sans}", " | ".join(f))
+
+        # La ligne de commande : classe, feuilles et mesures non applicables au JSON.
+        r = subprocess.run([sys.executable, "-X", "utf8", str(Path(__file__).resolve().parent / "check_html.py"), str(p),
+                            "--classe=page-servie", "--output", "json", "--sans-style"], capture_output=True, text=True, encoding="utf-8")
+        try:
+            j = json.loads(r.stdout)
+        except Exception:  # noqa: BLE001
+            j = {}
+        notes = " ".join(j.get("non_juge", []))
+        cas("check_html.py --classe=page-servie --output json : PASS, classe, feuille lue et mesures non applicables au verdict",
+            j.get("verdict") == "PASS" and j.get("classe") == "page-servie" and "page-servie-accueil.css" in notes and "@media print absent" in notes,
+            "PASS, classe page-servie, feuille lue nommée", f"{j.get('verdict')}, {j.get('classe')}", r.stderr[-200:])
+    finally:
+        shutil.rmtree(atelier, ignore_errors=True)
+    return out
+
+
+def run_lot_fa4():
+    """Lot FA4 de la campagne du 10/11/2026 : TF-2353, TF-2352, TF-2362, TF-2364, TF-2365, TF-2391."""
+    return run_fa4_tf2353() + run_fa4_tf2391() + run_fa4_impression() + run_fa4_tf2362() + run_fa4_tf2352()
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Auto-test des règles de lisibilité L1-L10.")
+    ap.add_argument("--output", choices=["text", "json"], default="text")
+    args = ap.parse_args()
+
+    res = (run() + run_exemptions() + run_h1_ecrans() + run_structure() + run_couverture() + run_l29_ter()
+           + run_glyphes_du_socle() + run_completude() + run_structure_completude()
+           + run_markdown() + run_syne()
+           + run_assets_inlinables() + run_assets_echelle_4pt() + run_fins_de_ligne_declarees()
+           + run_kpi_perimetre()
+           + run_capture_tuiles() + run_perimetre_non_mesure() + run_v9_echelles()
+           + run_echeance_forme_ancienne() + run_mesure_prete() + run_badge_defavorable()
+           + run_avertissements_13_10() + run_avertissements_14_10()
+           + run_accolade_dans_une_valeur() + run_compte_regles_en_prose()
+           + run_classe_source_machine() + run_avertissements_15_10()
+           + run_sections_lisibilite_publiees()
+           + run_l39_graphique_maison() + run_dates_jjmm()
+           + run_kpi_hors_page_conteneur() + run_lot_a_check_html()
+           + run_lot_fa4() + run_scenes_adresse_independante_de_la_police() + run_page_servie())
+    # TF-1964 — le composant embarque lit des jetons que l'hote ne declare pas : repli et alerte.
+    composants_jetons = run_lot_a_composants()
+    if composants_jetons:
+        res += composants_jetons
+    # TF-1992, TF-1966, TF-1963, TF-1965 — V1 bande de sommaire, V25, V26, V27 (rendu).
+    lot_a_rendu = run_lot_a_rendu()
+    if lot_a_rendu:
+        res += lot_a_rendu
+    rendu = run_rendu()
+    if rendu:
+        res += rendu
+    # TF-1799 — les messages L2 nomment les remedes qui passent.
+    remedes_l2 = run_l2_remedes_nommes()
+    if remedes_l2:
+        res += remedes_l2
+    # TF-1858 — le composant barres empilees a 12 categories, rouge avant, vert apres.
+    barres12 = run_barres_12_categories()
+    if barres12:
+        res += barres12
+    # TF-1859 — un canvas aux series invisibles n'est plus un PASS, et le canvas est declare hors mesure.
+    canvas_v22 = run_canvas_v22()
+    if canvas_v22:
+        res += canvas_v22
+    # TF-1884 — aucun script du skill ne plante en console Windows (cp1252), jouée sans `-X utf8`.
+    console = run_console_cp1252()
+    if console:
+        res += console
+    # TF-2478 — la création d'une jonction ne lit plus la sortie OEM de `cmd` comme de l'UTF-8.
+    res += run_jonction_sortie_oem()
+    # TF-1875 — quatre defauts de rendu des composants de graphique, rouge avant / vert apres, et le composant
+    # d entonnoir.
+    graphiques = run_graphiques_tf1875()
+    if graphiques:
+        res += graphiques
+    # TF-1882 — le nombre de pages imprimees, compte dans les conditions du lecteur.
+    format_a4 = run_format_a4()
+    if format_a4:
+        res += format_a4
+    # TF-1909 — le contenu contre la fenetre (E4, 75 %) : la page de colonnes de lecture a 28 % du 4K.
+    contenu_fenetre = run_v23_contenu_fenetre()
+    if contenu_fenetre:
+        res += contenu_fenetre
+    # TF-1917 — la borne basse de la mesure de lecture : quatre colonnes de cartes a 30 caracteres par ligne.
+    prose_verticale = run_v24_prose_verticale()
+    if prose_verticale:
+        res += prose_verticale
+    # TF-2679 — V28, l'equilibre horizontal de l'encre : la piste de droite reservee et vide.
+    equilibre = run_v28_equilibre()
+    if equilibre:
+        res += equilibre
+    # TF-2677 — la dispense data-colonne-ok ne vaut que sur le conteneur brideur, et chaque dispense se dit.
+    dispenses = run_dispenses_colonne()
+    if dispenses:
+        res += dispenses
+    # TF-2707, TF-2700, TF-2706 — la page se mesure reposee ; une boucle infinie se range en non juge ; des scenes empilees ne se jugent pas.
+    animations = run_animations_au_repos()
+    if animations:
+        res += animations
+    # TF-2300 — le lecteur d'animation a scenes du socle (scene-player) : comportement, mouvement reduit, impression, manifeste faux.
+    lecteur_scenes = run_scene_player()
+    if lecteur_scenes:
+        res += lecteur_scenes
+    # TF-1066 — les deux branches de V18 se mesurent a 2560 px : a 1440, les defauts du 4K
+    # n'existent pas et quatre verts ne prouveraient rien.
+    large = run_rendu_large()
+    if large:
+        res += large
+    # TF-0442 — le repli en cartes se mesure a 390 px, la seule largeur ou il se declenche.
+    repli = run_repli_cartes()
+    if repli:
+        res += repli
+    # TF-0382 — les deux sens de la borne V1, en comptes EXACTS (branche a part : CAS_RENDU
+    # teste « au moins n », et c est precisement le nombre qui est en cause ici).
+    bornes = run_v1_bornes()
+    if bornes:
+        res += bornes
+    # TF-0493 — la matrice d etats : chaque etat mesure ET capture, et un etat qui ne trouve pas
+    # son declencheur est declare NON JOUE, jamais vert.
+    matrice = run_matrice_etats()
+    if matrice:
+        res += matrice
+    # TF-1341 — « tout-deplie » et --etats-ouverts ouvrent les lignes du composant 10, les
+    # comptent, et un etat qui n'ouvre rien de ce qu'il nomme est declare NON JOUE.
+    lignes_detail = run_matrice_lignes_detail()
+    if lignes_detail:
+        res += lignes_detail
+    # TF-1340 / TF-1353 — la recherche dans la page ne reecrit plus son conteneur (les autres
+    # composants gardent leurs ecouteurs) et surligne un texte SVG par un tspan (le mot reste peint).
+    recherche = run_recherche_composants()
+    if recherche:
+        res += recherche
+    # TF-1093 — l'INSTANCE SERVIE et les FILTRES CROISES : un defaut qui n'existe que servi
+    # (feuille en chemin absolu) et une intersection vide qu'aucun etat unitaire ne montre.
+    # Le banc sert lui-meme ses fixtures, sur un port libre, et ferme son serveur en finally.
+    servie = run_instance_servie()
+    if servie:
+        res += servie
+    # TF-1674 — une application derriere une connexion se juge CONNECTEE (etat de session du
+    # produit), matrices comprises ; un theme sombre se rend sur demande et se declare.
+    session = run_session_et_theme()
+    if session:
+        res += session
+    # TF-2433 — une mire se reconnait a son action, pas au seul champ mot de passe.
+    mire_action = run_mire_a_son_action()
+    if mire_action:
+        res += mire_action
+    # TF-0768/0769/0781/0782 — le composant de filtres joue DANS un navigateur : ses defauts
+    # sont des defauts d'execution, qu'aucun oracle de marquage ne peut voir.
+    filtres = run_filtres_runtime()
+    if filtres:
+        res += filtres
+    # TF-0900 — le conteneur de tableau contre le thead collant : un referentiel de `top` ne se
+    # lit qu'APRES defilement, dans un navigateur. La feuille, elle, declarait juste.
+    colle = run_thead_colle()
+    if colle:
+        res += colle
+    # TF-0897 — une capture qui echoue est un CONSTAT, pas une panne : l'outil rend son verdict
+    # sur les familles du DOM et declare ce qu'il n'a pas pu inspecter.
+    capture = run_capture_manquee()
+    if capture:
+        res += capture
+    # TF-1282 — une capture par SECTION : l'echec d'une section ne perd plus la capture de
+    # page deja reussie, un panneau masque par une regle CSS se peint vraiment, et un echec
+    # residuel nomme sa cause plutot que le seul delai depasse.
+    sections_masquees = run_sections_masquees()
+    if sections_masquees:
+        res += sections_masquees
+    # TF-1356 — le mecanisme de neutralisation des elements collants (deja applique a la
+    # capture d'un seul element, V9) s'applique desormais AUSSI a la capture par section.
+    bandeau_section = run_bandeau_collant_section()
+    if bandeau_section:
+        res += bandeau_section
+    # TF-1370 — seul l'etat initial est juge par defaut, et le rapport le dit desormais, nuance
+    # quand --etats-ouverts ou une matrice rejoue en plus des etats declares.
+    etat_initial = run_etat_initial_non_juge()
+    if etat_initial:
+        res += etat_initial
+    # TF-2299 — une page a scenes declarees ([data-scene]) se joue scene par scene.
+    scenes_declarees = run_scenes_declarees()
+    if scenes_declarees:
+        res += scenes_declarees
+    # TF-0890 — le poseur de composants : une API qu'on peut IMPORTER, et une pose jouable hors
+    # de l'arbre des skills. Sans ces deux portes, un produit reecrit le poseur.
+    poseur = run_poseur_composants()
+    if poseur:
+        res += poseur
+    # TF-1225 — la mesure de bruit d'une regle sur un parc : un rendu par page, cache par empreinte.
+    bruit = run_mesure_de_bruit()
+    if bruit:
+        res += bruit
+    # TF-0935 — le composant d'infobulle : un `title` de sept objets rendu en puces, et la
+    # contre-epreuve qu'une seule ligne reste un paragraphe. Aucun oracle de marquage ne voit
+    # ce qu'un composant FAIT.
+    infobulle = run_infobulle_runtime()
+    if infobulle:
+        res += infobulle
+    # TF-0938 — le canevas differentiel POSE dans une page hote : un fragment que rien ne rendait
+    # pouvait echouer aux quatre largeurs sans que rien ne le dise. Le cas porte AUSSI le constat
+    # qui refuse d'exclure `.tbl-card` de V4 : zero chevauchement mesure, donc rien a assouplir.
+    canevas = run_canevas_differentiel()
+    if canevas:
+        res += canevas
+    # TF-0953 — l'arbitrage PARTAGE de la visibilite d'une ligne : deux composants du socle
+    # calculaient chacun `hidden` ou `display` pour leur compte, et ecrasaient tout troisieme
+    # mecanisme sans un mot. Le defaut n'est pas dans le HTML, il est dans ce que le JavaScript
+    # FAIT a l'ouverture — donc il se mesure dans un navigateur, pas par une regle de marquage.
+    visibilite = run_visibilite_lignes()
+    if visibilite:
+        res += visibilite
+    # TF-0941 — le canevas ERD est une page COMPLETE que rien ne rendait : ses declarations se
+    # posaient chez chaque consommateur, a la main, a chaque instanciation.
+    erd = run_canevas_modele_donnees()
+    if erd:
+        res += erd
+    # TF-1660 — le gabarit multi-bandes de factory-schemas, INSTANCIE : ses exemptions de
+    # gabarit a trous tombent a l'instanciation, et c'est l'instance que le produit livre.
+    multi_bandes = run_gabarit_multi_bandes()
+    if multi_bandes:
+        res += multi_bandes
+    # TF-0952 — le tableau arborescent : le defaut n'est pas dans le HTML, il est dans ce que le
+    # lecteur RECOIT a l'ouverture. 296 lignes d'un coup est un defaut ; seul un navigateur le dit.
+    arbre = run_table_arbre_runtime()
+    if arbre:
+        res += arbre
+    # TF-1087 — V9 retenait le MEILLEUR pixel : un actif a 90 % invisible passait, sauve par son
+    # accent. Le banc porte AUSSI le dessin au trait conforme et le gabarit reel de
+    # factory-schemas, seuls temoins qui interdisent de rouvrir la regression du 14/09.
+    dominante = run_v9_surface_dominante()
+    if dominante:
+        res += dominante
+    # TF-2474 — le socle ne se livre pas sur un rouge de ses consommateurs : le self-test de
+    # factory-schemas est rejoué en dernier (le plus long), et son rouge fait échouer cette recette.
+    res += run_consommateurs_du_socle()
+    rates = [r for r in res if r["verdict"] != "OK"]
+
+    if args.output == "json":
+        print(json.dumps({"total": len(res), "echecs": len(rates), "cas": res},
+                         ensure_ascii=False, indent=2))
+    else:
+        print("self-test — fixtures de lisibilité du skill factory-page-html\n")
+        for r in res:
+            marque = "OK  " if r["verdict"] == "OK" else "ECHEC"
+            att = (",".join(r["attendu"]) if isinstance(r["attendu"], list)
+                   else f'{r.get("regle", "rendu")} ×{r["attendu"]}') or "(aucune règle)"
+            obt = (",".join(r["obtenu"]) if isinstance(r["obtenu"], list)
+                   else f'×{r["obtenu"]}') or "(aucune)"
+            print(f"  [{marque}] {r['fixture']:<34} attendu {att:<12} obtenu {obt}")
+            if r["detail"]:
+                print(f"          {r['detail']}")
+        print(f"\n{len(res) - len(rates)}/{len(res)} cas passés")
+
+    sys.exit(1 if rates else 0)
+
+
+if __name__ == "__main__":
+    main()

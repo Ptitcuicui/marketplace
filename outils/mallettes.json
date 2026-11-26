@@ -1,0 +1,48 @@
+{
+  "$commentaire": "Source unique de l'assemblage. Chaque plugin liste les skills qu'il prend dans les forges, par chemin relatif à la racine des dépôts (FORGE_ROOT). On corrige un skill dans sa forge, jamais dans plugins/ : construire.mjs écrase plugins/ à chaque passage.",
+  "marketplace": {
+    "name": "factory",
+    "description": "Factory : mallettes d'outils IA des consultants (skills, agents et contrôles de la factory)",
+    "owner": { "name": "Ptitcuicui" }
+  },
+  "substitutions": [],
+  "plugins": [
+    {
+      "name": "factory-socle",
+      "displayName": "Factory – Socle",
+      "description": "Socle commun Factory : contrôles qualité (oracles), pages HTML chartées, communication, amélioration de prompts, contre-expertise, pilotage de mission, boussole et accueil de la factory.",
+      "skills": [
+        "factory-forge-agents/.claude/skills/quality-oracles",
+        "factory-forge-agents/.claude/skills/factory-page-html",
+        "factory-forge-agents/.claude/skills/factory-communication",
+        "factory-forge-agents/.claude/skills/la-barre",
+        "factory-forge-agents/.claude/skills/la-boucle",
+        "factory-forge-agents/.claude/skills/prompt-analyzer-l99",
+        "factory-forge-agents/.claude/skills/contre-expertise",
+        "factory-forge-agents/.claude/skills/pilote-de-mission",
+        "factory-forge-agents/.claude/skills/ou-en-suis-je",
+        "factory-forge-agents/.claude/skills/experts-forge",
+        "factory-forge-agents/.claude/skills/accueil-factory"
+      ],
+      "agents": "factory-pilot/.claude/agents",
+      "extra": "outils/socle"
+    },
+    {
+      "name": "factory-avant-vente",
+      "displayName": "Factory – Conseil et avant-vente",
+      "description": "Mallette conseil et avant-vente Factory : propales et revue de propale, réponse à appel d'offres, PowerPoint, Word et PDF chartés, schémas, revue de CV, plan d'amélioration, qualification des entrants.",
+      "dependencies": ["factory-socle"],
+      "skills": [
+        "factory-forge-agents/.claude/skills/factory-propale",
+        "factory-forge-agents/.claude/skills/factory-propale-review",
+        "factory-forge-agents/.claude/skills/factory-pptx",
+        "factory-forge-agents/.claude/skills/factory-docx",
+        "factory-forge-agents/.claude/skills/factory-pdf",
+        "factory-forge-agents/.claude/skills/factory-schemas",
+        "factory-forge-agents/.claude/skills/factory-cv-review",
+        "factory-forge-agents/.claude/skills/plan-d-amelioration",
+        "factory-forge-conception/skills/qualifie-l-entrant"
+      ]
+    }
+  ]
+}

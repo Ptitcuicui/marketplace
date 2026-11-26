@@ -1,0 +1,548 @@
+#!/usr/bin/env node
+// run-oracles v2 — Orchestrateur de la loi qualité (noyau générique).
+// Détecte les domaines d'un livrable (extension + trigger_files + content_patterns, bornés par
+// `chemins` quand l'entrée en porte — TF-1446 — et par `parties_paquet` — TF-1501),
+// lance les oracles CLI du registre EN PARALLÈLE (pool borné, cache par hash), agrège
+// un verdict PASS / FAIL / INCONCLUSIF, tient le BILAN 4 ÉTATS de chaque fichier
+// (jugé / exempté / délégué / signalé — somme = nb de fichiers, aucun silence),
+// applique les exemptions tracées (.oracles-exemptions.json, expirées = FAIL),
+// détecte les types réels (magic bytes ≠ extension = FAIL), et écrit un JOURNAL
+// (<cible>.oracles.json) + un HISTORIQUE (*-historique.jsonl, anti-recopie §5).
+//   node run-oracles.mjs <fichier|dossier> [--json] [--profil <nom|chemin>] [--no-cache] [--versionne]
+//   exit 0 = PASS · 1 = FAIL · 2 = INCONCLUSIF (0 PASS, 0 FAIL : personne n'a jugé).
+import fs from 'node:fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import { execFile } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { MARQUEUR_PILOT, resolvePilot, motifPilotAbsent } from './lib/pilot.mjs';
+import { MARQUEUR_FORGES, resolveForges, motifForgesAbsentes } from './lib/forges.mjs';
+import { resolvePython } from './lib/python.mjs';
+import { perimetreVersionneDemande, fichiersVersionnes, cleDeChemin } from './lib/perimetre.mjs';
+
+const SKILLDIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const SKILLSROOT = path.resolve(SKILLDIR, '..');
+const args = process.argv.slice(2);
+const JSONOUT = args.includes('--json');
+const NOCACHE = args.includes('--no-cache');
+const target = args.find(a => !a.startsWith('--'));
+// TF-2327 : l'option `--json` existe depuis la 2.8.0 (contrat de sortie, §5) mais rien ne la montrait à qui redirige la
+// sortie vers un fichier .json : il recevait le tableau texte et reconstruisait le rapport depuis le journal. L'usage
+// la décrit maintenant, `--help` l'affiche sur la sortie standard (code 0), et une sortie texte REDIRIGÉE le rappelle
+// sur la sortie d'erreur, sans toucher à la sortie standard.
+const USAGE = 'usage: node run-oracles.mjs <fichier|dossier> [--json] [--profil <nom|chemin>] [--no-cache] [--versionne]\n'
+  + '  --json       écrit le JOURNAL (celui de <cible>.oracles.json) en un seul objet JSON sur la sortie standard, rien d\'autre ; code de sortie inchangé\n'
+  + '  --profil     profil par nom (profils/<nom>.json) ou par chemin\n'
+  + '  --no-cache   ne reprend aucun verdict du cache\n'
+  + '  --versionne  ne juge que le contenu que git suit ou suivrait';
+if (args.includes('--help') || args.includes('-h')) { console.log(USAGE); process.exit(0); }
+if (!target || !fs.existsSync(target)) { console.error(USAGE); process.exit(2); }
+if (!JSONOUT && !process.stdout.isTTY) console.error('sortie redirigée : le tableau texte est écrit tel quel ; pour le journal en JSON sur la sortie standard, ajouter --json');
+
+// ---- profil (C1) : politiques contextuelles — nom (→ profils/<nom>.json) ou chemin ------------
+const profArg = args.includes('--profil') ? args[args.indexOf('--profil') + 1] : (process.env.QO_PROFIL || 'factory');
+const profilPath = fs.existsSync(profArg) ? path.resolve(profArg) : path.join(SKILLDIR, 'profils', profArg + '.json');
+if (!fs.existsSync(profilPath)) { console.error('profil introuvable : ' + profArg); process.exit(2); }
+const profilHash = crypto.createHash('sha256').update(fs.readFileSync(profilPath)).digest('hex').slice(0, 12);
+let PROFIL = {}; try { PROFIL = JSON.parse(fs.readFileSync(profilPath, 'utf8')); } catch {}
+const IGNORE_RX = (PROFIL.ignore_patterns || []).map(p => { try { return new RegExp(p); } catch { return null; } }).filter(Boolean);
+
+// ---- C1/§6 : niveau d'exigence (note | diffuse | production) — proportionnalité tracée --------
+const NIVEAUX_VALIDES = ['note', 'diffuse', 'production'];
+const NIVEAU = args.includes('--niveau') ? args[args.indexOf('--niveau') + 1] : (process.env.QO_NIVEAU || 'diffuse');
+if (!NIVEAUX_VALIDES.includes(NIVEAU)) { console.error('niveau inconnu : ' + NIVEAU + ' (attendu : ' + NIVEAUX_VALIDES.join('|') + ')'); process.exit(2); }
+// PLANCHER codé en dur (jamais lisible depuis un profil) : un profil ne peut pas abaisser §2/§5.
+const PLANCHER = ['Format / livraison / versioning', 'Sécurité / secrets', 'Calculs / chiffres', 'Traçabilité des affirmations chiffrées'];
+const NIVCONF = (PROFIL.niveaux || {})[NIVEAU] || { exclus: [], warn_toleres: NIVEAU !== 'production' };
+const EXCLUS = new Set(NIVCONF.exclus || []);
+const plancherViole = [...EXCLUS].filter(d => PLANCHER.includes(d));
+if (plancherViole.length) { console.error('profil invalide : domaine(s) du plancher non désactivable exclus au niveau ' + NIVEAU + ' : ' + plancherViole.join(' ; ')); process.exit(2); }
+const WARN_TOLERES = NIVCONF.warn_toleres !== false;
+
+// TF-0497 (22/08/2026) : le registre se charge depuis le skill, SAUF si `--registre` en nomme
+// un autre. Sans ce point d'entree, la garde des deux bords (empreinte avant/apres) restait
+// impossible a jouer : la seule facon deterministe de faire changer une cible PENDANT un run est
+// d'y faire passer un oracle qui la mute, et rien ne permettait d'en injecter un. Une garde
+// cablee que rien ne joue se decouvre cassee le jour ou elle devait servir.
+const registrePath = args.includes('--registre')
+  ? path.resolve(args[args.indexOf('--registre') + 1])
+  : path.join(SKILLDIR, 'references', 'registre-oracles.json');
+const registry = JSON.parse(fs.readFileSync(registrePath, 'utf8'));
+const IGNORE = new Set(['node_modules', '.git', '.venv', 'dist', 'build', 'old', 'Old', '__pycache__', 'fixtures']);
+function walk(p) {
+  const st = fs.statSync(p);
+  if (st.isFile()) return [p];
+  const out = [];
+  for (const e of fs.readdirSync(p, { withFileTypes: true })) {
+    if (IGNORE.has(e.name) || e.name.startsWith('.oracles') || e.name.startsWith('_oracles') || IGNORE_RX.some(rx => rx.test(e.name))) continue;
+    const fp = path.join(p, e.name);
+    if (e.isDirectory()) out.push(...walk(fp)); else if (!/\.oracles[.-]/.test(e.name)) out.push(fp);
+  }
+  return out;
+}
+// TF-1702 (lot Produit-82 20261014b, RA-3) — `--versionne` : le contenu que git suit ou suivrait
+// (`git ls-files -co --exclude-standard`, lib/perimetre.mjs), pas le disque. Un `.env` ignoré, une
+// sortie locale non versionnée ne font plus échouer le verdict du DÉPÔT. Les oracles lancés héritent
+// de QO_PERIMETRE=versionne (ceux qui parcourent un dossier eux-mêmes, oracle-secrets d'abord, s'y
+// bornent). Hors dépôt git : le disque entier est jugé, et le journal le dit.
+const VERSIONNE = perimetreVersionneDemande(args);
+const perimetre = VERSIONNE ? fichiersVersionnes(target) : null;
+if (VERSIONNE) process.env.QO_PERIMETRE = 'versionne';
+const files = perimetre && perimetre.fichiers ? walk(target).filter(f => perimetre.fichiers.has(cleDeChemin(f))) : walk(target);
+const targetIsFile = fs.statSync(target).isFile();   // une cible fichier est un fichier comme les autres (exemptions + bilan) ; seul un dossier-target injecté via trigger_files est hors bilan
+const extOf = f => path.extname(f).toLowerCase();
+const rel = f => path.relative(process.cwd(), f) || f;
+// TF-1064 — `{pilot}` : un oracle indexé au registre peut vivre dans le dépôt du pilot
+// (`oracle-ecriture.mjs`). Non résolu, le marqueur reste tel quel : le lancement échoue et
+// `runCli` le déclare, plutôt qu'un verdict inventé.
+const PILOT = resolvePilot(SKILLDIR);
+// TF-1334 — `{forges}` : la RACINE des forges sœurs (FORGE_ROOT, sinon le parent de la forge des
+// outils, sinon celui du pilot — lib/forges.mjs). Plus aucun chemin absolu au registre.
+const FORGES = resolveForges(SKILLDIR);
+const resolveCmd = (arr, file) => arr.map(s => s.replace('{skilldir}', SKILLDIR).replace('{skillsroot}', SKILLSROOT).replace(MARQUEUR_PILOT, PILOT || MARQUEUR_PILOT).replace(MARQUEUR_FORGES, FORGES || MARQUEUR_FORGES).replace('{profil}', profilPath).replace('{file}', file));
+
+// ---- C2 : magic bytes — le type réel ne doit pas contredire l'extension déclarée ---------------
+const MAGIC = [[Buffer.from('504b0304', 'hex'), 'zip', ['.zip', '.pptx', '.potx', '.docx', '.xlsx', '.jar', '.epub', '.odt', '.ods', '.odp']],
+  [Buffer.from('25504446', 'hex'), 'pdf', ['.pdf']], [Buffer.from('89504e47', 'hex'), 'png', ['.png']],
+  [Buffer.from('ffd8ff', 'hex'), 'jpeg', ['.jpg', '.jpeg']], [Buffer.from('47494638', 'hex'), 'gif', ['.gif']]];
+function magicMismatch(f) {
+  let head; try { head = Buffer.alloc(8); const fd = fs.openSync(f, 'r'); fs.readSync(fd, head, 0, 8, 0); fs.closeSync(fd); } catch { return null; }
+  for (const [sig, type, exts] of MAGIC) if (head.subarray(0, sig.length).equals(sig)) return exts.includes(extOf(f)) ? null : { type, ext: extOf(f) || '(sans extension)' };
+  return null;
+}
+
+// ---- C2 : exemptions tracées (données d'entrée, lecture seule — jamais modifiées par la boucle)
+const exemptPath = fs.statSync(target).isFile() ? path.join(path.dirname(target), '.oracles-exemptions.json') : path.join(target, '.oracles-exemptions.json');
+let exemptions = [];
+if (fs.existsSync(exemptPath)) { try { exemptions = JSON.parse(fs.readFileSync(exemptPath, 'utf8')); } catch { console.error('⚠ .oracles-exemptions.json illisible — ignoré'); } }
+const today = new Date().toISOString().slice(0, 10);
+const findExempt = (f, domaine) => exemptions.find(e => (path.basename(f) === e.fichier || rel(f).endsWith(e.fichier)) && e.domaine === domaine);
+
+// ---- C5 : cache par hash (contenu + script + profil) — jamais de cache sur FAIL ni SKIP --------
+// TF-0428 (lot Produit-05 20260820a, 21/08) — même doctrine que render_page.py (TF-0230) : sous un
+// arbre de LIVRAISON (output/, old/, dist/, build/), aucun journal à côté du livrable — ce que le
+// client reçoit ne contient pas les traces de son audit.
+//
+// TF-0501 (22/08/2026) : l'intention ci-dessus était écrite depuis TF-0428, elle n'était pas
+// tenue. `path.join(dirname(cible), '_oracles')` produit un dossier ENFANT du dossier livré —
+// pour `output/rapport/livrable.html`, c'était `output/rapport/_oracles/`, à l'intérieur de ce
+// que le client reçoit. Le message de fin annonçait pourtant « HORS livraison », ce qui rendait
+// le défaut invisible : il répondait d'avance à la question qu'on se serait posée. Mesuré chez
+// un produit : `_oracles/` recréé à CHAQUE écriture surveillée, supprimé à la main deux fois.
+//
+// Les journaux sortent maintenant au-dessus du PREMIER segment de livraison rencontré, dans un
+// `.oracles/` qui rejoue l'arborescence relative — déterministe (donc `--verifier-empreinte`
+// retrouve son journal), sans collision de noms, et hors de tout ce qui part chez le client.
+const SEGMENTS_LIVRAISON = new Set(['output', 'old', 'Old', 'dist', 'build']);
+const sousLivraison = p => path.resolve(p).split(/[\\/]/).some(s => SEGMENTS_LIVRAISON.has(s));
+const dossierSidecars = fs.statSync(target).isFile() ? path.dirname(target) : target;
+// Racine = le parent du premier segment de livraison ; le reste du chemin est rejoué sous .oracles/.
+const horsLivraisonDe = (dossier) => {
+  const parts = path.resolve(dossier).split(/[\\/]/);
+  const i = parts.findIndex(x => SEGMENTS_LIVRAISON.has(x));
+  if (i < 0) return null;
+  return path.join(parts.slice(0, i).join(path.sep), '.oracles', ...parts.slice(i));
+};
+const horsLivraison = sousLivraison(target) ? horsLivraisonDe(dossierSidecars) : null;
+// Repli de LECTURE sur l'ancien emplacement : un journal écrit avant TF-0501 reste lisible et
+// n'est pas déclaré disparu. Rien n'y est plus écrit — l'ancien dossier ne se recrée jamais.
+const horsLivraisonAncien = sousLivraison(target) ? path.join(dossierSidecars, '_oracles') : null;
+if (horsLivraison) { try { fs.mkdirSync(horsLivraison, { recursive: true }); } catch {} }
+const cheminSidecar = (suffixe, nomDossier) => {
+  if (fs.statSync(target).isFile()) return horsLivraison ? path.join(horsLivraison, path.basename(target) + suffixe) : target + suffixe;
+  return horsLivraison ? path.join(horsLivraison, nomDossier) : path.join(target, nomDossier);
+};
+const cachePath = cheminSidecar('.oracles-cache.json', '.oracles-cache.json');
+const journalPathTot = cheminSidecar('.oracles.json', '_oracles-journal.json');
+// Pour la LECTURE seule (--verifier-empreinte), un journal d'avant TF-0501 vit encore dans
+// l'ancien `_oracles/`. On l'accepte en repli plutôt que de déclarer disparu un verdict réel.
+const journalPathLecture = () => {
+  if (fs.existsSync(journalPathTot) || !horsLivraisonAncien) return journalPathTot;
+  const ancien = fs.statSync(target).isFile()
+    ? path.join(horsLivraisonAncien, path.basename(target) + '.oracles.json')
+    : path.join(horsLivraisonAncien, '_oracles-journal.json');
+  return fs.existsSync(ancien) ? ancien : journalPathTot;
+};
+let cache = {}; if (!NOCACHE && fs.existsSync(cachePath)) { try { cache = JSON.parse(fs.readFileSync(cachePath, 'utf8')); } catch {} }
+const sha = b => crypto.createHash('sha256').update(b).digest('hex').slice(0, 16);
+
+// ---- empreinte du contenu juge (TF-0478, verdict O2 du 22/08/2026) -------------------------
+// Le hachage existait deja ici, mais uniquement pour la cle de cache : la valeur etait calculee
+// puis jetee. Aucun verdict ne disait donc SUR QUEL CONTENU il avait ete rendu, et un CONFORME
+// cite dans une restitution vieillissait en silence — mesure le 22/08 : 2 journaux confrontables
+// sur 2 portaient un PASS rendu avant une modification de leur cible.
+//
+// Le format n'est PAS invente ici : c'est `forge-ops/empreinte@1`, deja produit par
+// forge-ops/scripts/ops.mjs (scellerEmpreinte). Un lecteur `empreinte@1` existant reste
+// compatible — il ne consomme que `fichiers`.
+//
+// Deux choix qui ne sont pas des details : le sha est COMPLET (la troncature a 16 reste reservee
+// a la cle de cache, ou une collision ne coute qu'un recalcul), et la granularite est une
+// association chemin -> empreinte plutot qu'un hachage d'arbre unique — un hachage global dirait
+// que quelque chose a bouge, jamais QUOI.
+const sha256Complet = b => crypto.createHash('sha256').update(b).digest('hex');
+const empreinteDe = (liste) => {
+  const fichiers = {};
+  for (const f of liste) { try { fichiers[rel(f)] = sha256Complet(fs.readFileSync(f)); } catch { fichiers[rel(f)] = 'ABSENT'; } }
+  return { format: 'forge-ops/empreinte@1', release: rel(target), ts: new Date().toISOString(), fichiers };
+};
+// Compare deux releves et rend la liste des chemins qui ont diverge — apparus, disparus, modifies.
+const divergences = (a, b) => {
+  const chemins = new Set([...Object.keys(a.fichiers), ...Object.keys(b.fichiers)]);
+  return [...chemins].filter(c => a.fichiers[c] !== b.fichiers[c]);
+};
+
+// ---- --verifier-empreinte : ce verdict deja rendu vaut-il encore ? (TF-0478, a1) -----------
+// Ecrire l'empreinte sans jamais la lire ne corrigerait rien. Le defaut mesure n'est pas qu'un
+// run mente au moment ou il s'execute : c'est qu'un verdict DEJA RENDU reste citable apres que
+// sa cible a change. Ce mode repond a la seule question qui compte pour un lecteur, sans
+// rejouer les oracles — et il BLOQUE (exit 1), conformement a l'arbitrage humain du 22/08.
+//
+// Antériorité : un journal ecrit AVANT ce mecanisme ne porte pas d'empreinte. Il est DECLARE
+// non jugeable (exit 2), jamais mis en echec — un verdict ancien n'est pas un verdict faux.
+if (args.includes('--verifier-empreinte')) {
+  const dire = (code, etat, message, detail) => {
+    if (JSONOUT) process.stdout.write(JSON.stringify({ oracle: 'run-oracles --verifier-empreinte', cible: rel(target), etat, verdict: etat === 'FRAIS' ? 'PASS' : etat === 'PERIME' ? 'FAIL' : 'SKIP', message, fichiers_modifies: detail || [] }));
+    else console.log((etat === 'FRAIS' ? '\u2705 ' : etat === 'PERIME' ? '\u274C ' : '\u2796 ') + etat + ' \u2014 ' + message);
+    process.exit(code);
+  };
+  const jLu = journalPathLecture();
+  if (!fs.existsSync(jLu)) dire(2, 'NON JUGEABLE', 'aucun journal pour cette cible \u2014 il n\'y a pas de verdict a verifier : ' + rel(jLu));
+  let jrn = null; try { jrn = JSON.parse(fs.readFileSync(jLu, 'utf8')); } catch {}
+  if (!jrn) dire(2, 'NON JUGEABLE', 'journal illisible \u2014 un journal casse ne vaut pas un verdict perime : ' + rel(jLu));
+  if (!jrn.empreinte || !jrn.empreinte.fichiers) dire(2, 'NON JUGEABLE', 'verdict ' + (jrn.verdict || '?') + ' du ' + (jrn.date_iso || '?') + ' rendu AVANT que les empreintes soient scellees \u2014 anteriorite declaree, jamais mise en echec (rejouer le run pour sceller)');
+  const maintenant = empreinteDe(files);
+  const bouges = divergences(jrn.empreinte, maintenant);
+  if (bouges.length) dire(1, 'PERIME', 'verdict ' + jrn.verdict + ' du ' + jrn.date_iso + ' \u2014 ' + bouges.length + ' fichier(s) modifie(s) depuis : ' + bouges.slice(0, 5).join(' \u00b7 ') + (bouges.length > 5 ? ' (+' + (bouges.length - 5) + ')' : '') + '. Ce verdict ne porte plus sur le contenu present : le citer serait faux.', bouges);
+  dire(0, 'FRAIS', 'verdict ' + jrn.verdict + ' du ' + jrn.date_iso + ' \u2014 ' + Object.keys(jrn.empreinte.fichiers).length + ' fichier(s) inchange(s) depuis le run : le verdict porte toujours sur ce contenu.');
+}
+const fileHash = new Map();
+const hashOf = f => { if (!fileHash.has(f)) { try { fileHash.set(f, sha(fs.readFileSync(f))); } catch { fileHash.set(f, 'ERR'); } } return fileHash.get(f); };
+function cacheKey(o, file) {
+  const script = (o.cmd || []).find(x => /\.(mjs|py)$/.test(x)) || '';
+  const sp = script.replace('{skilldir}', SKILLDIR).replace('{skillsroot}', SKILLSROOT).replace(MARQUEUR_PILOT, PILOT || MARQUEUR_PILOT).replace(MARQUEUR_FORGES, FORGES || MARQUEUR_FORGES);
+  const scriptH = fs.existsSync(sp) ? sha(fs.readFileSync(sp)) : 'noscript';
+  return [o.domaine, hashOf(file), scriptH, profilHash, NIVEAU].join('|');   // §6 — un PASS de niveau inférieur n'est jamais recyclé à un niveau supérieur
+}
+
+// ---- exécution d'un oracle CLI (async, timeout du registre, contrat JSON strict) ---------------
+function runCli(o, file) {
+  return new Promise(res => {
+    const parts = resolveCmd(o.cmd, file);
+    // TF-1334 — UN ORACLE D'UN AUTRE DÉPÔT (forge sœur, pilot) ABSENT DE CE POSTE EST UN SKIP
+    // MOTIVÉ. Un marqueur non résolu, ou un script résolu qui n'existe pas, faisait échouer le
+    // lancement, et un lancement en échec se lisait comme un FAIL — sans un mot sur le dépôt
+    // manquant. Les scripts du skill (`{skilldir}`, `{skillsroot}`) gardent leur comportement.
+    const iScript = o.cmd.findIndex(x => typeof x === 'string' && /\.(mjs|py)$/.test(x));
+    const brut = iScript >= 0 ? o.cmd[iScript] : '';
+    if (brut.includes(MARQUEUR_FORGES) || brut.includes(MARQUEUR_PILOT)) {
+      const script = parts[iScript];
+      const motif = script.includes(MARQUEUR_FORGES) ? motifForgesAbsentes(SKILLDIR)
+        : script.includes(MARQUEUR_PILOT) ? motifPilotAbsent(SKILLDIR)
+        : !fs.existsSync(script) ? `script introuvable sur ce poste : ${script} — le dépôt qui le porte n'est pas cloné sous cette racine` : null;
+      if (motif) { res({ verdict: 'SKIP', detail: motif, nWarn: 0 }); return; }
+    }
+    // TF-1326 (23/09/2026) — L'INTERPRÉTEUR PYTHON SE RÉSOUT, IL NE SE DEVINE PAS. Le registre écrit
+    // `python3` ou `python` ; sous Windows, `python3` peut être l'alias du Microsoft Store, qui répond
+    // « Python est introuvable » et sort en erreur : le domaine « Régression visuelle » rendait alors
+    // un FAIL sans explication. Le lanceur résout désormais l'interpréteur comme la recette
+    // (lib/python.mjs : seul compte un candidat qui EXÉCUTE `import sys`) ; introuvable → SKIP motivé.
+    if (/^(python3?|py)$/i.test(parts[0])) {
+      const py = resolvePython();
+      if (!py) {
+        res({ verdict: 'SKIP', nWarn: 0, detail: 'interpréteur Python introuvable sur ce poste — essayés : '
+          + (process.platform === 'win32' ? 'py -3, python, python3' : 'python3, python')
+          + ", chacun devant exécuter « import sys » (un alias du Microsoft Store n'en est pas un) : installer Python 3, ou le mettre sur le PATH" });
+        return;
+      }
+      parts.splice(0, 1, ...py);
+    }
+    execFile(parts[0], parts.slice(1), { encoding: 'utf8', timeout: o.timeout_ms || 120000, maxBuffer: 16 * 1024 * 1024 }, (error, stdout) => {
+      let obj = null; const out = (stdout || '').trim();
+      try { obj = JSON.parse(out); } catch { const i = out.indexOf('{'); if (i >= 0) { try { obj = JSON.parse(out.slice(i)); } catch {} } }
+      const status = error ? (typeof error.code === 'number' ? error.code : null) : 0;
+      let verdict = obj && typeof obj.verdict === 'string' ? obj.verdict.toUpperCase() : null;
+      if (!['PASS', 'FAIL', 'SKIP'].includes(verdict)) verdict = status === 0 ? (obj ? 'PASS' : 'SKIP') : status === 2 ? 'SKIP' : (error && error.killed ? 'FAIL' : status === null ? 'SKIP' : 'FAIL');
+      // ---- TF-0659 : DEUX CONTRATS COEXISTENT POUR LA MEME CHOSE, et le lecteur n'en lisait qu'un.
+      //
+      // LE FAIT, vecu de premiere main le 26/08 : le hook a BLOQUE l'ecriture d'un document sur
+      // « [Lisibilite d'un document (Markdown)] », et le journal a porte
+      // {"verdict":"FAIL","detail":""} — DETAIL VIDE. La raison existait pourtant : l'oracle
+      // appele emet {"verdict","fails":[…]}, une liste de CHAINES nommee `fails`, quand ce lecteur
+      // n'allait chercher que `findings[].msg`. La raison etait PRODUITE PAR L'ORACLE, PUIS JETEE
+      // AU PASSAGE DU CONTRAT.
+      //
+      // COUT MESURE : trois tours pour retrouver le registre d'oracles, y lire la commande, puis
+      // rejouer l'oracle a la main — apres quoi les neuf constats se sont affiches en clair, avec
+      // leur ligne et leur motif. Un hook BLOQUANT qui rend la main sans dire quoi corriger coute
+      // plus cher qu'un hook verbeux.
+      //
+      // CE QUI EST FAIT ICI, et pourquoi c'est le lecteur qui cede : faire converger tous les
+      // oracles CLI vers une forme unique demanderait de modifier des paquets qui ne dependent pas
+      // de celui-ci, et laisserait le silence comme comportement par defaut pendant la migration.
+      // Le lecteur accepte donc LES DEUX FORMES. Il ne DEVINE rien : il lit ce que l'oracle a
+      // ecrit, sous l'un ou l'autre nom.
+      const texteDe = (x) => (typeof x === 'string' ? x : (x && (x.msg || x.message)) || '');
+      // TF-1227 — UNE TROISIÈME FORME, celle de render_page.py : ni `findings[]` ni `fails[]`, mais
+      // `breakpoints.<largeur>.issues.<règle>[]`, des listes de {what, detail}. Le lecteur n'en
+      // connaissait que deux et annonçait « n'a pas su expliquer pourquoi » sur un JSON valide et
+      // explicite (14/09/2026). Un FAIL lit désormais ces constats, dédoublonnés d'une largeur à
+      // l'autre ; la largeur où le constat apparaît d'abord est dite. Rien n'est deviné : un JSON
+      // sans aucune de ces formes garde le message d'échec muet, qui le dit comme tel.
+      const raisonsRendu = () => {
+        const bp = obj && obj.breakpoints && typeof obj.breakpoints === 'object' ? obj.breakpoints : null;
+        if (!bp) return [];
+        const vus = new Set(), r = [];
+        for (const [w, d] of Object.entries(bp)) {
+          const iss = d && d.issues && typeof d.issues === 'object' ? d.issues : {};
+          for (const [regle, liste] of Object.entries(iss)) {
+            if (!Array.isArray(liste)) continue;
+            for (const x of liste) {
+              const t = typeof x === 'string' ? x : (x && x.what ? x.what + (x.detail ? ' — ' + x.detail : '') : JSON.stringify(x));
+              const k = regle + '|' + t;
+              if (vus.has(k)) continue;
+              vus.add(k); r.push({ regle, texte: `${regle} (${w} px) : ${t}` });
+            }
+          }
+        }
+        return r.sort((a, b) => (a.regle === 'unmeasured') - (b.regle === 'unmeasured')).map(x => x.texte);
+      };
+      let raisons = obj && Array.isArray(obj.findings) && obj.findings.length ? obj.findings.map(texteDe)
+        : (obj && Array.isArray(obj.fails) && obj.fails.length ? obj.fails.map(texteDe) : []);
+      if (!raisons.length && verdict === 'FAIL') raisons = raisonsRendu();
+      const nWarn = obj && Array.isArray(obj.findings) ? obj.findings.filter(f => f && f.sev === 'warn').length
+        : (obj && Array.isArray(obj.warns) ? obj.warns.length : 0);
+      // ---- TF-0815 : UNE LIGNE QUI RESUME DEUX CONSTATS SUR TROIS NE DIT PAS QU'ELLE EN CACHE UN.
+      //
+      // LE FAIT, mesure le 05/09 : ce `detail` ne portait que les DEUX premieres raisons. Le hook
+      // d'ecriture C7 identifie un constat par la ligne ainsi construite (chemin normalise, chiffres
+      // masques) ; deux versions d'un meme fichier portant 2 puis 3 constats du MEME oracle rendaient
+      // donc une ligne identique mot pour mot — meme cle, aucun compteur qui bouge, « 0 neuf ». Le
+      // gate s'ouvrait sur du travail NEUF, c'est-a-dire le seul defaut des deux qui laisse passer un
+      // defaut reel. La troncature est GARDEE (une ligne de verdict n'est pas un rapport), mais elle
+      // ANNONCE desormais ce qu'elle tronque : le nombre de constats de l'oracle vient en tete.
+      //
+      // CHANGEMENT DE CONTRAT, declare le 05/09 au pilot : le champ `detail` d'un verdict FAIL
+      // commence par « <n> constat(s) · » quand l'oracle a rendu au moins une raison. Tout lecteur
+      // qui comparait ce champ mot pour mot voit desormais la ligne bouger avec le nombre — c'est
+      // exactement ce qui est voulu. La borne est ce compte : rien d'autre n'est ajoute.
+      const listees = raisons.filter(Boolean);
+      let detail = (listees.length ? listees.length + ' constat(s) · ' + listees.slice(0, 2).join(' ; ') : '')
+        || (!obj && status === 0 ? 'contrat JSON non émis — verdict non retenu (P5/R1)' : (error && error.killed ? 'timeout oracle (' + (o.timeout_ms || 120000) + ' ms)' : (status === null ? 'oracle non exécutable' : '')));
+      // LE GARDE-FOU QUI RESTE UTILE QUOI QU'IL ARRIVE : un FAIL sans raison le DIT, et donne la
+      // commande a rejouer — elle est deja connue du registre. Un echec muet est le pire des trois
+      // comportements possibles, parce qu'il a l'air d'un verdict alors qu'il est une panne de
+      // transmission.
+      // TF-1484 — LE MOTIF D'UN SKIP S'AFFICHE. Depuis TF-1447 tout SKIP porte `motif` à place fixe,
+      // mais ce lecteur ne lisait que les constats : la ligne d'un contrôle non joué restait muette
+      // à l'écran. Un SKIP sans constat prend donc son motif (jamais écrasé s'il a déjà un détail).
+      if (verdict === 'SKIP' && !detail && obj && typeof obj.motif === 'string' && obj.motif.trim()) detail = obj.motif.trim();
+      if (verdict === 'FAIL' && !detail) {
+        detail = "l'oracle a ECHOUE et n'a pas su expliquer pourquoi — aucun `findings[]`, `fails[]` ni `breakpoints.*.issues` "
+          + 'dans sa sortie JSON. Rejouer a la main pour voir ses constats : ' + parts.join(' ');
+      }
+      res({ verdict, detail, nWarn });
+    });
+  });
+}
+
+// ---- planification : matching ext / trigger_files / content_patterns (P3) ---------------------
+const TEXT_EXT = new Set(['.md', '.html', '.htm', '.txt', '.csv', '.json', '.yml', '.yaml', '.svg', '.css']);
+const contents = new Map();
+for (const f of files) { try { if (TEXT_EXT.has(extOf(f)) && fs.statSync(f).size <= 1024 * 1024) contents.set(f, fs.readFileSync(f, 'utf8')); } catch {} }
+const contentMatches = o => (Array.isArray(o.content_patterns) && o.content_patterns.length)
+  ? files.filter(f => contents.has(f) && o.content_patterns.some(p => { try { return new RegExp(p, 'im').test(contents.get(f)); } catch { return false; } })) : [];
+// TF-1501 — les noms des parties d'un paquet zip, lus dans son répertoire central (fin d'archive) ;
+// null si l'archive est illisible. Une lecture par fichier, gardée pour les entrées suivantes.
+const parties = new Map();
+function partiesDuPaquet(f) {
+  if (parties.has(f)) return parties.get(f);
+  let noms = null;
+  try {
+    const buf = fs.readFileSync(f);
+    let fin = -1;
+    for (let i = buf.length - 22; i >= Math.max(0, buf.length - 22 - 65535); i--) if (buf.readUInt32LE(i) === 0x06054b50) { fin = i; break; }
+    if (fin >= 0) {
+      const n = buf.readUInt16LE(fin + 10);
+      let p = buf.readUInt32LE(fin + 16);
+      noms = [];
+      for (let k = 0; k < n; k++) {
+        if (p + 46 > buf.length || buf.readUInt32LE(p) !== 0x02014b50) { noms = null; break; }
+        const ln = buf.readUInt16LE(p + 28);
+        noms.push(buf.toString('utf8', p + 46, p + 46 + ln));
+        p += 46 + ln + buf.readUInt16LE(p + 30) + buf.readUInt16LE(p + 32);
+      }
+    }
+  } catch { noms = null; }
+  parties.set(f, noms);
+  return noms;
+}
+const paquetPorte = (f, prefixes) => { const noms = partiesDuPaquet(f); return noms === null || noms.some(n => prefixes.some(p => n.startsWith(p))); };
+
+const results = [], actions = [], tasks = [];
+const etat = new Map(); // C2 — bilan : fichier → jugé | exempté | délégué | signalé
+const setEtat = (f, e) => { const rank = { 'jugé': 4, 'exempté': 3, 'délégué': 2, 'signalé': 1 }; if ((rank[e] || 0) > (rank[etat.get(f)] || 0)) etat.set(f, e); };
+const exemptes = [];
+
+for (const f of files) {                                    // C2 — types réels
+  const mm = magicMismatch(f);
+  if (mm) { results.push({ domaine: 'Format / livraison / versioning', file: rel(f), verdict: 'FAIL', detail: `type réel ${mm.type} ≠ extension déclarée ${mm.ext} (magic bytes)` }); setEtat(f, 'jugé'); }
+}
+
+for (const o of registry.oracles) {
+  let matches = o.ext === 'any' ? [target] : (Array.isArray(o.ext) && o.ext.length ? files.filter(f => o.ext.includes(extOf(f))) : []);
+  // TF-1539 (01/10/2026) — `content_patterns` RESTREINT une entrée qui déclare aussi `ext`. La fusion
+  // se faisait par UNION : tout fichier de l'extension était routé, motif lu ou pas, et les entrées
+  // à `ext` + motif (« Données de démonstration », « <table ») jugeaient des fichiers que leur
+  // propre motif excluait. Désormais l'extension donne les candidats et le motif en garde ceux qui
+  // le portent. Un fichier dont le contenu n'a pas pu être lu (hors types texte, plus de 1 Mo)
+  // reste routé : un routage ne fait jamais taire un juge sur ce qu'il n'a pas lu.
+  if (o.ext !== 'any' && Array.isArray(o.ext) && o.ext.length && Array.isArray(o.content_patterns) && o.content_patterns.length) {
+    const portent = new Set(contentMatches(o));
+    matches = matches.filter(f => !contents.has(f) || portent.has(f));
+  }
+  if (Array.isArray(o.trigger_files) && o.trigger_files.length && files.some(f => o.trigger_files.includes(path.basename(f)))) matches = [...new Set([...matches, target])];
+  // Un oracle qui déclare des extensions ne juge QUE celles-là : content_patterns affine le
+  // périmètre, il ne l'élargit pas hors du type de fichier visé (08/08/2026). Sans ce filtre,
+  // un oracle de page HTML jugeait un .md contenant le motif — le registre se déclenchait sur
+  // lui-même, puisqu'il documente les motifs de déclenchement. Les oracles sans `ext` (5 au
+  // registre : programme-formation, interop, plan-de-mission, fiche-ice, cdc-cadrage) gardent
+  // un comportement inchangé : pour eux, content_patterns reste le seul critère.
+  const parContenu = (Array.isArray(o.ext) && o.ext.length)
+    ? contentMatches(o).filter(f => o.ext.includes(extOf(f)))
+    : contentMatches(o);
+  matches = [...new Set([...matches, ...parContenu])];
+  // TF-1446 (28/09/2026) — UN ORACLE PEUT SE BORNER À DES DOSSIERS. `chemins` (facultatif) nomme les
+  // dossiers dont un fichier doit relever pour être routé : `["output"]` veut dire « les livrables ».
+  // Le fait : lecture-tiers, déterministe et gratuit en T1-T3, n'était appelé sur aucune page, et
+  // run-oracles a déclaré CONFORME, chez un produit, la page d'une étude où il trouvait deux défauts
+  // réels. Mesuré le 28/09 sur les 74 pages suivies du pilot et des forges : les 10 pages sous
+  // `output` échouent toutes pour de vrais manques ; les 64 autres (vues générées, documentation,
+  // gabarits) ne sont pas des livrables, et leur précision n'a pas été mesurée. Le critère se lit
+  // sur le chemin RÉSOLU du fichier ; la cible-dossier injectée par `trigger_files` n'est pas filtrée.
+  if (Array.isArray(o.chemins) && o.chemins.length) {
+    matches = matches.filter(f => (f === target && !targetIsFile) ? true : path.resolve(f).split(/[\\/]+/).some(seg => o.chemins.includes(seg)));
+  }
+  // TF-1501 (01/10/2026) — UN ORACLE PEUT SE DÉCLENCHER SUR LE CONTENU D'UN PAQUET. `parties_paquet`
+  // (facultatif) nomme des préfixes de parties d'un paquet zip (OPC : .pptx, .docx…) : le fichier n'est
+  // routé que si son paquet porte au moins une partie sous l'un d'eux — `["ppt/fonts/"]` veut dire
+  // « un deck qui embarque des polices ». Le fait : cinq versions d'un deck sont sorties avec huit
+  // polices embarquées fausses, PASS à toutes les portes, faute d'un juge qui décode la copie
+  // embarquée ; ce juge n'a rien à dire d'un deck sans police embarquée, et ne lui doit pas un SKIP
+  // par livrable. Le répertoire central se lit sans rien décompresser ; un paquet ILLISIBLE reste
+  // routé : le juge dit lui-même ce qu'il ne lit pas, un routage ne fait jamais taire un juge.
+  if (Array.isArray(o.parties_paquet) && o.parties_paquet.length) {
+    matches = matches.filter(f => (f === target && !targetIsFile) ? true : paquetPorte(f, o.parties_paquet));
+  }
+  if (!matches.length) continue;
+  if (o.type === 'cli' && o.cmd && EXCLUS.has(o.domaine)) continue;   // §6 — domaine exclu à ce niveau (CLI seulement ; délégations toujours signalées, R6)
+  if (o.type === 'cli' && o.cmd) {
+    for (const f of matches) {
+      if (targetIsFile || f !== target) {
+        const ex = findExempt(f, o.domaine);
+        if (ex) {
+          if (ex.expire && ex.expire < today) { results.push({ domaine: o.domaine, file: rel(f), verdict: 'FAIL', detail: `exemption EXPIRÉE le ${ex.expire} (${ex.justification || 'sans justification'}) — re-vérifier ou renouveler` }); setEtat(f, 'jugé'); }
+          else { exemptes.push({ domaine: o.domaine, file: rel(f), justification: ex.justification || '(sans justification)', expire: ex.expire || 'sans échéance' }); setEtat(f, 'exempté'); }
+          continue;
+        }
+      }
+      tasks.push({ o, f });
+    }
+  } else {
+    actions.push({ domaine: o.domaine, type: o.type, skill: o.skill || null, statut: o.statut, hint: o.type === 'skill' ? ('invoquer le skill « ' + o.skill + ' »') : (o.cmd_ref || 'vérification manuelle (' + o.checklist + ')') });
+    for (const f of matches) if (targetIsFile || f !== target) setEtat(f, 'délégué');
+  }
+}
+
+// ---- C5 : exécution — cache d'abord, puis pool parallèle borné (ordre de restitution préservé) -
+const POOL = 4;
+const slots = new Array(tasks.length);
+let cacheHits = 0;
+const pending = [];
+tasks.forEach((t, i) => {
+  const key = t.f === target ? null : cacheKey(t.o, t.f);
+  if (key && cache[key] && cache[key].verdict === 'PASS') { slots[i] = { domaine: t.o.domaine, file: rel(t.f), verdict: 'PASS', detail: (cache[key].detail ? cache[key].detail + ' ' : '') + '(cache)' }; cacheHits++; }
+  else pending.push({ ...t, i, key });
+});
+async function pool() {
+  let idx = 0;
+  const worker = async () => {
+    while (idx < pending.length) {
+      const t = pending[idx++];
+      let { verdict, detail, nWarn } = await runCli(t.o, t.f);
+      if (!WARN_TOLERES && verdict === 'PASS' && nWarn > 0) { verdict = 'FAIL'; detail = nWarn + ' avertissement(s) promu(s) en échec (niveau ' + NIVEAU + ') — ' + (detail || ''); }
+      slots[t.i] = { domaine: t.o.domaine, file: rel(t.f), verdict, detail };
+      if (t.key && verdict === 'PASS') cache[t.key] = { verdict, detail: detail || '', date: new Date().toISOString() };
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(POOL, pending.length) }, worker));
+}
+// Bord AVANT : l'empreinte est prise juste avant que le premier oracle ne lise quoi que ce soit.
+const empreinteAvant = empreinteDe(files);
+await pool();
+// Bord APRES : reprise a l'identique. Si les deux relevés divergent, la cible a change PENDANT
+// le run et le verdict ne porte sur aucun etat coherent — ni sur l'avant, ni sur l'apres.
+const empreinteApres = empreinteDe(files);
+const bouges = divergences(empreinteAvant, empreinteApres);
+for (const s of slots) if (s) results.push(s);
+for (const t of tasks) if (targetIsFile || t.f !== target) setEtat(t.f, 'jugé');   // tout fichier réellement passé à un oracle est « jugé » — y compris la cible fichier unique ; seul le dossier-target (trigger_files) reste hors bilan
+if (!NOCACHE) { try { fs.writeFileSync(cachePath, JSON.stringify(cache, null, 1), 'utf8'); } catch {} }
+
+// ---- P1 (R4) + C2 — couverture : extensions orphelines, fichiers SANS extension, bilan --------
+const known = new Set(registry.oracles.flatMap(o => Array.isArray(o.ext) ? o.ext : []));
+const uncovered = [...new Set(files.map(extOf).filter(e => e && !known.has(e)))];
+if (uncovered.length) actions.push({ domaine: 'Couverture registre', type: 'manual', skill: null, statut: 'todo', hint: 'extension(s) sans oracle au registre : ' + uncovered.join(' ') + ' — règle §4 (définir + remonter un oracle)' });
+const noExt = files.filter(f => !extOf(f));
+if (noExt.length) actions.push({ domaine: 'Couverture registre', type: 'manual', skill: null, statut: 'todo', hint: 'fichier(s) SANS extension : ' + noExt.map(f => path.basename(f)).join(' · ') + ' — type à identifier, règle §4' });
+const bilan = { 'jugé': [], 'exempté': [], 'délégué': [], 'signalé': [] };
+for (const f of files) bilan[etat.get(f) || 'signalé'].push(rel(f));
+const bilanOk = Object.values(bilan).reduce((a, l) => a + l.length, 0) === files.length;
+
+const nFail = results.filter(r => r.verdict === 'FAIL').length;
+const nPass = results.filter(r => r.verdict === 'PASS').length;
+const nSkip = results.filter(r => r.verdict === 'SKIP').length;
+const verdictOracles = nFail ? 'FAIL' : (nPass ? 'PASS' : 'INCONCLUSIF');
+
+// PEREMPTION — arbitrage humain du 22/08 (option a1) : un verdict perime BLOQUE, il n'avertit pas.
+// Ce que la doctrine refuse ici, c'est de certifier un contenu que la suite n'a jamais juge dans
+// l'etat ou il se trouve maintenant. Le verdict des oracles est CONSERVE dans le journal (il a
+// bien ete rendu, et sur quoi se lit a l'empreinte du bord avant) ; ce qui change est le verdict
+// PRONONCE et le code de sortie.
+const perime = bouges.length > 0;
+const verdict = perime ? 'PERIME' : verdictOracles;
+const journal = { cible: target, date_iso: new Date().toISOString(), registre_version: registry.version, profil: path.basename(profilPath, '.json'), niveau: NIVEAU, verdict,
+  // TF-1702 : le périmètre jugé se dit — `disque` par défaut, `versionne` sur demande ; le motif d'un repli.
+  perimetre: perimetre && perimetre.fichiers ? 'versionne' : 'disque', perimetre_motif: perimetre && !perimetre.fichiers ? 'périmètre versionné demandé, mais ' + perimetre.motif + ' : le disque entier est jugé' : null, resume: { pass: nPass, fail: nFail, skip: nSkip, cache: cacheHits }, bilan_fichiers: bilan, bilan_complet: bilanOk, exemptions_actives: exemptes, resultats: results, actions_couverture: actions,
+  // D5 : `release` porte le chemin de la cible, le format reste `empreinte@1` inchange.
+  empreinte: perime ? null : empreinteApres,
+  // D6 : quand les bords divergent, l'empreinte est OMISE plutot que fausse, et le motif ecrit.
+  // Une empreinte qui ne correspond a rien serait pire que pas d'empreinte du tout.
+  empreinte_motif: perime
+    ? 'PERIME — ' + bouges.length + ' fichier(s) modifie(s) PENDANT le run : ' + bouges.slice(0, 5).join(' · ')
+      + (bouges.length > 5 ? ' (+' + (bouges.length - 5) + ')' : '') + '. Aucune empreinte scellee : le verdict ne porte sur aucun etat coherent.'
+    : null,
+  verdict_oracles: verdictOracles };
+const journalPath = journalPathTot;
+fs.writeFileSync(journalPath, JSON.stringify(journal, null, 2), 'utf8');
+if (horsLivraison && !JSONOUT) console.error('journaux d\'oracles écrits hors de l\'arbre de livraison (TF-0428, corrigé TF-0501) : ' + horsLivraison);
+const histoPath = journalPath.replace(/\.json$/, '-historique.jsonl');
+fs.appendFileSync(histoPath, JSON.stringify({ date_iso: journal.date_iso, verdict, profil: journal.profil, niveau: NIVEAU, resume: journal.resume, fails: results.filter(r => r.verdict === 'FAIL').map(r => r.domaine + ':' + r.file), empreinte: journal.empreinte, empreinte_motif: journal.empreinte_motif }) + '\n', 'utf8');
+const exitCode = (verdict === 'FAIL' || verdict === 'PERIME') ? 1 : verdict === 'INCONCLUSIF' ? 2 : 0;
+
+if (JSONOUT) { process.stdout.write(JSON.stringify(journal)); process.exit(exitCode); }
+const L = '─'.repeat(70);
+console.log(L); console.log('Oracles qualité — ' + target + '  [profil : ' + journal.profil + ' · niveau : ' + NIVEAU + ' · périmètre : ' + journal.perimetre + ']'); console.log(L);
+if (journal.perimetre_motif) console.log('  ⚠ ' + journal.perimetre_motif + ' (TF-1702)');
+for (const r of results) console.log(`  ${r.verdict === 'PASS' ? '✅' : r.verdict === 'FAIL' ? '❌' : '➖'} [${r.domaine}] ${r.file}${r.detail ? ' — ' + r.detail : ''}`);
+for (const e of exemptes) console.log(`  🔶 [${e.domaine}] ${e.file} — EXEMPTÉ : ${e.justification} (échéance ${e.expire})`);
+if (actions.length) { console.log('\n  Couverture — domaines à vérifier hors oracle CLI (action) :'); for (const a of actions) console.log(`   • [${a.domaine}] ${a.hint}${a.statut === 'todo' ? ' (oracle à outiller)' : ''}`); }
+console.log(`\n  Bilan fichiers (${files.length}) : jugé=${bilan['jugé'].length} · exempté=${bilan['exempté'].length} · délégué=${bilan['délégué'].length} · signalé=${bilan['signalé'].length}${bilanOk ? '' : '  ⚠ BILAN INCOMPLET — silence détecté'}${cacheHits ? ' · cache=' + cacheHits : ''}`);
+console.log('\n' + (verdict === 'PERIME'
+  ? '\u274C ' + journal.empreinte_motif + ' Relancer sur une cible stable.'
+  : verdict === 'FAIL'
+  ? `❌ NON CONFORME — ${nFail} oracle(s) en échec (${nPass} PASS, ${nSkip} SKIP). Corriger la source puis relancer.`
+  : verdict === 'INCONCLUSIF'
+    ? `⚠️ INCONCLUSIF — aucun oracle n'a réellement jugé (0 PASS, 0 FAIL, ${nSkip} SKIP). Un run sans jugement n'est pas un ✓ (§5) : installer les outils manquants ou traiter les actions de couverture.`
+    : `✅ CONFORME${actions.length ? ' (couverture partielle)' : ''} — ${nPass} PASS, ${nSkip} SKIP, 0 échec.${actions.length ? ' (voir actions de couverture ci-dessus)' : ''}`));
+console.log('Journal : ' + journalPath);
+process.exit(exitCode);

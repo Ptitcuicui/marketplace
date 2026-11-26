@@ -1,0 +1,1429 @@
+{
+ "version": 6,
+ "date": "2026-11-23",
+ "provenance": "TF-2452 (décision R-58 du 12/11/2026) — la barrière « tout script de contrôle est au registre » de TF-2399 ne lisait que les skills de forge-agents ; elle lit aussi les oracles du pilot et des forges (oracle-*.mjs|py et check_*.py suivis par git, hors fixtures, node_modules, vendor, old, output, input et recettes *.test.mjs). TF-2466 (décision R-58 du 12/11/2026, campagne du 13/11/2026) : un oracle sans appelant ne se justifie plus par un motif ; il est câblé (appelants nommés) ou déclaré « manuel » avec son motif et la commande qui le joue, sinon la barrière le nomme. Phase 2 de TF-2466 (13/11/2026) : les 12 lignes sans appelant sont résolues, 9 « manuel » avec leur motif et leur commande, 3 câblées à oracles/run-oracles-design.mjs de forge-design (lot dh, commit dc39050) ; le motif « sans-appelant » est retiré de la liste. TF-2488 (décision R-58 du 13/11/2026, campagne du 13/11/2026) : le relevé d'appelants distinguait mal ce qui appelle un oracle. Chaque ligne nomme désormais la nature de ses appelants dans `natures` (executable, recette, document), et les neuf lignes « manuel » de TF-2466 qui étaient jouées par le self-test de leur forge ou prescrites par un document nomment ces appelants. Fusion du 16/11/2026 (TF-2452) : le pilot a publié oracles/oracle-sidecars-arbre-lie.mjs (68c6f366, lot po, TF-2521), oracle d'état du parc joué par oracles/self-tests.mjs (ETAT_DU_PARC) : déclaré ici, motif « pilot-appele », nature « recette ».",
+ "lecture": "Un script absent du registre machine (references/registre-oracles.json) est déclaré ici avec un motif, ou la barrière du self-test échoue. Une ligne dont le fichier n'existe plus, ou dont le script est entré au registre depuis, fait échouer la barrière aussi : la liste ne garde pas de morts. Les appelants sont un relevé daté, non une garantie. Une ligne sans appelant (appelants vide) est refusée tant qu'elle ne porte pas le motif « manuel » avec sa déclaration {\"manuel\": {\"motif\": ..., \"commande\": ...}} : le motif compte 20 caractères au moins, la commande nomme le script. Nature de l'appel (TF-2488) : chaque ligne porte `natures`, la liste des natures de ses appelants, lues à leur chemin par la barrière du self-test — `executable` (un script, un hameçon, un lanceur, ou le fichier de configuration que ce lanceur lit), `recette` (un self-test, un *.test.mjs, un cliquet ou un manifeste de recette), `document` (un .md qui prescrit l'étape). Une ligne sans appelant porte `natures: []` et le motif « manuel » ; une ligne « manuel » peut aussi nommer ses appelants de recette ou de document, le motif disant alors qui choisit la cible. La barrière refuse une ligne qui n'a pas `natures`, en nomme une inconnue, ou en nomme une autre que celle de ses appelants.",
+ "motifs": {
+  "pilot-appele": "Oracle du pilot, appelé par ses hameçons, ses générateurs, son accueil ou sa recette (appelants nommés, relevés le 12/11/2026). Il juge un état, une règle ou un document propre au pilot, que son appelant lui désigne par un chemin : aucun livrable de produit ne le déclenche par son extension ou son contenu, le routeur de run-oracles n'a rien à lui router. Il est découvert par oracles/decouvrir-oracles.mjs (contrat factory/decouverte-oracles@1) et rejoué par la recette du pilot.",
+  "forge-appele": "Oracle de forge, appelé par le lanceur ou les scripts de sa propre forge (appelants nommés, relevés le 12/11/2026) : la forge le choisit selon son profil ou son étape, et le registre n'inscrit que les oracles qu'un livrable déclenche par son extension ou son contenu, ou qu'un humain invoque en cible explicite. À inscrire si un livrable de produit doit pouvoir le déclencher.",
+  "manuel": "Oracle joué à la main, sans étape qui l'appelle, déclaré comme tel (TF-2466, 13/11/2026). La ligne porte `manuel.motif` (pourquoi aucune étape ne le consomme : sa cible est choisie par un humain, il juge une pièce rare, il demande un réseau ou un outil absent de la recette) et `manuel.commande` (la commande exacte qui le joue, qui nomme le script, rejouée par l'agent qui la déclare). Ce n'est pas une justification de l'absence de câblage : c'est la trace que le geste existe et où le lancer."
+ },
+ "oracles": [
+  {
+   "depot": "factory-pilot",
+   "chemin": "gabarits/oracle-demande-produit.mjs",
+   "motif": "pilot-appele",
+   "appelants": [
+    "factory-pilot/scripts/detecter-demandes-recues.mjs"
+   ],
+   "natures": [
+    "executable"
+   ]
+  },
+  {
+   "depot": "factory-pilot",
+   "chemin": "gabarits/oracle-demande-tierce.mjs",
+   "motif": "pilot-appele",
+   "appelants": [
+    "factory-pilot/oracles/banc-mutation/manifeste-mutation.json"
+   ],
+   "natures": [
+    "recette"
+   ]
+  },
+  {
+   "depot": "factory-pilot",
+   "chemin": "gabarits/oracle-demande.mjs",
+   "motif": "pilot-appele",
+   "appelants": [
+    "factory-pilot/gabarits/HERITAGE.json",
+    "factory-pilot/oracles/baseline-recettes.json",
+    "factory-pilot/oracles/oracle-ecriture.mjs"
+   ],
+   "natures": [
+    "executable",
+    "recette"
+   ]
+  },
+  {
+   "depot": "factory-pilot",
+   "chemin": "gabarits/oracle-lot-relais.mjs",
+   "motif": "pilot-appele",
+   "appelants": [
+    "factory-pilot/gabarits/HERITAGE.json"
+   ],
+   "natures": [
+    "executable"
+   ]
+  },
+  {
+   "depot": "factory-pilot",
+   "chemin": "gabarits/oracle-lot-retours.mjs",
+   "motif": "pilot-appele",
+   "appelants": [
+    "factory-pilot/gabarits/HERITAGE.json",
+    "factory-pilot/gabarits/oracle-demande.mjs",
+    "factory-pilot/gabarits/oracle-lot-relais.mjs"
+   ],
+   "natures": [
+    "executable"
+   ]
+  },
+  {
+   "depot": "factory-pilot",
+   "chemin": "gabarits/oracle-revue-deck.mjs",
+   "motif": "pilot-appele",
+   "appelants": [
+    "factory-pilot/oracles/banc-mutation/manifeste-mutation.json"
+   ],
+   "natures": [
+    "recette"
+   ]
+  },
+  {
+   "depot": "factory-pilot",
+   "chemin": "gabarits/oracle-travaux-pilot.mjs",
+   "motif": "pilot-appele",
+   "appelants": [
+    "factory-pilot/gabarits/HERITAGE.json",
+    "factory-pilot/gabarits/oracle-demande-produit.mjs",
+    "factory-pilot/oracles/banc-mutation/manifeste-mutation.json"
+   ],
+   "natures": [
+    "executable",
+    "recette"
+   ]
+  },
+  {
+   "depot": "factory-pilot",
+   "chemin": "oracles/oracle-adoption-tests.mjs",
+   "motif": "pilot-appele",
+   "appelants": [
+    "factory-pilot/oracles/baseline-recettes.json"
+   ],
+   "natures": [
+    "recette"
+   ]
+  },
+  {
+   "depot": "factory-pilot",
+   "chemin": "oracles/oracle-amorcage-poste.mjs",
+   "motif": "pilot-appele",
+   "appelants": [
+    "factory-pilot/oracles/baseline-recettes.json",
+    "factory-pilot/oracles/hook-amorcage.mjs",
+    "factory-pilot/oracles/hook-ouverture.mjs"
+   ],
+   "natures": [
+    "executable",
+    "recette"
+   ]
+  },
+  {
+   "depot": "factory-pilot",
+   "chemin": "oracles/oracle-banc-double-sens.mjs",
+   "motif": "pilot-appele",
+   "appelants": [
+    "factory-pilot/oracles/baseline-recettes.json",
+    "factory-pilot/oracles/lib-recettes-dediees.mjs",
+    "factory-pilot/todo/CLASSES.json"
+   ],
+   "natures": [
+    "executable",
+    "recette"
+   ]
+  },
+  {
+   "depot": "factory-pilot",
+   "chemin": "oracles/oracle-boite-entree.mjs",
+   "motif": "pilot-appele",
+   "appelants": [
+    "factory-pilot/oracles/baseline-recettes.json",
+    "factory-pilot/oracles/hook-ouverture.mjs",
+    "factory-pilot/scripts/detecter-demandes-recues.mjs"
+   ],
+   "natures": [
+    "executable",
+    "recette"
+   ]
+  },
+  {
+   "depot": "factory-pilot",
+   "chemin": "oracles/oracle-cadence.mjs",
+   "motif": "pilot-appele",
+   "appelants": [
+    "factory-pilot/oracles/baseline-recettes.json"
+   ],
+   "natures": [
+    "recette"
+   ]
+  },
+  {
+   "depot": "factory-pilot",
+   "chemin": "oracles/oracle-caracteres-controle.mjs",
+   "motif": "pilot-appele",
+   "appelants": [
+    "factory-pilot/oracles/baseline-recettes.json",
+    "factory-pilot/oracles/oracle-controles-injoignables.mjs",
+    "factory-pilot/todo/CLASSES.json"
+   ],
+   "natures": [
+    "executable",
+    "recette"
+   ]
+  },
+  {
+   "depot": "factory-pilot",
+   "chemin": "oracles/oracle-cascade-isto.mjs",
+   "motif": "pilot-appele",
+   "appelants": [
+    "factory-pilot/gabarits/CASCADE-ISTO.json",
+    "factory-pilot/gabarits/documents/cascade-produit/generateur/generer-vue-cascade.mjs",
+    "factory-pilot/oracles/baseline-recettes.json"
+   ],
+   "natures": [
+    "executable",
+    "recette"
+   ]
+  },
+  {
+   "depot": "factory-pilot",
+   "chemin": "oracles/oracle-catalogues.mjs",
+   "motif": "pilot-appele",
+   "appelants": [
+    "factory-pilot/oracles/baseline-recettes.json"
+   ],
+   "natures": [
+    "recette"
+   ]
+  },
+  {
+   "depot": "factory-pilot",
+   "chemin": "oracles/oracle-chemin-ancre.mjs",
+   "motif": "pilot-appele",
+   "appelants": [
+    "factory-pilot/oracles/baseline-recettes.json",
+    "factory-pilot/oracles/lib-recettes-dediees.mjs",
+    "factory-pilot/todo/CLASSES.json"
+   ],
+   "natures": [
+    "executable",
+    "recette"
+   ]
+  },
+  {
+   "depot": "factory-pilot",
+   "chemin": "oracles/oracle-chemin-prescrit.mjs",
+   "motif": "pilot-appele",
+   "appelants": [
+    "factory-pilot/oracles/baseline-recettes.json",
+    "factory-pilot/oracles/hook-ouverture.mjs",
+    "factory-pilot/oracles/lib-recettes-dediees.mjs"
+   ],
+   "natures": [
+    "executable",
+    "recette"
+   ]
+  },
+  {
+   "depot": "factory-pilot",
+   "chemin": "oracles/oracle-claude-md.mjs",
+   "motif": "pilot-appele",
+   "appelants": [
+    "factory-pilot/oracles/baseline-recettes.json",
+    "factory-pilot/oracles/pre-commit-quantificateurs.mjs"
+   ],
+   "natures": [
+    "executable",
+    "recette"
+   ]
+  },
+  {
+   "depot": "factory-pilot",
+   "chemin": "oracles/oracle-coherence-restitution.mjs",
+   "motif": "pilot-appele",
+   "appelants": [
+    "factory-pilot/oracles/baseline-recettes.json"
+   ],
+   "natures": [
+    "recette"
+   ]
+  },
+  {
+   "depot": "factory-pilot",
+   "chemin": "oracles/oracle-conformite-projet.mjs",
+   "motif": "pilot-appele",
+   "appelants": [
+    "factory-pilot/gabarits/NOMMAGE-PRODUIT.json",
+    "factory-pilot/oracles/baseline-recettes.json",
+    "factory-pilot/oracles/hook-ouverture.mjs"
+   ],
+   "natures": [
+    "executable",
+    "recette"
+   ]
+  },
+  {
+   "depot": "factory-pilot",
+   "chemin": "oracles/oracle-constantes-externes.mjs",
+   "motif": "pilot-appele",
+   "appelants": [
+    "factory-pilot/oracles/baseline-recettes.json",
+    "factory-pilot/references/EXIGENCES-PROJET.json"
+   ],
+   "natures": [
+    "executable",
+    "recette"
+   ]
+  },
+  {
+   "depot": "factory-pilot",
+   "chemin": "oracles/oracle-controle-maison.mjs",
+   "motif": "pilot-appele",
+   "appelants": [
+    "factory-pilot/oracles/baseline-recettes.json",
+    "factory-pilot/oracles/hook-ecriture.mjs",
+    "factory-pilot/oracles/oracle-chemin-ancre.mjs"
+   ],
+   "natures": [
+    "executable",
+    "recette"
+   ]
+  },
+  {
+   "depot": "factory-pilot",
+   "chemin": "oracles/oracle-controles-injoignables.mjs",
+   "motif": "pilot-appele",
+   "appelants": [
+    "factory-pilot/oracles/baseline-recettes.json",
+    "factory-pilot/oracles/lib-recettes-dediees.mjs",
+    "factory-pilot/todo/CLASSES.json"
+   ],
+   "natures": [
+    "executable",
+    "recette"
+   ]
+  },
+  {
+   "depot": "factory-pilot",
+   "chemin": "oracles/oracle-couverture-exigences.mjs",
+   "motif": "pilot-appele",
+   "appelants": [
+    "factory-pilot/oracles/baseline-recettes.json",
+    "factory-pilot/oracles/oracle-fiche-produit.mjs"
+   ],
+   "natures": [
+    "executable",
+    "recette"
+   ]
+  },
+  {
+   "depot": "factory-pilot",
+   "chemin": "oracles/oracle-depense-voie-par-defaut.mjs",
+   "motif": "pilot-appele",
+   "appelants": [
+    "factory-pilot/oracles/baseline-recettes.json",
+    "factory-pilot/oracles/lib-recettes-dediees.mjs"
+   ],
+   "natures": [
+    "recette"
+   ]
+  },
+  {
+   "depot": "factory-pilot",
+   "chemin": "oracles/oracle-domaines-declares.mjs",
+   "motif": "pilot-appele",
+   "appelants": [
+    "factory-pilot/oracles/baseline-recettes.json"
+   ],
+   "natures": [
+    "recette"
+   ]
+  },
+  {
+   "depot": "factory-pilot",
+   "chemin": "oracles/oracle-ecart-normal.mjs",
+   "motif": "pilot-appele",
+   "appelants": [
+    "factory-pilot/oracles/banc-mutation/manifeste-mutation.json",
+    "factory-pilot/oracles/baseline-recettes.json",
+    "factory-pilot/oracles/lib-recettes-dediees.mjs"
+   ],
+   "natures": [
+    "recette"
+   ]
+  },
+  {
+   "depot": "factory-pilot",
+   "chemin": "oracles/oracle-ecosysteme.mjs",
+   "motif": "pilot-appele",
+   "appelants": [
+    "factory-pilot/oracles/baseline-recettes.json",
+    "factory-pilot/oracles/lib-recettes-dediees.mjs",
+    "factory-pilot/oracles/oracle-conformite-projet.mjs"
+   ],
+   "natures": [
+    "executable",
+    "recette"
+   ]
+  },
+  {
+   "depot": "factory-pilot",
+   "chemin": "oracles/oracle-empreintes.mjs",
+   "motif": "pilot-appele",
+   "appelants": [
+    "factory-pilot/oracles/baseline-recettes.json",
+    "factory-pilot/todo/CLASSES.json"
+   ],
+   "natures": [
+    "executable",
+    "recette"
+   ]
+  },
+  {
+   "depot": "factory-pilot",
+   "chemin": "oracles/oracle-enclenchement.mjs",
+   "motif": "pilot-appele",
+   "appelants": [
+    "factory-pilot/oracles/baseline-recettes.json",
+    "factory-pilot/oracles/decouvrir-oracles.mjs",
+    "factory-pilot/oracles/lib-recettes-dediees.mjs"
+   ],
+   "natures": [
+    "executable",
+    "recette"
+   ]
+  },
+  {
+   "depot": "factory-pilot",
+   "chemin": "oracles/oracle-etude-opportunite.mjs",
+   "motif": "pilot-appele",
+   "appelants": [
+    "factory-pilot/oracles/banc-mutation/manifeste-mutation.json",
+    "factory-pilot/oracles/baseline-recettes.json",
+    "factory-pilot/references/RELECTURE-INTENTION-REGLES.json"
+   ],
+   "natures": [
+    "executable",
+    "recette"
+   ]
+  },
+  {
+   "depot": "factory-pilot",
+   "chemin": "oracles/oracle-fiche-constat-precos.mjs",
+   "motif": "pilot-appele",
+   "appelants": [
+    "factory-pilot/oracles/baseline-recettes.json",
+    "factory-pilot/oracles/lib-decision-lue.mjs",
+    "factory-pilot/todo/CLASSES.json"
+   ],
+   "natures": [
+    "executable",
+    "recette"
+   ]
+  },
+  {
+   "depot": "factory-pilot",
+   "chemin": "oracles/oracle-fiche-produit.mjs",
+   "motif": "pilot-appele",
+   "appelants": [
+    "factory-pilot/oracles/baseline-recettes.json",
+    "factory-pilot/todo/CLASSES.json"
+   ],
+   "natures": [
+    "executable",
+    "recette"
+   ]
+  },
+  {
+   "depot": "factory-pilot",
+   "chemin": "oracles/oracle-fraicheur-doc.mjs",
+   "motif": "pilot-appele",
+   "appelants": [
+    "factory-pilot/oracles/baseline-recettes.json",
+    "factory-pilot/references/generer-compte-produits.mjs",
+    "factory-pilot/todo/CLASSES.json"
+   ],
+   "natures": [
+    "executable",
+    "recette"
+   ]
+  },
+  {
+   "depot": "factory-pilot",
+   "chemin": "oracles/oracle-gabarits-documents.mjs",
+   "motif": "pilot-appele",
+   "appelants": [
+    "factory-pilot/gabarits/HERITAGE.json",
+    "factory-pilot/oracles/baseline-recettes.json",
+    "factory-pilot/oracles/hook-ecriture.mjs"
+   ],
+   "natures": [
+    "executable",
+    "recette"
+   ]
+  },
+  {
+   "depot": "factory-pilot",
+   "chemin": "oracles/oracle-glossaire.mjs",
+   "motif": "pilot-appele",
+   "appelants": [
+    "factory-pilot/oracles/banc-mutation/manifeste-mutation.json",
+    "factory-pilot/oracles/baseline-recettes.json",
+    "factory-pilot/scripts/verifier-sonde-glossaire.mjs"
+   ],
+   "natures": [
+    "executable",
+    "recette"
+   ]
+  },
+  {
+   "depot": "factory-pilot",
+   "chemin": "oracles/oracle-insatisfactions.mjs",
+   "motif": "pilot-appele",
+   "appelants": [
+    "factory-pilot/oracles/baseline-recettes.json"
+   ],
+   "natures": [
+    "recette"
+   ]
+  },
+  {
+   "depot": "factory-pilot",
+   "chemin": "oracles/oracle-integrations.mjs",
+   "motif": "pilot-appele",
+   "appelants": [
+    "factory-pilot/oracles/baseline-recettes.json",
+    "factory-pilot/references/EXIGENCES-PROJET.json"
+   ],
+   "natures": [
+    "executable",
+    "recette"
+   ]
+  },
+  {
+   "depot": "factory-pilot",
+   "chemin": "oracles/oracle-invariant-mesure.mjs",
+   "motif": "pilot-appele",
+   "appelants": [
+    "factory-pilot/oracles/baseline-recettes.json",
+    "factory-pilot/oracles/lib-recettes-dediees.mjs",
+    "factory-pilot/todo/CLASSES.json"
+   ],
+   "natures": [
+    "executable",
+    "recette"
+   ]
+  },
+  {
+   "depot": "factory-pilot",
+   "chemin": "oracles/oracle-modeles-en-service.mjs",
+   "motif": "pilot-appele",
+   "appelants": [
+    "factory-pilot/oracles/baseline-recettes.json",
+    "factory-pilot/oracles/hook-ouverture.mjs",
+    "factory-pilot/references/MODELES-EN-SERVICE.json"
+   ],
+   "natures": [
+    "executable",
+    "recette"
+   ]
+  },
+  {
+   "depot": "factory-pilot",
+   "chemin": "oracles/oracle-modeles-tiers.mjs",
+   "motif": "pilot-appele",
+   "appelants": [
+    "factory-pilot/oracles/baseline-recettes.json",
+    "factory-pilot/oracles/lib-recettes-dediees.mjs",
+    "factory-pilot/references/MODELES-TIERS.json"
+   ],
+   "natures": [
+    "executable",
+    "recette"
+   ]
+  },
+  {
+   "depot": "factory-pilot",
+   "chemin": "oracles/oracle-parite-configuration.mjs",
+   "motif": "pilot-appele",
+   "appelants": [
+    "factory-pilot/oracles/baseline-recettes.json",
+    "factory-pilot/oracles/lib-recettes-dediees.mjs"
+   ],
+   "natures": [
+    "recette"
+   ]
+  },
+  {
+   "depot": "factory-pilot",
+   "chemin": "oracles/oracle-peremption-competences.mjs",
+   "motif": "pilot-appele",
+   "appelants": [
+    "factory-pilot/oracles/baseline-recettes.json"
+   ],
+   "natures": [
+    "recette"
+   ]
+  },
+  {
+   "depot": "factory-pilot",
+   "chemin": "oracles/oracle-pieges-regex.mjs",
+   "motif": "pilot-appele",
+   "appelants": [
+    "factory-pilot/oracles/baseline-recettes.json"
+   ],
+   "natures": [
+    "recette"
+   ]
+  },
+  {
+   "depot": "factory-pilot",
+   "chemin": "oracles/oracle-portee-doctrine.mjs",
+   "motif": "pilot-appele",
+   "appelants": [
+    "factory-pilot/oracles/baseline-recettes.json",
+    "factory-pilot/oracles/hook-ouverture.mjs"
+   ],
+   "natures": [
+    "executable",
+    "recette"
+   ]
+  },
+  {
+   "depot": "factory-pilot",
+   "chemin": "oracles/oracle-promesses.mjs",
+   "motif": "pilot-appele",
+   "appelants": [
+    "factory-pilot/oracles/baseline-recettes.json"
+   ],
+   "natures": [
+    "recette"
+   ]
+  },
+  {
+   "depot": "factory-pilot",
+   "chemin": "oracles/oracle-propagation.mjs",
+   "motif": "pilot-appele",
+   "appelants": [
+    "factory-pilot/oracles/baseline-recettes.json",
+    "factory-pilot/scripts/lib-extensions-jugees.mjs",
+    "factory-pilot/todo/ingerer-lot.mjs"
+   ],
+   "natures": [
+    "executable",
+    "recette"
+   ]
+  },
+  {
+   "depot": "factory-pilot",
+   "chemin": "oracles/oracle-readme-dossiers.mjs",
+   "motif": "pilot-appele",
+   "appelants": [
+    "factory-pilot/oracles/baseline-recettes.json"
+   ],
+   "natures": [
+    "recette"
+   ]
+  },
+  {
+   "depot": "factory-pilot",
+   "chemin": "oracles/oracle-recette-rejouable.mjs",
+   "motif": "manuel",
+   "appelants": [
+    "factory-pilot/references/ETAPES-RUN.md",
+    "factory-pilot/oracles/baseline-recettes.json"
+   ],
+   "natures": [
+    "recette",
+    "document"
+   ],
+   "manuel": {
+    "motif": "Prescrit à l'étape 5 (tests) de references/ETAPES-RUN.md du pilot, joué par la session du run sur la racine du produit ; second appelant (audit de recette de forge-tests) ouvert sous TF-2438.",
+    "commande": "node oracles\\oracle-recette-rejouable.mjs <racine-produit>  (exit 0, 1, 2)"
+   }
+  },
+  {
+   "depot": "factory-pilot",
+   "chemin": "oracles/oracle-recouvrement-controles.mjs",
+   "motif": "pilot-appele",
+   "appelants": [
+    "factory-pilot/oracles/baseline-recettes.json",
+    "factory-pilot/references/EXIGENCES-PROJET.json"
+   ],
+   "natures": [
+    "executable",
+    "recette"
+   ]
+  },
+  {
+   "depot": "factory-pilot",
+   "chemin": "oracles/oracle-reglages-surs.mjs",
+   "motif": "pilot-appele",
+   "appelants": [
+    "factory-pilot/oracles/baseline-recettes.json",
+    "factory-pilot/scripts/ouvrir-retour-reglage.mjs"
+   ],
+   "natures": [
+    "executable",
+    "recette"
+   ]
+  },
+  {
+   "depot": "factory-pilot",
+   "chemin": "oracles/oracle-regle-sans-juge.mjs",
+   "motif": "pilot-appele",
+   "appelants": [
+    "factory-pilot/oracles/baseline-recettes.json",
+    "factory-pilot/oracles/lib-recettes-dediees.mjs",
+    "factory-pilot/todo/CLASSES.json"
+   ],
+   "natures": [
+    "executable",
+    "recette"
+   ]
+  },
+  {
+   "depot": "factory-pilot",
+   "chemin": "oracles/oracle-repere-externe.mjs",
+   "motif": "pilot-appele",
+   "appelants": [
+    "factory-pilot/oracles/baseline-recettes.json",
+    "factory-pilot/oracles/lib-recettes-dediees.mjs",
+    "factory-pilot/todo/CLASSES.json"
+   ],
+   "natures": [
+    "executable",
+    "recette"
+   ]
+  },
+  {
+   "depot": "factory-pilot",
+   "chemin": "oracles/oracle-reprise.mjs",
+   "motif": "pilot-appele",
+   "appelants": [
+    "factory-pilot/gabarits/HERITAGE.json",
+    "factory-pilot/gabarits/REPRISE.json",
+    "factory-pilot/oracles/baseline-recettes.json"
+   ],
+   "natures": [
+    "executable",
+    "recette"
+   ]
+  },
+  {
+   "depot": "factory-pilot",
+   "chemin": "oracles/oracle-run-reseau.mjs",
+   "motif": "pilot-appele",
+   "appelants": [
+    "factory-pilot/gabarits/VOIX-EMETTEUR.json",
+    "factory-pilot/oracles/baseline-recettes.json"
+   ],
+   "natures": [
+    "executable",
+    "recette"
+   ]
+  },
+  {
+   "depot": "factory-pilot",
+   "chemin": "oracles/oracle-secrets-hors-perimetre.mjs",
+   "motif": "pilot-appele",
+   "appelants": [
+    "factory-pilot/.claude/settings.json",
+    "factory-pilot/oracles/baseline-recettes.json",
+    "factory-pilot/oracles/hook-ouverture.mjs"
+   ],
+   "natures": [
+    "executable",
+    "recette"
+   ]
+  },
+  {
+   "depot": "factory-pilot",
+   "chemin": "oracles/oracle-sidecars-arbre-lie.mjs",
+   "motif": "pilot-appele",
+   "appelants": [
+    "factory-pilot/oracles/self-tests.mjs"
+   ],
+   "natures": [
+    "recette"
+   ]
+  },
+  {
+   "depot": "factory-pilot",
+   "chemin": "oracles/oracle-skills.mjs",
+   "motif": "pilot-appele",
+   "appelants": [
+    "factory-pilot/bootstrap.mjs",
+    "factory-pilot/oracles/baseline-recettes.json",
+    "factory-pilot/oracles/consommateurs-skills.mjs"
+   ],
+   "natures": [
+    "executable",
+    "recette"
+   ]
+  },
+  {
+   "depot": "factory-pilot",
+   "chemin": "oracles/oracle-sollicitations.mjs",
+   "motif": "pilot-appele",
+   "appelants": [
+    "factory-pilot/oracles/baseline-recettes.json",
+    "factory-pilot/references/EXIGENCES-PROJET.json"
+   ],
+   "natures": [
+    "executable",
+    "recette"
+   ]
+  },
+  {
+   "depot": "factory-pilot",
+   "chemin": "oracles/oracle-source-contenu.mjs",
+   "motif": "pilot-appele",
+   "appelants": [
+    "factory-pilot/oracles/baseline-recettes.json",
+    "factory-pilot/oracles/lib-recettes-dediees.mjs"
+   ],
+   "natures": [
+    "recette"
+   ]
+  },
+  {
+   "depot": "factory-pilot",
+   "chemin": "oracles/oracle-synthese.mjs",
+   "motif": "pilot-appele",
+   "appelants": [
+    "factory-pilot/gabarits/HERITAGE.json",
+    "factory-pilot/gabarits/LEXIQUE-PRODUIT.json",
+    "factory-pilot/oracles/banc-mutation/manifeste-mutation.json"
+   ],
+   "natures": [
+    "executable",
+    "recette"
+   ]
+  },
+  {
+   "depot": "factory-pilot",
+   "chemin": "oracles/oracle-trace-mutation-mep.mjs",
+   "motif": "pilot-appele",
+   "appelants": [
+    "factory-pilot/oracles/baseline-recettes.json",
+    "factory-pilot/todo/CLASSES.json"
+   ],
+   "natures": [
+    "executable",
+    "recette"
+   ]
+  },
+  {
+   "depot": "factory-pilot",
+   "chemin": "oracles/oracle-unicite.mjs",
+   "motif": "pilot-appele",
+   "appelants": [
+    "factory-pilot/oracles/baseline-recettes.json",
+    "factory-pilot/scripts/lib-extensions-jugees.mjs"
+   ],
+   "natures": [
+    "executable",
+    "recette"
+   ]
+  },
+  {
+   "depot": "factory-pilot",
+   "chemin": "oracles/oracle-verdict-visuel.mjs",
+   "motif": "pilot-appele",
+   "appelants": [
+    "factory-pilot/oracles/banc-mutation/manifeste-mutation.json",
+    "factory-pilot/oracles/baseline-recettes.json"
+   ],
+   "natures": [
+    "recette"
+   ]
+  },
+  {
+   "depot": "factory-pilot",
+   "chemin": "oracles/oracle-verrou-unique.mjs",
+   "motif": "pilot-appele",
+   "appelants": [
+    "factory-pilot/oracles/baseline-recettes.json",
+    "factory-pilot/oracles/lib-recettes-dediees.mjs"
+   ],
+   "natures": [
+    "recette"
+   ]
+  },
+  {
+   "depot": "factory-pilot",
+   "chemin": "todo/oracle-todo.mjs",
+   "motif": "pilot-appele",
+   "appelants": [
+    "factory-pilot/oracles/resoudre-pilot.mjs",
+    "factory-pilot/todo/CLASSES.json",
+    "factory-pilot/todo/appliquer-export.mjs"
+   ],
+   "natures": [
+    "executable"
+   ]
+  },
+  {
+   "depot": "factory-forge-agents-security",
+   "chemin": "oracles/oracle-arret-en-course.mjs",
+   "motif": "manuel",
+   "appelants": [
+    "factory-forge-agents-security/CLAUDE.md",
+    "factory-forge-agents-security/oracles/self-test.mjs",
+    "factory-pilot/oracles/oracle-enclenchement.mjs"
+   ],
+   "natures": [
+    "executable",
+    "recette",
+    "document"
+   ],
+   "manuel": {
+    "motif": "Invoqué sur mandat humain via le pilot, cible explicite fournie par le mandat (CLAUDE.md de la forge, garde-fou 1) ; prouvé par oracles/self-test.mjs ; seul consommateur mécanique : la règle EN1 d'oracles/oracle-enclenchement.mjs du pilot, qui exige son verdict au ledger de tout run mobilisant la forge.",
+    "commande": "node oracles/oracle-arret-en-course.mjs <journal.jsonl> --json-only"
+   }
+  },
+  {
+   "depot": "factory-forge-agents-security",
+   "chemin": "oracles/oracle-corpus-injection.mjs",
+   "motif": "manuel",
+   "appelants": [
+    "factory-forge-agents-security/CLAUDE.md",
+    "factory-forge-agents-security/oracles/self-test.mjs",
+    "factory-pilot/oracles/oracle-enclenchement.mjs"
+   ],
+   "natures": [
+    "executable",
+    "recette",
+    "document"
+   ],
+   "manuel": {
+    "motif": "Invoqué sur mandat humain via le pilot, cible explicite fournie par le mandat (CLAUDE.md de la forge, garde-fou 1) ; prouvé par oracles/self-test.mjs ; seul consommateur mécanique : la règle EN1 d'oracles/oracle-enclenchement.mjs du pilot, qui exige son verdict au ledger de tout run mobilisant la forge.",
+    "commande": "node oracles/oracle-corpus-injection.mjs <agent.md|journal.jsonl> --json-only"
+   }
+  },
+  {
+   "depot": "factory-forge-agents-security",
+   "chemin": "oracles/oracle-pep-impact.mjs",
+   "motif": "manuel",
+   "appelants": [
+    "factory-forge-agents-security/oracles/self-test.mjs",
+    "factory-forge-agents-security/README.md"
+   ],
+   "natures": [
+    "recette",
+    "document"
+   ],
+   "manuel": {
+    "motif": "Invoqué sur mandat humain via le pilot, cible explicite fournie par le mandat : le journal des décisions d'un PEP et le catalogue des niveaux de risque du produit (TF-2422, 14/11/2026) ; prouvé par oracles/self-test.mjs (25 cas) ; aucun livrable ne le déclenche par son extension.",
+    "commande": "node oracles/oracle-pep-impact.mjs <journal-pep.jsonl> --catalogue <catalogue.json> --json-only"
+   }
+  },
+  {
+   "depot": "factory-forge-agents-security",
+   "chemin": "oracles/oracle-scan-agentdef.mjs",
+   "motif": "manuel",
+   "appelants": [
+    "factory-forge-agents-security/CLAUDE.md",
+    "factory-forge-agents-security/oracles/self-test.mjs",
+    "factory-pilot/oracles/oracle-enclenchement.mjs"
+   ],
+   "natures": [
+    "executable",
+    "recette",
+    "document"
+   ],
+   "manuel": {
+    "motif": "Invoqué sur mandat humain via le pilot, cible explicite fournie par le mandat (CLAUDE.md de la forge, garde-fou 1) ; prouvé par oracles/self-test.mjs ; seul consommateur mécanique : la règle EN1 d'oracles/oracle-enclenchement.mjs du pilot, qui exige son verdict au ledger de tout run mobilisant la forge.",
+    "commande": "node oracles/oracle-scan-agentdef.mjs <agent.yaml|.claude/agents/x.md> --json-only"
+   }
+  },
+  {
+   "depot": "factory-forge-agents-security",
+   "chemin": "oracles/oracle-scan-mcp-supabase.mjs",
+   "motif": "manuel",
+   "appelants": [
+    "factory-forge-agents-security/CLAUDE.md",
+    "factory-forge-agents-security/oracles/self-test.mjs",
+    "factory-pilot/oracles/oracle-enclenchement.mjs"
+   ],
+   "natures": [
+    "executable",
+    "recette",
+    "document"
+   ],
+   "manuel": {
+    "motif": "Invoqué sur mandat humain via le pilot, cible explicite fournie par le mandat (CLAUDE.md de la forge, garde-fou 1) ; prouvé par oracles/self-test.mjs ; seul consommateur mécanique : la règle EN1 d'oracles/oracle-enclenchement.mjs du pilot, qui exige son verdict au ledger de tout run mobilisant la forge.",
+    "commande": "node oracles/oracle-scan-mcp-supabase.mjs <fichier|dossier> --production <ref> --json-only"
+   }
+  },
+  {
+   "depot": "factory-forge-agents-security",
+   "chemin": "oracles/oracle-scan-toolcalls.mjs",
+   "motif": "manuel",
+   "appelants": [
+    "factory-forge-agents-security/CLAUDE.md",
+    "factory-forge-agents-security/oracles/self-test.mjs",
+    "factory-pilot/oracles/oracle-enclenchement.mjs"
+   ],
+   "natures": [
+    "executable",
+    "recette",
+    "document"
+   ],
+   "manuel": {
+    "motif": "Invoqué sur mandat humain via le pilot, cible explicite fournie par le mandat (CLAUDE.md de la forge, garde-fou 1) ; prouvé par oracles/self-test.mjs ; seul consommateur mécanique : la règle EN1 d'oracles/oracle-enclenchement.mjs du pilot, qui exige son verdict au ledger de tout run mobilisant la forge.",
+    "commande": "node oracles/oracle-scan-toolcalls.mjs <journal.jsonl> --perimetre <dossier> --json-only"
+   }
+  },
+  {
+   "depot": "factory-forge-agents-security",
+   "chemin": "oracles/oracle-scan-workflow-agent.mjs",
+   "motif": "manuel",
+   "appelants": [
+    "factory-forge-agents-security/CLAUDE.md",
+    "factory-forge-agents-security/oracles/self-test.mjs",
+    "factory-pilot/oracles/oracle-enclenchement.mjs"
+   ],
+   "natures": [
+    "executable",
+    "recette",
+    "document"
+   ],
+   "manuel": {
+    "motif": "Invoqué sur mandat humain via le pilot, cible explicite fournie par le mandat (CLAUDE.md de la forge, garde-fou 1) ; prouvé par oracles/self-test.mjs ; seul consommateur mécanique : la règle EN1 d'oracles/oracle-enclenchement.mjs du pilot, qui exige son verdict au ledger de tout run mobilisant la forge.",
+    "commande": "node oracles/oracle-scan-workflow-agent.mjs <dépôt|workflows|fichier.yml> --json-only"
+   }
+  },
+  {
+   "depot": "factory-forge-conception",
+   "chemin": "oracles/oracle-cadrage-metier.mjs",
+   "motif": "forge-appele",
+   "appelants": [
+    "factory-forge-conception/oracles/manifeste.json",
+    "factory-forge-conception/oracles/run-oracles-conception.mjs"
+   ],
+   "natures": [
+    "executable"
+   ]
+  },
+  {
+   "depot": "factory-forge-conception",
+   "chemin": "oracles/oracle-constitution.mjs",
+   "motif": "forge-appele",
+   "appelants": [
+    "factory-forge-conception/oracles/manifeste.json",
+    "factory-forge-conception/oracles/run-oracles-conception.mjs"
+   ],
+   "natures": [
+    "executable"
+   ]
+  },
+  {
+   "depot": "factory-forge-conception",
+   "chemin": "oracles/oracle-delta.mjs",
+   "motif": "forge-appele",
+   "appelants": [
+    "factory-forge-conception/oracles/manifeste.json",
+    "factory-forge-conception/oracles/run-oracles-conception.mjs",
+    "factory-forge-conception/scripts/delta.mjs"
+   ],
+   "natures": [
+    "executable"
+   ]
+  },
+  {
+   "depot": "factory-forge-conception",
+   "chemin": "oracles/oracle-ears.mjs",
+   "motif": "forge-appele",
+   "appelants": [
+    "factory-forge-conception/oracles/manifeste.json"
+   ],
+   "natures": [
+    "executable"
+   ]
+  },
+  {
+   "depot": "factory-forge-conception",
+   "chemin": "oracles/oracle-etat.mjs",
+   "motif": "forge-appele",
+   "appelants": [
+    "factory-forge-conception/oracles/manifeste.json",
+    "factory-forge-conception/oracles/run-oracles-conception.mjs"
+   ],
+   "natures": [
+    "executable"
+   ]
+  },
+  {
+   "depot": "factory-forge-conception",
+   "chemin": "oracles/oracle-exigences-md.mjs",
+   "motif": "forge-appele",
+   "appelants": [
+    "factory-forge-conception/oracles/manifeste.json",
+    "factory-forge-conception/oracles/run-oracles-conception.mjs"
+   ],
+   "natures": [
+    "executable"
+   ]
+  },
+  {
+   "depot": "factory-forge-conception",
+   "chemin": "oracles/oracle-retro-modele.mjs",
+   "motif": "forge-appele",
+   "appelants": [
+    "factory-forge-conception/oracles/manifeste.json",
+    "factory-forge-conception/oracles/run-oracles-conception.mjs"
+   ],
+   "natures": [
+    "executable"
+   ]
+  },
+  {
+   "depot": "factory-forge-conception",
+   "chemin": "oracles/oracle-vues-profil.mjs",
+   "motif": "forge-appele",
+   "appelants": [
+    "factory-forge-conception/oracles/manifeste.json"
+   ],
+   "natures": [
+    "executable"
+   ]
+  },
+  {
+   "depot": "factory-forge-data",
+   "chemin": "oracles/oracle-anonymiser.mjs",
+   "motif": "forge-appele",
+   "appelants": [
+    "factory-forge-data/oracles/oracle-jeu-fictif.mjs",
+    "factory-forge-data/scripts/anonymiser.mjs",
+    "factory-forge-data/scripts/exercer-anonymiser-postgres.mjs"
+   ],
+   "natures": [
+    "executable"
+   ]
+  },
+  {
+   "depot": "factory-forge-data",
+   "chemin": "oracles/oracle-jeu-fictif.mjs",
+   "motif": "forge-appele",
+   "appelants": [
+    "factory-forge-data/references/definition-jeu-fictif.json"
+   ],
+   "natures": [
+    "executable"
+   ]
+  },
+  {
+   "depot": "factory-forge-design",
+   "chemin": "oracles/oracle-barre-externe.mjs",
+   "motif": "forge-appele",
+   "appelants": [
+    "factory-forge-design/oracles/run-oracles-design.mjs"
+   ],
+   "natures": [
+    "executable"
+   ]
+  },
+  {
+   "depot": "factory-forge-design",
+   "chemin": "oracles/oracle-bascule.mjs",
+   "motif": "forge-appele",
+   "appelants": [
+    "factory-pilot/todo/CLASSES.json",
+    "factory-pilot/todo/generateurs-defauts.json",
+    "factory-forge-design/oracles/run-oracles-design.mjs"
+   ],
+   "natures": [
+    "executable"
+   ]
+  },
+  {
+   "depot": "factory-forge-design",
+   "chemin": "oracles/oracle-baseline.mjs",
+   "motif": "forge-appele",
+   "appelants": [
+    "factory-pilot/todo/CLASSES.json",
+    "factory-forge-design/corpus/grille-viewports.json",
+    "factory-forge-design/oracles/lib/grille.mjs"
+   ],
+   "natures": [
+    "executable"
+   ]
+  },
+  {
+   "depot": "factory-forge-design",
+   "chemin": "oracles/oracle-caracteres-controle.mjs",
+   "motif": "forge-appele",
+   "appelants": [
+    "factory-pilot/oracles/baseline-recettes.json",
+    "factory-pilot/oracles/oracle-caracteres-controle.mjs",
+    "factory-pilot/oracles/oracle-controles-injoignables.mjs"
+   ],
+   "natures": [
+    "executable",
+    "recette"
+   ]
+  },
+  {
+   "depot": "factory-forge-design",
+   "chemin": "oracles/oracle-coherence-promesse.mjs",
+   "motif": "manuel",
+   "appelants": [
+    "factory-forge-design/oracles/self-test.mjs"
+   ],
+   "natures": [
+    "recette"
+   ],
+   "manuel": {
+    "motif": "Aucun skill ni document ne prescrit encore de confronter une page à un CONSTITUTION.md ; consommateur d'origine : la section Promesse du cadrage ratifié de forge-conception (TF-0577) ; prouvé par son --self-test (7 PASS).",
+    "commande": "node oracles/oracle-coherence-promesse.mjs <page.html> --cadrage <cadrage.md> --json"
+   }
+  },
+  {
+   "depot": "factory-forge-design",
+   "chemin": "oracles/oracle-declencheurs.mjs",
+   "motif": "forge-appele",
+   "appelants": [
+    "factory-forge-design/oracles/lib/selecteurs.mjs",
+    "factory-forge-design/oracles/oracle-surcouche.mjs",
+    "factory-forge-design/oracles/run-oracles-design.mjs"
+   ],
+   "natures": [
+    "executable"
+   ]
+  },
+  {
+   "depot": "factory-forge-design",
+   "chemin": "oracles/oracle-dtcg.mjs",
+   "motif": "forge-appele",
+   "appelants": [
+    "factory-forge-design/oracles/run-oracles-design.mjs",
+    "factory-forge-design/scripts/generer-tokens-css.mjs"
+   ],
+   "natures": [
+    "executable"
+   ]
+  },
+  {
+   "depot": "factory-forge-design",
+   "chemin": "oracles/oracle-erreurs-formulaire.mjs",
+   "motif": "forge-appele",
+   "appelants": [
+    "factory-forge-design/corpus/composants/saisie-erreurs.js",
+    "factory-forge-design/oracles/lib/jouer_erreurs_formulaire.py",
+    "factory-forge-design/oracles/run-oracles-design.mjs"
+   ],
+   "natures": [
+    "executable"
+   ]
+  },
+  {
+   "depot": "factory-forge-design",
+   "chemin": "oracles/oracle-fluidite.mjs",
+   "motif": "forge-appele",
+   "appelants": [
+    "factory-forge-design/oracles/run-oracles-design.mjs",
+    "factory-forge-design/oracles/self-test.mjs"
+   ],
+   "natures": [
+    "executable",
+    "recette"
+   ]
+  },
+  {
+   "depot": "factory-forge-design",
+   "chemin": "oracles/oracle-liste-demande.mjs",
+   "motif": "forge-appele",
+   "appelants": [
+    "factory-forge-design/oracles/run-oracles-design.mjs"
+   ],
+   "natures": [
+    "executable"
+   ]
+  },
+  {
+   "depot": "factory-forge-design",
+   "chemin": "oracles/oracle-logo-petit.mjs",
+   "motif": "forge-appele",
+   "appelants": [
+    "factory-pilot/todo/CLASSES.json",
+    "factory-forge-design/oracles/lib/rendre_logo.py"
+   ],
+   "natures": [
+    "executable"
+   ]
+  },
+  {
+   "depot": "factory-forge-design",
+   "chemin": "oracles/oracle-panneau-tache.mjs",
+   "motif": "forge-appele",
+   "appelants": [
+    "factory-forge-design/oracles/run-oracles-design.mjs"
+   ],
+   "natures": [
+    "executable"
+   ]
+  },
+  {
+   "depot": "factory-forge-design",
+   "chemin": "oracles/oracle-perceptibilite.mjs",
+   "motif": "forge-appele",
+   "appelants": [
+    "factory-forge-design/oracles/run-oracles-design.mjs"
+   ],
+   "natures": [
+    "executable"
+   ]
+  },
+  {
+   "depot": "factory-forge-design",
+   "chemin": "oracles/oracle-saisie.mjs",
+   "motif": "forge-appele",
+   "appelants": [
+    "factory-pilot/todo/CLASSES.json",
+    "factory-forge-design/oracles/run-oracles-design.mjs"
+   ],
+   "natures": [
+    "executable"
+   ]
+  },
+  {
+   "depot": "factory-forge-design",
+   "chemin": "oracles/oracle-slop.mjs",
+   "motif": "forge-appele",
+   "appelants": [
+    "factory-forge-design/oracles/run-oracles-design.mjs"
+   ],
+   "natures": [
+    "executable"
+   ]
+  },
+  {
+   "depot": "factory-forge-design",
+   "chemin": "oracles/oracle-surcouche.mjs",
+   "motif": "forge-appele",
+   "appelants": [
+    "factory-forge-design/oracles/lib/selecteurs.mjs",
+    "factory-forge-design/oracles/oracle-declencheurs.mjs",
+    "factory-forge-design/oracles/run-oracles-design.mjs"
+   ],
+   "natures": [
+    "executable"
+   ]
+  },
+  {
+   "depot": "factory-forge-design",
+   "chemin": "oracles/oracle-taste.mjs",
+   "motif": "forge-appele",
+   "appelants": [
+    "factory-forge-design/oracles/run-oracles-design.mjs"
+   ],
+   "natures": [
+    "executable"
+   ]
+  },
+  {
+   "depot": "factory-forge-design",
+   "chemin": "oracles/oracle-textes-application.mjs",
+   "motif": "forge-appele",
+   "appelants": [
+    "factory-forge-design/oracles/run-oracles-design.mjs"
+   ],
+   "natures": [
+    "executable"
+   ]
+  },
+  {
+   "depot": "factory-forge-design",
+   "chemin": "oracles/oracle-theme-powerbi.mjs",
+   "motif": "forge-appele",
+   "appelants": [
+    "factory-forge-design/scripts/generer-theme-powerbi.mjs"
+   ],
+   "natures": [
+    "executable"
+   ]
+  },
+  {
+   "depot": "factory-forge-design",
+   "chemin": "oracles/oracle-tokens.mjs",
+   "motif": "forge-appele",
+   "appelants": [
+    "factory-forge-design/oracles/run-oracles-design.mjs",
+    "factory-forge-design/skills/systeme-de-marque/scripts/generer-design-md.mjs",
+    "factory-forge-design/skills/systeme-de-marque/scripts/lib/color.mjs"
+   ],
+   "natures": [
+    "executable"
+   ]
+  },
+  {
+   "depot": "factory-forge-design",
+   "chemin": "skills/ameliore-le-design/scripts/check_maquette.py",
+   "motif": "forge-appele",
+   "appelants": [
+    "factory-forge-design/oracles/oracle-motion.mjs",
+    "factory-forge-design/oracles/oracle-panneau-tache.mjs"
+   ],
+   "natures": [
+    "executable"
+   ]
+  },
+  {
+   "depot": "factory-forge-organization",
+   "chemin": "oracles/oracle-conventions.mjs",
+   "motif": "forge-appele",
+   "appelants": [
+    "factory-pilot/oracles/oracle-conformite-projet.mjs",
+    "factory-pilot/oracles/oracle-ecosysteme.mjs",
+    "factory-forge-organization/oracles/decouvrir-oracles.mjs"
+   ],
+   "natures": [
+    "executable"
+   ]
+  },
+  {
+   "depot": "factory-forge-websec",
+   "chemin": "oracles/oracle-dast.mjs",
+   "motif": "forge-appele",
+   "appelants": [
+    "factory-forge-websec/scripts/preuve-dast-actif.mjs"
+   ],
+   "natures": [
+    "executable"
+   ]
+  },
+  {
+   "depot": "factory-forge-websec",
+   "chemin": "oracles/oracle-exposition.mjs",
+   "motif": "forge-appele",
+   "appelants": [
+    "factory-pilot/oracles/oracle-chemin-prescrit.mjs",
+    "factory-forge-websec/oracles/oracle-exposition-statique.mjs",
+    "factory-forge-websec/scripts/capturer.mjs"
+   ],
+   "natures": [
+    "executable"
+   ]
+  },
+  {
+   "depot": "factory-forge-websec",
+   "chemin": "oracles/oracle-sca.mjs",
+   "motif": "manuel",
+   "appelants": [
+    "factory-forge-websec/CLAUDE.md",
+    "factory-forge-websec/oracles/self-test.mjs"
+   ],
+   "natures": [
+    "recette",
+    "document"
+   ],
+   "manuel": {
+    "motif": "Audit des dépendances d'un produit livré, joué par la session du run au gate MEP websec (references/ETAPES-RUN.md, R-33) ou sur mandat humain, cible la racine du produit ; appelé par oracles/self-test.mjs et listé par oracles/decouvrir-oracles.mjs ; distinct de l'oracle-sca de quality-oracles.",
+    "commande": "node oracles/oracle-sca.mjs <racine-produit> [--seuils f.json]"
+   }
+  }
+ ]
+}

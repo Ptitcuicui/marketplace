@@ -1,0 +1,680 @@
+# Composants réutilisables — socle page HTML Factory
+
+Composants chartés prêts à coller, **tous en tokens `:root`** (cf. `charte-et-tokens.md`).
+Extraits de livrables réels puis filtrés par la charte et **validés par les oracles**
+(`check_html.py` PASS + `render_page.py` V1–V7 PASS, 3 breakpoints). N'utiliser que ces
+versions : les variantes d'origine violaient souvent la charte (hex en dur, couleur seule,
+barre invisible — cf. `anti-patterns.md`).
+
+Chaque composant porte un tier : 🔴 Obligatoire si présent · 🟡 Recommandé · ⚪ Optionnel.
+
+---
+
+## 1 — Grille de KPI 🟡 — REMPLACÉE par l'asset « tuiles d'indicateurs » (§ 14)
+
+> **Remplacée (D-55 (a) du 03/10/2026, Produit-02 RT-120).** Cet extrait n'est pas embarquable et
+> ne porte ni comparaison ni écart. Employer l'asset du § 14 ; l'extrait ci-dessous reste lisible
+> pour les pages existantes, qu'il n'y a plus lieu de reproduire.
+
+Chiffres-clés en tête de livrable. Toujours **label + valeur (+ hint)** ; jamais une valeur
+nue, jamais le sens porté par la seule couleur.
+
+```html
+<div class="kpis">
+  <div class="kpi"><span class="kpi-label">Conformité</span>
+    <span class="kpi-value">87 %</span><span class="kpi-hint">32 / 37 ADR</span></div>
+</div>
+```
+```css
+.kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+.kpi { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 16px; display: flex; flex-direction: column; gap: 4px; }
+.kpi-label { font-family: var(--sans); color: var(--muted); font-size: .8rem; }
+.kpi-value { font-family: var(--head); font-weight: 800; font-size: 1.6rem; color: var(--ink); }
+.kpi-hint { color: var(--muted); font-size: .75rem; }   /* --muted, pas --faint : contraste AA */
+@media screen and (max-width: 1020px) { .kpis { grid-template-columns: repeat(2, 1fr); } }
+```
+
+## 2 — Badge de statut 🔴 (dès qu'un état est affiché)
+
+Texte en `--ink` (contraste garanti) ; la couleur sémantique est portée par **la pastille +
+la bordure + le libellé**, jamais par le texte coloré seul (échoue le contraste AA sur fond
+clair, et « couleur seule » viole WCAG 1.4.1).
+
+```html
+<span class="badge ok">Adopter</span>
+<span class="badge part">Adapter</span>
+<span class="badge info">Info</span>
+<span class="badge ko">Écarter</span>
+```
+```css
+.badge { display: inline-flex; align-items: center; gap: 8px; font-size: .78rem; font-weight: 600;
+  color: var(--ink); padding: 4px 12px; border-radius: 999px; border: 1px solid var(--line); }
+.badge::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--_dot, var(--muted)); }
+.badge.ok   { --_dot: var(--green); background: var(--green-fill); border-color: var(--green-line); }
+.badge.part { --_dot: var(--amber); background: var(--amber-fill); border-color: var(--amber-line); }
+.badge.info { --_dot: var(--teal);  background: var(--teal-fill);  border-color: var(--teal-line); }
+.badge.ko   { --_dot: var(--red);   background: var(--red-fill);   border-color: var(--red-line); }
+```
+
+La variante `ko` dit un état **défavorable** : bloquant, écarté, refusé, probabilité forte d'un
+risque. Elle se câble sur les jetons `--red`, `--red-fill` et `--red-line` du gabarit, posés dans
+ses trois projections (clair, sombre, impression) : aucun consommateur ne pose son propre rouge
+(TF-1263).
+
+## 3 — Barre de progression 🟡
+
+`display: inline-block` **obligatoire** : une barre sur `<span>` inline ignore `height`/`width`
+et devient invisible. Largeur pilotée par un token local `--val`.
+
+```html
+<span class="bar" role="img" aria-label="Score 87 %"><span class="fill" style="--val:87%"></span></span>
+```
+```css
+.bar { display: inline-block; vertical-align: middle; background: var(--line); border-radius: 999px; height: 8px; overflow: hidden; min-width: 120px; }
+.fill { display: block; height: 100%; width: var(--val); background: var(--blue); border-radius: 999px; }
+```
+
+## 4 — Légende 🟡
+
+Accompagne tout code couleur : **swatch + libellé texte** (la couleur ne porte jamais seule).
+
+```html
+<ul class="legend">
+  <li class="leg-item"><span class="leg-swatch" style="background:var(--green-fill);border-color:var(--green-line)"></span> Conforme</li>
+</ul>
+```
+```css
+.legend { display: flex; flex-wrap: wrap; gap: 16px; margin: 12px 0; padding: 0; list-style: none; }
+.leg-item { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: .85rem; }
+.leg-swatch { width: 12px; height: 12px; border-radius: 4px; border: 1px solid var(--line); }
+```
+
+## 5 — Barre d'outils avec compteur de résultats ⚪ (catalogues/référentiels)
+
+Le compteur en `aria-live="polite"` annonce le résultat du filtrage aux lecteurs d'écran.
+Viewer-only (masqué à l'impression).
+
+```html
+<div class="toolbar">
+  <label for="q" class="count">Filtrer :</label>
+  <input type="search" id="q" aria-label="Filtrer">
+  <span class="count" id="count" aria-live="polite" role="status"></span>
+</div>
+```
+```css
+.toolbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.toolbar input[type="search"] { font-family: var(--sans); padding: 8px 12px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--surface); color: var(--ink); }
+.toolbar input:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+.count { color: var(--muted); font-size: .85rem; }
+@media print { .toolbar { display: none; } }
+```
+```js
+// escapeHtml OBLIGATOIRE avant toute réinjection de la saisie (cf. bonnes-pratiques §7)
+const escapeHtml = s => String(s).replace(/[&<>"']/g,
+  c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+```
+
+## 6 — Tableau de données repliable en cartes 🔴 (dès qu'un `<table>` est consulté sur mobile)
+
+Sous 640 px, un tableau large dépasse le viewport (bloquant V1 de l'oracle, **même dans un
+conteneur `overflow-x:auto`**). Le repli en cartes empilées via `data-label` est la parade
+robuste. Un `thead` **sticky** ne se justifie que dans un conteneur à hauteur bornée ; hors de
+ce cas il se peint par-dessus la première ligne — le laisser statique.
+
+**Et s'il colle, il se décale du token `--hh` (TF-0754, 02/09/2026).** L'arbitrage manquait :
+« header sticky » et « thead sticky » se superposaient, aucun des deux textes ne disait lequel
+cède, et un **produit** a dû trancher un arbitrage de socle après deux cycles de rendu. Le socle
+tranche désormais — l'en-tête de document garde le bord haut, le thead prend
+`top: var(--hh)` (`thead.colle th`), et `--hh` vaut la hauteur de l'en-tête, posée dans `:root`
+par le gabarit. Deux lignes de CSS, dans `assets/boilerplate.html` ; `check_html.py` (L29) refuse
+la collision et le token non déclaré.
+
+**Le seuil dépend du CONTENU, pas d'un pixel fixe (RA-2 — la deuxième remarque d'un lot de retours, mesurée sur livrable réel le 13/08)** :
+un tableau de 9 colonnes portant de la prose déborde encore à 1 200 px (V1 mesuré : bord droit
+à 1 173 px pour un viewport de 1 100 px). Règle de calibrage : ~130 px de largeur utile par
+colonne de prose — un tableau de N colonnes textuelles se replie sous `N × 130 px` environ, et
+640 px n'est le bon seuil que jusqu'à 4-5 colonnes. **Palier intermédiaire obligatoire** entre
+le seuil de repli et la largeur où le tableau tient à l'aise : `overflow-wrap: anywhere` sur
+les cellules (mot longs cassés, pas de débordement). La preuve reste `render_page.py` aux
+largeurs cibles — jamais le seuil sur parole.
+
+**LA RÈGLE EST DÉSORMAIS MÉCANISÉE, PARCE QU'ÉCRITE EN PROSE ELLE ÉTAIT RETRADUITE ET MAL
+RETRADUITE (TF-0558, 24/08/2026).** Le calibrage ci-dessus restait à la charge de chaque émetteur,
+et l'exemple de code figeait `640 px` — deux textes qui se contredisent dans la même section. Coût
+mesuré sur un livrable réel : repli réglé à 900 px alors qu'un tableau de 8 colonnes débordait
+jusque vers 1 400 px (bord droit à 1 308 px pour un viewport de 1 280) — **16 débordements
+bloquants, invisibles cinq jours**. Le même 900 px était figé en dur dans un gabarit de la factory :
+tout projet qui instanciait la famille le reproduisait.
+
+**`screen` n'est pas décoratif (TF-1882, 19/10/2026).** Chaque règle de petit écran s'écrit `@media screen and (max-width: …)` : sans `screen`, elle se déclenche aussi à l'impression, où la largeur imprimable d'un A4 vaut ~698 px — une fiche demandée « sur une page A4 » est sortie sur deux pages, ses colonnes empilées par une règle faite pour un téléphone. `scripts/check_format_a4.py` compte les pages dans les conditions du lecteur.
+
+*Trois lignes de CSS remplacent la prose*, et aucun émetteur n'a plus rien à calibrer : le nombre
+de colonnes se LIT dans le marquage, et le palier se déclenche seul.
+
+```css
+/* Le repli anticipé se déclenche sur le NOMBRE DE COLONNES, lu dans le marquage — jamais sur un
+   pixel choisi à la main. Trois paliers, calibrés sur la mesure et non sur la règle du pouce :
+   5 colonnes sous 1 020 px, 7 sous 1 400, 9 sous 1 700. Le « ~130 px par colonne » de l'énoncé
+   ci-dessus est OPTIMISTE — la mesure du 24/08 donne ~165 px pour des colonnes de prose (huit
+   colonnes débordaient encore à 1 308 px), et c'est ce chiffre-là qui fixe les paliers.
+
+   LE PRÉFIXE EST RÉPÉTÉ, ET C'EST VOULU. Un premier jet posait un jeton (`--replier: 1`) en
+   espérant qu'il déclenche le bloc : une propriété personnalisée ne déclenche RIEN par elle-même,
+   c'est une valeur que quelque chose doit lire. La prescription aurait été une affordance non
+   câblée — exactement ce que la première loi transverse interdit, écrite dans le document qui
+   l'enseigne. La verbosité est le prix du fait que ça marche.
+
+   `box-sizing: border-box` N'EST PAS DÉCORATIF : une cellule en `width: 100%` avec du
+   remplissage déborde de la valeur de ce remplissage. Mesuré en écrivant cette prescription —
+   bord droit à 1 300 px pour un viewport de 1 280, soit exactement les 2 × 10 px de padding.
+   Le repli s'appliquait, et il débordait quand même : une parade qui reproduit le défaut
+   qu'elle corrige. */
+@media screen and (max-width: 1020px) {
+  .table-wrap:has(th:nth-child(5)) thead { display: none; }
+  .table-wrap:has(th:nth-child(5)) tr,
+  .table-wrap:has(th:nth-child(5)) td { display: block; width: 100%; box-sizing: border-box; }
+  .table-wrap:has(th:nth-child(5)) tbody td { overflow-wrap: anywhere; }
+  .table-wrap:has(th:nth-child(5)) tbody td::before { content: attr(data-label); font-weight: 700; }
+}
+@media screen and (max-width: 1400px) {
+  .table-wrap:has(th:nth-child(7)) thead { display: none; }
+  .table-wrap:has(th:nth-child(7)) tr,
+  .table-wrap:has(th:nth-child(7)) td { display: block; width: 100%; box-sizing: border-box; }
+  .table-wrap:has(th:nth-child(7)) tbody td { overflow-wrap: anywhere; }
+  .table-wrap:has(th:nth-child(7)) tbody td::before { content: attr(data-label); font-weight: 700; }
+}
+@media screen and (max-width: 1700px) {
+  .table-wrap:has(th:nth-child(9)) thead { display: none; }
+  .table-wrap:has(th:nth-child(9)) tr,
+  .table-wrap:has(th:nth-child(9)) td { display: block; width: 100%; box-sizing: border-box; }
+  .table-wrap:has(th:nth-child(9)) tbody td { overflow-wrap: anywhere; }
+  .table-wrap:has(th:nth-child(9)) tbody td::before { content: attr(data-label); font-weight: 700; }
+}
+```
+
+**Mesure du 24/08** : le livrable qui rendait 16 débordements bloquants repasse à **0 bloquant**
+sans qu'aucune classe soit posée à la main. Le tableau doit vivre dans un `.table-wrap` et ses
+cellules porter `data-label` — deux exigences que le boilerplate du socle pose déjà. *Une règle de calibrage écrite en prose est une règle que chaque projet retraduit,
+et une retraduction sur trois se trompe — ici elle s'est trompée sur celui qui l'avait écrite.*
+
+```html
+<table>
+  <caption>Inventaire</caption>
+  <thead><tr><th scope="col">ID</th><th scope="col">Nom</th><th scope="col">Verdict</th></tr></thead>
+  <tbody>
+    <tr><td data-label="ID">B2</td><td data-label="Nom">Grille de KPI</td><td data-label="Verdict"><span class="badge ok">Adopter</span></td></tr>
+  </tbody>
+</table>
+```
+```css
+table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+caption { text-align: left; color: var(--muted); font-size: .85rem; padding: 8px 0; }
+thead th { background: var(--surface); text-align: left; font-family: var(--head); font-weight: 700; color: var(--ink); border-bottom: 2px solid var(--line); padding: 12px; }
+tbody td { padding: 12px; border-bottom: 1px solid var(--line); }
+@media screen and (max-width: 640px) {
+  /* TF-0499 (22/08/2026) : `table` ne passe JAMAIS en display:block. Une <caption> dont le
+     tableau parent est en block recoit une boite de tableau anonyme qui se reduit au contenu :
+     mesure a 390 px sur une legende de 108 caracteres, elle rendait 70 x 192 px — une colonne
+     d'un mot — contre 366 x 42 px une fois la regle alignee. Le boilerplate du skill ne touchait
+     deja que thead/tr/td : c'est LUI qui fait foi, et cet extrait ne le suivait pas. Constate sur
+     livrable reel : quinze tableaux touches, jamais vus par aucun oracle. */
+  tr, td { display: block; width: 100%; box-sizing: border-box; }
+  thead { display: none; }
+  tbody tr { border: 1px solid var(--line); border-radius: var(--r-sm); padding: 8px 12px; margin: 12px 0; }
+  tbody td { border: none; padding: 4px 0; display: flex; justify-content: space-between; gap: 12px; }
+  tbody td::before { content: attr(data-label); font-weight: 700; color: var(--muted); font-size: .78rem; }
+}
+```
+
+---
+
+### 6 bis — Largeurs de colonnes : un tableau de données n'est pas une grille régulière 🔴
+
+**Retour humain du 21/08/2026** sur un livrable remis : « des colonnes avec uniquement un ID
+n'ont pas besoin d'une largeur aussi importante, et les colonnes avec des textes ont besoin de
+plus de largeur ». Mesure sur un tableau d'actions à 4 colonnes en `table-layout: fixed` sans
+largeurs déclarées : la colonne `#` — contenu le plus large, **un caractère** — recevait **25 %**
+de la largeur. Après dérivation depuis le contenu : 4,1 %, et les colonnes de texte passent de
+25 % chacune à 25 / 43 / 27 %.
+
+**La voie standard est `<colgroup>`**, et elle est utilisable depuis TF-0444 : `colgroup` et
+`col` étaient comptés par V4 comme des boîtes recouvrant `thead` et `tbody` — deux faux
+positifs BLOQUANTS par tableau, 50 sur un livrable réel — ce qui poussait les runs à porter les
+largeurs sur les `<th>`, contournement à refaire à chaque fois. L'oracle les exclut désormais.
+
+**Heuristique**, vérifiée sur les 25 tableaux d'une même page :
+
+1. `base` = max(longueur de l'en-tête, **90e centile** des longueurs de cellule de la colonne) —
+   le centile plutôt que le maximum, sinon une seule cellule bavarde emporte la colonne ;
+2. `poids` = `base ^ 0,6` — le texte se **replie**, il ne s'étale pas linéairement : une colonne
+   qui contient trois fois plus de caractères n'a pas besoin de trois fois plus de largeur ;
+3. plancher **4 %**, plafond **42 %**, puis renormalisation à 100 % ;
+4. une colonne dont le contenu le plus large tient en **12 caractères** passe en
+   `white-space: nowrap` — elle ne se repliera jamais, autant lui garantir sa ligne.
+
+```html
+<table class="repli-cartes">
+  <colgroup>
+    <col style="width:4%">    <!-- # : un caractère -->
+    <col style="width:25%">   <!-- Constat -->
+    <col style="width:43%">   <!-- Remédiation : la plus bavarde -->
+    <col style="width:28%">   <!-- Porteur -->
+  </colgroup>
+  <thead><tr><th scope="col">#</th><th scope="col">Constat</th><th scope="col">Remédiation</th><th scope="col">Porteur</th></tr></thead>
+  <tbody>
+    <tr><td data-label="#" class="serre">1</td><td data-label="Constat">…</td><td data-label="Remédiation">…</td><td data-label="Porteur">…</td></tr>
+  </tbody>
+</table>
+```
+```css
+table { table-layout: fixed; }
+td.serre, th.serre { white-space: nowrap; }   /* colonnes de ≤ 12 caractères */
+```
+
+**Ce que l'heuristique ne remplace pas** : la mesure. Les pourcentages se dérivent du contenu
+RÉEL du tableau, pas d'un gabarit — et le résultat se juge par `render_page.py` aux largeurs
+cibles, comme le seuil de repli ci-dessus. Un tableau dont une colonne tombe sous le plancher
+après renormalisation est un tableau qui a trop de colonnes : le replier, ou en retirer une.
+
+## Note d'usage
+
+- **Recherche in-page** (surlignage insensible aux accents) : composant dédié déjà fourni,
+  voir [composant-recherche.md](composant-recherche.md).
+- **Embarquer un composant, c'est le POSER, jamais le coller** (TF-1059). Une copie collée à la
+  main perd l'exemption du socle : les oracles de forge-design (`oracles/lib/socle.mjs`)
+  n'exemptent que les blocs marqués `COMPOSANT-EMBARQUE` et scellés par leur empreinte, et la
+  jugent donc sur tout son CSS. Poser avec
+  `node scripts/embarquer-composants.mjs --poser <page.html> --composants table-filters.js,table-filters.css`,
+  vérifier avec `--constat <page.html>`. Un défaut du composant se corrige ici, à la source ;
+  une copie éditée sur place perd son sceau et redevient une fourche.
+- **Un décor se peint sur un élément frère du texte, jamais sur son ancêtre** (TF-1417). Un rail
+  de gouttière, une bande ou un dégradé posé en `::before` / `::after` sur le conteneur d'un texte
+  rend le contraste de TOUT ce texte non mesurable : 440 lignes « NON MESURABLE » sur une page de
+  guide le 24/09/2026, 4 une fois le rail sorti en `<div class="ch-rail" aria-hidden="true">`,
+  frère des paragraphes. `render_page.py` le signale (famille `decor_sur_ancetre`, un constat par
+  ancêtre, en avertissement : le bruit mesuré sur les pages existantes n'est pas nul) ; une puce ou une pastille de moins de 24 px n'est pas un décor.
+- Tous les composants ci-dessus supposent le bloc `:root` du boilerplate. Après intégration,
+  **relancer les oracles** (`check_html.py` puis `render_page.py`) : ne jamais juger un rendu
+  depuis le seul code (cf. `zero-defaut-visuel.md`).
+
+
+## 8 — KPI cliquables filtrant une liste 🔴 (standard H3, dès que des KPI comptent des lignes affichées)
+
+Asset : [`assets/kpi-filter.js`](../assets/kpi-filter.js) (delta n°6, 14/08). Un KPI qui
+compte des éléments affichés les FILTRE au clic (re-clic = tout) ; un KPI d'éléments hors
+page ne se branche pas — il reste un `div` et dit où vivent ses éléments. Contrat de
+marquage : `<button data-kpi-filtre data-kpi-table="id" data-kpi-attr="statut"
+data-kpi-valeur="candidat">` + `data-<attr>` sur chaque ligne. Masquage par
+`data-kpi-cache`, composable avec la recherche et les facettes D-12 (visibilité dérivée).
+**Une carte ne filtre QUE le tableau qu'elle désigne** (`data-kpi-table`, TF-0970) : l'état
+actif se tient par tableau, donc `init(document)` est sûr sur une page à plusieurs groupes de
+cartes, même quand ils filtrent sur des attributs différents. Règle vérifiée par
+`self_test.py` (`run_kpi_perimetre`) : un clic sur une carte ne change le nombre de lignes
+visibles que du tableau désigné.
+La règle **L13** de `check_html` exige la recherche statique dès 8 lignes et signale les
+KPI non cliquables au-dessus d'une liste. Modèles éprouvés : `todo/TODO.html` (pilot,
+oracle 13/13) et le dashboard forge-tests (tuiles).
+
+## 9 — Onglets accessibles 🔴 (dès qu'un rapport se lit par onglets)
+
+Asset : [`assets/tabs.js`](../assets/tabs.js) (TF-0425, lot Produit-05 20260820a). Un rapport à
+onglets réécrivait ~50 lignes de JS à chaque livrable ; le composant porte les rôles
+WAI-ARIA, les flèches (cycle), Home/End, le `#hash` qui ouvre le bon onglet (cible = panneau
+**ou** élément dans un panneau — les liens de sommaire inter-onglets marchent), et
+l'impression de **tous** les panneaux. Contrat de marquage :
+
+```html
+<div class="tabs" data-tabs>
+  <div role="tablist" aria-label="Chapitres">
+    <button type="button" role="tab" id="tab-a" aria-controls="pan-a" aria-selected="true">Synthèse</button>
+    <button type="button" role="tab" id="tab-b" aria-controls="pan-b" aria-selected="false" tabindex="-1">Constats</button>
+  </div>
+  <section role="tabpanel" id="pan-a" aria-labelledby="tab-a">…</section>
+  <section role="tabpanel" id="pan-b" aria-labelledby="tab-b" hidden>…</section>
+</div>
+```
+```css
+[role="tablist"] { display: flex; gap: 4px; border-bottom: 2px solid var(--line); }
+[role="tab"] { font: inherit; font-family: var(--head); font-weight: 700; color: var(--muted); background: none; border: none; border-bottom: 3px solid transparent; padding: 12px 16px; cursor: pointer; }
+[role="tab"][aria-selected="true"] { color: var(--blue); border-bottom-color: var(--blue); }
+[role="tab"]:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+[role="tabpanel"] { padding-top: 16px; }
+@media print { [role="tablist"] { display: none; } [role="tabpanel"][hidden] { display: block; } }
+```
+Initialisation : `FactoryTabs.initAll()`. Règle **L16** de `check_html` : tout `role=tab` vise un
+`tabpanel` résolu, tout panneau est étiqueté par son onglet, les panneaux masqués sont
+réaffichés sous `@media print`. Revue de lecture : `render_page.py --sections "[role=tabpanel]"`
+capture chaque panneau.
+
+## 10 — Ligne de tableau dépliable 🟡 (détail à la demande sans quitter le tableau)
+
+Asset : [`assets/table-detail.js`](../assets/table-detail.js) (TF-0432, lot Produit-05
+20260820b). La convention `tr[data-detail]` existait côté **consommateur** (`table-filters.js`
+l'exclut du comptage et la fait voyager avec sa ligne mère) sans composant pour la
+**produire** — 99 lignes dépliables écrites à la main sur un seul livrable. Contrat :
+
+```html
+<tr><td><button type="button" class="td-btn" aria-expanded="false" aria-controls="det-1">›</button> L1</td><td>ko</td><td>délai</td></tr>
+<tr data-detail id="det-1" hidden><td colspan="3">Le contrôle a échoué à 1 280 px : délai de 3,2 s mesuré le 20/08.</td></tr>
+```
+```css
+.td-btn { font: inherit; color: var(--blue); background: none; border: 1px solid var(--line); border-radius: var(--r-sm); width: 24px; height: 24px; cursor: pointer; transition: transform .15s; }
+.td-btn[aria-expanded="true"] { transform: rotate(90deg); }
+tr[data-detail] td { background: var(--bg, #f6f8fc); border-bottom: 1px solid var(--line); padding: 12px 16px 12px 44px; }
+@media print { tr[data-detail][hidden] { display: table-row; } .td-btn { display: none; } }
+```
+Initialisation : `FactoryTableDetail.initAll()` ; un `#hash` qui vise un élément d'une ligne
+fermée l'ouvre. Le chevron est `›` (U+203A), présent dans toute pile de repli (TF-0435) — jamais
+`\25B6`. Règle **L17** de `check_html` : toute ligne de détail a un `id`, un bouton qui la vise,
+un `colspan` égal au nombre de colonnes, et une règle `@media print` qui la déplie. Avec
+`table-filters.js` : la ligne de détail suit le filtrage de sa ligne mère.
+
+## 11 — Gabarits de chapitre : `.chap.lire` et `.chap.duo` 🔴 (règle L2 corrigée, TF-0421)
+
+Portés par le boilerplate. La mesure de lecture se règle sur le **conteneur**, jamais sur le
+paragraphe (`width: min(75ch, 100%)` sur `.prose` laissait 60 % d'un écran de 1 800 px vide
+— vert à L2 tel qu'il était écrit, refusé par le client). `section.chap.lire` : conteneur de
+lecture de ~1 080 px centré, le texte le remplit. `section.chap.duo` : grille 7/5 texte +
+encart utile (KPI, légende, figure), repli sous 1 100 px. `render_page.py` L2 juge désormais
+quelle que soit la propriété CSS qui bride, et 1920 px est dans les largeurs par défaut.
+
+**Page de données (TF-1622, RA-3, 13/10/2026).** Sur une page qui se déclare `data-page="donnees"`,
+la prose occupe la **pleine largeur par défaut** ; `.chap.lire` y est une **option déclarée**, jamais
+une prescription. Retour humain : « pourquoi ce n'est pas affiché sur toute la largeur et sur une
+moitié de colonne uniquement ? ». V18 (a) ne compte plus en défaut la prose large d'une page de
+données : il publie sa mesure.
+
+## 12 — Lecteur de source embarquée 🔴 (dès qu'un livrable CITE un document du dépôt)
+
+`assets/source-reader.js` — **le composant que la règle A1 rendait nécessaire, et qui n'existait
+pas.** A1 exige un fichier autoportant : un rapport qui renvoie à des fichiers du dépôt **perd ses
+sources dès qu'il part par courriel**. La conséquence logique est d'EMBARQUER les documents cités —
+et un `<pre>` de 67 Ko de Markdown est illisible. Faute de composant, un livrable a dû écrire à la
+main ~130 lignes de convertisseur, une bascule à deux vues, et un rendu différé.
+
+```html
+<details class="src" data-src-format="markdown">
+  <summary>Note de cadrage — 1,2 Ko</summary>
+  <script type="text/plain" class="src-brut">…le document, tel quel…</script>
+</details>
+<script>/* source-reader.js collé ici : une page autoportante n'a pas de fichier voisin */</script>
+<script>FactorySourceReader.init();</script>
+```
+
+**Trois partis pris, tous payés par un défaut réel.**
+
+| Parti pris | Pourquoi | Ce qu'il évite |
+|---|---|---|
+| **Rendu DIFFÉRÉ** au premier dépliage | douze documents rendus d'avance faisaient passer le DOM de 7 000 à **plus de 25 000 nœuds** | l'échec de l'oracle de performance, découvert par essai sur un livrable |
+| **Liens NON cliquables**, cible en infobulle | ils visent le dépôt, donc rien depuis la page | *un lien mort ment davantage qu'une absence de lien* |
+| Document dans un `<script type="text/plain">` | le seul emplacement où du Markdown brut n'est ni interprété comme du HTML, ni ré-échappé | un `<pre>` caché compterait dans le DOM dès le chargement — ce que le rendu différé cherche à éviter |
+
+**Sous-ensemble de Markdown volontairement borné** : titres (un `#` embarqué devient `h2`, la page
+hôte garde son `h1`), tableaux (dans une zone qui défile horizontalement — un tableau large ne doit
+pas faire déborder la page hôte, V1 est bloquant), listes, blocs de code, citations, séparateurs,
+gras/italique/code en ligne. **Ce qui n'est pas reconnu sort en paragraphe, jamais en HTML brut** :
+un document cité est une DONNÉE, et une donnée ne s'exécute pas.
+
+**Deux pièges d'écriture, notés parce qu'ils se repaient sinon.** (1) Le composant est destiné à
+être **collé** dans la page : toute séquence de fermeture de script, *même en commentaire*, fermerait
+le bloc de la page hôte — elles sont écrites échappées dans le fichier. (2) Le jeton qui protège le
+code en ligne est construit par `String.fromCharCode`, jamais écrit en littéral : un premier jet
+employait « espace chiffre espace », et la phrase « il y a 3 cas » devenait un `<code>` vide.
+
+Fixture de référence : `fixtures/src-lecteur-de-source.html` — passe check_html (A1 comprise) et la
+matrice d'états de `render_page.py`, qui déplie le document et mesure le rendu obtenu.
+
+## 13 — Infobulle structurée 🔴 (dès qu'une infobulle porte plus de deux objets, TF-0935)
+
+**Le fait payé.** Le socle ne connaissait que l'attribut `title` natif. Mesure sur un livrable
+servi : 3 153 cellules à `title`, 2 527 en portant plusieurs objets, la plus longue **sept objets
+en 700 caractères** d'un seul bloc — conforme à L3, illisible. Retour humain : « formatte tous les
+tooltips, puces et sous-puces ». Le composant a été écrit chez le produit, à la place du socle.
+
+**Assets** : `assets/infobulle.js` + `assets/infobulle.css`. Ils se posent par
+`embarquer-composants.mjs --poser <page.html> --composants infobulle.js,infobulle.css`, donc ils
+entrent au contrôle de parité comme les autres composants embarqués.
+
+**Contrat d'écriture — le `title` est la SEULE source.** Une ligne par objet, une sous-précision
+par ligne indentée. Le composant lit le `title` et le rend en puces : aucun balisage double, aucun
+attribut de données à tenir à jour (1,25 Mo chez le produit au lieu de 2,06 par la voie qui
+dupliquait le contenu).
+
+```html
+<td title="Fait mensuel des lots
+  grain : un lot par mois
+  volume : 1,4 million de lignes
+Dimension des bâtiments
+  grain : un bâtiment">LOC.FAI_LOT_MOIS</td>
+<script>window.FactoryInfobulle.init(document);</script>
+```
+
+**Comportement.** Un seul nœud `#infobulle` (`role="tooltip"`) pour la page, `position: fixed`,
+largeur ≤ 520 px, replacé pour rester dans l'écran. Le `title` natif est **retiré** pendant
+l'affichage — sans quoi les deux infobulles se superposent — et **restitué** à la fermeture : un
+`title` perdu est un contenu perdu à l'impression et pour les technologies d'assistance.
+Fermeture : sortie du survol, perte du focus, défilement, `Échap`. À l'impression, le composant
+ne s'affiche pas ; c'est le `title` restitué qui porte le contenu.
+
+**Ce que le composant ne fait pas** : il ne fabrique pas de structure là où l'auteur n'en a pas
+mis — un `title` d'une seule ligne reste un paragraphe. La contre-épreuve est au banc
+(`tf-infobulle-structuree.html`, quatre cas joués dans Chromium).
+
+**Règle liée** : L3 (g) — au-delà de 200 caractères ou de deux objets **sans structure**,
+`check_html.py` rend un constat « légende illisible ».
+
+## Filtres de colonne — compléments (TF-0429 / TF-0430 / TF-0431)
+
+`table-filters.js` : `init(table, { apresFiltrage(table, visibles, total) })` est appelé à la
+fin de **chaque** filtrage (cases, Tous/Aucun, recherche) — et `instance.appliquer` est
+enveloppable (les gestionnaires internes passent par l'instance). **État vide** fourni : un
+filtre qui ne laisse rien insère une ligne `tr[data-tf-empty]` (libellé `data-tf-vide`
+surchargeable) avec le bouton « Tout réafficher », retirée dès qu'une ligne revient. Le
+**panneau choisit son côté** selon la place mesurée (`tf-droite`) et neutralise le rognage du
+conteneur `overflow-x:auto` tant qu'il est ouvert (`data-tf-ouvert`), rétabli à la fermeture.
+
+
+## 14 — Tuiles d'indicateurs 🔴 (dès qu'un chiffre de tête ou un détail chiffré est présenté)
+
+**Le fait.** Le détail d'une ligne s'écrivait en phrases (« Groupe X, plafond 0,90 € par clic :
+192 impressions, 20 clics… ») faute de composant ; la grille de KPI du § 1 était un extrait sans
+comparaison ni écart (Produit-02, RT-120).
+
+**Assets** : `assets/tuiles-indicateurs.css` + `assets/tuiles-indicateurs.js` (tendance
+optionnelle seule). Pose : `node scripts/embarquer-composants.mjs --poser <page.html> --composants
+tuiles-indicateurs.css,tuiles-indicateurs.js`, puis `window.FactoryTuiles.init(document)`.
+Exemple complet : `assets/exemples-interactions/exemple-tuiles-et-barres-empilees.html`.
+
+**Quand l'employer.** Une rangée de 3 à 6 tuiles en tête de livrable, ou par groupe quand un détail
+dépasse quelques chiffres. Un détail chiffré dense en prose passe en tuiles. Au-delà de 6, grouper
+(un chapitre par famille) plutôt qu'allonger la rangée. Le retour à la ligne est automatique.
+
+**Une tuile dit cinq choses** : le libellé, la valeur, l'**écart** (absolu et relatif ; pour un
+pourcentage, l'écart en **points**, jamais en %), le **sens** par une flèche ET un mot (hausse,
+baisse, au-dessus, stable) — jamais la couleur seule — et la **comparaison libellée** (période
+précédente, ou cible). Un jugement (favorable / défavorable) s'écrit en toutes lettres quand le
+sens n'est pas neutre ; la couleur ne fait que le doubler. La tendance est optionnelle.
+
+```html
+<div class="tuiles">
+  <article class="tuile tuile--bon" aria-labelledby="t2-l" aria-describedby="t2-c" data-tendance="6900,7200,7050,7610,8340" data-tendance-libelle="5 dernières périodes">
+    <p class="tuile-label" id="t2-l">Clics</p>
+    <p class="tuile-valeur">8 340</p>
+    <p class="tuile-ecart"><span class="tuile-sens"><span class="tuile-fleche" aria-hidden="true">↑</span><span>hausse</span></span> <span>+730 (+9,6 %)</span> <span class="tuile-jugement">favorable</span></p>
+    <p class="tuile-comparaison" id="t2-c">Période précédente : 7 610</p>
+  </article>
+</div>
+```
+
+**Légende (L3).** La comparaison est le texte visible que `aria-describedby` désigne : pas de
+`title` redondant sur la tuile. Variantes de ton : `tuile--bon`, `tuile--mauvais`, `tuile--neutre`
+(la flèche prend `--green`, `--red`, `--muted`). L'écart se **calcule** à l'écriture, pas à l'œil :
+un écart faux dans une tuile est un chiffre faux de tête.
+
+**Contrôle (TF-1857).** `check_html.py` L39 signale, en avertissement, une rangée de chiffres clés
+écrite à la main (au moins trois blocs `.kpi`, `.chiffre`, `.indicateur`… sans `.tuile-valeur` ni
+`data-kpi-filtre`) ; écart voulu : `data-hors-composant="<raison, 8 caractères au moins>"` sur la rangée.
+
+**Tokens et limites.** Jetons du `:root` du boilerplate seulement, échelle 4 pt, clair et sombre par
+les jetons. L'écart n'est pas calculé par le script (il se lit sans JS, à l'impression et en PDF) ;
+la tendance, elle, n'existe qu'avec JS et ne porte jamais le sens à elle seule.
+
+## 15 — Barres empilées 🔴 (dès qu'un total se compose de plusieurs séries)
+
+**Le fait.** Le socle n'avait aucun composant de graphique : chaque page écrivait son SVG à la main
+et retenait la série UNIQUE, la voie la plus courte, alors que la demande et la donnée en portaient
+plusieurs (Produit-02, RT-119). Une partie d'un tout se montre empilée.
+
+**Assets** : `assets/barres-empilees.css` (palette en jetons + style) et `assets/barres-empilees.js`,
+posés avec `infobulle.css` et `infobulle.js` (l'infobulle par segment). Vertical et horizontal, mode
+`valeurs` ou `pourcent`, 1 à 6 séries (au-delà : regrouper en « Autres »), valeurs positives ou nulles.
+
+**Donnée déclarée, dessin dérivé.** La `<figure data-graphe-empile id="…">` porte un
+`<script type="application/json" class="graphe-donnees">` (orientation, mode, unite, decimales,
+totaux, titre, categories, series[{nom, valeurs}]). Deux voies pour le même code : le navigateur
+dessine au chargement (`window.FactoryBarresEmpilees.init(document)`), ou, de préférence,
+`node assets/barres-empilees.js --injecter <page.html>` **pré-rend** le SVG dans le fichier — il
+existe alors sans script (PDF, courriel, oracle statique) et se refait à l'identique. Aucune
+requête réseau, aucune bibliothèque.
+
+```html
+<figure class="graphe-empile" id="g-jour" data-graphe-empile>
+  <figcaption>Dépense par jour et par pays (euros)</figcaption>
+  <script type="application/json" class="graphe-donnees">
+  {"orientation":"vertical","mode":"valeurs","unite":"€","totaux":true,"categories":["Lun","Mar"],
+   "series":[{"nom":"France","valeurs":[820,760]},{"nom":"Italie","valeurs":[410,450]}]}
+  </script>
+</figure>
+```
+
+**CONVENTION lue par l'oracle.** Le `<svg>` porte `data-series-source="N"` (N = nombre de séries de
+la DONNÉE, pas de ce qui est peint) ; chaque segment porte `data-serie="<nom>"` ; une étiquette est
+un `<text class="etiquette-marque" data-etiquette-de="<id du rect>">`, posée **seulement si elle tient
+dans le rectangle** (sinon pas d'étiquette — la valeur passe alors à l'infobulle). L'étiquette porte
+`data-overlap-ok="<id du rect>"` : paire déclarée pour V4, pas d'exemption en bloc.
+
+**Palette.** `--cat-1` à `--cat-6` (et `--cat-N-texte` pour le texte posé dessus), valeurs de la
+palette documentée du skill `dataviz`, validées le 03/10/2026 par son `validate_palette.js` sur les
+surfaces du socle : clair (#FFFFFF) tous contrôles PASS sauf le contraste 3:1 de trois teintes
+(aqua 2,82, jaune 2,17, magenta 2,69 : bande « relief requis »), sombre (#121B2E) tous PASS. Le
+relief est fourni : étiquettes directes, filets de 2 px (`vector-effect: non-scaling-stroke`),
+légende dès 2 séries, vue tableau sous le graphique (en place si elle fait moins de 200 caractères,
+L9 ; en dépliant au-delà). Changer une valeur de la palette exige de rejouer le validateur.
+
+**Totaux (TF-1858).** `totaux: true` écrit le total de chaque colonne (barre) **s'il tient** : dans la bande de
+sa colonne en vertical, dans le viewBox en horizontal (largeur estimée comme celle des étiquettes de
+segment). À douze colonnes ou avec une unité en mot (« 9 158 sessions »), ils ne tiennent pas : ils sont
+masqués et l'infobulle de chaque segment porte alors « Total de la colonne ». L'étiquette « 0 » de l'axe
+vertical se pose au-dessus de sa ligne de base, hors de la rangée des étiquettes de catégorie. Banc :
+`fixtures/barres-12-categories*.html`, jugé par `render_page.py` (`self_test.py`, `run_barres_12_categories`).
+
+**Ce que l'infobulle doit contenir.** Un COMPLÉMENT, jamais le texte visible : la part du total de la
+colonne, le rang parmi les séries, le total de la colonne s'il n'est pas affiché, la valeur exacte si
+l'étiquette l'arrondit ou manque. Le nom de la série et de la catégorie vont dans l'`aria-label` du
+segment, pas dans l'infobulle. Elle se lit depuis le `title` du segment (contrat du § 13) ; chaque
+segment est focalisable (`tabindex="0"`) pour que le clavier l'ouvre aussi.
+
+**Contrôle (TF-1857).** `check_html.py` L39 signale, en avertissement, un `<svg>` hors composant qui
+trace à la main une série de barres (quatre barres de même épaisseur, à pas régulier, sur une même
+arête) ; écart voulu : `data-hors-composant="<raison, 8 caractères au moins>"` sur le `<svg>`.
+
+**Étroit et long (TF-1875).** Quatre défauts relevés à 390 px et sur les longues séries, corrigés au composant :
+(1) la vue tableau d'un graphique à **cinq colonnes ou plus** (trois séries et plus) se replie en **cartes** sous
+560 px, comme le § 6 (les cellules portent `data-label`, le nom de la série) : elle débordait du viewport
+(bord droit à 394 px pour 390 avec cinq séries, jusqu'à 460 px avec six) ; (2) les étiquettes de catégorie s'écrivent
+**une sur k en partant de la dernière** — la période la plus récente est toujours lue — et la **marge droite suit**
+la demi-largeur de cette étiquette (« sept. 2026 » dépassait le viewBox de 13 px à 33 mois) ; (3) sans total au-dessus,
+la graduation la plus haute de l'axe vertical a sa marge haute (« 300 » dépassait de 2 px) ; (4) en barres horizontales
+sans totaux, la marge droite suit la demi-largeur de la dernière graduation (« 20 000 » dépassait de 6 px). Banc :
+`fixtures/barres-5-series*.html`, `barres-33-mois*.html`, `barres-horizontal-sans-totaux*.html`, la rouge de chacun
+figeant l'ancien rendu ou l'ancienne feuille (`self_test.py`, `run_graphiques_tf1875`). `render_page.py` ne prend
+plus une **ligne de grille** pour une liaison V4 : une liaison s'éloigne de sa boîte de départ et s'arrête contre sa
+boîte d'arrivée ; la grille de `barres-grille-liaison.html` (totaux extrêmes à 3 px d'une graduation, douze colonnes,
+390 px) rendait 9 constats, elle en rend 0.
+
+**Limites.** Pas de valeurs négatives ; l'étiquette se calcule sur une estimation de largeur de
+texte ; viewBox de 420 unités (lisible de 340 à 560 px) ; le graphique ne remplace pas le tableau
+quand le lecteur doit comparer des valeurs précises. Une page dont la donnée porte plusieurs séries
+et dont le graphique n'en peint qu'une est un défaut : `data-series-source` rend la comparaison
+possible.
+
+## 16 — Entonnoir 🔴 (dès qu'une suite d'étapes ne fait que décroître et qu'on veut sa conversion)
+
+**Le fait.** Le socle n'avait aucun composant d'entonnoir : une barre horizontale à une série du composant § 15
+répétait l'effectif (étiquette dans la barre, total au bout, ligne de la vue tableau) et ne disait pas ce qui compte
+dans un entonnoir, la **conversion** d'une étape à la suivante (TF-1875, retour du constructeur de TF-1855).
+
+**Assets** : `assets/entonnoir.css` et `assets/entonnoir.js`, posés avec `infobulle.css` et `infobulle.js`
+(l'infobulle par barre). De 2 à 8 étapes, effectifs positifs ou nuls, première étape strictement positive.
+
+**Donnée déclarée, dessin dérivé** — comme le § 15. La `<figure data-entonnoir id="…">` porte un
+`<script type="application/json" class="entonnoir-donnees">` (`unite`, `titre`, `etapes[{nom, valeur}]`).
+Navigateur : `window.FactoryEntonnoir.init(document)` ; fichier, de préférence :
+`node assets/entonnoir.js --injecter <page.html>` **pré-rend** le marquage (PDF, courriel, oracle statique),
+idempotent.
+
+```html
+<figure class="entonnoir" id="e-parcours" data-entonnoir>
+  <figcaption>Parcours d'inscription par étape</figcaption>
+  <script type="application/json" class="entonnoir-donnees">
+  {"unite":"visiteurs","titre":"Parcours d'inscription","etapes":[{"nom":"Visites","valeur":12480},{"nom":"Comptes créés","valeur":3412},{"nom":"Paiements","valeur":214}]}
+  </script>
+</figure>
+```
+
+**Ce qui est dit, et une seule fois.** Chaque étape écrit son nom et son effectif sur une ligne, puis sa barre
+(largeur proportionnelle à la première étape, centrée : la forme d'un entonnoir), puis sa **conversion** :
+« 27,3 % de l'étape précédente », et dès la troisième étape « · 7,3 % du départ ». L'effectif n'est jamais répété dans
+la barre (il va à son `aria-label`) ; l'infobulle ne porte que le **complément**, les effectifs perdus depuis l'étape
+précédente. La vue tableau garde les chiffres exacts (en place sous 200 caractères, L9 ; en dépliant au-delà).
+
+**Ce que le composant refuse.** Une étape plus grande que la précédente — ce n'est pas un entonnoir —, un départ
+nul, moins de 2 ou plus de 8 étapes : il écrit l'erreur (`role="alert"`) au lieu de dessiner un mensonge.
+Deux étapes égales sont admises (aucune perte).
+
+**Tokens et limites.** Une seule teinte (`--entonnoir-barre`, sinon `--blue`) : la largeur dit le reste. Échelle 4 pt,
+aucune couleur en dur. Pas de valeurs négatives, pas de sous-entonnoir ni de branches (deux entonnoirs se posent côte
+à côte). Banc : `fixtures/entonnoir.html`, jugé par `render_page.py` à 390 et 1440 px (`run_graphiques_tf1875`).
+
+## 17 — Lecteur d'animation à scènes 🔴 (dès qu'une animation se lit scène par scène, TF-2300, D-181)
+
+**Assets** : `assets/scene-player.js` + `assets/scene-player.css`. Le lecteur écrit une fois pour la série d'animations du
+09/11/2026 (deux passes de juges pour atteindre PASS, 31 espacements hors échelle corrigés) est un composant du socle : un
+manifeste de scènes, la lecture et la pause, le clavier, des segments de progression, le mouvement réduit, l'impression.
+
+```html
+<div class="sp" data-scene-player role="region" aria-label="Animation en 3 scènes">
+  <div class="sp-scenes">
+    <section class="sp-scene" data-scene="0">…</section>
+    <section class="sp-scene" data-scene="1" hidden>…</section>
+    <section class="sp-scene" data-scene="2" hidden>…</section>
+  </div>
+  <div class="sp-commandes">
+    <button type="button" class="sp-commande" data-commande="precedente">← Précédente</button>
+    <button type="button" class="sp-commande sp-lecture" data-commande="lecture"><span class="sp-icone" aria-hidden="true"></span><span class="sp-libelle">Lecture</span></button>
+    <button type="button" class="sp-commande" data-commande="suivante">Suivante →</button>
+    <div class="sp-segments" aria-hidden="true"></div><span class="sp-compteur" aria-hidden="true"></span>
+  </div>
+  <p class="sp-annonce sr-only" aria-live="polite"></p>
+  <script type="application/json" data-scenes>[{"titre":"Lire","duree_ms":6000}, …]</script>
+</div>
+<script src="assets/scene-player.js"></script><script>FactoryScenePlayer.initAll();</script>
+```
+
+**Le contrat.** Le manifeste compte exactement autant d'entrées que de `[data-scene]` (`titre`, `duree_ms`) : sinon le composant
+ne s'arme pas et la page reste statique (première scène visible, les autres `hidden`). Un sommaire facultatif pose
+`data-aller="<index>"` sur ses boutons. Espace lance ou met en pause, les flèches changent de scène ; la fin de la dernière
+scène arrête la lecture (« Rejouer »). L'état se lit sur le lecteur (`data-etat` : pret, lecture, pause, fin ;
+`data-scene-courante`) — **jamais `data-scene` sur le lecteur ni sur `<body>`** : `render_page.py` (TF-2299) joue chaque
+`[data-scene]` comme une scène, au clavier puis par `[data-aller]`.
+
+**Mouvement réduit et impression.** Sous `prefers-reduced-motion`, aucune lecture automatique : les scènes se parcourent à
+la main et aucun segment ne se remplit. À l'impression, toutes les scènes s'impriment et les commandes disparaissent
+(`@media print` de `scene-player.css`, jugée par L16). Jetons du socle seulement (`--surface`, `--line`, `--ink`,
+`--muted`, `--blue`, `--bg`, `--r`), échelle 4 pt.
+
+**Limites.** Un seul jeu de scènes par lecteur ; pas de transitions entre scènes (la page peut animer les contenus de la
+scène courante, ces animations se jouent à l'état reposé, TF-2707) ; les écouteurs du clavier sont posés sur le document,
+donc une page ne porte qu'un lecteur actif au clavier. Banc : `fixtures/scene-player-verte.html`, joué dans un navigateur
+(`run_scene_player` : état initial, flèches, boutons, sommaire, lecture et pause, impression, mouvement réduit, manifeste
+faux) puis scène par scène par `render_page.py` à 390 et 1 280 px.

@@ -1,0 +1,403 @@
+# Détail des 8 couches d'analyse L99
+
+Spécification complète de chaque chapitre. Charger ce fichier avant toute analyse.
+
+## Principe directeur — double ancrage (à appliquer à TOUTES les couches)
+
+Les 8 couches ne sont ni des silos indépendants (→ redondance) ni une chaîne linéaire
+(→ propagation d'erreur par ancrage). Elles fonctionnent en **double ancrage** :
+
+1. **Ancre fixe = le prompt d'origine.** Chaque couche relit le prompt original, à chaque
+   fois, sans filtre. Aucune couche ne travaille en aveugle sur la seule synthèse de la
+   précédente. C'est ce qui préserve les « yeux neufs » : un défaut raté par une couche
+   reste rattrapable par une autre.
+2. **Registre = les sorties des couches précédentes.** Sert à UNE chose : interdire de
+   redire. Si un point est déjà couvert, la couche doit l'**escalader** (le pousser plus
+   loin) ou apporter du **neuf** — jamais le restater. Le registre ne restreint jamais le
+   périmètre d'analyse.
+3. **Boucle de correction ascendante.** Une couche aval qui repère un défaut manqué en
+   amont le **remonte** à l'inventaire maître (Chapitre 3) au lieu de le garder pour elle.
+   La chaîne est corrective, pas cumulative-aveugle.
+
+Conséquence pratique : on relit toujours la source, on ne répète jamais, on remonte
+toujours les trous découverts tard.
+
+## Sévérité — tag obligatoire dès le Chapitre 3
+
+Chaque défaut identifié porte un tag :
+- **bloquant** : le prompt échouera ou produira un résultat inexploitable.
+- **majeur** : dégrade fortement la qualité, mais le prompt « marche ».
+- **mineur** : cosmétique ou marginal.
+
+Les bloquants et majeurs traversent tout le pipeline jusqu'à correction au Chapitre 8.
+Les mineurs sont listés une fois, sans suivi.
+
+
+## Forme de la sortie L99 — non négociable (TF-0770, 02/09/2026)
+
+**Le fait mesuré.** L'analyse `ANALYSE-L99-PROMPT-CONSOLE-20260902.md` a demandé **quatre
+itérations de forme** (M7, M10, M18, traçabilité) avant d'être déclarée conforme — cinq passages
+au journal d'oracles (`.oracles-historique.jsonl`). Aucune de ces quatre corrections ne portait
+sur le FOND de l'analyse. Une sortie qui doit être reprise quatre fois pour être lisible a coûté
+quatre fois le prix de sa relecture, et ce coût est entièrement évitable : les quatre règles
+tiennent en quatre lignes, et elles s'appliquent **à l'écriture**, pas après.
+
+Ces quatre règles s'appliquent à **tous** les chapitres, en L99 comme en L50.
+
+1. **Ouverture de chapitre (M7).** Un chapitre ne commence **jamais** par un tableau nu. Il ouvre
+   par une à trois phrases qui disent **ce que le lecteur va apprendre** — pas ce que le chapitre
+   contient. « Ce chapitre note l'étalon sur 100 » n'est pas une ouverture : c'est le titre
+   reformulé. « Le prompt perd 38 points sur deux dimensions, et les deux tiennent au même
+   silence : l'audience » en est une.
+2. **Mode de lecture (M10).** Tout chapitre qui porte un **tableau** dit **comment le lire** :
+   ce que vaut une ligne, dans quel ordre les lignes sont classées, et ce qu'on en fait. Une
+   phrase suffit. Un tableau sans mode d'emploi se lit de gauche à droite par quelqu'un qui
+   cherche déjà ce qu'il sait ; le lecteur neuf, lui, ne sait pas par où entrer.
+3. **Glose d'un identifiant à sa première occurrence (M18).** Tout identifiant du vocabulaire de
+   l'analyse — `M7`, `L4`, `G1`, `Ch3 #10`, `D-33`, `RD-23` — porte son sens **en
+   ligne** la première fois qu'il apparaît : `**M18** *(règle de lisibilité 18 : un identifiant
+   porte son sens)*`. Un identifiant muet oblige le lecteur à sortir du document pour le
+   comprendre, et c'est précisément ce que L99 reproche aux prompts qu'il analyse.
+4. **Source de tout chiffre repris du prompt.** Chaque chiffre que l'analyse **reprend du prompt
+   analysé** (un seuil, un volume, une durée, un compte) porte sa provenance : ligne, section, ou
+   citation courte. Un chiffre sans source, dans une analyse, est indistinguable d'un chiffre
+   inventé par l'analyse — et le Ch4 (Factcheck) reproche exactement cela au prompt.
+
+**Ce que ces règles ne disent pas** : elles ne prescrivent ni la longueur, ni le ton, ni le
+nombre de tableaux. Elles ne remplacent pas le fond. Un chapitre parfaitement ouvert et
+parfaitement glosé qui n'apprend rien reste un mauvais chapitre.
+
+**Vérification.** La sortie L99 se juge par l'oracle de lisibilité du Markdown
+(`check_markdown.py` du socle `factory-page-html`, règles M7 / M10 / M14 / M18), enregistré
+au registre `quality-oracles` sous le domaine « Lisibilité d'un document (Markdown) ». Une paire
+de fixtures rouge/verte de sortie L99 est rejouée par le banc de `quality-oracles`.
+
+## Livrable HTML : le Ch8 injecte les règles de socle applicables (TF-0765, 02/09/2026)
+
+**Le fait mesuré.** Un prompt produit du 31/08 exigeait « tri et filtres » **sans nommer** la
+règle de socle ni le composant qui l'implémente. La console livrée portait un tri maison hors
+en-tête, **jugée conforme par ses propres oracles**, et l'humain a dû redemander le 02/09
+« comme demandé par la factory ». Un aller-retour entier pour une règle qui existait, était
+outillée, et que le prompt ne nommait pas.
+
+**Règle.** Dès que le livrable attendu du prompt analysé est une **page HTML** (page, fiche,
+console, tableau de bord, cartographie), le **Chapitre 8** énumère nommément, dans le prompt
+réécrit **et** dans le contrat de sortie, les **règles de socle applicables** — au minimum :
+
+- **L4** *(règle de lisibilité 4 : filtres de colonne sur les tableaux de données)* et le
+  **composant de filtres** du socle, nommé, plutôt qu'un tri maison ;
+- **G1-G6** *(garde-fous 1 à 6 du composant de filtres : marquage ou exemption motivée, asset
+  référencé, initialisation, id + thead, compteur `aria-live`, réaffichage à l'impression)* ;
+- les **règles de lisibilité** applicables au type de page (ouverture, mode d'emploi des
+  tableaux, glose des en-têtes) ;
+- l'**oracle** qui les vérifie, nommé lui aussi, pour que le contrat de sortie soit **exécutable**
+  et pas seulement écrit.
+
+**Pourquoi le nommer et pas seulement l'exiger** : « tri et filtres » est une intention ; « L4 +
+le composant de filtres du socle, vérifié par `oracle-filtres-tableau` » est une instruction
+qu'on peut tenir et une conformité qu'on peut prouver. Un prompt qui exige un résultat sans
+nommer la règle qui le définit délègue au producteur le soin de la redécouvrir — et il la
+redécouvre mal.
+
+**Borne** : L99 **cite** ces règles, il ne les vérifie pas et ne les exécute jamais. La
+vérification appartient au producteur du livrable, par les oracles nommés.
+
+## Contrat de sortie : l'oracle de forme de chaque format produit, voie de repli comprise (TF-2194, 06/11/2026)
+
+**Le fait mesuré.** Le 05/11/2026, le contrat de sortie d'un prompt d'audit (boucle L99, 86/100
+mesuré) nommait `check_html.py` seul pour la forme, ou citait l'échec du générateur. Le générateur
+a échoué, le livrable est sorti en Markdown, et aucun oracle de forme ne le visait. Joué après
+coup, `check_markdown.py` rendait exit 1 avec 9 défauts (4 de M7, 5 de M10), alors que les trois
+oracles du contrat rendaient PASS et que le livrable était déjà poussé et promu : une version et
+un commit de plus pour le corriger. Même classe que TF-0765, côté Markdown.
+
+**Règle.** Le contrat de sortie du Ch8 nomme, pour **chaque format que le prompt réécrit peut
+produire**, l'oracle de forme de ce format :
+
+- une page HTML : `check_html.py` ;
+- un document Markdown : `check_markdown.py` (règles M7 / M10 / M14 / M18), du socle
+  `factory-page-html` ;
+- les autres formats : l'oracle de leur domaine au registre `quality-oracles`.
+
+Une **voie de repli** (le générateur échoue, un format de secours prend le relais) produit un
+format de plus : le contrat nomme l'oracle du format de repli au même titre que celui du format
+nominal. Un contrat qui prévoit un repli Markdown sans `check_markdown.py` est incomplet.
+
+**Borne** : L99 **cite** ces oracles, il ne les exécute pas ; le producteur du livrable les joue
+avant de le remettre.
+
+## Nom du livrable : dans un projet de la factory, le Ch8 cite R-4 et R-25 (TF-1441, 28/09/2026)
+
+**Le fait mesuré.** Dans un projet de la factory, le Chapitre 8 d'une analyse a prescrit au
+prompt réécrit le nom « <Projet> - <Objet> - <Type> - AAAAMMJJa ». Le pilot exige le type en
+premier mot du deuxième segment (R-25) : le livrable produit a dû être renommé après ses
+contrôles, puis tous les contrôles rejoués. Même classe que TF-0765 : une règle de socle qui
+existait, était outillée, et que le prompt ne nommait pas.
+
+**Règle.** Quand le prompt s'exécutera dans un projet de la factory (un dossier `forge\`
+à sa racine, ou un `CLAUDE.md` qui renvoie au pilot `factory-pilot`) et produit un livrable
+documentaire daté, le **prompt réécrit** et le **contrat de sortie** nomment ce livrable ainsi, et
+citent les deux règles qui le fixent :
+
+- `<Projet> - <Type> - <Objet> - AAAAMMJJ<indice>.<ext>` ;
+- **R-4** : le nom du PROJET ouvre le nom, jamais l'émetteur ; les fichiers historiques ne se
+  renomment pas ;
+- **R-25** : le `<Type>` est le **premier mot du deuxième segment**, et il figure au registre des
+  types de forge-organization (comparaison insensible à la casse et aux accents) ; un type nouveau
+  s'ajoute au registre dans un commit motivé, jamais improvisé dans un nom.
+
+**Pourquoi le nommer** : « nommer le livrable selon la convention » est une intention ; « R-4 et
+R-25 : `<Projet> - Étude - <Objet> - 20260928a.md` » est une instruction qu'on tient du premier
+coup. Un nom composé par l'analyse n'a aucune autorité, et c'est lui qu'un exécutant suivra.
+
+**L'analyse elle-même porte le type « Revue »** (TF-1975, 29/10/2026). Le fait : chez un produit,
+trois analyses L99 des 16 et 19/10/2026 ont pris le type « Analyse » dans leur nom. « Analyse »
+n'est pas au registre des types (36 types, forge-organization 1.6.0), et rien ne l'a signalé.
+L'analyse est une revue d'un existant contre une grille : dans un projet de la factory, son nom
+est `<Projet> - Revue - Prompt <objet> passé au crible L99 - AAAAMMJJ<indice>.md`.
+
+**Le chemin du journal borne l'objet** (TF-2632, 16/11/2026). R-4 mesure le chemin relatif de
+chaque fichier d'`output\` avec le sidecar d'oracle (`.oracles/` et `.oracles-historique.jsonl`, 34
+caractères) sous un plafond de 150, soit **116 caractères utiles**. Le fichier le plus long d'une
+analyse en mode boucle est son journal `<analyse>.boucle.json`, qui ajoute 12 caractères au nom de
+l'analyse : c'est lui qu'on mesure, dossier compris. Le fait : le 12/11/2026, chez un produit, le nom
+prescrit par le point 9 de `SKILL.md` a donné un chemin de 149 caractères pour l'analyse, R-4 FAIL
+(mesure du retour, non rejouée ici). Rejoué le 16/11/2026 sur `oracle-conformite-projet --regles R-4`
+avec le projet `factory-marketing` (18 caractères) : un objet de trois mots, « de relance LinkedIn »,
+donne un journal de 119 caractères, FAIL ; l'objet « relance » en donne 107, PASS. L'`<objet>` tient
+donc en 4 mots au plus, et le nombre de mots ne suffit pas : sous `output\03-etudes\`, projet et objet
+tiennent à 34 caractères au plus à eux deux. Le prompt réécrit et le contrat de sortie le disent, et
+le producteur mesure le chemin du journal avant d'écrire.
+Exemple rejoué sous R-4 : `output/03-etudes/factory-marketing - Revue - Prompt relance passé au crible L99 - 20261116a.md.boucle.json`
+
+**Borne** : hors factory, le Ch8 reprend la convention que le projet déclare, ou n'en prescrit
+aucune. L99 **cite** R-4 et R-25, il ne les vérifie pas : le contrôle appartient au producteur,
+par la conformité du pilot.
+
+
+---
+
+### Chapitre 1 — OODA · Cadrage stratégique + Étalon noté
+
+Structurer en 4 sous-sections + 1 étalon noté :
+
+- **Observe** : Que dit réellement ce prompt ? Faits, intentions et contraintes explicites. Citer les passages clés.
+- **Orient** : Dans quel contexte s'inscrit-il ? Objectif profond derrière la demande ? Persona implicite de l'auteur et du destinataire (le LLM).
+- **Decide** : 2-3 stratégies alternatives pour y répondre de manière optimale.
+- **Act** : Approche concrète recommandée, justifiée.
+- **Étalon** : Avant toute critique, poser à quoi ressemble le **prompt idéal** pour cette intention — les **critères de réussite** explicites (format, audience, contraintes, garde-fous attendus). C'est le mètre-étalon que les couches suivantes utilisent pour mesurer l'écart. On ne critique pas un écart sans avoir posé la cible.
+
+**Ressource distante : l'accès est un prérequis VÉRIFIÉ de l'étalon (TF-1185).** Dès que le prompt
+désigne une ressource que l'exécutant devra ouvrir — URL, dépôt, base, point d'API, chemin de
+fichier —, l'étalon pose l'accès en **prérequis mesuré**, pas en hypothèse : le prompt idéal ouvre
+par une « **ÉTAPE 0 — prérequis d'accès** » qui mesure l'accès avant tout travail et porte sa
+branche d'échec. La mesure elle-même appartient au **Ch4** (section « Prémisse d'accès : la mesurer
+avant de la classer ») ; elle est due **avant** la notation, car un accès faux plafonne la dimension
+*Ancrage / contexte* et déclenche la règle d'arrimage des bloquants.
+
+**Rubrique de notation (le score, pas un mot).** L'étalon est noté sur 100, réparti en 6 dimensions. C'est le chiffre de référence du Chapitre 8 (score avant → après).
+
+| Dimension | Pts | Ce qu'on mesure |
+|---|---|---|
+| Clarté de l'intention | 20 | La tâche et le résultat attendu sont-ils non ambigus ? |
+| Spécification | 20 | Format, longueur, audience, ton sont-ils posés ? |
+| Garde-fous & contraintes | 15 | Ce qu'il ne faut PAS faire, limites, exclusions |
+| Ancrage / contexte | 15 | Le prompt fournit-il (ou fait-il chercher) le contexte nécessaire ? |
+| Vérifiabilité de la sortie | 15 | Peut-on juger si la réponse est bonne ? (préfigure le contrat Ch8) |
+| Robustesse | 15 | Résistance aux interprétations divergentes et au détournement |
+
+Règle d'arrimage à la sévérité : **tout défaut bloquant plafonne le score à 40/100** (zone échec), quel que soit le reste. Chaque défaut majeur retire des points dans sa dimension. Donner le score chiffré ici, dimension par dimension, avec une ligne de justification.
+
+---
+
+### Chapitre 2 — Chainlogic · Raisonnement en chaîne (conditionnelle)
+
+**Condition d'application** : seulement si le prompt contient une vraie chaîne d'instructions ou un raisonnement multi-étapes.
+
+Si oui :
+- Formaliser sous forme Si A → alors B → donc C.
+- Signaler toute rupture logique, saut non justifié ou présupposé non étayé.
+- Vérifier que l'enchaînement des instructions est cohérent et sans contradiction.
+
+Si non (prompt simple, mono-instruction) : une ligne « pas de chaîne logique interne ». Puis analyser à la place les **collisions et dépendances entre instructions** : deux consignes qui se contredisent, un ordre implicite non dit, une instruction qui en désactive une autre.
+
+---
+
+### Chapitre 3 — Blindspots · Inventaire maître
+
+Couche pivot : c'est **l'unique liste de référence** des trous. Tout défaut identifié ici — ou remonté depuis une couche aval via la boucle de correction (y compris les faussetés du Chapitre 4) — y figure, tagué en sévérité.
+
+Identifier ce que le prompt **ne dit pas** :
+
+- Hypothèses implicites non formulées
+- Ambiguïtés qui pourraient mener à des interprétations divergentes
+- Cas limites non couverts (edge cases)
+- Contraintes oubliées (format, longueur, ton, audience, etc.)
+- Biais cognitifs probables de l'auteur (ancrage, confirmation, curse of knowledge…)
+
+Chaque entrée : description + tag **bloquant / majeur / mineur**.
+
+---
+
+### Chapitre 4 — Factcheck · Audit des prémisses (conditionnelle)
+
+**Condition d'application** : seulement si le prompt contient des affirmations factuelles, des entités nommées, des dates, des chiffres, de l'actualité, ou demande au modèle de traiter quelque chose comme vrai.
+
+Ch3 traque les **omissions** (ce que le prompt ne dit pas). Ce chapitre traque les **erreurs de commission** : ce que le prompt affirme et qui est faux — et que le LLM amplifierait docilement.
+
+Si la condition est remplie :
+- Lister chaque affirmation vérifiable du prompt.
+- Marquer chacune : **vrai / faux / périmé / invérifiable**.
+- Pour chaque prémisse **fausse ou périmée** : la **remonter au Chapitre 3** taguée **bloquant** (le résultat sera construit sur du faux).
+- Pour chaque prémisse **invérifiable** : la remonter au Chapitre 3 taguée **majeur** + recommander une vérification (source à exiger, recherche à lancer).
+- Ne pas trancher au doigt mouillé : si la véracité dépend d'un fait hors de portée, le dire et le classer invérifiable plutôt que d'inventer un verdict.
+
+#### Prémisse d'ACCÈS : la mesurer avant de la classer (TF-1185, 17/09/2026)
+
+**Le fait mesuré.** Un prompt désignait deux rapports distants par leur URL et affirmait de l'un
+« accessible ici ». Quatre lectures REST émises avec la même identité, dans la même seconde, ont
+rendu `200` (liste des espaces : **un seul** visible), `200` (50 rapports dans cet espace),
+`401` et `401` sur l'espace visé. La prémisse était **fausse pour l'exécutant**, et les deux
+réponses positives prouvaient que le refus portait sur l'appartenance à l'espace, pas sur le
+jeton. Sans ces quatre appels, l'analyse aurait rendu « accès à vérifier » : le défaut le plus
+grave du prompt serait passé de **bloquant** à *majeur*, et l'exécution serait tombée dans la
+substitution silencieuse d'ancre — comparer contre un instantané de neuf mois en l'appelant
+« le rapport en ligne ». La règle du doigt mouillé protège contre l'invention ; elle ne dispense
+pas de mesurer.
+
+**Règle (étape obligatoire du Ch4).** Toute prémisse d'**accès** à une ressource désignée — URL,
+chemin de fichier, dépôt, base, point d'API, boîte aux lettres, espace de travail — **se mesure
+par l'appel le moins coûteux et en lecture seule AVANT d'être classée**. « Invérifiable » est
+réservé à ce qui n'a **pas** de test bon marché ; le classement porte alors le test qui manque,
+l'identité qu'il exigerait et son coût. *Une prémisse qu'on peut mesurer et qu'on classe
+invérifiable n'est pas prudente : elle est non mesurée.*
+
+**Ce que porte le verdict d'une prémisse d'accès** — sans ces quatre pièces, le verdict ne vaut
+rien et reste « non mesuré » :
+
+1. le **code de retour** (ou l'erreur exacte) et l'appel qui l'a produit ;
+2. l'**horodatage** et l'**identité** employée (compte, jeton, profil, machine) ;
+3. un **contrôle positif** avec la même identité, sur une ressource comparable — sans lui, un
+   refus ne se distingue pas d'un jeton mort ;
+4. l'**énumération des familles d'accès de la plateforme visée** — ses *scopes* et ses points
+   d'entrée parallèles : espace personnel, espace partagé, API d'administration, export, partage
+   par lien, copie locale, lecture déléguée — avec celles qui ont été essayées et celles qui
+   restent ouvertes.
+
+**Doctrine, en une phrase : un refus prouve qu'une porte est fermée, jamais qu'il n'y en a
+qu'une.** Un `401` sur un point d'API ferme ce point d'API, pas la ressource : conclure
+« inaccessible » sans avoir énuméré les autres familles d'accès, c'est prendre une porte pour un
+mur.
+
+**Bornes.** La mesure reste en **lecture seule** et n'emploie que les accès **déjà détenus** par
+l'exécutant : aucune demande de jeton, aucune création de compte, aucun contournement d'un refus,
+aucune dépense. Si aucun appel n'est émissible (aucune identité, réseau fermé, plateforme payante),
+la prémisse est classée invérifiable **avec** le test qui manque et ce qu'il exigerait — c'est le
+seul usage légitime de « invérifiable » pour une prémisse d'accès.
+
+**Vérification.** Le chapitre 4 d'une analyse qui porte une prémisse d'accès se juge par
+`oracle-premisse-acces.mjs` de `quality-oracles` (domaine « Prémisse d'accès mesurée avant d'être
+classée »), avec sa paire de fixtures rouge/verte.
+
+Si non (aucune prémisse factuelle) : une ligne « aucune affirmation factuelle vérifiable, couche non déclenchée ».
+
+---
+
+### Chapitre 5 — Premortem · Anticipation d'échec
+
+Relire l'origine (ancre fixe), puis se projeter dans le futur : ce prompt a été utilisé et le résultat a été décevant ou contre-productif.
+
+Lister les **5 causes les plus probables** de cet échec, classées par probabilité décroissante. Pour chacune :
+- Décrire le scénario d'échec
+- Expliquer le mécanisme (pourquoi ça échoue)
+- Proposer une mitigation
+
+**Discipline build-on** : chaque cause doit soit **escalader** un défaut de l'inventaire (Ch3) en le projetant concrètement en échec, soit être un défaut **neuf** — auquel cas elle est **remontée au Chapitre 3** (boucle de correction). Interdiction de simplement restater un blindspot sans le transformer en scénario.
+
+---
+
+### Chapitre 6 — Wargame · Stress-test adversarial (+ lentille robustesse)
+
+Relire l'origine, puis attaquer **l'étalon (Ch1) et la direction de réécriture** — pas seulement re-lister les trous. Jouer successivement 3 rôles :
+
+1. **L'utilisateur exigeant** : Qu'est-ce qui manque pour que ce prompt donne un résultat professionnel et exploitable ?
+2. **L'expert du domaine** : Quelles erreurs de fond ou approximations un spécialiste relèverait-il ?
+3. **Le contradicteur** : Comment un LLM pourrait-il mal interpréter, contourner l'intention, ou produire une réponse techniquement conforme mais inutile (conformité littérale paresseuse) ?
+
+**Lentille robustesse — obligatoire si le prompt est un system prompt, une instruction d'agent ou un template réutilisable** : surface d'injection, collision avec d'autres instructions, mauvais usage d'outil, contournement de la hiérarchie d'instructions. Inclure ici la question du **calibrage** : le prompt suppose-t-il des capacités que le modèle ou le runtime cible n'a pas (fenêtre de contexte, outils, taille de modèle, modèle local vs frontier) ? Tout défaut neuf trouvé ici remonte au Chapitre 3.
+
+---
+
+### Chapitre 7 — Deepthink · Implications profondes (conditionnelle)
+
+**Condition d'application** : seulement si le prompt est un template réutilisable, un system/agent prompt, ou un prompt à haute fréquence d'usage.
+
+Si oui — analyser les conséquences de 2e et 3e ordre :
+- Que se passe-t-il à grande échelle ou en répétition fréquente ?
+- Comment se comporte-t-il s'il est adapté à d'autres contextes ou domaines ?
+- Quels effets émergents (positifs ou négatifs) personne ne voit venir ?
+- Le prompt crée-t-il des dépendances, des habitudes ou des biais systémiques ?
+
+Si non (prompt one-shot) : une ligne « prompt one-shot, effets d'échelle non pertinents ». Ne pas forcer d'analyse hors-sol.
+
+---
+
+### Chapitre 8 — Synthèse & Prompt amélioré (traçable)
+
+Ce chapitre est le livrable principal. Il contient :
+
+1. **Score /100 (avant → après)** : reprendre la rubrique du Ch1. Donner le score du prompt original, puis le score du prompt réécrit, dimension par dimension si l'écart le justifie. En mode simple, ce second score s'écrit **« projeté (non mesuré) »** : c'est une estimation de l'auteur, et 5 prompts réécrits relus à l'aveugle le 16/10/2026 valaient de 6 à 12 points de moins (TF-1831). En mode boucle, c'est le score **mesuré** par le relecteur aveugle de la dernière passe retenue (`references/boucle.md`).
+2. **Diagnostic en 3 lignes** : résumé des forces et faiblesses majeures du prompt original.
+3. **Prompt réécrit** : version optimisée, prête à copier-coller. Il doit :
+   - Conserver l'intention originale.
+   - **Clôturer explicitement chaque défaut bloquant et majeur** de l'inventaire (Ch3), faussetés du Ch4 et mitigations du Ch5 incluses.
+   - Atteindre l'étalon posé au Ch1.
+   - Être directement utilisable (pas de placeholder sauf si le prompt original en contenait).
+   - **Ouvrir par une « ÉTAPE 0 — prérequis d'accès » dès que le prompt désigne une ressource
+     distante** (TF-1185) : l'appel de mesure à émettre, le contrôle positif qui l'accompagne,
+     les familles d'accès à essayer avant de conclure, et la **branche d'échec explicite** — ne
+     pas contourner en silence, déclarer le repli **avec sa date** et ce qu'il ne permet plus de
+     juger, ouvrir la décision d'accès avec son mode opératoire (qui la prend, auprès de qui).
+   - **Nommer le livrable selon R-4 et R-25 dans un projet de la factory**, en citant les deux
+     règles (TF-1441 ; voir « Nom du livrable » plus haut) — jamais un gabarit de nom composé ici.
+4. **Contrat de sortie** : critères d'acceptation **vérifiables** que la réponse produite par le prompt réécrit devra satisfaire (ex. « doit contenir X », « ≤ N mots », « cite ses sources », « pas de Y »). L'étalon Ch1 cadre le *prompt* ; le contrat cadre la *sortie*. Embarquer ce contrat dans le prompt réécrit chaque fois que c'est possible, et le rappeler ici en clair. **Le contrat nomme l'oracle de forme de chaque format que le prompt peut produire, voie de repli comprise** (TF-2194 ; voir « Contrat de sortie : l'oracle de forme de chaque format produit ») : `check_html.py` pour une page HTML, `check_markdown.py` pour un Markdown.
+5. **Changelog tracé** : chaque modification est rattachée au défaut qu'elle corrige (ex. « +audience → bloquant Ch3 #2 / cause d'échec Ch5 #1 »). Aucune correction ne sort du chapeau : tout se rattache à un défaut nommé.
+5 bis. **Écarts à la lettre (obligatoire, TF-0176 du 13/08)** : quand le prompt d'origine porte une demande humaine, le Ch8 liste EXPLICITEMENT chaque endroit où le prompt réécrit s'écarte du texte littéral de cette demande (seuil ajouté, périmètre restreint, condition introduite, formulation adoucie) — un tableau « vous avez écrit → je propose → pourquoi », soumis à validation poste par poste. Un affaiblissement noyé dans un prompt long que l'humain valide en bloc N'EST PAS un écart validé : le 13/08, « pour chaque liste, des filtres » devenu « dès 8 lignes » a traversé une validation humaine sans être vu, et le livrable a été refusé. Aucun écart = le dire (« aucun écart à la lettre »).
+
+   **Deux catégories d'écarts, deux validations (TF-1391, 27/09/2026).** Le tableau classe chaque écart dans l'une des deux, et la seconde ne se valide JAMAIS avec le prompt :
+   - **Manière d'exécuter** : seuil, ordre, outil, borne, formulation du prompt. L'écart change la façon dont le travail est fait, pas ce que le lecteur du livrable verra. Il se valide avec le prompt réécrit, poste par poste.
+   - **Contenu visible ajouté** : toute phrase, source, mention, ligne, colonne, diapositive, avertissement ou contrôle bloquant que le livrable remis MONTRERA et que l'humain n'a pas demandé. Chacun se pose en décision DISTINCTE, hors du prompt, avec trois options : ne pas l'ajouter (l'option par défaut), l'ajouter tel quel, l'ajouter reformulé. **Chaque libellé d'option NOMME le contenu qu'il ajoute** (TF-1853, 18/10/2026) ; la catégorie reste en tête de la cellule, et les trois formules ci-dessus décrivent le geste, elles ne se recopient jamais comme libellés. Le 17/10/2026, la question nommait trois scénarios et l'option (a) disait « L'ajouter tel quel : onglet Scénarios » : l'humain a dû demander pourquoi l'option des trois scénarios n'était pas affichée parmi les choix. Forme attendue : « Contenu visible ajouté — (a) Ajouter les trois scénarios bas, central, haut ; (b) Ajouter ces trois scénarios reformulés en <la reformulation proposée> ; (c) Ne pas ajouter les trois scénarios (défaut) ». Un « exécute le prompt » ne vaut pas réponse à ces décisions : tant qu'elles sont ouvertes, le contenu n'entre ni dans le prompt réécrit ni dans un contrôle bloquant. Le 26/09/2026, une source « déclaration du commanditaire de l'audit » ajoutée sous un chapitre, validée en bloc parmi 17 écarts, est devenue un contrôle bloquant du générateur ; l'humain l'a fait retirer après la remise (« jamais demandé d'écrire ça »).
+   - Un doute sur la catégorie se tranche vers la seconde.
+6. **Protocole de tests du livrable** *(conditionnel — proportionnalité)* : prolonge le contrat de sortie (point 4) en plan de vérification exécutable du **livrable que le prompt réécrit produira à l'exécution** — jamais du prompt lui-même (le prompt est déjà stress-testé par Ch5-Ch6). Le protocole est **prescrit, pas exécuté** : L99 l'embarque dans le prompt réécrit dès que celui-ci s'exécutera en autonomie, et le rappelle en clair dans ce chapitre.
+
+   **Condition d'application** : version complète seulement si le livrable attendu est substantiel (code, document, deck/PPTX, page HTML, template, données). Prompt conversationnel one-shot : une ligne « livrable conversationnel, protocole non déclenché » (ou une passe de revue simple pour les contenus courts).
+
+   Contenu obligatoire du protocole :
+   - **Type de livrable détecté + oracles de vérification** :
+
+   | Type de livrable | Oracles |
+   |---|---|
+   | Code | Exécution réelle + cas de test (nominal + limite) |
+   | Page / fiche HTML | Script de conformité `factory-page-html` (charte, accessibilité, print) si disponible ; sinon rendu + checklist. **Et les règles de socle nommées** — L4 + composant de filtres, G1-G6, lisibilité — vérifiées par `oracle-filtres-tableau` (cf. « Livrable HTML : le Ch8 injecte les règles de socle applicables ») |
+   | Deck / PPTX | Rendu LibreOffice + checklist charte `factory-pptx` si disponible |
+   | Document texte | Contrat chiffré : longueur, structure, présence/absence d'éléments nommés |
+   | Données / tableau | Contrôles de cohérence sur échantillon (totaux, types, bornes, doublons) |
+   | Contenu court (post, email) | Revue par critères binaires du contrat — pas d'oracle automatisable |
+
+   - **Jeu d'essai minimal** : 2-3 cas d'entrée, dont au moins 1 cas limite.
+   - **Boucle bornée** : générer → tester contre le contrat → corriger. **3 itérations maximum**, critères d'arrêt binaires repris du contrat de sortie. Après 3 passes en échec : **livrer avec la liste des écarts résiduels** — jamais boucler au-delà.
+   - **Composition, pas duplication** : si `la-boucle` ou `audite-et-corrige-l-appli` sont présents dans l'environnement d'exécution, le protocole leur délègue l'itération au lieu de la réimplémenter.
+   - **Interdits** : aucun critère subjectif (« satisfaction », « exemplaire », « bonne qualité ») — uniquement des critères vérifiables.
+
+7. **Forme de la sortie** *(non négociable)* : les quatre règles de la section « Forme de la sortie L99 » s'appliquent à ce chapitre comme aux sept autres — ouverture avant tout tableau, mode de lecture de tout tableau, glose de tout identifiant à sa première occurrence, source de tout chiffre repris du prompt.
+
+---
+
+## Note sur le mode L50
+
+L50 = Chapitres 1, 3, 8. Avec cette architecture, L50 devient une boucle serrée et cohérente :
+**étalon noté (Ch1) → inventaire taggé (Ch3) → prompt réécrit + score + contrat (Ch8)**. C'est le
+minimum viable qui conserve l'ancrage sur l'origine, la mesure chiffrée et la traçabilité des
+corrections. Le Factcheck (Ch4) reste hors L50 : conditionnel et orthogonal au minimum structurel.
+Le **protocole de tests du livrable** (Ch8 §6) voyage avec le Chapitre 8 : L50 en hérite
+automatiquement, avec la même condition de proportionnalité.

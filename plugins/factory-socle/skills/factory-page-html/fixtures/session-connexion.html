@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="fr"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Factory — Connexion — 20261014a</title>
+<style>
+:root{--ink:#0F172A;--line:#E6EAF2;--surface:#FFFFFF;--bg:#FAFBFF;
+ --head:"Montserrat",system-ui,sans-serif;--sans:"Inter",system-ui,sans-serif}
+body{margin:0;font-family:var(--sans);font-size:15px;color:var(--ink);background:var(--bg)}
+main{max-width:420px;margin:80px auto;padding:24px;background:var(--surface);border:1px solid var(--line);border-radius:12px}
+h1{font-family:var(--head);font-size:1.4rem;margin:0 0 12px}
+@media print{body{background:#fff}}
+</style></head>
+<!--
+  TF-1674 (lot Produit-80 20261012b, RD-1). L'ECRAN DE CONNEXION que sert le banc a qui n'a pas
+  de session. Il est sain : un oracle qui ne charge pas la session juge CET ecran, rend PASS, et
+  ne voit jamais l'application (`session-application.html`), qui porte un debordement.
+-->
+<!--
+  TF-1788 (lot Produit-83 20261015b, RA-4). L'ecran porte la MIRE elle-meme (formulaire avec un
+  champ mot de passe) : render_page la reconnait et dit, au non juge, que seule la mire a ete
+  jugee et que l'application connectee se juge avec --etat-session.
+-->
+<body><main>
+<h1>Connexion</h1>
+<p>Identifiez-vous pour acceder a l'application.</p>
+<form action="/connexion" method="post">
+<p><label for="id">Identifiant</label><br><input id="id" name="id" type="text" autocomplete="username"></p>
+<p><label for="mdp">Mot de passe</label><br><input id="mdp" name="mdp" type="password" autocomplete="current-password"></p>
+<p><button type="submit">Se connecter</button></p>
+</form>
+</main></body></html>

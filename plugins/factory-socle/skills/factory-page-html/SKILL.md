@@ -1,0 +1,1312 @@
+---
+name: factory-page-html
+description: >
+  Produit des pages HTML autonomes au socle commun Factory et en fait l'audit de conformité : charte (Montserrat titres / Inter corps, jamais Syne, light theme), tokens :root, sémantique et accessibilité WCAG 2.2 AA, responsive, et robustesse d'export PDF WeasyPrint. Sert de couche de base dont héritent factory-fiches-html et factory-schemas. Use when / déclencher dès qu'il faut créer, charter, refondre, auditer ou corriger une page HTML autonome (fiche, schéma, dashboard, cartographie, livrable HTML) en contexte Factory ou Enseigne-A, ou mentionne page HTML, gabarit HTML, boilerplate HTML, charte HTML, ou veut vérifier qu'un fichier HTML respecte les règles maison. Fournit un boilerplate prêt à l'emploi, un script de conformité déterministe (charte + accessibilité + print) et l'oracle zéro défaut visuel render_page.py (multi-breakpoints, contraste, débordements, chevauchements), avec la checklist canonique V1–V19 et V21–V28 et les règles de lisibilité L1–L39 à fixtures rouges.
+# TF-0475 (23/08/2026) : declenchement CADRE par motif de chemin. Verifie contre la
+# reference de frontmatter de Claude Code — `paths` limite l'activation AUTOMATIQUE, et
+# n'empeche jamais l'appel direct par `/factory-page-html`.
+paths: "**/*.html, **/*.md"
+metadata:
+  version: "1.53.0"
+---
+
+# Page HTML — Socle commun Factory
+
+Couche de base pour toute page HTML autonome chartée. Les skills `factory-fiches-html`
+et `factory-schemas` n'ajoutent que leurs gabarits par-dessus ce socle.
+
+**1.53.0 (23/11/2026)** — **Lot fag2 de la campagne du 23/11/2026 : V28 avertit au lieu de bloquer (TF-2691, D-234 (a)), et une navigation latérale déclarée sort de la mesure de V17 et L2 (TF-2776, D-235 (a)) ; décisions du porteur : exécutées.**
+*(TF-2691 d'abord :* le porteur a répondu « 234a » : `equilibre_droite` (V28, piste de droite vide) passe de bloquante à **avertissement**, sur le modèle exact de V25 : une ligne de la
+table `FAMILLES` de `render_page.py`, sévérité `avertissement`. Le constat se rend toujours, avec son détail ; la page ne fait plus échouer le verdict. Les seuils ne bougent pas, une échéance
+de `echeances.json` pourra encore la durcir, et la mesure publiée (22 pages accusées sur 117, 13 sur 107 pages rendues) reste dans `zero-defaut-visuel.md`. Au banc, la rouge
+`equilibre-piste-reservee-vide.html` garde son compte de constats et les sept familles muettes, et rend maintenant PASS sans cause bloquante au lieu de FAIL.
+*TF-2776 ensuite :* le porteur a répondu « 235a » : un `nav`, un `aside` ou un élément porteur de `data-navigation`, **à côté** d'un bloc (même hauteur sur plus de 8 px, entièrement à
+sa gauche ou à sa droite), sort de la mesure ; les règles et les seuils ne changent pas. V17 compare le conteneur à la fenêtre moins la navigation (et le dit dans le message) ; L2 ne juge
+pas le texte d'une navigation déclarée, ne prend pas sa piste pour une colonne d'étiquettes (`l2_gouttiere`) et ne la compte pas dans le cadre d'un conteneur de lecture (`l2_conteneur`).
+Trois verts, rouges sur l'outil d'avant (`nav-laterale-nav-accusee-a-tort.html`, `-aside-a-droite.html`, `-attribut-fixe.html`), et trois contre-épreuves qui restent accusées : la même
+page sans déclaration (`nav-laterale-non-declaree.html`), une navigation en bandeau (`nav-bandeau-conteneur-bride.html`) et une colonne de lecture calée à gauche à côté d'une
+navigation (`nav-laterale-colonne-calee-a-gauche.html`, que l'outil d'avant n'accusait pas à 1 280 et 1 440 px : la largeur de la navigation y comptait comme une marge de gauche).)*
+
+**1.52.0 (22/11/2026)** — **Lot fag de la campagne du 22/11/2026 : la page se mesure reposée (TF-2707, TF-2700, TF-2706), `check_html` ne compte pas le `<h1>` d'un écran masqué (TF-2791), le lecteur d'animation à scènes entre au socle (TF-2300), et V28 est mesurée sur les pages livrées (TF-2691) ; décisions R-58 : exécutées.**
+*(TF-2707, TF-2700, TF-2706 d'abord :* `render_page.py` chargeait la page et mesurait 250 ms plus tard, à l'instant où elle se trouvait : une encre sombre à 1,01:1
+sur un papier clair (libellé en fondu d'entrée), « agent » à 1,76:1 (animation CSS infinie), 34 à 35 chevauchements V4 bloquants par largeur entre les scènes
+empilées d'une animation SVG. Une animation **finie** est désormais menée à son terme avant toute mesure ; ce qu'une animation **infinie** fait varier
+(`opacity`, couleurs, `fill`, `filter`…) n'a pas d'état de repos : le ratio V2 sous seuil d'un tel texte, et le contraste V9 d'un tel actif, sont rangés au
+`non_juge` avec la propriété animée, jamais en bloquant ; V4 ne compare pas deux éléments dont les racines animées en boucle par opacité diffèrent (des scènes
+empilées, montrées une à une) et dit le compte des paires non jugées. Ce qu'aucune animation ne fait varier reste jugé. Six fixtures `animation-*` : chaque
+verte (PASS) a sa rouge conservée (encre pâle au repos, paragraphe statique pâle, deux libellés superposés dans une scène : FAIL), rouges sur HEAD intact.
+*TF-2791 ensuite :* A3 refusait « 2 balises `<h1>` » sur une maquette à deux écrans dont l'un est masqué ; le compte ne retient plus un `<h1>` que la lecture du
+fichier établit comme masqué (`hidden`, `display: none` en ligne ou par une règle à sélecteur simple sans règle d'affichage plus spécifique, `<template>`,
+`<dialog>` fermé) — un sélecteur non évaluable ne masque rien ; le refus propose `hidden`, et le remède est joué au banc. *TF-2300 :* `assets/scene-player.js` et
+`scene-player.css`, composant n° 17 de `composants.md` : manifeste JSON de scènes, lecture et pause, clavier, segments, mouvement réduit, impression, jugé dans un
+navigateur puis scène par scène par `render_page.py`. *TF-2691 :* la mesure de bruit de V28 sur 117 pages livrées donne 23 pages accusées (19,7 %), dont 10 gabarits
+Jinja non rendus ; 13 sur 107 pages rendues, et la capture lue ne montre pas le défaut annoncé : les seuils ne sont pas tenus pour établis, la décision de les
+recalibrer ou de déclasser V28 revient au porteur ; `zero-defaut-visuel.md` porte la mesure.)*
+
+**1.51.0 (16/11/2026)** — **La dispense `data-colonne-ok` ne vaut que sur le conteneur brideur (TF-2677), et `render_page` gagne V28, l'équilibre
+horizontal de l'encre (TF-2679) ; `oracle-filtres-tableau` lit les actifs déclarés pour G2 (TF-2618, quality-oracles) ; décisions R-58 : exécutées.**
+*(TF-2677 d'abord :* sur `factory-site`, la v2 d'une page avait posé `data-colonne-ok` sur `<main>`, avec un motif écrit par l'agent ; `closest`
+laissait la dispense remonter et éteignait L2 « conteneur calé à gauche » pour toute la page, l'humain a vu la moitié vide à droite sur une capture.
+Elle ne vaut plus que sur le conteneur brideur lui-même : posée sur `<main>`, `<body>`, `<html>` ou `[role=main]` aussi larges que leur parent, ou sur un
+ancêtre du brideur, elle ne dispense rien (V23 et V24 la lisent de la même façon) ; chaque dispense rencontrée se dit au `non_juge` avec son motif, ou
+« SANS MOTIF ». Fixture rouge `l2c-dispense-sur-main.html` : PASS avant, FAIL après ; les trois verts du banc, dont `session-changement-mdp.html` (le
+`<main>` de 420 px est sa propre bride), restent PASS. TF-2679 ensuite :* une piste de grille réservée sans contenu, une marge animée vide, un bandeau à
+une seule figure : aucune famille ne jugeait ce que le lecteur voit. La famille `equilibre_droite` (V28, bloquante) découpe la capture pleine page en
+tranches de 40 px et refuse une suite de plus de 600 px dont l'encre laisse plus de 25 % du cadre vide à droite avec plus de 15 points d'écart avec la
+gauche ; un élément collant compte sur la hauteur de son parent, une colonne déclarée n'est pas jugée, une tranche sans encre interrompt la suite ; sans
+image la famille est non jugée et le dit. Fixture rouge `equilibre-piste-reservee-vide.html` (PASS avant, 1 constat après, les sept autres familles
+muettes), trois vertes, et la paire du collant (aside court `sticky` : 0 ; le même sans `sticky` : 1). Les seuils sont ceux de la décision, non calibrés ici sur le parc : le bruit est à mesurer (`mesurer_bruit.py`).
+
+**1.50.0 (14/11/2026)** — **Lot fa de la seconde campagne du 14/11/2026 : `L18` et `L27` qualifiés, les renvois `L30` nus soldés, une classe
+`page-servie`, les quatre cas de scènes indépendants de la police du poste (TF-2531, TF-2533, TF-2543 ; décision R-58 : exécutée).**
+· **TF-2531.** `check_html.py` émet `L18 (jeton)` (identifiant muet, code de règle sans glose), `L18 bis` (système d'identifiants non expliqué),
+`L27 (colonne)` (colonne sans définition) et `L27 bis` (en-têtes de ligne) ; le contrôle de TF-2492 les juge, et ne nomme plus que `L15` parmi les
+numéros à section nue. Les renvois `L30` nus de `check_html.py`, de `jargon-a-gloser.json` et d'une fixture disent `L30 (chapitre)` ou
+`L30 (couverture)` ; `composant-filtres-tableau.md` documente la liste d'exceptions par chemin de TF-2296. Rouge avant : le référentiel qualifié contre
+l'ancien `check_html` donne 6 écarts ; vert après : 0. Un consommateur qui lit le premier mot d'un message lit encore « L18 » ou « L27 » ; celui qui
+lit le préfixe entier lit le qualificatif. · **TF-2533.** Les quatre cas de scènes (TF-2299, TF-2391) rouges sur HEAD intact dépendaient de la police
+à chasse fixe du poste : l'adresse insécable de `scenes-rouge.html` (126 caractères) ne débordait à 1 280 px que sous Courier New (scrollWidth 1 290),
+pas sous Consolas, Cascadia Mono ni le `monospace` du Chromium de ce poste (1 280). Elle compte 222 caractères dans les deux fixtures (1 951 px sous
+Consolas) et trois cas statiques gardent le seuil. Le rouge S6 du self-test de `factory-schemas` (1.0.2) est un écart étroit déclaré avec son motif,
+refus de forge-design rapporté au pilot. · **TF-2543.** **Une page servie avec ses fichiers se déclare `page-servie`** (`--classe=page-servie`, ou
+`<meta name="classe-artefact" content="page-servie">`, avec `--racine-servie` pour les chemins absolus) : les feuilles liées locales sont **lues** et leur
+CSS jugé comme s'il était en ligne ; A2 « favicon non embarqué », « `@media print` absent » et « `:root` absent » (quand une feuille liée n'a pas pu
+être lue) ne s'appliquent pas, et le verdict le dit, avec les feuilles lues et non lues. Tout le reste est jugé, A4 et L25 compris. Rouge avant : 3
+échecs sous `page-lue` sur `page-servie-accueil.html` ; vert après : 0 sous `page-servie`. Recette : 890 cas (872 au départ du lot, +18), `references/lisibilite.md`,
+section « Classes d'artefact ».
+
+**1.49.0 (14/11/2026)** — **`check_html.py` qualifie chaque règle émise sous L12 et L29, et le banc refuse l'identifiant nu (TF-2508,
+campagne du 14/11/2026, décision R-58 : exécutée).** La 1.48.0 avait distingué les deux règles L30 ; « L12 » restait émis pour quatre règles
+et « L29 » pour trois, et le contrôle de TF-2492 ne les jugeait pas, faute de sections toutes qualifiées : leur section nue côtoyait des
+volets qualifiés. Les sections nues du référentiel deviennent `L12 (données)` et `L29 (collision)`, et chaque message ouvre par
+l'identifiant de sa section : `L12 (données)` (l'énumération « clé — valeur » en prose), `L12 (virgules)`, `L12 (cellules)`,
+`L12 (cellules, suite)` (les virgules d'une cellule et la colonne aux formes mêlées), `L29 (collision)` (le `thead` collant derrière
+l'en-tête, `--hh` non déclaré) et `L29 ter` (le script qui pose `style.position`) ; les attendus des fixtures et des paires suivent. Le banc
+compte les ordinaux latins (`bis`, `ter`, `quater`) comme des qualificatifs, refuse l'identifiant nu d'un numéro dont toutes les sections
+sont qualifiées, exige chaque section qualifiée émise sauf celles qu'il déclare jugées hors de `check_html` (`L29 bis` et `L29 quater`,
+déclaration qui se périme si un message les ouvre), et nomme les numéros à section nue qu'il ne juge pas (`L15`, `L18`, `L27` : la borne se dit
+au lieu de se taire). Rouge avant : le référentiel qualifié contre l'ancien `check_html` donne 8 écarts, et 7 cas de la recette rouges ; vert
+après : 0 écart, 233 cas lus sans rendu verts. Un consommateur qui lit le premier mot d'un message lit encore « L12 » ou « L29 » ; celui qui
+lit le préfixe entier lit le qualificatif. Le renvoi à `L30` nu de `factory-schemas` (TF-2509) est qualifié dans la même livraison.
+
+**1.48.1 (14/11/2026)** — **Le cas de jonction de TF-2478 ne dépend plus de la console qui lance la recette (TF-2510, campagne du
+14/11/2026, décision R-58 : exécutée).** Recette seule : le comportement du skill ne change pas. Le pilot avait mesuré 863/864 au
+rejeu de la recette puis 3/3 OK au rejeu du cas seul, et l'attribuait à la charge du poste. Mesuré le 14/11/2026, la cause est
+ailleurs : `cmd /c mklink` écrit dans la page de code de la console qui lance la recette. Lancée depuis Git Bash (page 850), il écrit
+`cr\x82\x82e` et l'ancienne forme (`text=True`) lève l'exception que le rouge attend ; lancée depuis PowerShell (page 65001), il écrit
+de l'UTF-8, rien ne se lève et le rouge rend « aucune exception ». Quarante processus occupés sur vingt cœurs n'ont rien changé
+(10 cas sur 10 OK). `run_jonction_sortie_oem` rejoue donc la forme d'avant et `_creer_jonction` sur un flux d'octets imposé, celui que
+`cmd` écrit en page 850, que `subprocess.run` rend à la place de `cmd` dans le sous-processus : le rouge (UnicodeDecodeError sur
+0x82) et le vert (flux lu sans exception, sous `-X utf8` et `-X utf8=0`) tiennent dans toute console. Le cas avec le vrai `cmd`
+reste, comme vert. Contre-épreuve : `_creer_jonction` remise à `text=True` rend ECHEC sur le flux imposé depuis PowerShell, là où le
+vert réel rendait OK.
+
+**1.48.0 (13/11/2026)** — **`check_html.py` émet un identifiant distinct pour chacune des deux règles L30 (TF-2492, campagne du
+13/11/2026, décision R-58 : exécutée).** Il émettait « L30 » pour deux règles que `references/lisibilite.md` distingue depuis la
+1.47.0 : un chapitre qui dit ce qu'il contient et glose son jargon, et une page de couverture qui affiche son dénominateur. Le
+numéro seul ne disait pas laquelle avait mordu. Les messages ouvrent désormais par `L30 (chapitre)` (le `.contenu` attendu, le
+terme technique non glosé) et `L30 (couverture)` (le dénominateur, les manquants, la carte de chiffre clé qui renvoie hors page),
+tels que les sections du référentiel s'appellent ; les renvois des messages, les attendus des fixtures et les préfixes retirés par
+`--classe=source-machine` suivent. Le banc compare désormais aussi les identifiants émis aux sections publiées
+(`ecarts_identifiants_partages`) : quand toutes les sections d'un numéro portent un qualificatif, l'identifiant nu est refusé et
+chaque section doit être émise sous son propre identifiant, avec des textes jouets rouges et verts avant le référentiel réel. Un
+consommateur qui lit le premier mot d'un message lit encore « L30 » ; celui qui lit le préfixe entier lit le qualificatif.
+Les numéros qui gardent une section nue (« L12 » et ses volets, « L29 » et ses suites) ne changent pas.
+
+**1.47.1 (13/11/2026)** — **La recette du socle rejoue le self-test de `factory-schemas`, et n'imprime plus d'exception de fil
+de lecture (TF-2474 et TF-2478, campagne du 13/11/2026, décision R-58 : exécutée).** Recette seule : le comportement du skill ne
+change pas. **(1) TF-2474.** Le 3e rouge SC4 de forge-design en trois jours (TF-2406 le socle, TF-2448 forge-tests, TF-2459 les
+schémas) était visible au self-test de `factory-schemas` depuis TF-2384, mais aucune recette ne le jouait quand le socle changeait.
+`scripts/self_test.py` rejoue en dernier (`run_consommateurs_du_socle`, `rejouer_consommateur`) `factory-schemas/scripts/self-test.mjs`
+et échoue sur son exit non nul : un rouge du consommateur bloque la livraison du socle. Trois consommateurs jetables prouvent les deux
+sens (exit 1 rend ECHEC, exit 0 rend OK, script absent rend NON_JOUE, jamais un vert). Les consommateurs à rejouer se déclarent dans
+`CONSOMMATEURS_DU_SOCLE`. **(2) TF-2478.** L'exception `UnicodeDecodeError` (octet 0x82, position 11) venait de
+`cmd /c mklink /J`, qui écrit « Jonction créée » en cp850 (« é » = 0x82), lu par `text=True` comme de l'UTF-8 sous `PYTHONUTF8=1` ;
+sans cette variable cp1252 décode 0x82 sans rien dire. La création de la jonction (`_creer_jonction`) ne lit plus que le code de retour,
+la sortie restant en octets ; `run_jonction_sortie_oem` joue l'ancienne forme (rouge) et la nouvelle sous `-X utf8` et `-X utf8=0` (verts).
+Recette : 853/853 avant, 861/861 après (3 cas pour la jonction, 5 pour les consommateurs).
+
+**1.47.0 (13/11/2026)** — **`references/lisibilite.md` publie une section par règle que `check_html.py` juge, sans doublon
+(TF-2469, campagne du 13/11/2026, décision R-58 : exécutée).** La règle `L23` (attribut `hidden`, TF-0733) était jugée
+sans section ; deux sections s'appelaient `L30` et deux `L29 ter` ; le compte des cas datait du 23/08. La section `L23` est
+écrite, les deux `L30` deviennent `L30 (chapitre)` et `L30 (couverture)` (usage de `L12 (virgules)`), la section de TF-0929
+devient `L29 quater` (ses fixtures s'appellent déjà `l29q-*`), le compte est mesuré le 13/11 (130 cas, 75 rouges). Le banc
+joue désormais `run_sections_lisibilite_publiees` de `scripts/self_test.py` : les numéros de règle émis par `check_html.py`
+(lus à l'arbre syntaxique) sont comparés aux sections publiées, un identifiant répété et un compte périmé sont refusés, avec
+des textes jouets rouges et verts avant le référentiel réel. Aucune règle de `check_html.py` ne change.
+
+**1.46.1 (12/11/2026)** — **La recette du gabarit multi-bandes de `factory-schemas` instancie le pied avec
+la signature de la fixture (TF-2458, campagne du 12/11/2026 dans la nuit, décision R-58 : exécutée).**
+`run_gabarit_multi_bandes` de `scripts/self_test.py` lit `{{ANNEE_REF}}` et `{{MARQUE_FOOTER}}` dans
+`factory-schemas/fixtures/signature` par `lire-signature.mjs`, sans valeur de marque en dur ; recette 845/847
+avant, 847/847 après. Recette seule : le comportement du skill ne change pas.
+
+**1.46.0 (12/11/2026)** — **`render_page.py` reconnaît une mire de connexion à son action, plus à la seule présence d'un champ mot de passe
+(TF-2433, retour RT-21 du 10/11/2026 ; campagne du 12/11/2026, décision R-58 : exécutée).** L'écran connecté de changement de mot de passe (champs
+actuel, nouveau, confirmation, action `/espace/mot-de-passe`) était pris pour une mire : la ligne « MIRE DE CONNEXION RENDUE » disait que le verdict portait
+sur la mire, alors que l'écran était bien l'application. La sonde `MIRE_JS` juge désormais le formulaire qui porte chaque champ mot de passe visible.
+**Changement, donc pas une mire** : un champ `autocomplete="new-password"`, ou deux champs mot de passe visibles (confirmation, création de compte), ou une
+action dont le chemin nomme le mot de passe sans nommer la connexion. **Connexion, donc une mire** : une action dont le chemin nomme la connexion, ou un
+bouton « Se connecter », ou un champ `autocomplete="current-password"`, ou un identifiant (champ `username`, e-mail) à côté d'un seul mot de passe. Sans
+attribut `action`, le formulaire part vers l'adresse de la page : sur une instance servie, c'est elle qui se lit (sur un fichier, aucune adresse ne
+compte, seuls le bouton et les champs parlent). **Un champ mot de passe seul, sans aucun de ces indices, se juge comme un écran connecté** : l'écart avec
+la lettre de TF-1788 (tout champ mot de passe visible) est voulu, et la ligne ne se dit plus que d'un formulaire qui ouvre une session. Fixtures :
+`session-changement-mdp.html` (le défaut d'origine, jugé sans ligne MIRE) et `session-connexion-sans-action.html` (la mire sans `action`, toujours dite) ;
+8 sondes en ligne au self-test (`run_mire_a_son_action`) dont 4 rouges sur l'ancienne sonde, et 2 cas en mode fichier dans `run_session_et_theme`.
+
+**1.45.0 (10/11/2026)** — **six retours du produit marketing (RA-202, RA-203, RA-212, RA-214, RA-215 et un reste de TF-2299) : l'export PDF aux
+polices de la charte, la page imprimée mesurée, la complétude d'une source de données, deux contrôles qui cessent de se tromper (TF-2352, TF-2353,
+TF-2362, TF-2364, TF-2365, TF-2391 ; campagne du 10/11/2026, lot FA4, décisions R-58 : exécutées).** Chaque règle a sa fixture rouge et sa fixture verte,
+jouées avant et après ; 26 cas neufs au self-test (`run_lot_fa4`). **(1) `scripts/exporter_pdf.py` (TF-2352).** Une page du socle déclare ses polices sans
+`@font-face` (règle A1) ; sur un poste qui ne les a pas, l'impression PDF retombait sur Segoe UI et Consolas. L'export pose les familles de la page depuis un
+CACHE LOCAL (les WOFF2 de `../factory-schemas/scripts/fonts`, ou `--cache`, ou `FACTORY_POLICES`) en `@font-face` data: dans une copie de travail
+temporaire, la page et le dépôt restant intacts, puis LIT les polices que le PDF embarque : une police de repli embarquée est un échec (exit 1), avec son
+nom. Rejouer l'ancien geste (cache sans Montserrat) rend `AAAAAA+SegoeUI-Bold` ; le cache du socle rend `MontserratThin-Bold`, `Inter-Regular`,
+`JetBrainsMono-Regular`. **(2) `check_html.py` ne juge plus le repli dans un `@font-face` (TF-2353).** Un bloc `@font-face` nomme une famille embarquée
+(règle A1), un repli n'y a pas de sens : l'avertissement « font-family sans repli système » en sortait 1 à 4 par livrable, à lire et à écarter. Les règles
+d'usage sont jugées comme avant (la rouge en garde un, sur elle seule). **(3) `check_completude.py --source-donnees` (TF-2362).** Une source JSON ou un
+module Python (lu par `ast`, jamais exécuté) et une cible HTML ou PDF, comparées par CHAÎNES : chaque chaîne de la source doit se retrouver dans le texte de
+la cible, la manquante est nommée avec son chemin (`$.sections[1].items[2]`). Un compte de mots ne dit pas quelle phrase a disparu. **(4)
+`scripts/check_impression.py` (TF-2364, TF-2365).** G1 s'écrivait « impression toujours claire » sans oracle qui la joue : le contrôle imprime la page deux
+fois, thème par défaut puis `data-theme="dark"` sur la racine, et compare les pages en image (la fixture rouge diffère de 99,94 % des pixels ; le remède
+`@media screen` donne 0). Sur une page à `@page` de taille fixe, il mesure aussi la marge basse du dernier bloc de chaque page (seuil 5 mm, `--marge-mm`) et
+nomme la page fautive (0,9 mm sur la fixture). `render_page.py` dit désormais à chaque exécution que la page imprimée n'est pas mesurée par lui.
+**(5) `mesurer_bruit.py` compte les défauts de scène (TF-2391).** Depuis 1.44.0 les familles d'une scène vivent sous `scenes.scenes[nom].issues` ; le compte
+ne lisait que l'état initial. Sur `scenes-rouge.html` le taux de `v1_overflow` passe de 0 à 1 page sur 2, ventilé « dont 1 en scène ». **Version MINEURE :**
+quatre scripts ou options neufs, aucune règle existante ne durcit (G1 et la marge basse sont des contrôles à jouer, pas une porte de `check_html`).
+
+**1.44.0 (09/11/2026)** — **`render_page.py` rend et mesure chaque scène d'une page à scènes déclarées, aux largeurs du socle (TF-2299, RA-04 ; lot
+Produit-81 du 09/11/2026, décision R-58 : exécutée).** Sur cinq animations de sept ou huit scènes, 32 scènes sur 37 n'étaient jamais rendues ni mesurées
+(`non_juge` : « seul l'état initial »), et une planche de captures écrite à la main y a trouvé deux défauts que tous les juges avaient laissés passer.
+Désormais, tout élément `[data-scene]` autre que `html` et `body` (le corps porte la scène *courante*, pas une scène) est une scène : sur une page neuve,
+par largeur, `render_page` l'atteint par les gestes d'un lecteur (flèche droite jusqu'à ce qu'elle se voie, puis le sommaire `[data-aller]`), mène les
+animations d'entrée à leur terme, la mesure comme la page (V1 à V4, V9, V18, canvas) et la capture (`<page>-w<largeur>-scene<NN>.png`). Sans drapeau :
+une page sans scène déclarée n'est pas touchée. Un défaut de scène compte dans le verdict. **Une scène qu'aucun geste n'affiche est NON JOUÉE**, nommée
+au `non_juge` avec ses gestes essayés, jamais couverte par un vert. Le `non_juge` dit aussi ce qui reste non mesuré : les images intermédiaires d'une
+animation, le minuteur du lecteur (lecture automatique), les états « pause » et « fin », un état ouvert à l'intérieur d'une scène, un autre geste que
+ceux-ci, une scène déclarée autrement que par `[data-scene]`. Fixtures `scenes-rouge.html` (sept scènes, adresse insécable en scène 4 : l'état initial
+rend PASS, le parcours rend FAIL à 390 et 1 280 px, scène 4 seule), `scenes-verte.html` (sept scènes, PASS) et `scenes-inatteignables.html` (deux scènes
+cachées, nommées non jouées) : 3 cas échouent sur la version d'avant, 3 passent après.
+
+**1.43.0 (06/11/2026)** — **le composant de filtres lit la valeur déclarée d'une facette et sa saisie filtre (TF-2195) ; un panneau fermé n'est plus
+jugé à la largeur de son résumé (TF-2220) ; Produit-86, lots 20261105b RP-15 et 20261105h RP-40, décisions R-58 : exécutées.** *(TF-2220 d'abord :
+`render_page` ne juge plus la prose d'un `<details>` fermé, que sa mise en page réduit à la largeur du résumé, 42 px sur la fixture, 154 px sur le
+livrable fautif contre 1 376 ouvert ; les quatre mesures de largeur de texte `l2_filet`, `l2_width`, `prose_etroite` et `prose_verticale` l'ignorent,
+`--etats-ouverts` ouvre le panneau et le juge à sa largeur réelle. Fixtures `details-ferme-resume-etroit.html` : 2 constats avant, 0 après, et
+`details-ouvert-etroit.html`, le même panneau ouvert et borné à 260 px, garde ses 2 constats.)* TF-2195 : des filtres à une valeur par ligne (84 sur 84, 67 pour 3 agents) venaient d'une cellule composite
+dont le texte entier servait de valeur. `data-tf-valeur` sur la cellule dit la valeur de facette ; `table-filters.css` respecte `[hidden]` (la
+règle `display: flex` des cases annulait la recherche) ; la saisie du panneau masque les cases et les lignes qui ne correspondent pas. Fixture
+`tf-valeur-composite.html` : 6 échecs sur le composant d'avant, 7 cas verts après ; 15 copies embarquées (10 pages) scellées de nouveau. Détail :
+`references/composant-filtres-tableau.md`, section « La valeur d'une facette se déclare, et la saisie filtre ».
+
+**1.42.0 (29/10/2026)** — **neuf retours de produits corrigés à la cause (TF-1962 à TF-1967, TF-1969, TF-1970, TF-1992 ; lots Produit-84 des
+19/10 et Produit-85 du 24/10, décisions R-58 : exécutées).** Chaque règle a sa fixture rouge et sa verte, jouées avant et après ; 29 cas
+neufs au self-test (`run_lot_a_check_html`, `run_lot_a_composants`, `run_lot_a_rendu`), 20 rouges sur la version d'avant, 29 verts après.
+**(1) L3 nomme la classe réservée qui le déclenche (TF-1962).** Une classe de mise en page `pv` a produit 95 échecs « valeur sans légende »
+sans que l'auteur sache que la CLASSE les déclenchait ; le message dit désormais « classe réservée « pv » » et publie la liste
+(`badge, chip-val, kpi, pastille, pv, stat` ; scores `jauge, sc, score`, et « note » suivie d'un chiffre), `lisibilite.md` § L3 la publie aussi.
+**(2) Les composants lisent des jetons AVEC repli, et l'hôte qui n'en déclare pas le sait (TF-1964).** `table-filters.css` lisait
+`--surface`, `--muted`, `--r-sm` et `--sans` nus : une page écrite à la main rendait cinq panneaux de filtre au fond `rgba(0,0,0,0)`. Chaque
+`var()` de la feuille porte un repli, MOT-CLÉ DE COULEUR SYSTÈME (`Canvas`, `CanvasText`, `GrayText`, `LinkText`), jamais une couleur en dur ;
+`embarquer-composants.mjs --constat` refuse un bloc CSS embarqué qui lit sans repli un jeton absent de la page, et `--poser` le dit à la
+pose. **(3) Les filtres de colonne ont une place dans le repli en cartes (TF-1965).** Le repli masquait le `thead` et ses cinq déclencheurs
+(0 x 0 à 390 px) : sous 900 px, `table-filters.css` les pose en barre de puces au-dessus des cartes ; la famille `filtres_masques_repli`
+(V27, bloquante) refuse un tableau replié dont un déclencheur est en `display:none`, écart voulu `data-filtres-remplaces="<raison>"` ;
+bruit mesuré : 10 pages sur 49 livrables du pilot l'accusent à 390 px, toutes de vrais défauts (0 à 1 440 px).
+**(4) Un panneau déplié se mesure (TF-1963).** `panneau_deplie` (V26, bloquante) : neuf points d'échantillon par panneau visible (fond opaque
+dans la pile, texte dessous), et le centre de trois contrôles. Cas fondateur rejoué de bout en bout : outil d'avant et feuille d'avant,
+PASS ; outil neuf et feuille d'avant, FAIL (fond `rgba(0,0,0,0)`, 6 points sur 9) ; feuille neuve, PASS. **(5) Colonnes déséquilibrées
+(TF-1966).** `colonnes_desequilibrees` (V25, avertissement) : une colonne à 25 % du tableau ou plus, remplie à 30 % ou moins, face à une
+colonne plus étroite, pleine et sur 3 lignes ou plus ; écart voulu `data-colonnes-ok`. **(6) Trois règles de forme, toutes en avertissement
+(TF-1967, TF-1970, TF-1969).** L12 lit les virgules d'une cellule (4 éléments) et la colonne qui mêle listes et prose ; L27 bis juge aussi les
+`<th scope="row">` d'une page qui n'est pas déclarée de données (écart voulu `data-entetes-ok`) ; L18 (jeton) signale un code de règle en lettres puis
+chiffres (`ADR0501`, `OSP0901`, `GDE0202-R05`) cité nu, hors préfixes de normes (ISO, SHA, HTTP…) : avertissement, parce que la
+mesure du parc y trouve des noms de sentier et de fichier (`GR223`, `WRD0000`), pas des codes de règle. **(7) V1 ne compte plus la bande de sommaire
+défilante que L25 prescrit (TF-1992).** Un élément au-delà de la fenêtre, dans un conteneur `overflow-x` qui tient dans la fenêtre ET dans un
+sommaire déclaré (`nav.toc`, `aria-label` Sommaire, `[role=tablist]`), n'est plus un débordement : il est compté au non-mesure ; la même bande
+hors sommaire reste accusée (4 constats avant et après). Un correctif voisin : `entete_desaligne` ne compare plus un en-tête à une carte.
+Bruit mesuré et décisions de sévérité : `references/lisibilite.md` et `references/zero-defaut-visuel.md`. **Version MINEURE** : trois familles
+de rendu et trois règles de forme entrent, un composant change de feuille.
+
+**1.41.0 (21/10/2026)** — **V24 : `render_page.py` signale un bloc de prose de plus de 3 lignes sous 45 caractères par ligne, aux largeurs de
+bureau (TF-1917, RT-134 du lot Produit-02 20261018d, décision R-58 option (a)).** Une demande « textes trop verticaux » a été servie
+par quatre colonnes de cartes d'environ 30 caractères par ligne, tous contrôles verts : V18 ne borne que le maximum (135). Nouvelle
+famille `prose_verticale`, **en avertissement** : `render_page.py` ne connaît pas de niveau « majeur », la consigne dit « signale »,
+et une colonne étroite est parfois voulue. Mesure : les caractères des lignes pleines (la dernière est partielle) sur les lignes
+réellement peintes, dès 1 100 px, 4 lignes et plus sous 45 ; exclus et nommés : tableaux et cellules, navigations, code, légendes
+et notes, infobulles, tuiles de chiffre clé, boutons, et une colonne déclarée (`data-colonne-ok`, `data-mesure-lecture`). Taux
+mesuré (`mesurer_bruit.py`) : 0/10 gabarits et exemples du dépôt, 0/54 pages du pilot, 0/412 fixtures du socle — une fixture sur 412
+accusée à la première passe, une colonne de 34 ch dont la mesure de lecture est déclarée, exclue explicitement. Fixtures :
+`v24-cartes-de-texte-etroites.html` (HEAD : 0 signalement ; après : 4 à 1 280, 1 440 et 1 920 px), trois vertes, et le bord de la
+lettre (3 lignes passent, 4 sont signalées). **Version MINEURE** : une famille entre dans `render_page.py`.
+
+**1.40.0 (21/10/2026)** — **V23 : `render_page.py` refuse un contenu qui occupe moins de 75 % de la fenêtre aux largeurs de bureau
+(TF-1909, retour d'un produit du 18/10/2026, décision R-58 option (a) ; récidive de TF-1622).** Un rapport dont tous les chapitres
+portaient `.chap.lire` (1 080 px centrés) passait `check_html.py` (sélecteur exact du jeton) et `render_page.py` aux sept largeurs
+sur deux thèmes, puis a été refusé par l'exploitant : le contenu occupait 28 % d'une fenêtre de 3 840 px, la règle E4 du socle en
+exige 75 à 100. Aucune famille ne comparait le contenu à la fenêtre. Nouvelle famille `contenu_etroit` (bloquante) : l'empan
+horizontal des blocs de contenu (paragraphes, listes, tableaux, figures, images et graphiques), hors bandeau, navigation et pied,
+gouttières de la page créditées, contre la fenêtre, dès 1 100 px, tolérance 4 px ; une barre latérale face au contenu compte dans
+l'empan. Trois sorties passent, chacune jouée au banc : le token du socle (qui vaut exactement 75 % à 2 560 et 3 840 px), un passage
+`.chap.lire` inséré dans une page dont un autre bloc est large, une colonne étroite déclarée `data-colonne-ok`. Fixtures
+`v23-contenu-etroit-centre.html` (HEAD : verdict PASS, 0 bloquant à 1 920 et à 3 840 px ; après : 1 constat à 1 920, 2 560 et
+3 840 px, 0 à 1 280) et trois vertes. Taux mesuré : 0/10 sur les gabarits et exemples du dépôt, 6/54 sur les pages livrables du
+pilot, 42/412 sur les fixtures du socle (`references/zero-defaut-visuel.md`, § mesure de bruit). **Version MINEURE** : une famille
+bloquante entre dans `render_page.py`.
+
+**1.39.0 (21/10/2026)** — **L13 : l'exemption `data-kpi-hors-page` posée sur le conteneur vaut pour ses tuiles (TF-1905, retour
+d'un produit du 18/10/2026, décision R-58 option (a)).** L'attribut posé sur une rangée de quatre tuiles était sans effet sur
+l'avertissement L13 (KPI non cliquables au-dessus d'une liste de 8 lignes ou plus) : il a fallu le répéter sur chaque tuile.
+`check_html.py` lit désormais l'attribut sur la tuile ET sur ses ancêtres, comme le barème de groupe de L3 (TF-0231) ; un motif
+vide ne déclare rien, à aucun niveau. Trois fixtures de même page (`l13-kpi-exemption-du-conteneur.html` : HEAD 4 tuiles
+signalées, après 0 ; `l13-kpi-sans-exemption.html` : 4, la règle mord encore ; `l13-kpi-exemption-vide.html` : 4).
+**Version MINEURE** : un verdict de `check_html.py` change (moins d'avertissements).
+
+**1.38.0 (21/10/2026)** — **L3 ne lit plus une date « JJ/MM » en cellule comme une note « N/M » (TF-1904, retour d'un produit du
+18/10/2026, décision R-58 option (a)).** Un rapport HTML a reçu 16 échecs bloquants L3 sur des dates de semaine (`12/10`,
+`19/10`), levés par une légende de colonne qui n'apprenait rien au lecteur. `check_html.py` exempte deux preuves, jamais la
+forme seule (`5/10` est aussi une note) : un `<time datetime>` sur la valeur, un de ses ancêtres ou un de ses descendants ; ou
+un JJ/MM plausible (jour 1-31, mois 1-12) sous un en-tête de colonne qui nomme une date (date, semaine, jour, période,
+échéance, début, fin, livraison ; « du » et « au » seulement en en-tête entier) et ne nomme pas une note (note, score, sur,
+indice, taux, rang, niveau). Une valeur déclarée score par classe (`sc`, `score`, `note`, `jauge`) reste un score. Le message du
+refus nomme ces deux remèdes, et la fixture verte les joue (TF-1013). Fixtures `l3-date-jjmm-colonne-date.html` (HEAD : 9
+échecs L3 ; après : 0) et `l3-date-jjmm-colonne-resultat.html` (les 6 notes restent refusées). **Version MINEURE** : un verdict de
+`check_html.py` change (moins de refus).
+
+**1.37.1 (21/10/2026)** — **le contrôle statique « règle de largeur sans `screen` » juge aussi le skill `factory-schemas`
+(TF-1895, décision humaine D-41 (a) du 19/10/2026).** Le skill de schémas écrivait neuf règles `@media (max-width` ou
+`(min-width` sans `screen` dans cinq fichiers (`exemple-reference.html`, `template-modele-donnees.html`,
+`template-multi-bandes.html`, `template-schema-differentiel.html`, `references/conventions-communes.md`) : le banc de 1.37.0
+ne jugeait que les `assets/` du socle. Le contrôle de `run_format_a4` couvre désormais `assets/` et `references/*.md` du
+skill de schémas (13 fichiers), reconnaît `min-width` comme `max-width`, et rejoue le sens rouge sur le vrai gabarit
+multi-bandes (forme d'avant rétablie en mémoire : refusée). Aucun verdict de `check_html.py` ni de `render_page.py` ne
+change. **Version PATCH** : le banc s'étend, aucun script livré ne change.
+
+**1.37.0 (19/10/2026)** — **un oracle de format A4 compte les pages dans les conditions du lecteur, et le boilerplate écrit
+ses règles de petit écran sous `screen` (TF-1882, RT-1 du lot Produit-84 20261016a, décision R-58 option (a)).** Une fiche
+demandée « sur une page A4 » passait `check_html.py`, `render_page.py` aux sept largeurs et `run-oracles-design`, mesurait
+374 mm de haut à l'écran et sortait sur 2 pages imprimée. Deux causes : aucune feuille bornée à 297 mm à l'écran, et une règle
+`@media (max-width: 720px)` sans `screen`, déclenchée aussi à l'impression (largeur imprimable d'un A4 : ~698 px) ; le
+boilerplate écrivait lui aussi ses quatre règles de petit écran sans `screen`. **(1) `scripts/check_format_a4.py`** (nouveau,
+point de départ : la pièce jointe du lot, relue et réécrite sans ses hypothèses de gabarit — ni `.zone` ni pied de page
+supposés) : hauteur à l'écran aux largeurs 3 840, 1 920, 1 440 et 1 024 px (297 mm au plus), puis une génération de PDF par
+condition d'impression du lecteur, comptée page par page (marges de la page `@page`, 10 mm avec en-têtes du navigateur, marges
+par défaut de Chrome 0,4 pouce, 15 mm ; Letter en avertissement). **Aucune condition n'est « marges nulles »** : c'est la
+mesure qui avait menti, et le banc le rejoue (la fixture rouge sort sur 1 page à marges nulles). Exit 0 PASS, 1 FAIL, 2 SKIP
+motivé ; `--pages N`, `--sans-ecran`, `--output json` ; le non jugé nomme les autres navigateurs, la mise à l'échelle du
+lecteur, les marges plus larges et la lisibilité d'un corps réduit. **(2) `screen` au boilerplate** :
+`@media screen and (max-width: …)` pour ses quatre règles de petit écran (et l'exemple d'interactions qui en dérive) ; les
+extraits de `references/composants.md` suivent. Trois fixtures `format-a4-*` jouées dans les deux sens (neuf cas,
+`run_format_a4`) : la verte tient sur une page dans les quatre conditions ; la rouge « règle mobile sans screen » tient à
+l'écran et sort sur 2 pages dans trois conditions sur quatre, pour la bonne raison (aucun échec d'écran) ; la rouge « trop
+haute » rend 478 mm à l'écran et 2 pages. Un contrôle statique du banc refuse toute `@media (max-width` sans `screen` dans le
+boilerplate (sens rouge : la forme d'avant). **Version MINEURE** : un script s'ajoute, aucun verdict existant ne change.
+
+**1.36.0 (19/10/2026)** — **quatre défauts des composants de graphique corrigés, et un composant d'entonnoir (TF-1875,
+retour du constructeur de TF-1855 du 18/10/2026, décision R-58 option (a)).** Chaque défaut a sa fixture rouge et sa verte.
+**(1) V4 ne prend plus une ligne de grille pour une liaison** : douze colonnes à 390 px, totaux extrêmes à 3 px d'une
+graduation, la grille « traversait » les dix barres du milieu (9 constats à 390 px, 0 à 1 440) ; une liaison s'éloigne de sa
+boîte de départ et s'arrête contre sa boîte d'arrivée, une grille passe à côté (produit scalaire du tracé avec le vecteur
+extrémité vers centre de boîte) ; l'oracle n'est pas adouci, `v4-fleche-traverse-boite.html` garde ses constats. Bruit mesuré : 174 pages du parc à 1 440 px, compte V4 identique page par page avant et après (8 563 constats, 0 échec de rendu) ; le défaut ne se voit qu'à 390 px.
+**(2) La vue tableau à cinq colonnes ou plus se replie en cartes sous 560 px** (bord droit à 394 px pour 390 avec cinq séries,
+jusqu'à 460 px de viewport avec six ; `data-label` posé par le composant). **(3) À 33 mois, l'étiquette du dernier mois**
+(« sept. 2026 », 13 px hors du viewBox) **et la graduation la plus haute** (2 px) **ne sont plus rognées** : les étiquettes de
+catégorie s'écrivent une sur k en partant de la dernière, la marge droite suit la demi-largeur de cette étiquette, la marge
+haute tient la graduation. **(4) Sans totaux, la dernière graduation horizontale** (« 20 000 », 6 px) **n'est plus rognée** :
+la marge droite suit sa demi-largeur. **(5) Un composant d'entonnoir**, `assets/entonnoir.css` et `assets/entonnoir.js`, au
+modèle des barres empilées (donnée JSON déclarée, dessin dérivé, voie navigateur et `--injecter`, vue tableau, infobulle en
+complément) : chaque étape écrit son effectif UNE fois (la barre horizontale à une série l'écrit deux fois, mesuré), puis sa
+conversion « x % de l'étape précédente · y % du départ » ; une étape plus grande que la précédente est refusée. Composant
+n° 16 de `references/composants.md`. Fixtures `barres-5-series*`, `barres-33-mois*`, `barres-horizontal-sans-totaux*`,
+`barres-grille-liaison`, `entonnoir` et `barres-empilees-ancien.css` (la feuille d'avant, figée) ; 27 cas au self-test
+(`run_graphiques_tf1875`) ; le rognage se mesure (chaque `<text>` d'un graphe tient dans son `<svg>`). **Version MINEURE** : un composant s'ajoute, les trois autres défauts sont correctifs.
+
+**1.35.0 (19/10/2026)** — **V4 compare un texte de premier niveau aux libellés d'un groupe frère sans titre (TF-1891,
+RT-10 du lot Produit-84 20261019b, décision R-58 option (a)).** Le retour : « Sources lues au 19/10/2026 », texte SVG de
+premier niveau ancré à droite, posé sur le dernier libellé d'une légende `<g transform>` sans `<title>` ; `render_page.py
+--selector .diagram-wrap` rendait PASS, 0 V4, et le défaut ne s'est vu que sur la capture. Le jugement par boîte compare le
+texte au groupe ENTIER, dont la boîte est large : un libellé court recouvert par un texte long ne pèse pas 10 % du plus
+petit des deux et passe. `render_page.py` compare maintenant ce texte à CHAQUE `<text>` descendant d'un groupe frère sans
+titre, boîte contre boîte, au même seuil et avec la même grammaire d'exemption (`data-overlap-ok="<id du libellé>"`, nommée
+dans le message) ; un groupe titré reste un nœud jugé par sa boîte. Trois fixtures `v4-texte-sur-libelle-de-groupe-*` jouées
+dans les deux sens : la rouge rendait PASS (0 constat), elle rend 1 ; la verte (texte sous la légende) et celle à paire
+déclarée en rendent 0. **Bruit mesuré avant de durcir** : 174 pages du parc (15 dépôts, 1 440 px), 0 page nouvellement
+accusée, compte V4 identique page par page avant et après (47 pages déjà accusées, 8 563 constats), 0 échec de rendu
+(`references/zero-defaut-visuel.md`). Écart au retour : la page de Produit-84 n'est pas dans ce dépôt ; la fixture reproduit
+le mécanisme (texte long sur un libellé court), pas la page. **Version MINEURE** : une famille bloquante juge plus juste,
+aucun verdict de la recette existante ne change.
+
+**1.34.1 (19/10/2026)** — **la langue déclarée d'une page se lit et se juge pour ce qu'elle est, et aucun script du
+skill ne plante en console Windows (TF-1884, RT-3 du lot Produit-84 20261016b, décision R-58 option (a)).** Une fiche
+demandée en espagnol était refusée sur le seul motif de `lang`, et le script plantait en `cp1252` en affichant l'échec.
+**(1) A3 lit `lang` sous ses trois écritures HTML** (guillemets doubles, apostrophes, valeur nue) et le juge **bien formé**
+(étiquette BCP 47 : `es`, `es-419`, `fil-PH`, `zh-Hans`). Avant : `lang='es-419'` et `lang=fil-PH` échouaient comme
+« absents », et `lang="es_ES"` échouait pour la mauvaise raison (« absent » alors que la langue est déclarée). Après : les
+deux premiers passent avec l'avertissement TF-0241, le dernier échoue en « invalide » avec les formes qui passent ; l'absence
+reste bloquante et son message dit de déclarer SA langue, jamais « fr » pour passer (WCAG 3.1.1). Ce que le contrôle ne
+juge pas est publié au non jugé : l'existence de la langue au registre IANA et la langue réelle du texte. **(2) UTF-8
+forcé** dans `check_completude.py` et `mesurer_bruit.py`, les deux scripts qui ne le faisaient pas : le premier plantait en
+`UnicodeEncodeError` sur « → » (reproduit avant correction, exit 1) dès qu'on le lançait depuis une console Windows ; le
+banc masquait le défaut parce qu'il joue ses sous-processus en `-X utf8`. Cas du banc : `run_console_cp1252`, qui impose
+`cp1252` sans `-X utf8` (rouge : un script jouet qui ne s'en soucie pas échoue). Fixtures `charte-lang-es`,
+`charte-lang-apostrophes`, `charte-lang-trois-lettres`, `charte-lang-invalide`. **Version CORRECTIVE** : aucune règle neuve,
+aucun verdict de la recette existante ne change. Écart au libellé du registre : la variante `client-a-page-html` citée par
+le retour n'est pas dans ce dépôt, et `lang="es"` entre guillemets doubles passait déjà ici (mesuré, fixture `charte-lang-es`).
+
+**1.34.0 (18/10/2026)** — **le canvas est déclaré hors mesure, et ses aplats sont mesurés : une règle de rendu neuve,
+`V22` (TF-1859, RA-14 du lot Produit-79 20261017c), bloquante.** Un graphique Apache ECharts aux séries presque
+blanches (jetons `--cat-1` à `--cat-6` absents, légende sans pastille) rendait `render_page.py` PASS en clair et en sombre
+aux 7 largeurs : le contenu d'un `<canvas>` n'est pas dans le DOM, et le périmètre de non-mesure ne le disait pas.
+Deux apports. **(1) Le périmètre de non-mesure** porte à chaque exécution, PASS compris, texte et JSON, une ligne
+« CANVAS » : ce qu'un canvas soustrait aux mesures du DOM, ce que V22 mesure, ce qu'elle ne mesure pas, et combien de canvas
+CETTE exécution a rencontrés, mesurés, jugés indiscernables ou non mesurables. **(2) V22** (famille
+`v22_canvas_indiscernable`) capture chaque `<canvas>` d'au moins 48 px, relève ses aplats de couleur et les compare au fond
+vu par le lecteur, au seuil de V9 (1,2:1) ; sans dépendance nouvelle (Pillow, déjà requis par V9). Un canvas sans aplat
+(courbes) est déclaré non mesurable. Bruit mesuré sur le parc : 0 accusation sur 54 canvas mesurés
+(`references/zero-defaut-visuel.md`). Trois fixtures `canvas-*` et huit cas au self-test (`run_canvas_v22`) : la rouge
+rendait PASS avant, FAIL à 1,08:1 après. **Version MINEURE** : une famille bloquante s'ajoute pour un défaut certain (contenu
+invisible) ; aucun verdict de la recette existante ne change.
+
+**1.33.1 (18/10/2026)** — **le composant « barres empilées » tient à douze catégories (TF-1858, RA-13 du
+lot Produit-79 20261017c).** Avec 12 catégories, `render_page.py` rendait V4 « 0 » × « oct. 2025 » à toutes
+les largeurs et des totaux « 9 158 sessions » × « 9 984 sessions » qui se chevauchent dès que l'unité est un
+mot ; les fixtures du composant n'avaient que 2 à 5 catégories. `assets/barres-empilees.js` : l'étiquette
+« 0 » de l'axe vertical se pose au-dessus de sa ligne, les totaux ne s'écrivent que s'ils tiennent (bande de
+la colonne en vertical, viewBox en horizontal, où ils étaient rognés : « 9 984 sess ») et passent sinon à
+l'infobulle (« Total de la colonne »). Banc : `fixtures/barres-12-categories-ancien-rendu.html` (rendu gelé de
+l'ancien composant : 17 constats V4 à 1440 px) et `fixtures/barres-12-categories.html` (composant actuel, par
+référence : 0 constat à 1440 et 390 px), jugés par `render_page.py` ; `exemple-tuiles-et-barres-empilees.html`
+et sa copie embarquée du composant sont réécrits. **Version CORRECTIVE** : un défaut de composant, aucune règle
+neuve.
+
+**1.33.0 (18/10/2026)** — **une règle de lisibilité neuve, `L39` : une forme que le socle couvre ne se
+réalise pas à la main (TF-1857, RA-12 du lot Produit-79 20261017c), en avertissement.** Classe
+`graphique-maison-hors-composant-du-socle`. Un tableau de bord de six graphiques SVG écrits à la main
+et d'une rangée de sept chiffres clés en `div.kpi` est passé sous tous les contrôles du socle, alors que
+`composants.md` § 14 et § 15 déclaraient les composants obligatoires. `check_html.py` mesure maintenant
+la structure : une rangée d'au moins trois blocs de chiffre clé sans la structure du composant
+(`.tuile-valeur`) ni `data-kpi-filtre`, et un `<svg>` hors composant qui trace au moins quatre barres
+(même épaisseur, pas régulier, même arête, longueurs variables). Écart voulu :
+`data-hors-composant="<raison, 8 caractères au moins>"`. Bruit mesuré sur les 176 pages des `output\` du
+parc : 101 pages accusées (57 %), 98 pour la rangée, 8 pour les barres, zéro fausse accusation relevée
+(`references/lisibilite.md`, § L39) — d'où l'avertissement, non le blocage. Douze cas dans
+`self_test.py` (`run_l39_graphique_maison`), onze fixtures `l39-*`. Ce que L39 ne voit pas (barres en
+`<div>`, canvas, courbes) est publié au périmètre de non-mesure. **Version MINEURE** : une famille
+d'avertissement s'ajoute, aucun verdict existant ne change.
+
+**1.32.0 (17/10/2026)** — **une règle de rendu neuve, `V21` : les largeurs de contenu mélangées
+(TF-1307, décision D-9 option (b) du 17/10/2026), en avertissement.** Réécriture comme candidature
+NEUVE de la règle écrite en septembre sur un poste et perdue avant publication (elle s'appelait V19 ;
+ce numéro est pris depuis par « mot coupé », d'où un numéro neuf). Famille `largeurs_melangees` de
+`render_page.py` : des blocs de contenu frères (`section`, `article`, `.chap`, `[role=region]`,
+enfants directs d'un même parent en flux vertical) dont les largeurs RENDUES diffèrent de plus de
+max(8 px, 1,5 %) — un chapitre en pleine largeur suivi d'un chapitre bridé par `.chap.lire` (retour
+humain TF-1038). Exception déclarée : `data-largeur-exception="<raison>"` sur le bloc. Quatre
+fixtures `v21-*` jouées dans les deux sens ; taux d'accusation mesuré sur le parc livrable du pilot
+avant entrée (`references/zero-defaut-visuel.md`, § V21). **V20 reste vide** : le numéro appartenait à
+la règle « doute invisible », déclarée perdue le 17/10/2026 et non réécrite ; le réutiliser ferait
+désigner autre chose à tout « V20 » déjà écrit au registre. **Version MINEURE** : une famille
+d'avertissement s'ajoute, aucun verdict existant ne change.
+
+**1.31.0 (15/10/2026)** — **neuf retours de produits corrigés à la cause ; les deux règles neuves
+entrent en avertissement.** · **L38** : une ligne de listing qui renvoie, par une ancre, vers une
+section d'un autre chapitre qui reprend son objet et le complète (TF-1742, classe
+`page-html-liste-renvoi-sans-detail`). · **L3 bis** juge le `<title>` d'un groupe SVG et le `title`
+d'un élément de ligne de tableau ligne par ligne contre le texte de SON groupe ou de SA ligne,
+préfixe de code retiré (TF-1763) ; la paraphrase et l'inclusion plus large sont publiées au
+périmètre de non-mesure. · « Indice » sur des numéros de version AAAAMMJJ<lettre> n'est plus une
+colonne calculée (TF-1743). · `assets/boilerplate.html` pose les six jetons `*-solid` que V16
+prescrit, dans ses trois projections (TF-1744). · `render_page.py` reconnaît une **mire de
+connexion** (champ mot de passe visible) et nomme `--etat-session` (TF-1788) ; les messages L2
+nomment les trois sorties qui passent, dont `data-page="donnees"`, chacune jouée au banc (TF-1799) ;
+`entete_desaligne` ne mesure plus un en-tête réservé au lecteur d'écran (TF-1800) ; sous `--theme`,
+le thème demandé tient contre une page qui réécrit `data-theme` depuis sa propre clé (TF-1775) ;
+V2 lit un fond écrit en `oklch()` (ou tout autre espace de couleur) au lieu de le sauter et de
+juger le texte sur un blanc supposé : une maquette sombre de la forge design rendait 2 faux
+constats à 2,14:1 à chaque largeur, 0 après (fixtures `v2-svg-panneau-oklch-clair.html` et
+`-sombre.html`) ; V4 lit de même le fond d'une barre collante, et une barre opaque écrite en
+`oklch()` survole sans être accusée (fixtures `v4-sticky-oklch-opaque.html` et `-translucide.html`).
+
+**1.30.0 (14/10/2026)** — **`check_html.py` ne plante plus sur une accolade dans une valeur de la
+feuille** : un trou de gabarit dans une `url()` levait une IndexError, la page est jugée et A5
+avertit que la lecture de la feuille y est partielle (TF-1682). · **L37 bloque** : une ligne en
+statut défavorable sans action échoue, sur décision humaine prise au vu de son bruit (8 pages du
+parc, toutes de vrais cas ; 2 passent de PASS à FAIL — TF-1688, `references/lisibilite.md`). ·
+La plage des règles L annoncée en prose (description comprise) dit **L1–L37**, et la recette la
+compare à la dernière règle écrite (TF-1689).
+
+**1.29.0 (14/10/2026)** — **cinq retours de produits corrigés à la cause ; les deux règles neuves
+entrent en avertissement.** · **L37** : une ligne en statut défavorable (Écart, Partiel, Non
+conforme…) porte son action, colonne d'action ou lien interne (TF-1664, RT-58). · **L12 en
+cellule** : deux faits ou plus enchaînés par des points-virgules dans une cellule de tableau
+(TF-1665, RT-33). · **L28** ne juge plus une colonne sur le seul mot « date » de son en-tête : une
+cellule au moins doit porter du temps (TF-1677). · **`controles_desalignes`** ne prend plus la
+grille sommaire latéral + contenu pour une rangée de formulaire (TF-1663, RT-8). ·
+**`render_page.py --etat-session` et `--theme`** : une application derrière une connexion se juge
+connectée, matrices comprises, et un thème sombre se rend sur demande (TF-1674, RD-1). · Le
+gabarit multi-bandes de `factory-schemas`, **instancié**, passe `check_html.py` et
+`render_page.py` aux six largeurs, rejoué par le self-test (TF-1660, RT-5). Détail et bruit mesuré :
+`references/lisibilite.md` (L12 en cellule, L28, L37), `references/zero-defaut-visuel.md` (V11).
+
+**1.28.1 (13/10/2026)** — **une page lue par une machine se déclare, au lieu d'être exemptée à la
+main.** · `check_html.py --classe=source-machine`, ou `<meta name="classe-artefact"
+content="source-machine">` dans la page : L7, L25 et le `.contenu` de L30 (chapitre) ne sont pas mesurés, et
+sont nommés au périmètre de non-mesure ; tout le reste est jugé, dont le dénominateur de couverture
+de L30 (couverture) (TF-1589, RT-115 ; `references/lisibilite.md`, classes d'artefact).
+
+**1.28.0 (13/10/2026)** — **six retours humains sur des pages rendues corrigés à la cause, et leurs
+règles neuves entrent en avertissement.** · **L25 / L6 / `sommaire_perdu`** reconnaissent une barre
+`role="tablist"` comme sommaire : plus de menu latéral exigé en plus des onglets (TF-1626, RA-6).
+· **Page de données** : prose pleine largeur par défaut, `.chap.lire` en option déclarée, V18 (a)
+ne la compte plus (TF-1622, RA-3). · Le composant de filtres aligne l'en-tête d'une colonne
+alignée à droite (`th.tf-num`, déclencheur à gauche du libellé) et la famille
+**`entete_desaligne`** mesure l'écart libellé / valeurs, en avertissement (TF-1623, RA-4).
+· `--matrice-etats` ne joue plus un déclencheur de filtre MASQUÉ : il ouvre d'abord l'onglet qui
+le porte (TF-1618, RA-1). · En avertissement : **L12** sur une énumération de quatre noms ou plus
+par virgules (TF-1621, RA-2), **L35** typographie française aux coupures de ligne (TF-1384),
+**L36** contenu d'auteur livré au lecteur (TF-1283), et `check_html.py` joue l'oracle d'écriture
+du pilot sur le **texte visible** de la page (`--sans-style` pour s'en passer ; TF-1624, RA-5).
+
+**1.27.0 (12/10/2026)** — **le rendu juge le tracé d'une flèche et l'encre d'un texte SVG, et une
+règle neuve se mesure sur tout le parc avant d'entrer.** · **V2** juge un `<text>` SVG sur son
+`fill`, contre la forme remplie posée dessous, plus sur l'encre héritée de la page (TF-1368 :
+28 libellés sur 35 d'un schéma remis à 1:1, V2 muet). · **V4** juge une liaison SVG par son tracé
+échantillonné : traversée d'une boîte intermédiaire et flèches confondues sont vues, la boîte
+englobante d'une flèche coudée n'accuse plus ses voisines (TF-1369 : 4 431 constats V4 ramenés à
+3 013 sur 387 pages existantes, une seule page nouvellement accusée). · Famille
+**`decor_sur_ancetre`**, en avertissement : un décor en `::before` / `::after` sur l'ancêtre d'un
+texte aveugle son contraste (TF-1417), règle d'auteur dans `composants.md`. · **V19 passe en
+avertissement** : 8 pages sur 385 existantes accusées (TF-1350). · **`scripts/mesurer_bruit.py`**
+(TF-1225) : un rendu par page partagé entre familles, cache par empreinte, rendus parallèles,
+avant/après par `--avant-ref`. · Badge **`ko`** au catalogue, sur le rouge du gabarit (TF-1263) ;
+le poseur de composants n'accuse plus une page en CRLF (TF-1486) ; chemins cités résolus (C1,
+TF-1222) et références conformes à `check_markdown` (TF-1269). **Version MINEURE** : deux familles
+bloquantes jugent plus juste, aucune ne disparaît.
+
+**1.26.0 (28/09/2026)** — **`check_completude.py` compte aussi la structure.** TF-1436 (lot
+Produit-78 20260928a, RP-2) : une liste numérotée fondue en un paragraphe, ou un titre rétrogradé
+d'un niveau, rendait PASS à 100,3 % de couverture de MOTS — la structure disparaissait sans
+qu'aucun contrôle ne le voie. Le contrôle compte désormais aussi les titres par niveau et les
+éléments de liste par type (numérotée, à puces) ; `--seuil` ne couvre que les mots, jamais la
+structure, qui reste bloquante sans dérogation possible. Fixtures `structure-source.md` /
+`structure-verte.html` / `structure-rouge.html`.
+
+**1.25.0 (23/09/2026)** — **la charte de police des pages est celle des présentations de
+l'émetteur.** Décision humaine D-5 (a) du 22/09 (« la charte des présentations fait foi, les pages
+s'y alignent »), exécutée par D-11 (a) le 23/09 (TF-1023). La marque Factory était portée par deux
+chartes depuis le 11/09 : Roboto / DM Sans pour les pages, Montserrat / Inter pour les
+présentations. · Le gabarit ouvre désormais ses piles par **Montserrat** (titres) et **Inter**
+(corps), les familles que `../factory-pptx/scripts/lire-marque.mjs` lit au dossier de marque ;
+**Roboto et DM Sans restent en premier repli**, si bien qu'une page livrée avant l'alignement n'est
+pas fautive. · La recette de `quality-oracles` **relit la charte à la source** et refuse un gabarit
+dont une pile ne commence pas par les familles de la charte (non jugé, motif écrit, quand le dossier
+de marque n'est pas sur le poste). · Les juges qui exemptent les polices de la charte suivent :
+`oracle-slop` (forge-design) lit la paire dans ce gabarit installé, le profil `factory` et le gate
+d'écriture reconnaissent Montserrat et Inter. · Les composants embarqués (`infobulle.css` et ses
+voisins) ne changent **pas** : leur empreinte scelle chaque page qui les porte, et leur repli « DM
+Sans » reste une famille de la pile. **Version MINEURE** : les jetons et leurs noms ne changent pas,
+seules les familles de tête des piles.
+
+**1.24.0 (20/09/2026)** — **l'oracle cesse de juger une page qui n'existe que sur le poste de
+l'auditeur, et il croise enfin deux filtres.** Restes archivés de TF-0480 et TF-0493, rouverts par
+TF-1093. · **Mode INSTANCE SERVIE** : une URL `http(s)://` se donne à la place d'un chemin, et
+c'est la page **telle qu'elle est servie** qui est mesurée. Ce que `file://` ne peut pas voir, et
+qui est mesuré ici : un actif référencé en chemin **absolu** (`/tokens.css`) n'y résout pas et
+disparaît sans bruit — fixture `servi-actif-absolu.html`, **PASS sur fichier, 2 bloquants V1 une
+fois servie** (`scrollWidth 4284 px > viewport 1440 px`) ; sa corrigée passe des deux côtés. Le
+mode n'accepte que `localhost` / `127.0.0.1` / `::1` ; toute autre origine **arrête l'outil** sans
+`--origine-distante`, et une page distante reste une **donnée tierce** — lecture seule, aucune
+authentification, aucun secret saisi. Un verdict pris sur fichier **dit désormais** qu'il ne juge
+pas le livrable servi. · **`--matrice-paires`** : les **filtres croisés**, énumérés par paires
+(colonne A = valeur a) × (colonne B = valeur b), chaque croisement sur une page neuve. La matrice
+de TF-0493 ne pose qu'**un** filtre à la fois : une intersection vide que chaque facette prise
+seule ne montre pas lui échappe entièrement. Fixture `paires-croisement-muet.html` : **PASS** sous
+`--matrice-etats` seule — c'est la preuve du trou —, **FAIL** avec 2 `etat_muet` sous
+`--matrice-paires` ; sa corrigée passe. La **borne est affichée**, toujours : « N paires jouées sur
+M possibles », plafond `--paires-max` (24), croisements servis en **tour de rôle** entre paires de
+colonnes pour qu'un plafond ne soit jamais dépensé sur un seul couple. · **La mesure se publie
+PRÊTE** (`mesure_js()`, `mesure_large_js()`) : `MEASURE_JS` est un **gabarit** — il porte
+`__ALIGN_TOL__`, `__L2_MIN_VIEWPORT__`… que `run()` remplaçait chez lui. Un consommateur qui
+importe le module pour ne **pas** recopier la formule recevait le gabarit, et son évaluation levait
+`ReferenceError: __ALIGN_TOL__ is not defined` — mesuré le 20/09 sur le pan `plancher` de
+forge-tests, dont chaque route devenait « visitée mais non mesurée ». La constante reste exportée ;
+la préparation devient une **porte publique**, comme `--familles`. · Le banc sert lui-même ses
+fixtures (serveur HTTP de la bibliothèque standard, port libre, fermé en `finally`) : **21 cas
+neufs**, aucune dépendance ajoutée, aucun accès réseau externe. **Version MINEURE** : le mode
+fichier reste le défaut et son comportement ne change pas.
+
+**1.22.0 (14/09/2026)** — **le socle cesse d'accuser ce qu'il impose, et ses composants disent ce
+qu'ils font.** · Trois règles de `check_html` jugeaient le mauvais objet : A5 comptait les polices
+embarquées que A1 exige (TF-0984), la police Syne se cherchait dans le texte au lieu des
+déclarations (TF-1049), L30 (chapitre) trouvait « gate » dans `aggregate_type` (TF-0969). · Deux règles de
+STRUCTURE naissent : **S2** refuse un même ensemble énuméré deux fois, en tableau et en fiches
+(TF-1036), **S3** exige qu'une colonne déclarée relevée porte sa source par ligne et que la page
+cite son garde-fou (TF-1053). · `render_page` sépare l'en-tête bridé par la fin de son tableau
+(informatif) de l'en-tête recouvert (bloquant), sans désarmer le tableau vide (TF-0968, TF-0973,
+TF-1060), laisse survoler une barre collante opaque (TF-1061) et n'accuse plus un champ de saisie
+(TF-0847). · Les composants : une carte ne filtre que son tableau (TF-0970), une colonne à valeur
+unique le dit dans son en-tête et sa forme se lit sur le `<th>` (TF-1051, TF-1052), plus aucune
+balise fermante en clair dans un asset inlinable (TF-1062), zéro couleur en dur, espacement hors
+échelle ou focus improvisé dans les feuilles des composants (TF-1059). **Version MINEURE** : jouée
+contre 301 pages des dépôts consommateurs, **zéro accusation nouvelle**, six faux positifs retirés.
+
+**1.20.0 (08/09/2026, soir)** — **six items d'une seconde campagne, et une seule leçon : ce que
+personne ne RENDAIT, personne ne le mesurait.** · **Deux gabarits du parc échouaient aux quatre
+largeurs sans que rien ne le dise**, parce qu'ils sont des fragments ou des pages que la recette
+ne rendait pas : le canevas de schéma différentiel (1 bloquant V2 à chacune des quatre largeurs —
+l'ambre du socle à **3,08:1** sur un glyphe de légende, sous les 4,5:1 d'un texte) et le canevas
+ERD (**11, 12, 12 et 18** bloquants). Les deux sont désormais POSÉS par la recette dans une page
+hôte **générée depuis eux**, jamais recopiée ; après correction, **0 bloquant aux quatre
+largeurs**, et le sens rouge en rend 4 et 47. Le canevas ERD pose lui-même ses déclarations
+(`data-overlap-ok` sur les **arêtes seules**, `data-rognage-assume` sur son point de montage,
+repli du dictionnaire sous 900 px, `.dd-mono`) au lieu de les faire repayer à chaque
+instanciation, et ses points de montage deviennent des **paramètres** — deux schémas sur une page
+étaient impossibles. · **La visibilité d'une ligne se calcule enfin à UN SEUL endroit**
+(`assets/visibilite-lignes.js`) : elle est la **disjonction** des attributs déclarés par tous les
+mécanismes. Avant, chaque composant la recalculait depuis sa seule liste et écrasait les autres
+sans un mot — un produit avait dû poser un `MutationObserver` sur `hidden` puis déplier tout son
+arbre à chaque changement de filtre. · **Le socle sait plier une hiérarchie** (`table-arbre.js` +
+`.css`, **L31**) : mesuré sur 48 lignes et 3 niveaux, **3 visibles à l'arrivée** au lieu de 48, et
+le pliage **survit** au passage des filtres. · **Deux règles ferment la porte à l'explication qui
+n'explique rien** : L3 bis lit désormais `data-definition` et juge aussi la définition d'un
+`<th>` qui répète son propre libellé ; **L18 bis** exige la légende d'un SYSTÈME d'identifiants
+avant son premier tableau — la page fondatrice était **verte à L18 (jeton)**, glosée jeton par jeton, et
+son lecteur ne savait toujours pas ce qu'est un repère S. · **Le socle dit où s'arrête son
+périmètre** : un tableau, avant le quick start, renvoie les schémas de base de données, ERD et
+schémas différentiels vers `factory-schemas` — leur absence de renvoi avait fait écrire puis
+jeter un composant de 40 cartes.
+**Version MINEURE, et c'est mesuré, pas supposé** : tout est ajout compatible. Les trois règles
+neuves ont été jouées contre les dépôts qui CONSOMMENT le socle avant d'être posées —
+**357 à 362 pages HTML suivies de huit dépôts du parc, zéro constat nouveau** à chaque fois. Le
+seul changement de comportement d'un composant existant (le composant de filtres cesse de forcer
+`display:''` sur une ligne qu'un autre mécanisme masque encore) est sans effet quand l'arbitrage
+n'est pas chargé, et les deux composants gardent leur repli à l'identique.
+
+**1.19.0 (08/09/2026)** — **huit items d'une campagne, et une seule leçon : le socle se
+contredisait lui-même, ou mesurait à côté du défaut que l'humain voyait à la première
+ouverture.** · **Deux lignes du même gabarit se défaisaient l'une l'autre** : `table-filters.js`
+posait `position: relative` **en ligne** sur chaque `<th>` (TF-0899) et `.table-hote
+{ overflow-x: auto }` faisait du conteneur la boîte de défilement du `thead` collant (TF-0900).
+Chacune, seule, suffisait à défaire le geste L29 posé vingt lignes plus bas — `<th>` à 441 px
+pour 337 attendus, une à deux lignes recouvertes **en permanence**, `<th>` à **-96 px** après
+200 px de défilement. L'ancrage ne se pose plus que sur un `<th>` dont la position **calculée**
+vaut `static` ; le conteneur ne défile plus qu'**en dessous de 900 px**, là où le repli en cartes
+masque déjà le `thead`. · **Rien ne mesurait le rendu APRÈS DÉFILEMENT** (TF-0901) : huit
+en-têtes posés sur leurs lignes, **trois oracles PASS**, l'humain seul détecteur — L29 juge des
+déclarations, V4 compare des frères tous décalés pareil, l'oracle de filtres juge le marquage.
+**V15** mesure au repos (recouvrement = bloquant) puis après défilement (un `sticky` hors de son
+`top` déclaré = constat), sans aucun jeton : elle compare le **rendu** au **déclaré**. ·
+**Le défaut vit ENTRE deux mesures** (TF-0910) : les cinq teintes d'état pastel du socle vivent
+entre L\* 93 et 97, chaque badge tenait 4,5:1, et le lecteur ne les distinguait pas. **V16**
+mesure la **distance** entre fonds d'états (Delta-E CIE76 **et** luminance, seuils cumulatifs) ;
+la charte fournit des `*-solid` à encre blanche. · **Une balise citée en toutes lettres**
+(TF-0896) : le commentaire S-G1 du boilerplate a fait embarquer le `<head>` dans la feuille d'une
+page générée — **une** règle CSS pour 27 350 caractères, page nue, trois passes d'oracles à
+mesurer des symptômes. **A5** juge une feuille sur sa **densité de règles** et sur les résidus de
+balisage. · **Une capture qui échoue rendait un traceback au lieu d'un verdict** (TF-0897) : la
+branche d'échec existait, la sortie texte la traversait en `Path(None)`. · **Une page de
+couverture doit dire sur combien elle porte** (TF-0909) : 47 lignes de mapping, trois PASS, et
+38 colonnes + 22 mesures orphelines trouvées en recette le soir même — **L30 (couverture)**. · **Le poseur de
+composants s'importe enfin** (TF-0890) : son analyse d'arguments s'exécutait au chargement et
+tuait tout importateur ; un produit avait réimplémenté le format du bloc dans un autre langage,
+*la classe de défaut que ce script existe pour éliminer*. `--poser` et `--constat <page>`
+rendent la parité jouable des deux côtés. **Bruit mesuré avant chaque mise en bloquant : 0
+constat sur les 159 documents HTML du skill.** Recette 173 → 208 cas ; jeu de règles 36 → 38,
+empreinte `c16177d42a88` → `9dffeac5d60f`.
+
+**1.17.0 (02/09/2026)** — **huit retours d'un lot produit, et une seule famille de cause : le
+socle DÉCRIVAIT sans EXIGER, ou mesurait à côté du défaut.** · **Le composant de filtres lisait un
+TEXTE là où il fallait lire une VALEUR** (TF-0768/0769/0781/0782) : `parseFloat("1 000")` vaut
+**1** — l'espace insécable de milliers arrête l'analyse — donc *toute page en français triait
+faux, en silence*, et le produit a dû réarmer son propre tri. Même lecture naïve pour les
+facettes, rangées par ordre alphabétique (« août 2025, avr. 2026, déc. 2025 »), et une heuristique
+`1 < n < lignes` qui **privait de facette la colonne clé** — huit marchés distincts sur huit
+lignes. Tri et facettes lisent désormais `data-v`/`data-sort`, sinon un nombre **après** retrait
+des espaces ; un même comparateur sert aux deux, donc une date ISO se range chronologiquement
+(G8) ; **chaque** en-tête porte sa facette, la cardinalité ne décide que de la FORME
+(`data-tf-forme`), et la seule sortie est une exemption **déclarée avec motif** (G7). L'état se
+lit et se rejoue — `api.etat()`, `api.rafraichir()`, `init(table, { etat })` — au lieu d'être
+relu dans le DOM par la page hôte. Trois fixtures jouées **dans Chromium** sur l'asset réel : deux
+calculent dans la page l'ordre qu'aurait rendu l'ancienne lecture et exigent qu'il DIFFÈRE.
+· **Cinq règles de lisibilité neuves**, chacune née d'un retour humain direct : **L25** un
+sommaire visible en permanence au-delà de trois chapitres (« fournis un menu sur la gauche ») ;
+**L26** une page de données se DÉCLARE et prend toute la largeur, la colonne de lecture reste pour
+la prose — l'arbitrage manquait, et le même défaut a été signalé « des dizaines de fois » ;
+**L27 (colonne)** un `<th>` définit sa colonne, avec son **unité** (une hypothèse en euros/an était
+multipliée par un nombre de séjours) ; **L28** le temps s'affiche comme du temps, valeur d'ordre
+obligatoire ; **L29** l'arbitrage `header` collant / `thead` collant, tranché au socle par le
+token `--hh` — un **produit** avait dû le trancher seul. · **Quatre familles de rendu**
+(V11–V14) : contrôles d'une même rangée alignés à 2 px (« textbox pas alignés »), tableau rogné
+dans un conteneur défilant **bloquant** au-delà de 1 280 px (le débordement était relevé, puis
+classé « acceptable » sans mesure), bloc de texte sous 70 % de son conteneur, sommaire perdu au
+défilement. **Bruit mesuré avant mise en bloquant : 0 constat sur les 153 documents HTML du
+dépôt.** · **`--red` / `--red-fill` / `--red-line`** entrent à la palette (TF-0755) : le livrable
+conforme de la maison les employait déjà, la documentation ne les portait pas — *une palette dont
+un registre entier n'est écrit nulle part se fait réinventer*. Recette 141 → 171 cas.
+
+**1.16.0 (02/09/2026)** — **trois défauts d'une seule famille : un contrôle qui décrit son cas
+et ne le voit pas.** · **Le balisage d'emphase cesse d'être du texte** (TF-0720) :
+`**RD-23** *(glose)*` était refusé par M18 comme identifiant muet — le contrôle prenait les
+quatre caractères suivant le jeton et y trouvait les astérisques de fermeture du gras. Quatre
+refus à l'écriture d'un seul lot, dont deux sur du contenu conforme ; et la MÊME cause avait
+déjà été signalée le 22/08 sur un autre oracle, une cellule `**90**` non lue comme un nombre
+(re-somme à 189 au lieu de 99). `check_markdown.py` expose désormais `neutraliser_emphase()`,
+qui blanchit les marqueurs **en préservant les positions**, et la fenêtre de glose se prend sur
+le **paragraphe reflué**, plus sur la ligne physique — la coupure à 95 colonnes ne porte aucun
+sens. Mesure : la fixture verte rendait FAIL sur deux faux positifs, elle rend PASS ; la rouge
+mord toujours sur les deux jetons vraiment muets. · **L24** (neuve, BLOQUANTE) : un badge de
+statut engageant est **résolvant** (TF-0719). Un `span.badge.acte` de titre « Décision prise le
+22 août 2026 par la direction… » a été posé sur une décision **jamais prise**, sur cinq
+emplacements d'un livrable client — et il est passé, parce que L3 n'exige d'un badge qu'une
+légende, et elle était là. *Le vocabulaire était bon, la discipline absente.* Un badge de statut
+est l'affirmation de rang la plus visible de la page : il porte désormais un lien, un
+`aria-describedby` ou un `data-decision` vers une trace **qui se déclare décision**. Règle de
+dégradation à sens unique, écrite dans `lisibilite.md` : sans cible, `propose` — jamais
+l'inverse. · **`l2_gouttiere` regarde enfin les `<table>`** (TF-0694) : la règle décrivait ce
+défaut au mot près et au seuil exact, et rendait PASS dessus — elle commençait par
+`if (cs.display !== 'grid') continue`. *Une mise en page `intitulé | contenu` en `<table>` n'est
+pas un tableau de données : c'est la même intention avec l'autre outil.* Elle n'avait pas
+échoué, **elle n'avait pas été appelée**, et rien ne le disait : sur la fiche fautive (intitulés
+à 32 %), verdict PASS et zéro constat sur les treize familles, après deux fiches livrées et
+trois régénérations. On mesure la largeur **rendue** de la première colonne, avec les mêmes
+garde-fous ; seuil 20 % inchangé, et une fixture verte garantit qu'un vrai tableau de données à
+deux colonnes comparables reste PASS. Recette 127 → 141 cas.
+
+**1.15.0 (24/08/2026)** — **quatre frictions d'un lot client, dont deux contradictions du socle avec
+lui-même.** · **L19 n'accuse plus le repli en cartes** : `composants.md` §6 impose
+`overflow-wrap: anywhere` sur les cellules comme palier OBLIGATOIRE, et L19 traitait `td` comme de la
+prose — huit livrables PASS le 19/08 rendaient douze FAIL le 24/08 sans qu'un octet ait bougé. La
+cause profonde était que `regles_css` APLATISSAIT la feuille sans garder le contexte d'at-rule : un
+sélecteur écrit sous `@media` était jugé comme s'il s'appliquait partout. Le contexte est désormais
+porté, et l'exemption exige DEUX conditions cumulatives (sous media query ET signature de repli) —
+un `anywhere` sur un `p` sous media query reste jugé. · **Le calibrage du repli est MÉCANISÉ** : il
+était écrit en prose, donc retraduit par chaque émetteur, et mal — repli réglé à 900 px quand un
+tableau de huit colonnes débordait jusque vers 1 400 (16 débordements bloquants, invisibles cinq
+jours). Trois paliers lisent le nombre de colonnes dans le marquage ; plus rien à calibrer. Deux
+défauts trouvés en l'écrivant : un jeton `--replier` qui ne déclenchait RIEN (une propriété
+personnalisée n'active aucune règle — une affordance non câblée dans le document qui l'enseigne), et
+`width: 100%` sans `box-sizing` qui débordait de son propre remplissage. · **V4 tolère la géométrie
+de police entre inline frères** : la boîte d'un inline vaut la hauteur d'em, pas l'interligne, donc
+deux surlignages de lignes voisines se recouvrent sans qu'un pixel peint ne se superpose — mesuré sur
+1 246 surlignages : 5 px à interligne 1,22, rien à 1,45. · **L'encre du surlignage se POSE** :
+`composant-recherche.md` prescrivait `color: inherit`, ce qui rendait un badge à texte clair
+illisible en recherche active — 21 constats de contraste bloquants, ratio 1,04:1. Recette 116 → 119.
+
+**1.14.0 (24/08/2026)** — **V8 « contenu rogné »** (neuve, BLOQUANTE) : le seul défaut qu'un oracle
+VISUEL ne peut pas voir. Une fiche livrée, déclarée conforme la veille par les DEUX contrôles, avait
+perdu deux sections entières et son pied de page — feuille A4 à hauteur FIGÉE, contenu 1441 px pour
+une boîte de 1123 px, 41 éléments de texte invisibles, aucun signal ni à l'écran ni à l'impression.
+Découvert par comparaison des mots d'un PDF (1132) à ceux de la page (1313). `overflow: hidden` EST
+le mécanisme qui rend un défaut invisible à un contrôle d'apparence : V8 compare donc la taille du
+CONTENU à celle de la BOÎTE, nomme le nombre d'éléments invisibles et cite les trois premiers.
+Portée étroite — `hidden` et `clip` seulement ; `auto`/`scroll` laissent le lecteur défiler, et le
+socle prescrit leur usage. Échappatoires : troncature d'une ligne à points de suspension (admise
+d'office, le lecteur la voit) ou `data-rognage-assume`. *Corollaire pour la bibliothèque : une
+hauteur de page est un PLANCHER (`min-height`), jamais un plafond — sinon tout ajout futur devient
+une perte silencieuse.* · **Message de remédiation de L2-largeur complété** : il prescrivait la
+moitié du geste, et la correction prescrite créait une seconde violation. Mesuré deux fois le même
+jour — premier passage « poser la mesure sur le conteneur », second passage « rupture d'alignement
+entre frères », dont la levée exige `data-mesure-lecture` que le premier message ne nommait pas. Le
+geste complet est désormais nommé en une fois. Recette 114 → 116 cas.
+
+**1.13.0 (23/08/2026)** — **L22** (neuve, bloquante) : une promesse écrite en COMMENTAIRE est
+tenue. Un schéma livré annonçait « un `<title>` par forme » et n'en portait qu'un, celui du
+diagramme entier : l'infobulle promise n'existait pas et quatre chevauchements V4 bloquants en
+découlaient, après quatre versions et trois relectures qu'un commentaire avait dispensées de
+vérifier. Les annonces QUANTIFIÉES sont jugées porteur par porteur — le premier jet comptait des
+totaux et se trompait dans les deux sens, accusant les gabarits du socle et laissant passer sa
+propre fixture rouge. Échappatoire : `promesse-ok`, ou la négation écrite. Recette 112 → 114 cas.
+· **`render_page.py --familles`** : les familles de mesure, leur libellé et leur sévérité sont
+désormais PUBLIÉES par le socle sous `factory/familles-mesure@1`, et ses trois consommateurs
+(plancher de forge-tests, rendu comparatif de forge-design, vérificateur d'instances du pilot) les
+LISENT au lieu d'en tenir chacun une copie. Une table recopiée trois fois divergeait déjà.
+
+**1.12.0 (23/08/2026)** — **lecteur de source embarquee** (composant 12) : le composant que la
+regle A1 rendait necessaire et qui n'existait pas. Une page autoportante ne peut pas renvoyer a des
+fichiers du depot — elle EMBARQUE les documents cites, et un bloc brut de 67 Ko est illisible. Rendu
+DIFFERE au premier depliage (douze documents rendus d'avance : DOM de 7 000 a plus de 25 000
+noeuds), liens NON cliquables avec leur cible en infobulle (un lien mort ment davantage qu'une
+absence de lien), et sous-ensemble de Markdown borne — ce qui n'est pas reconnu sort en paragraphe,
+jamais en HTML brut.
+
+**1.11.0 (23/08/2026)** — **`--matrice-etats`** (neuve) : cinq états mesurés et capturés, et le
+bloquant **`etat_muet`** — un état vide qui ne se déclare pas. Deux défauts qu'un client avait
+trouvés en deux clics sur un livrable « tous oracles verts ».
+
+**1.10.0 (23/08/2026)** — **L2-frères** (neuve, avertissement) : la rupture d'alignement entre
+frères EMPILÉS, invisible aux trois mesures L2 existantes qui comparent chaque bloc à son propre
+conteneur. Mesuré : un même défaut signalé TROIS FOIS par un client en quatre versions, sous
+trois formulations. Écart légitime → `data-mesure-lecture`. Trouvé en la jouant sur nos propres
+pages : deux instances de gabarit passaient l'audit statique et échouaient au rendu (contraste
+2,48:1 sur la ligne pédagogique, bride de lecture posée sur le paragraphe, quatre chevauchements
+V4 dans un schéma dont les nœuds n'avaient pas le `<title>` que son propre commentaire
+promettait). Trois causes, un même aveuglement : le contrôle statique ne rend pas la page.
+
+**1.9.0 (23/08/2026)** — **L21** (neuve) : une classe de composant de la charte présente dans le
+marquage est visée par au moins une règle CSS. Deux squelettes portaient un sommaire annoncé et
+non stylé : L6 passait, le rendu passait, et le sommaire se rendait en liste nue. Un oracle de
+marquage trouve la classe et s'arrête là ; un oracle de rendu ne voit rien tant que rien ne
+déborde. En entrant, la règle a trouvé le même défaut dans HUIT fixtures du socle — complétées.
+Recette 101/101 → 102/102.
+
+**1.8.0 (22/08/2026)** — deux retours clients de plus, et une PORTE ouverte.
+**L20** (neuve) : au-dela de 4 Ko ou 80 lignes, un bloc de texte brut offre une alternative de
+lecture ou declare `data-brut-fait-foi`. Un document de 67 Ko embarque en brut passait TOUS les
+oracles ; le client a du le redemander deux fois. « Le contenu est la » ne veut pas dire « le
+contenu est lisible ».
+**`scripts/check_markdown.py`** (neuf) : les regles independantes du rendu s'appliquent enfin aux
+`.md` — `M7`, `M10`, `M14`, `M18`. Le Markdown est le format de livraison dominant des runs de
+conseil, et aucun controle de lisibilite ne l'atteignait. Domaine enregistre au registre des
+oracles. Recette 96/96 -> 101/101.
+
+**1.7.0 (22/08/2026)** — trois retours clients fermés.
+**L1** : le SUJET d'un sélecteur est son DERNIER composant, plus son premier —
+`a.kpi .kpi-label{display:flex}` faisait de tout lien un élément de bloc, et six phrases
+correctes échouaient d'un coup ; le message nomme désormais le sélecteur fautif.
+**L18 (jeton)** (neuve) : un identifiant du vocabulaire du livrable — `E2`, `H3`, `ADR 0009` — RÉSOUT à
+sa première occurrence (`title`, `aria-describedby`, ancre interne). Retour direct du client :
+« je ne sais pas ce qu'est E2 ».
+**L19** (neuve) : `overflow-wrap: anywhere` sur un sélecteur de PROSE est refusé — nécessaire sur
+un chemin, ravageur sur du texte courant (« Utilisabl/e », « 231 occurrenc/es »).
+Recette 91/91 → 95/95.
+
+## Cibles de rendu
+
+Deux cibles, à arbitrer dès le départ car certaines règles diffèrent :
+
+- **Viewer** : navigateur / viewer Claude Web (le JS et le `:hover` fonctionnent).
+- **PDF** : export WeasyPrint (pas de JS, `:hover`/`:focus` inactifs, fonts à embarquer).
+
+Toute information portée par un tooltip ou un effet JS doit avoir un **équivalent statique**
+si la page vise aussi le PDF.
+
+## Règles non négociables (charte)
+
+- **Montserrat** (700/800) pour titres et sections · **Inter** pour le corps · **jamais Syne** — la charte des
+  présentations de l'émetteur, lue au dossier de marque (D-5 (a) du 22/09/2026, exécutée par D-11 (a) le 23/09) ;
+  Roboto et DM Sans, la charte d'avant, restent en premier repli (voir `charte-et-tokens.md`, C1-C2).
+- **Light theme par défaut, STRICTEMENT** (G1, décision R-30/TF-0131 amendée TF-0158 le
+  13/08) : un livrable circule et s'ouvre identique chez tous ses lecteurs — l'auto-sombre
+  hérité de l'OS (`prefers-color-scheme` à la première visite) est retiré, il a produit un
+  retour humain réel. **Bascule sombre câblée obligatoire** : bouton `.theme-toggle` en
+  en-tête, `data-theme` sur `:root`, tokens sombres dérivés, persistance `localStorage`
+  (le sombre est un CHOIX du lecteur), impression toujours claire. Le boilerplate
+  l'embarque déjà (snippet S-G1). Un bouton présent sans script qui pose `data-theme` est
+  une bascule morte, FAIL bloquant ; son absence totale (rendu figé print/PDF) n'est qu'un
+  avertissement. Depuis TF-0303 (17/08), tout `prefers-color-scheme` qui **pilote** le thème
+  (bloc `<style>`, attribut `style`, appel `matchMedia`) est un FAIL bloquant : la règle
+  était écrite trois fois et jouée zéro fois — elle est revenue dans un livrable client.
+  Une **mention** en commentaire reste muette : le socle doit pouvoir documenter son interdit.
+- **Auto-portance du fichier livré (A1, TF-0303)** : `<!DOCTYPE html>`, `<html>`, `<head>`
+  et `<body>` sont dans le FICHIER. Un HTML écrit pour une publication hébergée n'en a
+  aucun — l'hôte les fournit à la publication, et le fichier qui part en pièce jointe reste
+  un fragment sans langue, sans encodage et sans viewport. FAIL bloquant par balise manquante.
+- **`charset` puis `viewport` en TOUTE PREMIÈRE position du `<head>` (A3)** : la déclaration
+  d'encodage doit tomber dans les **1024 premiers octets** (fenêtre de sniffing de la
+  spécification) — mesurée en octets de l'encodage réel, pas en caractères. Le boilerplate
+  lui-même la déclarait au 1613e (son commentaire S-G1 et son script d'initialisation la
+  repoussaient) : corrigé le 17/08. FAIL bloquant.
+  **L'ordre du `<head>` est donc prescrit, et le pattern S-G1 le dit maintenant** (TF-0368,
+  18/08) : `charset` et `viewport` avant tout SCRIPT — le commentaire S-G1 et son script
+  viennent après. Ce qui est mesuré reste la fenêtre de 1024 octets, pas la position littérale :
+  un court commentaire d'en-tête avant `charset` est admis (le boilerplate en porte un, et
+  déclare `charset` au ~400e octet) ; un script, non — il pèse trop pour tenir dans la fenêtre.
+  Reconstat qui a valu cette précision : l'avertissement « script bloquant dans `<head>` »
+  avait été dénoncé le 14/08 comme un faux positif permanent (TF-0228) ; le 18/08, il a
+  **disparu des cinq livrables** d'un projet réel après le seul correctif A3. Il ne signalait
+  pas une fatalité, il signalait un ordre fautif — et le message ne le disait pas, parce qu'il
+  ne parlait que de `defer`. Un avertissement qui ne nomme pas sa cause corrigeable se fait
+  exempter au lieu de se faire corriger.
+- **Une balise ne se cite jamais en toutes lettres dans un texte (A5, TF-0896)** : ni dans un
+  commentaire HTML, ni dans un commentaire CSS, ni dans une prose de page — on écrit « la balise
+  de style », « la balise de script ». Le boilerplate le violait dans son propre commentaire
+  S-G1, avant la vraie balise : un générateur qui extrait le style **à la première occurrence** a
+  embarqué le commentaire, le script d'initialisation et le `<head>` dans la feuille. Chromium a
+  rendu **une seule règle** pour 27 350 caractères, la page est sortie **nue**, et les oracles
+  ont mesuré des symptômes sans lien avec la cause (débordement de 2 106 px, sommaire perdu,
+  faux G1) — trois passes complètes sur une page de 188 Ko avant de bissecter la feuille à la
+  main. Même famille que RA-1 (retour du 13/08 : un `</script` en clair dans un composant embarqué) pour la balise de script fermante. Contrôlé par `check_html.py`
+  (FAIL bloquant, deux branches : résidu de balisage dans un sélecteur, et **densité de règles**
+  — moins d'une règle par 2 000 caractères sur un bloc d'au moins 1 000). **Accolade dans une
+  valeur (TF-1682, avertissement)** : un trou de gabarit dans une `url()` (`{{POLICE}}`) se lit
+  sans peine au navigateur, mais `check_html.py` découpe la feuille aux accolades ; il levait une
+  IndexError sur deux pages, qui n'étaient jugées par rien. Il les juge et dit que sa lecture de
+  la feuille y est partielle : juger la page assemblée.
+- **Titre au motif A4** : `{Marque} — {Objet} · {Client} — {YYYYMMDD}{a,b,c…}`. Deux FAIL
+  distincts, parce que les deux manques ne se corrigent pas du même geste : titre d'un seul
+  bloc (pas de marque séparée de l'objet), et absence d'indice de version **daté** — « V1 »
+  ne distingue pas deux révisions du même jour. Le titre est la seule métadonnée qui suit le
+  fichier partout : onglet, favori, pied d'impression, pièce jointe.
+- **Favicon-lettre obligatoire** (A2/G2, systématisation du 13/08, loi transverse n°3) : tout
+  HTML créé porte un favicon SVG en `data:` URI avec la **première lettre du nom du client ou
+  du projet** — le boilerplate l'embarque (remplacer `{L}`). FAIL bloquant depuis TF-0303,
+  aux deux branches : aucun `<link rel="icon">`, ou un `rel="icon"` qui pointe un FICHIER
+  (le livrable qui voyage seul arrive alors sans son icône).
+- Toutes les couleurs, polices et rayons en **variables `:root`** — aucun hex en dur.
+- Toujours une **pile de repli système** derrière les web fonts.
+- **Autonomie réseau totale (A1, décision D-10)** : aucune requête au chargement — pas de
+  CDN, pas de police distante, pas d'image externe. CSS/JS inline, images en `data:` URI,
+  polices en repli système. Un lien cliquable `<a href>` reste légitime (rien ne se charge
+  sans geste du lecteur). Une URL réseau **citée en commentaire** (HTML `<!-- -->` ou CSS
+  `/* */`) reste muette elle aussi — rien n'y est résolu, et le socle doit pouvoir écrire en
+  place ce qu'il vient de retirer (TF-0307). Contrôlé par `check_html.py` (FAIL bloquant).
+- Nommage fichier : `Factory - {TypeDoc} {Client} - {Scope} - {YYYYMMDD}{a,b,c…}.{ext}`.
+
+Détail complet + tokens (palette, rayons, familles, année de référence) :
+voir [references/charte-et-tokens.md](references/charte-et-tokens.md).
+
+## Avant de dessiner : ce que ce socle NE fournit PAS, et où c'est fourni
+
+**Le fait payé, et il est daté (TF-0939, 08/09/2026).** Une page de données devait montrer le
+schéma des bases source et cible. La recherche s'est arrêtée ici — ce socle est le seul cité par
+le `<produit>/CLAUDE.md`, et il ne renvoyait nulle part ailleurs. Verdict de ce tour-là :
+« aucun gabarit de schéma différentiel ». Une grille maison de 40 cartes et 429 puces a donc été
+écrite, puis jetée le lendemain : le gabarit existait, chez `factory-schemas`, prêt à
+instancier. Coût : un composant écrit pour rien et un tour humain. Ce n'était pas un défaut de
+recherche, c'était un défaut de **renvoi** — un socle qui ne dit pas où s'arrête son périmètre
+laisse croire qu'il n'y a rien au-delà.
+
+| Ce qui est demandé | Signes dans la demande | Où c'est fourni |
+| --- | --- | --- |
+| Schéma de base de données, ERD, MCD / MLD, tables et relations, dictionnaire de données | « schéma de base de données », « ERD », « MCD », « les tables et leurs relations », « classification PII » | `factory-schemas` · `../factory-schemas/references/canevas-modele-donnees.md` + `../factory-schemas/assets/template-modele-donnees.html` |
+| Schéma de base **différentiel** — ce qui CHANGE entre l'existant et la cible | « tables et champs ajoutés ou modifiés de couleurs différentes », « ce qui change », « schéma des bases X et Y » | `factory-schemas` · `../factory-schemas/assets/template-schema-differentiel.html` |
+| Architecture par couches, topologie réseau, flux temporel, tableau de bord KPI | « architecture cible », « topologie », « promotion entre environnements », « vue de pilotage » | `factory-schemas` · les quatre autres canevas |
+
+Ces gabarits **héritent de ce socle** : ils s'insèrent dans une page bâtie ici, consomment ses
+tokens et ses composants, et se font juger par `check_html.py` et `render_page.py` comme
+n'importe quelle page. Aller les chercher n'est pas sortir du socle, c'est l'utiliser.
+
+**Ne jamais réécrire un canevas à la main.** Une grille de cartes bricolée pour un livrable
+n'a ni la parité des composants, ni les fixtures, ni les mesures aux quatre largeurs — et le
+prochain qui en aura besoin la réécrira encore.
+
+## Quick start
+
+Partir du boilerplate, ne jamais d'une page vierge : [assets/boilerplate.html](assets/boilerplate.html).
+Il embarque déjà tous les obligatoires (charset en tête, `lang="fr"`, tokens `:root`,
+repli système, `@media print` + `@page`, responsive, structure sémantique, un seul `<h1>`).
+
+## Workflow — créer une page
+
+1. Copier `assets/boilerplate.html` sous le nom normalisé.
+2. Renseigner `<title>`, `<meta name="description">` et le `<h1>` unique.
+3. Construire le contenu en **balises sémantiques** (`<section>`, listes, `<table>` pour les données),
+   hiérarchie de titres sans saut de niveau.
+4. Décliner via les **tokens `:root`** uniquement ; ne pas écrire de couleur en dur.
+5. Vérifier la cible PDF si concernée (cf. règles print de la référence).
+6. Auditer (workflow ci-dessous) avant livraison.
+
+## Workflow — auditer / corriger une page
+
+Lancer le contrôle de conformité déterministe (charte + accessibilité + print) :
+
+```bash
+python scripts/check_html.py chemin/vers/page.html
+# JSON pour intégration : python scripts/check_html.py page.html --output json
+```
+
+Le script signale les **échecs bloquants** (Syne présent, `lang` absent ou mal formé, charset non prioritaire
+ou déclaré au-delà du 1024e octet — A3, squelette `html`/`head`/`body` absent — A1, titre hors
+motif marque + objet + version datée — A4, favicon absent ou non embarqué — A2,
+`<h1>` absent ou multiple, `:root` absent, `<title>` vide, pas de `@media print`, ressource
+chargée par le réseau — A1, feuille de style qui ne rend presque aucune règle — A5, bouton
+`.theme-toggle` sans script câblant `data-theme` — G1,
+thème piloté par `prefers-color-scheme` — G1) et des
+**avertissements** (repli de font manquant, `alt` manquant, saut de niveau de titre, script
+bloquant en `<head>`, pas de repère sémantique, aucun bouton de bascule — G1, légitime sur un
+rendu figé). Corriger tous les échecs, traiter les avertissements selon le contexte, relancer
+jusqu'au PASS.
+
+**Exemptions déclarées (TF-0308, R-30 §3).** Un fichier qui n'est pas une page ne peut pas
+tenir les règles d'une page : les fragments de canevas de `factory-schemas` (à insérer dans
+un squelette hôte) n'ont ni `<head>`, ni `<title>`, ni favicon par conception. Ces cas sont
+nommés un par un dans `EXEMPTIONS_DECLAREES` (`check_html.py`), avec la famille de contrôles
+écartée et son motif — registre **nominatif**, jamais un dossier entier, pour qu'un fichier
+ajouté demain échoue tant qu'on ne l'a pas déclaré. Le contrôle rend alors un **SKIP annoncé
+à chaque exécution** (avertissement citant le motif et le nombre de contrôles écartés), et
+juge tout le reste : réseau A1, thème G1, police, lisibilité. Une exemption qui n'écarte plus
+rien se signale d'elle-même (« SANS EFFET ») pour qu'on retire sa ligne. Le passage par le
+chemin du fichier est la seule porte : sans `source`, aucune exemption ne s'applique — un
+livrable ne peut pas s'exempter lui-même.
+
+Puis lancer l'**oracle zéro défaut visuel** (rendu multi-breakpoints + mesures) :
+
+```bash
+python scripts/render_page.py page.html            # défaut : 3840, 2560, 1920, 1280, 768, 390 px (TF-0422, TF-1066)
+# schéma : --selector .diagram-wrap · JSON : --output json
+# revue de lecture : --sections "[role=tabpanel]"  → une capture par section, par largeur
+# composants interactifs : --matrice-etats         → cinq états mesurés ET capturés (TF-0493)
+# filtres croisés        : --matrice-paires        → (col A = val a) × (col B = val b) (TF-1093)
+# page à scènes          : aucun drapeau           → chaque [data-scene] jouée, mesurée, capturée (TF-2299)
+python scripts/render_page.py http://127.0.0.1:8000/page.html --matrice-paires   # INSTANCE SERVIE
+```
+
+**La grille par défaut et la règle E5 du pilot (TF-1066, 12/09/2026).** Une page de bureau se
+**conçoit à 1920 px** — c'est la largeur de référence des maquettes, des captures de baseline et
+de la critique d'implémentation — et se **vérifie sans bloquant jusqu'à 3840 px** (règle E5,
+`<pilot>/references/BEST-PRACTICES-HTML.md` § E du pilot, décision humaine du 12/09/2026). D'où six
+largeurs par défaut au lieu de quatre. Ce que le 4K change, et que 1920 ne montrait pas : la
+mesure de lecture reste portée par le **conteneur** (`.chap.lire`, E4) — la prose ne s'étire pas
+sur 2 880 px ; une page de **données** prend toute la largeur (L26) au lieu de laisser la moitié
+de l'écran vide. **V18** juge ces deux défauts, et seulement au-delà de 2560 px. **1280 reste** :
+les postes de bureau étroits existent encore.
+
+**La matrice d'états (`--matrice-etats`, TF-0493) — les composants cassent là où personne ne
+regarde.** Cinq états, chacun repartant d'une **page neuve**, chacun mesuré et capturé : tout
+déplié · filtre ouvert sur la **première** puis sur la **dernière** colonne · filtre ne laissant
+aucune ligne · recherche sans correspondance. Deux défauts trouvés par un client sur un seul
+livrable, tous deux reproductibles en deux clics, tous deux invisibles au rendu par défaut : un
+panneau de filtre qui **crée un ascenseur horizontal** à l'ouverture, et un bouton « Aucun » qui
+**détruit l'affichage sans un mot**. `--etats-ouverts` existait et avait été utilisé — il ouvre le
+premier panneau et ne produit **aucun état d'échec**.
+
+Ce que la matrice ajoute au-delà de V1/V2/V4 : **un état vide se déclare** (loi n° 3). Plus aucune
+ligne visible et pas un mot pour le dire → **bloquant** `etat_muet` ; le socle prescrit déjà la
+forme du message (`.tf-count` en zone vivante avec la classe `zero`, ou `.tf-vide-msg`). Et un état
+qui ne trouve pas son déclencheur est déclaré **NON JOUÉ**, jamais vert : un composant absent est
+une réponse, un état muet serait un mensonge. « Tout déplié » (et `--etats-ouverts`, même script)
+ouvre aussi les **lignes de détail** `tr[data-detail]` du composant 10 par leur bouton, **compte**
+ce qu'il a ouvert (« 3/3 ligne(s) de détail ») et, s'il n'ouvre rien de ce qu'il nomme, se déclare
+NON JOUÉ (TF-1341). La preuve qui justifie d'ouvrir **les deux**
+colonnes : sur la même page, le panneau rend 0 constat sur la première et 2 sur la dernière — un
+panneau ne déborde pas du même côté à droite qu'à gauche.
+
+**Les filtres CROISÉS (`--matrice-paires`, TF-1093) — la matrice unitaire ne pose qu'un filtre à
+la fois.** Ses cinq états sont unitaires : un panneau ouvert, une colonne décochée, une recherche
+sans correspondance. Aucun ne pose **deux** filtres ensemble, alors que c'est l'usage normal d'un
+tableau filtrable et que c'est là que l'intersection devient vide. Une page qui n'annonce le vide
+que lorsqu'une facette est **entièrement décochée** reste muette sur le croisement — la loi n° 3
+est violée sans qu'aucun état unitaire ne puisse le montrer. L'option énumère
+`(colonne A = valeur a) × (colonne B = valeur b)`, chaque croisement sur une page neuve, mesuré et
+capturé, et le `etat_muet` y est jugé au **même barème** que `filtre-sans-resultat` — un croisement
+jugé autrement ne lui serait pas comparable. **La borne se dit** : « N paires jouées sur M
+possibles », plafond `--paires-max` (24 par défaut), croisements servis en **tour de rôle** entre
+paires de colonnes — à plat, le plafond serait dépensé sur le premier couple et annoncerait une
+couverture qu'il n'a pas. Les croisements de **trois facettes et plus ne sont pas jugés**, et la
+sortie le déclare.
+
+**L'INSTANCE SERVIE (TF-1093) — un verdict sur `file://` n'est pas un verdict sur le livrable.**
+Le positionnel accepte une **URL `http(s)://`** à la place d'un chemin, et l'oracle mesure alors la
+page telle qu'elle est **servie**. Ce que `file://` ne montre pas : un actif référencé en chemin
+**absolu** (`/tokens.css`) n'y résout pas et disparaît **sans bruit**, et tout comportement gardé
+par `location.protocol` ne s'exécute pas — la page rendue n'existe nulle part ailleurs que sur le
+poste de l'auditeur. Mesure du 20/09 : même fixture, **PASS** sur fichier et **2 bloquants V1** une
+fois servie. Un verdict pris sur fichier le **déclare** désormais au non jugé. **Frontières
+d'environnement** (loi transverse n° 2) : seules `localhost`, `127.0.0.1` et `::1` sont acceptées ;
+toute autre origine **arrête l'outil** tant que `--origine-distante` n'est pas donné, et une page
+distante reste une **donnée tierce** — lecture seule, aucune authentification, aucune saisie de
+secret. Le geste attendu est de servir la page en local (`python -m http.server` dans son dossier).
+**Le mode fichier reste le défaut** : sans URL, rien de tout cela ne s'active.
+
+**UNE APPLICATION DERRIÈRE UNE CONNEXION (TF-1674).** `--etat-session <fichier>` charge l'état de
+session que le script de connexion du produit a enregistré (Playwright
+`context.storage_state(path=…)`) : la page jugée est l'application, plus l'écran de connexion, et
+chaque état d'une matrice rechargé reste connecté. L'oracle ne se connecte jamais lui-même et ne lit
+pas le fichier ; il est refusé sur un fichier `file://` et sur une origine non locale, et le
+verdict déclare la session au non jugé. `--theme sombre` rend la page sous
+`prefers-color-scheme: dark` **et** pose `data-theme="dark"` sur `<html>` avant les scripts de la
+page, à chaque chargement, ainsi que le choix stocké du socle (`factory-theme`, RV-9), que le
+script d'initialisation du gabarit relit et réécrit (TF-1718) ; un observateur actif tant que la
+page vit remet `data-theme` à la valeur demandée à chaque réécriture, y compris celle d'une page qui
+relit sa propre clé (TF-1775), et la réécriture contrée se dit au non jugé (« THEME TENU CONTRE LA
+PAGE ») ; un écart qui subsisterait se dit encore (« THEME DEMANDE NON RENDU »). Le thème rendu est
+toujours déclaré, et une page à thème sombre se juge deux fois. Les noms d'`oracle-exploitabilite` (`factory-forge-design`) sont acceptés tels
+quels : `--etat-connexion` pour `--etat-session`, `--theme dark|light` pour `sombre|clair`.
+**Une mire se reconnaît (TF-1788, lot Produit-83 20261015b, RA-4).** Sans `--etat-session`, une
+application derrière connexion se rend en mire, et le verdict portait sur la mire sans le dire. Dès
+qu'un formulaire de connexion est rendu (**un formulaire qui ouvre une session**, reconnu à son action
+depuis TF-2433 ; l'écran de changement de mot de passe n'en est pas un et se juge comme écran connecté),
+`render_page.py` le dit à la largeur (non mesurable)
+et au non jugé (« MIRE DE CONNEXION RENDUE »), avec le geste : sur une instance servie, enregistrer
+l'état de session par le script de connexion du produit puis rejouer avec `--etat-session` ; avec
+une session chargée qui ne passe pas la mire, la régénérer ; sur un fichier, servir l'application.
+Fixtures du banc : `session-connexion.html` (porte la mire), `session-connexion-sans-action.html`,
+`session-changement-mdp.html` (TF-2433, jamais une mire), `session-application.html`,
+`theme-sombre-deborde.html`, `theme-attribut-sombre.html`, `theme-choix-stocke-sombre.html`,
+`theme-force-clair.html`, `theme-cle-propre-clair.html`.
+
+Il mesure les bloquants **L2-rendu** (un bloc de texte occupe au moins 85 % de la largeur
+qui lui est offerte, et une colonne d'étiquettes ne mange pas plus de 20 % d'une grille —
+la mesure de lecture se règle sur le conteneur, pas sur le paragraphe),
+**V1** (débordement horizontal), **V2** (contraste WCAG AA : ≥ 4.5:1,
+≥ 3:1 en texte large) et **V4** (chevauchements — superposition voulue = `data-overlap-ok="<id de l'élément recouvert>"`, une **paire** et non un interrupteur depuis TF-1146 ; la forme nue exempte encore mais elle est recensée),
+signale **L2-frères** (TF-0491), **V21** (largeurs de contenu mélangées, TF-1307), **V3** et **V7** en avertissements — L2-frères compare la
+largeur d'un bloc de texte à celle de son **frère empilé** : trois mesures L2 ne voyaient que
+le rapport d'un bloc à son propre conteneur, et une prose bornée ET CENTRÉE au-dessus de
+cartes pleine largeur les satisfaisait toutes les trois. Le lecteur, lui, voit un bord droit
+qui ne tombe pas au même endroit — signalé trois fois par un client, sous trois formulations,
+sur quatre versions. Ce n'est pas un bloquant : une mesure de lecture étroite est un choix
+défendable, mais elle se **déclare** (`data-mesure-lecture` sur le bloc étroit) au lieu d'être
+subie. Ne se prononce que dans un **flux vertical** — dans une grille ou une boîte flexible, la
+largeur d'un enfant est décidée par sa piste, pas par lui, et produit un PNG par
+breakpoint **hors de tout arbre de livraison** (TF-0230) : `<dossier du HTML>/.oracles/`
+pour une page ordinaire, un dossier temporaire nommé si la page vit sous `output/`, `old/`,
+`dist/`… — un `.oracles/` DANS `output/` reste dans ce que le client reçoit, et un audit y
+avait laissé 25 Mo à déplacer à la main. `--out <dossier>` fait foi quand il est donné :
+c'est ainsi qu'un run journalise ses captures.
+**V5** (croisements) et **V6** (images) restent à inspecter sur ces PNG — on ne
+juge jamais un rendu depuis le code seul. Corriger à la source (tokens, géométrie), relancer
+jusqu'au PASS. Liste canonique et sévérités :
+[references/zero-defaut-visuel.md](references/zero-defaut-visuel.md) — **référence unique
+pour toute la forge**, les autres skills livrables la citent sans la redéfinir.
+
+**Une demande de format imprimé se COMPTE, dans les conditions du lecteur (TF-1882).** Une page demandée « sur une
+page A4 » (ou N pages) ne se déclare pas tenue sur une mesure faite dans une seule condition de rendu : ni check_html ni
+render_page ne comptent de pages. `check_format_a4.py` mesure la hauteur à l'écran (3 840, 1 920, 1 440 et 1 024 px,
+297 mm au plus), puis imprime en Chromium sous quatre conditions de lecteur (marges de la page, 10 mm avec en-têtes,
+marges par défaut de Chrome, 15 mm) et compte les pages ; Letter est un avertissement. Jamais « marges nulles » : c'est
+la mesure qui avait menti. Toute règle de petit écran s'écrit `@media screen and (max-width: …)`.
+
+```bash
+python scripts/check_format_a4.py page.html                 # une page A4 demandée ; exit 0 PASS · 1 FAIL · 2 SKIP motivé
+python scripts/check_format_a4.py page.html --pages 2 --sans-ecran --output json
+```
+
+**La page IMPRIMÉE se mesure aussi (TF-2364, TF-2365).** `render_page` juge l'écran, `check_html` la feuille : aucun ne regardait le
+papier. Deux défauts sont passés verts : une page imprimée après un passage en thème sombre sortait en cartes sombres sur papier blanc (G1
+« impression toujours claire » n'avait aucun oracle qui la joue), et le pied d'une feuille à hauteur figée finissait à 0,1 mm du bord.
+`check_impression.py` imprime la page deux fois, thème par défaut puis `data-theme="dark"` posé sur la racine, compare les pages en image (plus de
+0,05 % de pixels en écart, ou un autre nombre de pages, est un échec) et, sur une page qui déclare un `@page` de taille fixe, mesure pour chaque
+page la marge entre le bas de la feuille et le dernier bloc (5 mm au moins, `--marge-mm`). Sans `@page` de taille fixe, la marge est dite non
+mesurée ; sans bascule de thème, les deux impressions sont identiques et G1 passe. À jouer sur toute page qui s'imprime, d'office sur une page à
+`@page` fixe (le socle ne la lance pas encore de lui-même : `render_page` rappelle la limite à chaque exécution).
+
+```bash
+python scripts/check_impression.py page.html                     # exit 0 PASS · 1 FAIL · 2 SKIP motivé (Chromium, pymupdf, numpy)
+python scripts/check_impression.py page.html --marge-mm 8 --output json
+```
+
+**L'export PDF embarque les polices de la charte (TF-2352).** Une page du socle ne porte pas de `@font-face` (règle A1) : sur un poste qui n'a pas
+ses polices, l'impression PDF retombait sur Segoe UI et Consolas, sans que le poste producteur, lui, le voie. `exporter_pdf.py` pose les familles de
+la page depuis un cache local de WOFF2 (celui de `factory-schemas/scripts/fonts`, ou `--cache`, ou `FACTORY_POLICES`) dans une copie de travail
+temporaire, imprime, puis lit les polices du PDF : une police de repli embarquée est un échec nommé. La page livrée reste inchangée. La route
+manuelle (copie de travail et `@font-face` en `file://`) reste valable pour une famille que le cache n'a pas ; l'export dit alors laquelle.
+
+```bash
+python scripts/exporter_pdf.py page.html --out page.pdf          # exit 0 PASS · 1 police de repli embarquée · 2 SKIP motivé
+python scripts/exporter_pdf.py page.html --out page.pdf --cache <dossier de WOFF2> --tolerer-repli "Segoe UI Symbol"
+```
+
+Enfin, contrôler la **lisibilité** — ce que le lecteur peut effectivement lire et utiliser :
+
+```bash
+python scripts/check_html.py page.html --regles L     # L1-L39 seules
+python scripts/self_test.py                           # prouve que chaque règle échoue ; rejoue en dernier le self-test de factory-schemas (5 min 44 s mesurées)
+```
+
+Une page exacte, chartée et sans défaut visuel peut rester **illisible** : textes coupés,
+scores sans barème ni formule, valeurs opaques, tableaux longs non filtrables, sommaire muet,
+liens sans destination, chapitres de données sans mode d'emploi, `null` rendu tel quel. Ces
+règles sont nées de défauts relevés par des lecteurs humains sur un livrable réel que les
+trois oracles précédents validaient — chacune a sa fixture rouge.
+
+Ce qui suppose de LIRE (clarté du propos, pertinence, justesse d'un chapeau) n'est pas
+mécanisé : c'est la **revue de lecture — OBLIGATOIRE avant toute livraison (TF-0422)**.
+Capturer (`render_page.py`, 3840/2560/1920/1280/768/390 + `--sections`), **ouvrir et lire** les
+captures — au-delà de 4:1, les **tuiles d'un écran** que le script produit d'office, jamais la
+seule capture pleine page, illisible une fois réduite (TF-1131) —, consigner chaque constat dans `<produit>/REVUE.md` au gabarit
+[references/gabarit-revue-de-lecture.md](references/gabarit-revue-de-lecture.md) (largeur ·
+section · constat · suite · preuve) ou la mention « aucun constat » datée. Une page verte à
+tous les oracles a été refusée par son client à l'ouverture : les oracles mesurent des
+propriétés locales, la revue regarde la page comme un lecteur. Règles, conventions de
+marquage et partage mécanique / revue : [references/lisibilite.md](references/lisibilite.md).
+
+**Le socle le dit lui-même désormais (TF-1148, 16/09/2026).** Cette étape était déclarée
+obligatoire ici et vérifiée par le seul `run-oracles` : pour un produit qui consomme le socle
+par ses trois scripts, elle n'existait pas. `check_html.py` publie donc à chaque exécution, PASS
+ou FAIL, un bloc **« Périmètre de NON-MESURE »** (clé `non_juge` en JSON, au format de celui de
+`render_page.py`) dont la première ligne nomme la revue de lecture, dit qu'elle n'a pas été jouée
+et donne le chemin du gabarit. Mesure du défaut fermé : un indice livré le 15/09 avec trois
+verdicts verts, **sept défauts** relevés à l'ouverture par son destinataire, dont **cinq**
+visibles en une minute sur des captures.
+
+Le même bloc nomme ensuite **ce que `check_html.py` ne regarde pas** (TF-1141) : la largeur
+*utile* d'une colonne par rapport à son contenu, la densité et la proportion d'une figure, le
+sens d'un libellé pour un lecteur neuf, l'appartenance d'un chapitre à son lecteur déclaré, et
+le rendu — qui appartient à `render_page.py`. Onze pages **doublement vertes** ont été remises à
+un humain qui y a relevé **huit défauts**, tous hors du champ des deux contrôles ; la session qui
+les produisait n'avait aucun moyen de savoir ce qui n'était pas mesuré. Quand l'un des deux
+oracles publie ses limites et l'autre se tait, le silence se lit comme une absence de limite.
+
+## Compter ce qui est RENDU contre ce que la source DIT — la complétude (TF-1174)
+
+**Le fait payé, 16/09/2026 (lot Produit-64 20260916b, RD-10 : son retour n° 10).** Une édition d'un générateur a sorti
+un `append` de sa boucle de regroupement de prose : toute la prose sauf le dernier fragment de
+chaque chapitre a disparu de la page rendue. Le livrable est passé de **11 996 à environ 3 000 mots
+visibles**, et les neuf encadrés « Exemple de lecture » sont tombés à **zéro**. Les six oracles
+joués dessus : `render_page.py` PASS · `check_markdown.py --style` PASS (il juge la source, qui n'a
+pas bougé) · `oracle-slop` PASS · `oracle-tokens` PASS · `oracle-mobile` PASS · `check_html.py` FAIL,
+mais sur L7 et L10 seulement — l'absence d'un chapeau et d'un exemple de lecture, jamais la
+disparition du texte. Une page amputée n'a en effet ni débordement, ni contraste faible, ni couleur
+en dur : **elle est parfaitement conforme et presque vide.**
+
+Les six mesurent la FORME. Aucun ne mesurait la COMPLÉTUDE — une grandeur *corrélée* prise pour
+l'invariant : tant qu'un générateur ne perd rien, forme et contenu vont ensemble ; le jour où la
+corrélation se rompt, six verdicts verts couvrent une page vide.
+
+Le contrôle ne demande aucune finesse, il demande de **compter** :
+
+```bash
+python scripts/check_completude.py page.html --source source.md     # exit 0 PASS · 1 FAIL · 2 SKIP
+python scripts/check_completude.py page.html --source a.md --source b.md --output json
+```
+
+    rendu  = mots visibles du corps HTML (balises, commentaires, scripts et styles retirés)
+    source = mots visibles du ou des Markdown dont il sort
+    si rendu < source : ARRÊT — la page porte moins de texte que sa source
+
+Le seuil est grossier à dessein : un rendu porte EN PLUS les libellés du générateur (menus,
+inventaires, légendes de schéma), il est donc normalement **plus riche** que sa source. Un rendu
+plus pauvre est une perte, sans jugement à rendre. `--seuil` sous 1.0 reste possible, mais la
+**dérogation est écrite au périmètre de non-mesure de chaque exécution** — jamais silencieuse.
+
+**Le compte de mots ne voit pas la structure (TF-1436, 28/09/2026, lot Produit-78 20260928a,
+RP-2).** Le même contrôle compte aussi les **titres par niveau** et les **éléments de liste par
+type** (numérotée, à puces). Le fait payé : une liste de 8 éléments fondue en un paragraphe, ou un
+« ## » rendu en h3, rendait PASS à 100,3 % de couverture — le compte de mots restait intact, la
+structure avait disparu. `--seuil` ne couvre que les mots : un titre ou un élément de liste perdu
+ou déplacé reste bloquant, même sous une dérogation de couverture.
+
+À lancer dès qu'une chaîne **transforme une source en page** : un gabarit rendu, une synthèse
+publiée, un rapport d'audit. Une page écrite à la main n'a pas de source à laquelle se comparer, et
+ce contrôle ne s'y applique pas.
+
+**Une source de données, une cible PDF (TF-2362, RA-212).** Un kit généré depuis un module Python de contenu et livré en PDF n'avait aucun oracle :
+la prescription ci-dessus ne comparait qu'un HTML à un Markdown, et un contrôle ad hoc a dû s'écrire. `--source-donnees` prend un JSON ou un module
+Python (lu par `ast`, jamais exécuté ; une f-string ou un appel, dont le texte se calcule, est dit non lu) et compare par CHAÎNES : chaque feuille
+texte de la source doit se retrouver dans le texte de la cible, HTML ou PDF (espaces, casse, apostrophes, césure de fin de ligne et balisage de la
+chaîne normalisés). La chaîne manquante est nommée avec son chemin, et le compte de mots d'avant n'aurait pas dit laquelle. Les clés qui ne sont pas du
+texte de page (`id`, `href`, `classe`) se déclarent à ignorer, sinon elles comptent manquantes : le non_juge le dit.
+
+```bash
+python scripts/check_completude.py kit.pdf --source-donnees contenu.json --ignorer-cles id,classe     # exit 0 PASS · 1 FAIL · 2 SKIP
+python scripts/check_completude.py page.html --source-donnees module_de_contenu.py --output json
+```
+
+## La chaîne ne s'arrête pas à ce socle : quatre oracles de `factory-forge-design` jugent la même page (TF-1173)
+
+**Le fait mesuré, 16/09/2026 (lot Produit-64 20260916b, RD-9 : son retour n° 9).** Un guide développeur déclaré PASS
+par les trois scripts ci-dessus a été soumis pour la première fois aux oracles de
+`factory-forge-design` : **trois verdicts rouges sur quatre.** Aucun de ces défauts n'est visible
+aux trois scripts du socle — le filet de 3 px ne déborde pas, la couleur en dur contraste
+correctement, la barre fixe ne recouvre rien au rendu de bureau. Le défaut était **entre** les deux
+forges : le socle ne disait pas que quatre autres oracles jugent cette même page, et un producteur
+ne joue pas ce qu'il ne sait pas exister.
+
+| Oracle | Règles | Ce qu'il juge | Trouvé le 16/09 sur une page « conforme » |
+|---|---|---|---|
+| `oracle-slop` | S1–S10 | marqueurs de design généré | **FAIL** — 4 règles dures S1 (filets latéraux de 2, 3 et 4 px, marqueurs de page générée) |
+| `oracle-tokens` | T1–T8 | traçabilité des jetons, parité des thèmes, contraste | **FAIL** — 59 écarts durs, dont 3 bloquants T1 (couleurs en dur) et 56 T3 (espacements hors échelle 4 pt) |
+| `oracle-mobile` | M1–M8 | viewport, cibles tactiles, encoche, reflow, paysage | **FAIL** — M3 bloquant : barre fixe sans `env(safe-area-inset-*)`, passage sous l'encoche |
+| `oracle-images` | I1–I7 | alt, plafonds, zéro réseau, variantes réellement différentes | PASS |
+
+Les jouer, d'un coup ou un par un :
+
+```bash
+# Les quatre (et les autres oracles applicables), avec verdict agrégé — exit 0 PASS / 1 FAIL / 2 indéterminé
+node <racine factory-forge-design>/oracles/run-oracles-design.mjs page.html
+# Un seul, quand on corrige une famille
+node <racine factory-forge-design>/oracles/oracle-slop.mjs page.html
+node <racine factory-forge-design>/oracles/oracle-tokens.mjs page.html
+node <racine factory-forge-design>/oracles/oracle-mobile.mjs page.html   # --mobile côté orchestrateur si le châssis n'est pas détecté
+node <racine factory-forge-design>/oracles/oracle-images.mjs page.html
+```
+
+`check_html.py` et `render_page.py` **le rappellent à chaque exécution**, PASS ou FAIL, dans leur
+bloc « Périmètre de NON-MESURE » : le renvoi n'est pas seulement écrit ici, il est prononcé par les
+contrôles que le producteur lance de toute façon.
+
+## Référentiel détaillé
+
+- Complétude rendu vs source, pour toute page issue d'un générateur : `scripts/check_completude.py`
+  (TF-1174) — section ci-dessus ; registre : `../quality-oracles/references/registre-oracles.md`
+- Les quatre oracles de `factory-forge-design` qui jugent cette même page, et leur ligne de
+  commande : section ci-dessus (TF-1173) — `oracle-slop`, `oracle-tokens`, `oracle-mobile`,
+  `oracle-images`, lancés ensemble par `<racine>/factory-forge-design/oracles/run-oracles-design.mjs`
+- Format imprimé demandé (« une page A4 »), pages comptées dans les conditions du lecteur : `scripts/check_format_a4.py`
+  (TF-1882) — section « Une demande de format imprimé se COMPTE » ci-dessus ; registre :
+  `../quality-oracles/references/registre-oracles.md`
+- La page imprimée (G1 en thème sombre, marge basse d'une feuille fixe) : `scripts/check_impression.py` (TF-2364, TF-2365) ; l'export PDF aux
+  polices de la charte : `scripts/exporter_pdf.py` (TF-2352) — sections « La page IMPRIMÉE se mesure aussi » et « L'export PDF embarque les
+  polices » ci-dessus
+- Bruit d'une règle du rendu sur un parc, avant/après, en une commande : `scripts/mesurer_bruit.py`
+  (TF-1225) — [references/zero-defaut-visuel.md](references/zero-defaut-visuel.md), « Mesurer le
+  bruit d'une règle »
+- Charte & tokens : [references/charte-et-tokens.md](references/charte-et-tokens.md)
+- Bonnes pratiques par axe (structure, sémantique, typo, a11y, responsive, print, JS, maintenabilité) :
+  [references/bonnes-pratiques.md](references/bonnes-pratiques.md)
+- Contournements à ne pas généraliser : [references/anti-patterns.md](references/anti-patterns.md)
+- Checklist canonique zéro défaut visuel V1–V19 et V21–V28 (transversale forge ; V20 reste vide, voir 1.32.0) : [references/zero-defaut-visuel.md](references/zero-defaut-visuel.md)
+- Règles de lisibilité L1–L39 + partage contrôle mécanique / revue de lecture : [references/lisibilite.md](references/lisibilite.md)
+
+## Composants
+
+**Obligatoire** — Filtres de colonne sur les tableaux de données parcourus (≥ 8 lignes) — **chaque** colonne reçoit sa facette, la cardinalité ne décide que de la forme du panneau (G7) : [references/composant-filtres-tableau.md](references/composant-filtres-tableau.md) (asset : [assets/table-filters.js](assets/table-filters.js)). Exemption possible via `data-filterable="off"` **et** `data-filterable-reason="…"` — sans motif, c'est un échec.
+
+**Obligatoire** — Pliage sur les tableaux qui rendent une HIÉRARCHIE (plus de 8 lignes portant `data-niveau`, sur au moins deux niveaux) — L31 : [assets/table-arbre.js](assets/table-arbre.js) + [assets/table-arbre.css](assets/table-arbre.css). Marquage `data-arbre` sur la table, `data-cle` / `data-parent` / `data-niveau` sur les lignes ; chevron par ligne parente avec son **compte d'enfants**, guides d'indentation dérivés de la donnée (plus d'espaces insécables dans le texte), *Tout déplier* / *Tout replier*, compteur vivant. Tout montrer volontairement se déclare : `data-arbre="ouvert"`.
+
+**Socle des trois** — [assets/visibilite-lignes.js](assets/visibilite-lignes.js) : la visibilité d'une ligne est la **disjonction** des attributs de masquage déclarés par TOUS les mécanismes, calculée à un seul endroit (TF-0953). Sans lui, chaque composant recalcule `hidden` depuis sa seule liste et écrase les autres — un produit avait dû poser un `MutationObserver` sur `hidden` puis déplier tout son arbre à chaque changement de filtre. Un composant qui masque **déclare** son attribut (`register`), il ne devine jamais ceux des autres.
+
+**Optionnel** —
+
+- Bibliothèque de composants chartés prêts à coller (KPI, badges de statut, barres de progression, légende, barre d'outils + compteur, tableau repliable en cartes, **onglets accessibles** `assets/tabs.js` — L16, **ligne de tableau dépliable** `assets/table-detail.js` — L17, gabarits de chapitre `.chap.lire`/`.chap.duo` — L2, **lecteur d'animation à scènes** `assets/scene-player.js` — composants.md § 17), validés par les oracles : [references/composants.md](references/composants.md).
+- **Entonnoir de conversion** (composant 16, TF-1875) : une suite d'étapes décroissantes, l'effectif écrit une fois et la conversion d'une étape à la suivante : [references/composants.md](references/composants.md) § 16 (assets : [assets/entonnoir.css](assets/entonnoir.css), [assets/entonnoir.js](assets/entonnoir.js)).
+- Recherche dans le document + compteur d'occurrences (pour catalogues/référentiels parcourus,
+  insensible aux accents, viewer-only) : [references/composant-recherche.md](references/composant-recherche.md)
+  (asset : [assets/find-in-page.js](assets/find-in-page.js)).
+
+### Une copie d'un composant se POSE, elle ne se colle pas (TF-0784, 03/09/2026)
+
+La règle A1 impose une page **autoportante** : un livrable qui charge un fichier voisin perd son
+composant dès qu'il part par courriel. **Inliner un composant du socle est donc la règle**, pas
+l'exception — et c'est exactement là qu'une copie se détache de sa source.
+
+**Le fait payé.** `../factory-schemas/assets/exemple-reference.html` portait une copie **manuelle**
+de `assets/table-filters.js`, collée un jour où elle était juste. Le composant a été corrigé
+**sept fois** (TF-0429/0430/0431 le 21/08 ; TF-0768/0769/0781/0782 le 02/09) : la copie n'a pas
+bougé d'un octet. Elle triait encore « 1 000 » comme 1, rangeait les mois par ordre alphabétique
+et privait de facette la colonne clé — **dans le même dépôt que les correctifs**. Un correctif ne
+voyage pas tout seul, et rien ne disait qu'une copie existait.
+
+**Le geste.** On entoure le bloc de ses marqueurs, puis on le laisse être posé :
+
+```bash
+node .claude/skills/factory-page-html/scripts/embarquer-composants.mjs --constat   # écart ? exit 1
+node .claude/skills/factory-page-html/scripts/embarquer-composants.mjs --ecrire    # (re)pose les blocs
+```
+
+**Et depuis un produit, hors du dépôt des skills (TF-0890)** — c'est la porte qui manquait, et
+son absence a coûté un **second poseur** : le module tuait le processus **à l'import** (son
+analyse d'arguments s'exécutait au chargement, `exit 2` avant le premier appel) et `--ecrire` ne
+parcourait que l'arbre des skills. Un produit a donc réimplémenté le format du bloc en Python —
+marqueurs, échappement, empreinte — *exactement la classe de défaut que ce script existe pour
+éliminer*. Le même code sert désormais des deux côtés :
+
+```bash
+node …/embarquer-composants.mjs --poser mon-livrable.html --composants table-filters.css,table-filters.js
+node …/embarquer-composants.mjs --constat mon-livrable.html   # rejoue la parité sur CE fichier
+```
+
+`--poser` insère la feuille avant la fermeture de l'en-tête et le script avant celle du corps, et
+remet à la source un bloc déjà marqué. Le module s'importe aussi sans rien exécuter :
+`import { blocCanonique, poserComposants, confronterBlocs } from '…/embarquer-composants.mjs'`.
+
+```html
+<!-- COMPOSANT-EMBARQUE:DEBUT table-filters.js -->
+<script data-composant="table-filters.js" data-empreinte="sha256:…">…</script>
+<!-- COMPOSANT-EMBARQUE:FIN table-filters.js -->
+```
+
+Le script ne touche **que** les blocs déjà marqués — adopter une copie manuelle reste un geste
+explicite. Seule transformation admise entre source et copie : l'échappement `</script` (RA-1).
+La contrepartie CSS se pose de la même façon (`table-filters.css` dans un `<style>` marqué) ; la
+page hôte n'a qu'à **aliaser** les jetons du socle qu'elle ne nomme pas comme lui.
+
+**Le contrôle.** `../quality-oracles/scripts/oracle-parite-assets.mjs` balaie l'arborescence des
+skills sans rien écrire (P1 déclaration · P2 empreinte · P3 parité octet · P4 exemption datée et
+motivée) ; le self-test de `quality-oracles` le rejoue **sur le dépôt réel**, pour que le
+troisième skill qui recopie un composant rougisse le banc au lieu de dériver en silence.
+
+## Langue
+
+Tout livrable et toute interaction en **français**.

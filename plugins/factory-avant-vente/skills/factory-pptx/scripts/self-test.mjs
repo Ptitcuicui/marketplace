@@ -1,0 +1,1562 @@
+#!/usr/bin/env node
+// self-test — contrôle exécuté d'un skill Factory versionné en source (TF-1021 / TF-1022,
+// 11/09/2026). Node pur, zéro dépendance, déterministe, double sens (fixture rouge ET verte).
+//
+// POURQUOI IL EXISTE, et le fait est daté. Le 11/09/2026, l'audit des quatre skills qui ne
+// vivaient qu'en archive a mesuré deux défauts qu'aucun contrôle n'attrapait :
+//   — `factory-pptx` v2.5.0 citait 14 ressources en chemin relatif et n'en livrait que 3 ;
+//     11 liens morts, dont la charte « toujours » à charger et le script mis en avant dans
+//     la description elle-même. Un skill dont le workflow renvoie vers des fichiers absents
+//     n'est pas déroulable, et rien ne le disait.
+//   — 4 des 5 fichiers `references/` de `factory-propale` embarquaient, en clair, les noms
+//     de cinq clients réels — dans un paquet réutilisé pour TOUT client futur, et alors que
+//     la règle dure n° 2 du skill lui-même interdit exactement cette migration.
+// C1 ferme le premier trou, C2 le second.
+//
+// CE QU'IL JUGE
+//   C1 — tout chemin relatif cité par SKILL.md existe dans le skill.
+//        Une ligne portant la mention « non livré » est EXEMPTÉE : déclarer un manque est
+//        l'inverse d'un lien mort, et un skill doit pouvoir nommer ce qui lui manque.
+//   C2 — aucun terme de la table des noms interdits dans les fichiers texte du skill.
+//        La table est une DONNÉE et vit HORS de tout dépôt publié (loi transverse n° 4) :
+//        elle est résolue à l'exécution, jamais embarquée — un contrôle qui embarquerait la
+//        liste publierait exactement ce qu'il protège. Son ABSENCE rend SKIP, jamais PASS.
+//   C3 — `scripts/lire-marque.mjs` consomme bien un dossier de marque (TF-1023, 11/09/2026) :
+//        joué sur les DEUX fixtures de `fixtures/`, dans les DEUX formats (source DTCG et
+//        dérivé CSS). Fixture VERTE `marque-valide` : exit 0 et chaque valeur rendue égale à
+//        `fixtures/marque-valide/attendu.json` — une valeur en dur survivante divergerait.
+//        Fixture ROUGE `marque-sans-blue` : exit 2, le jeton manquant nommé. Dossier absent :
+//        exit 2. Un lecteur qui « réussirait » sur la fixture rouge retomberait sur du dur.
+//   C4 — SKILL.md ne porte plus de VALEUR de marque en dur : aucune couleur hexadécimale,
+//        aucune famille de police nommée comme valeur. Les noms de jetons, eux, sont attendus.
+//        Une police nommée pour être INTERDITE reste permise : c'est une règle, pas une valeur.
+//   C5 — l'export par PowerPoint ne quitte jamais une application qu'il n'a pas lancée (TF-1502,
+//        01/10/2026 : 8 scripts maison sur 9 quittaient l'instance de l'utilisateur). La règle de
+//        `scripts/exporter-powerpoint.ps1` est jouée par son mode -Decision, sans PowerPoint, sur
+//        sept cas ; puis trois MUTANTS de la règle (Quit sans condition, garde sur le seul compte
+//        des présentations, garde sans la visibilité) doivent chacun être pris par un cas.
+//   C6 — le verrou entre sessions parallèles de `scripts/exporter-pptx.mjs` : libre il s'obtient,
+//        tenu par un processus vivant il ne s'obtient ni ne se touche, en cours d'écriture il ne se
+//        reprend pas, périmé (processus terminé, trop vieux) il se reprend et c'est dit ; deux
+//        processus lancés ensemble ne le tiennent jamais en même temps.
+//   C7 — la chaîne d'assainissement (`--deja-exporte`, sans PowerPoint) sur les fixtures FICTIVES
+//        du juge des polices embarquées (skill quality-oracles) : verte livrée à l'identique,
+//        rouge réencodée puis rejugée PASS avec ses seules parties de police changées, rouge sans
+//        police source refusée sans rien écrire, deck sans police livré tel quel, sortie existante
+//        jamais écrasée.
+//   C9 — les pieds de page d'un deck pptxgenjs (TF-1382) : sur un vrai deck de pptxgenjs 4.0.1, S4 échoue
+//        (6 constats) ; `scripts/poser-pieds-de-page.py`, le remède de l'étape 6 bis, joué, les supprime et
+//        l'oracle rend PASS ; le deck d'entrée reste intact, une sortie existante n'est jamais écrasée,
+//        des noms absents du deck rendent un refus net sans rien écrire.
+//   C10 — l'étape 0 du workflow, cadrer avant de générer (TF-1383) : SKILL.md prescrit la résolution de famille
+//        (G8) et le jugement de la fiche de conception (G6) ; les deux commandes sont rejouées sur le pilot :
+//        la fiche d'exemple remplie rend PASS, le modèle vide rend FAIL.
+//   C11 — le skill sur un poste Windows sans LibreOffice (TF-1386) : l'aide des scripts Python sort sous une
+//        console cp1252 (un script qui imprime une flèche sans forcer l'UTF-8 y échoue : le détecteur voit le
+//        défaut), et `--png` de l'export refuse un dossier existant et la combinaison avec --deja-exporte.
+//   C12 — la documentation de la sortie de lire-marque.mjs égale sa sortie (TF-2355) : le bloc json de SKILL.md
+//        est confronté, par sa forme, à la sortie réelle sur la fixture verte ; une clé documentée comme une
+//        chaîne et rendue comme un objet, ou une clé non documentée, est vue.
+//   C13 — le prérequis pptxgenjs se vérifie (TF-2326) : `scripts/verifier-prerequis.mjs` rend exit 2 et la
+//        commande d'installation sur un dossier sans module ou avec le module seulement dans NODE_PATH, exit 0
+//        sur un dossier qui le porte ; SKILL.md ne déclare plus le module « installé globalement ».
+//   C14 — les polices du poste et les mots doublés du PDF (TF-2354) : `lire-marque.mjs` relève une police absente
+//        (`--polices-installees`, `--exiger-polices`), `scripts/controler-mots-doubles.py` refuse le PDF dont
+//        le dernier mot de chaque ligne coupée est répété et laisse passer le PDF sain.
+//   C15 — l'espace insécable se pose sur le fichier produit (TF-2328) : le deck de jeu de typographie fait avertir S8
+//        six fois ; `scripts/poser-insecables.py` joué, S8 n'avertit plus ; idempotent, entrée intacte, sortie
+//        existante jamais écrasée, deck déjà conforme inchangé.
+//   C16 — la langue, l'en-tête de tableau et les formes décoratives (TF-2368) : un vrai deck de pptxgenjs 4.0.1, écrit
+//        comme avant ce lot, rend 9 passages en en-US, 1 tableau sans firstRow et 2 formes non marquées ;
+//        `scripts/accessibilite-deck.py --out` les corrige et le recontrôle passe ; chaque altération du vert
+//        (langue, en-tête, marque) est refusée pour sa règle.
+//   C17 — le style d'un tableau de contenu, tranché par le porteur (D-44 (a)), est écrit en usage au § 9 de la
+//        charte (TF-2371) : la décision, les trois clés rendues qui la portent, aucune couleur littérale ; chaque
+//        altération du réel (clé retirée, valeur écrite, sous-titre retiré) est vue.
+//   C18 — une grille par famille de pages sœurs, aucune barre latérale accolée (TF-2374) : `scripts/controler-grilles.py`
+//        sur deux decks de pptxgenjs 4.0.1, le vert passe, le rouge est refusé pour 6 barres latérales et pour la
+//        page 2 qui suit une autre grille (cartes de 1,62 po, bandeau qui saute de 0,36 po) ; `references/layouts.md`
+//        porte les deux règles.
+//   C19 — un SVG se rend par un navigateur qui applique les dégradés, rogné à la boîte, ou se refuse (TF-2377) :
+//        le SVG de jeu à dégradé rend 960 x 360 px aux deux teintes du dégradé ; sans moteur, ressource externe,
+//        dimensions inconnues ou format ai, eps, pdf, emf : exit 2, message, rien d'écrit.
+//   C20 — le fichier de cadrage de la communication est exigé avant de générer (TF-2379) : SKILL.md prescrit
+//        `verifier-cadrage.mjs` du skill voisin à l'étape 0 ; l'exemple rempli passe, le gabarit vide est refusé.
+//   C21 — la règle des intercalaires dit ce que S1 juge (TF-2401) : SKILL.md et references/charte.md § 6 écrivent
+//        les deux formes admises, toutes les parties ont leur intercalaire ou aucune (gabarit B de factory-propale),
+//        et refusent le deck mixte ; l'oracle S1 laisse passer le deck du gabarit B et refuse le deck mixte ; la
+//        phrase d'avant le lot, rejouée, est refusée aux deux endroits.
+//   C22 — un masque de couverture ou d'intercalaire ne porte pas d'espace réservé de titre (TF-2599) : SKILL.md
+//        l'écrit (masque, titre en zone libre, ce que l'invite fait voir, règle PH1), et PH1 d'oracle-pptx refuse le
+//        deck de jeu à espaces réservés de titre vides et laisse passer le même deck rempli ; le SKILL.md amputé de la
+//        règle est refusé.
+//   C8 — sur demande (--essai-powerpoint) : l'essai réel par PowerPoint, joué seulement si AUCUN
+//        processus PowerPoint ne tourne, et avec --instance-neuve. L'instance lancée doit être
+//        quittée, le PPTX et le PDF écrits. Sans l'option, ou si PowerPoint tourne : non joué, dit.
+//
+// DOUBLE SENS. Chaque contrôle est rejoué sur une FIXTURE ROUGE : C1 sur un SKILL.md temporaire
+// citant un fichier absent, C2 sur un terme inventé, C3 sur le dossier de marque amputé, C4 sur
+// un texte planté, C5 sur des mutants de la règle, C6 sur un verrou tenu et un verrou en cours
+// d'écriture, C7 sur un deck à polices fausses. Si une fixture rouge ne rougit pas, le contrôle est
+// aveugle et le self-test échoue de lui-même. Les fixtures VERTES sont le skill réel,
+// `fixtures/marque-valide`, la règle livrée, un verrou libre et le deck fictif à polices saines.
+//
+// Sortie : JSON {verdict, findings, non_juge} sur stdout. Exit 0 (PASS) / 1 (FAIL) / 2 (SKIP).
+// Usage : node scripts/self-test.mjs [--skill=<dir>] [--referentiel=<chemin table>] [--essai-powerpoint]
+
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { spawn, spawnSync } from 'node:child_process';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+
+const ICI = path.dirname(fileURLToPath(import.meta.url));
+const args = process.argv.slice(2);
+const opt = (n) => (args.find((a) => a.startsWith(`--${n}=`)) || '').split('=').slice(1).join('=');
+
+const SKILL_DIR = path.resolve(opt('skill') || path.join(ICI, '..'));
+const NOM_SKILL = path.basename(SKILL_DIR);
+
+// --referentiel=<chemin> est AUTORITAIRE : s'il est donné, aucune autre piste n'est explorée.
+// Sans lui, les pistes par défaut du parc sont essayées dans l'ordre.
+const REF_EXPLICITE = opt('referentiel');
+const PISTES_TABLE = REF_EXPLICITE ? [REF_EXPLICITE] : [
+  process.env.FORGE_NOMS_INTERDITS,
+  process.env.FORGE_ROOT ? path.join(process.env.FORGE_ROOT, '_confidentiel', 'tables', 'noms-interdits.json') : null,
+  'C:/dev/_confidentiel/tables/noms-interdits.json',
+  path.join(SKILL_DIR, '..', '..', '..', '..', '_confidentiel', 'tables', 'noms-interdits.json'),
+].filter(Boolean);
+
+const NON_JUGE = [
+  "ne lit que du TEXTE : un nom vivant dans une image, une archive ou un binaire n'est pas vu",
+  "C1 ne juge que SKILL.md — un chemin mort cité par un fichier de references/ n'est pas attrapé",
+  "C1 ne vérifie que l'EXISTENCE du fichier, jamais que son contenu tient la promesse du renvoi",
+  "C2 n'a pas d'opinion sur un nom de client ABSENT de la table : la table est figée et ne s'étend pas toute seule",
+  "C2 exige une frontière non alphanumérique autour des termes de 4 caractères ou moins, pour ne pas rougir sur une sous-chaîne fortuite — un sigle court collé à un mot lui échappe donc",
+  "C3 joue lire-marque.mjs sur des fixtures SYNTHÉTIQUES : il ne dit rien du dossier de marque réel de l'émetteur, ni de la justesse des valeurs qui y vivent",
+  "C3 ne juge pas le RENDU : qu'un jeton soit lu ne prouve pas qu'il ait été peint sur la diapositive — c'est l'affaire de la passe QA du deck",
+  "C4 ne voit que SKILL.md : une valeur en dur dans references/ n'est pas attrapée — charte.md porte d'ailleurs des valeurs datées, explicitement « ne fait pas foi »",
+  "C4 ne connaît que la notation hexadécimale à six chiffres et les familles de polices nommées : un nom de couleur CSS ou une valeur rgb() lui échappe",
+  "C5 joue la RÈGLE de décision sur des faits donnés : que les faits soient bien relevés sur une vraie instance (numéros de processus, visibilité, présentations ouvertes) ne se prouve que par C8",
+  "C6 prouve l'exclusion entre processus d'un même poste : un verrou n'arbitre pas deux postes, et chaque poste a sa propre instance PowerPoint",
+  "C7 répare des polices fictives à une famille : l'équivalence octet pour octet avec PowerPoint sur des polices réelles est une mesure du produit (8 flux sur 8, 30/09/2026), rapportée et non rejouée ici",
+  "C9 joue le remède sur un deck de jeu produit par pptxgenjs 4.0.1 : que PowerPoint ouvre sans réserve un espace réservé posé ainsi, sans correspondance dans un gabarit, n'est pas prouvé par ce contrôle",
+  "C10 prouve que les commandes prescrites distinguent une fiche remplie d'une fiche vide ; que l'agent remplisse réellement la fiche avant de générer, et que le lecteur y soit juste défini, n'est jugé par aucun contrôle de ce self-test",
+  "C11 ne tire aucune image : la capture par PowerPoint (--png) ne se prouve que par un essai réel, sur un poste où PowerPoint est installé, jamais par ce self-test sans PowerPoint",
+  "C12 compare la FORME (clés et types) du bloc documenté à la sortie : il ne dit rien des valeurs, ni de la prose qui entoure le bloc",
+  "C13 prouve la règle de résolution sur des dossiers neufs et un module factice : que la version éprouvée de pptxgenjs s'installe sans réseau n'est pas jugé ici",
+  "C14 : la détection des polices du poste (registre Windows, fc-list) n'est prouvée que par sa liste injectée ; que le poste réel soit lu juste n'est pas jugé. Les PDF de jeu sont synthétiques : un PDF réel de PowerPoint à police substituée n'est pas rejoué",
+  "C15 pose l'insécable selon la table de S8 : une espace ordinaire que la table ne couvre pas (guillemets droits, trait d'union) reste ordinaire, et le placement réel des coupures de ligne reste une mesure de rendu",
+  "C16 juge la déclaration de langue, de la première ligne d'un tableau et des formes sans texte : ni la justesse d'un texte alternatif, ni l'ordre de lecture, ni la langue d'un passage volontairement étranger",
+  "C17 juge le texte du § 9 de la charte : que le style de tableau prescrit soit celui que le porteur voulait relève de la décision D-44, pas de ce contrôle",
+  "C18 compare la géométrie des cartes et du bandeau entre les pages d'une famille DÉCLARÉE (--familles) et cherche les barres fines accolées ; une famille non déclarée, ou une barre posée autrement qu'en forme fine, n'est pas vue",
+  "C19 prouve le rendu du SVG de jeu à deux teintes ; un SVG réel plus riche (filtres, texte vivant dont la police manque au poste) n'est pas rejoué, et fetch_drive_assets.py ne télécharge toujours que des rasters",
+  "C20 prouve que la commande prescrite distingue un cadrage complet d'un gabarit vide ; que l'agent le remplisse avec les faits du cas, et qu'ils soient justes, n'est jugé par aucun contrôle",
+  "C21 juge la phrase des deux fichiers et le comportement de S1 sur deux decks de jeu ; que le gabarit B de factory-propale prescrive bien un sommaire sans intercalaire se lit chez ce skill, pas ici",
+  "C22 juge la phrase de SKILL.md et PH1 sur une paire de decks de jeu ; qu'un script de construction réel définisse le masque sans espace réservé de titre se lit chez le produit, pas ici",
+  "C8 n'est joué que sur demande, et jamais quand PowerPoint tourne : sans lui, le chemin COM réel n'est prouvé par aucun contrôle de ce self-test",
+  "ne juge ni la qualité rédactionnelle, ni le déclenchement, ni la conformité à la charte du parc",
+];
+
+const EXT_TEXTE = new Set(['.md', '.mjs', '.js', '.py', '.html', '.css', '.json', '.txt', '.xml', '.yml', '.yaml', '.jsonl']);
+const EXT_CITABLE = new Set(['.md', '.mjs', '.js', '.py', '.html', '.css', '.json', '.txt', '.xml']);
+
+function marcher(d, out = []) {
+  for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+    if (e.name === '__pycache__' || e.name === '.git') continue;
+    const p = path.join(d, e.name);
+    if (e.isDirectory()) marcher(p, out);
+    else out.push(p);
+  }
+  return out;
+}
+
+const sansAccent = (s) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+
+// ---------------------------------------------------------------- C1 : liens relatifs
+// Extrait les candidats « chemin » d'un SKILL.md : ce qui est entre backticks et les cibles
+// de liens Markdown. Un candidat est retenu s'il ressemble à un fichier du skill.
+function cheminsCites(texte) {
+  const trouves = [];
+  texte.split(/\r?\n/).forEach((ligne, i) => {
+    if (sansAccent(ligne).includes('non livre')) return; // manque DÉCLARÉ ≠ lien mort
+    const bruts = [
+      ...[...ligne.matchAll(/`([^`\n]+)`/g)].map((m) => m[1]),
+      ...[...ligne.matchAll(/\]\(([^)\s]+)\)/g)].map((m) => m[1]),
+    ];
+    for (const brut of bruts) {
+      const tok = brut.trim();
+      if (!tok || /\s/.test(tok)) continue;              // libellés, gabarits de nommage
+      if (/^[a-z]+:\/\//i.test(tok)) continue;           // URL
+      if (tok.startsWith('/') || /^[A-Za-z]:[\\/]/.test(tok)) continue; // chemin absolu
+      if (/[{}<>*?|]/.test(tok)) continue;               // gabarit, placeholder
+      const ext = path.extname(tok).toLowerCase();
+      if (!EXT_CITABLE.has(ext)) continue;
+      trouves.push({ tok, ligne: i + 1 });
+    }
+  });
+  return trouves;
+}
+
+function verifierChemins(dirSkill, texteSkillMd, etiquette) {
+  const findings = [];
+  let fichiers = [];
+  try { fichiers = marcher(dirSkill).map((f) => path.relative(dirSkill, f).replace(/\\/g, '/')); } catch { fichiers = []; }
+  const basenames = new Set(fichiers.map((f) => f.split('/').pop()));
+  for (const { tok, ligne } of cheminsCites(texteSkillMd)) {
+    const existe = tok.includes('/')
+      ? fs.existsSync(path.join(dirSkill, tok))
+      : basenames.has(tok);
+    if (!existe) findings.push(`${etiquette}:${ligne} — chemin cité et absent du skill : ${tok}`);
+  }
+  return findings;
+}
+
+// ---------------------------------------------------------------- C2 : noms interdits
+function chargerTable() {
+  for (const p of PISTES_TABLE) {
+    try {
+      if (p && fs.existsSync(p)) {
+        const t = JSON.parse(fs.readFileSync(p, 'utf8'));
+        const termes = new Set([
+          ...(t.noms || []), ...(t.identifiants || []), ...(t.sigles || []),
+          ...Object.keys(t.pseudonymes || {}),
+        ].filter(Boolean));
+        return { chemin: p, termes: [...termes] };
+      }
+    } catch { /* piste suivante */ }
+  }
+  return null;
+}
+
+const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+function verifierNoms(dirSkill, termes) {
+  const findings = [];
+  for (const f of marcher(dirSkill)) {
+    if (!EXT_TEXTE.has(path.extname(f).toLowerCase())) continue;
+    let lignes;
+    try { lignes = fs.readFileSync(f, 'utf8').split(/\r?\n/); } catch { continue; }
+    const rel = path.relative(dirSkill, f).replace(/\\/g, '/');
+    for (const terme of termes) {
+      const motif = terme.length <= 4
+        ? new RegExp(`(?<![A-Za-z0-9])${esc(terme)}(?![A-Za-z0-9])`, 'i')
+        : new RegExp(esc(terme), 'i');
+      lignes.forEach((l, i) => {
+        if (motif.test(l)) findings.push(`${rel}:${i + 1} — terme de la table des noms interdits présent (terme non recopié ici)`);
+      });
+    }
+  }
+  return findings;
+}
+
+// ------------------------------------------------------- C3 : consommation du système de marque
+const LECTEUR = path.join(SKILL_DIR, 'scripts', 'lire-marque.mjs');
+const FIX = path.join(SKILL_DIR, 'fixtures');
+
+function jouerLecteur(dossier, format) {
+  const r = spawnSync(process.execPath, [LECTEUR, `--marque=${dossier}`, `--format=${format}`, '--compact'], {
+    encoding: 'utf8',
+  });
+  return { code: r.status, out: r.stdout || '', err: r.stderr || '' };
+}
+
+function verifierMarque() {
+  const findings = [];
+  if (!fs.existsSync(LECTEUR)) {
+    findings.push('scripts/lire-marque.mjs — absent : le skill ne peut plus consommer de système de marque');
+    return findings;
+  }
+  const dossierVert = path.join(FIX, 'marque-valide');
+  const dossierRouge = path.join(FIX, 'marque-sans-blue');
+  const cheminAttendu = path.join(dossierVert, 'attendu.json');
+  if (!fs.existsSync(cheminAttendu)) {
+    findings.push('fixtures/marque-valide/attendu.json — absent : la fixture verte ne dit plus ce qu\'elle attend');
+    return findings;
+  }
+  const attendu = JSON.parse(fs.readFileSync(cheminAttendu, 'utf8'));
+
+  for (const format of ['dtcg', 'css']) {
+    // FIXTURE VERTE — exit 0 et valeurs strictement égales à celles du dossier de marque lu.
+    const v = jouerLecteur(dossierVert, format);
+    if (v.code !== 0) {
+      findings.push(`fixture-verte/marque-valide (${format}) — lire-marque.mjs sort en ${v.code} au lieu de 0 : ${v.err.split('\n')[0]}`);
+      continue;
+    }
+    let lu;
+    try { lu = JSON.parse(v.out); } catch { findings.push(`fixture-verte/marque-valide (${format}) — sortie JSON illisible`); continue; }
+    for (const [cle, val] of Object.entries(attendu.usages_pptx || {})) {
+      const obtenu = lu.usages_pptx && lu.usages_pptx[cle];
+      const brut = obtenu && typeof obtenu === 'object' ? obtenu.pptx : obtenu;
+      if (String(brut) !== String(val)) {
+        findings.push(`fixture-verte/marque-valide (${format}) — usages_pptx.${cle} = ${brut}, attendu ${val} : la valeur rendue ne vient pas du dossier de marque`);
+      }
+    }
+    for (const [jeton, pouces] of Object.entries(attendu.dimensions_pouces || {})) {
+      const d = lu.dimensions && lu.dimensions[jeton];
+      if (!d || d.pouces !== pouces) {
+        findings.push(`fixture-verte/marque-valide (${format}) — dimension ${jeton} = ${d ? d.pouces : 'absente'} pouce(s), attendu ${pouces} : conversion px→pouce fausse`);
+      }
+    }
+
+    // FIXTURE ROUGE — un jeton requis manque : le lecteur DOIT rendre la main, pas improviser.
+    const r = jouerLecteur(dossierRouge, format);
+    if (r.code !== 2) {
+      findings.push(`fixture-rouge/marque-sans-blue (${format}) — lire-marque.mjs sort en ${r.code} au lieu de 2 : un jeton manquant ne rend pas la main`);
+    } else if (!/blue/i.test(r.err)) {
+      findings.push(`fixture-rouge/marque-sans-blue (${format}) — exit 2 correct mais le message ne nomme pas le jeton manquant`);
+    }
+    if (r.out.trim()) {
+      findings.push(`fixture-rouge/marque-sans-blue (${format}) — le lecteur a tout de même écrit des valeurs sur stdout`);
+    }
+  }
+
+  // FIXTURE ROUGE — dossier de marque injoignable : rendre la main, jamais retomber sur du dur.
+  const absent = jouerLecteur(path.join(FIX, 'marque-qui-n-existe-pas'), 'auto');
+  if (absent.code !== 2) {
+    findings.push(`fixture-rouge/dossier-absent — lire-marque.mjs sort en ${absent.code} au lieu de 2 : un dossier de marque injoignable ne rend pas la main`);
+  }
+  return findings;
+}
+
+// ---------------------------------------------------- C4 : plus de valeur de marque en dur
+const FAMILLES = ['Montserrat', 'Inter', 'Roboto', 'DM Sans', 'JetBrains Mono', 'Helvetica', 'Arial', 'Calibri', 'Poppins', 'Lato'];
+
+function valeursEnDur(texte, etiquette) {
+  const findings = [];
+  texte.split(/\r?\n/).forEach((ligne, i) => {
+    const interdiction = /jamais|interdit/i.test(ligne); // nommer une police pour la BANNIR est une règle
+    for (const m of ligne.matchAll(/#[0-9A-Fa-f]{6}\b/g)) {
+      findings.push(`${etiquette}:${i + 1} — couleur en dur : ${m[0]} — écrire le nom du jeton, la valeur vit chez l'émetteur`);
+    }
+    if (interdiction) return;
+    for (const fam of FAMILLES) {
+      if (new RegExp(`\\b${fam}\\b`).test(ligne)) {
+        findings.push(`${etiquette}:${i + 1} — police en dur : ${fam} — écrire le nom du jeton, la valeur vit chez l'émetteur`);
+      }
+    }
+  });
+  return findings;
+}
+
+// ------------------------------------------- C5 : la règle « l'export a-t-il lancé l'instance ? »
+const PS1 = path.join(SKILL_DIR, 'scripts', 'exporter-powerpoint.ps1');
+const EXPORTEUR = path.join(SKILL_DIR, 'scripts', 'exporter-pptx.mjs');
+const LIGNE_REGLE = '$quitter = $lancee -and (-not $erreur) -and ($autres -eq 0) -and (-not $visible)';
+const CAS_DECISION = [
+  { cas: "instance de l'utilisateur, sans fenêtre ni présentation (le 30/09/2026)", pids_avant: [4321], pids_apres: [4321], autres_presentations: 0, visible: false, erreur_lecture: false, attendu: false },
+  { cas: "instance de l'utilisateur, visible, quatre présentations ouvertes", pids_avant: [4321], pids_apres: [4321], autres_presentations: 4, visible: true, erreur_lecture: false, attendu: false },
+  { cas: "instance lancée par l'export, seule et invisible", pids_avant: [], pids_apres: [5555], autres_presentations: 0, visible: false, erreur_lecture: false, attendu: true },
+  { cas: "instance lancée par l'export, où l'utilisateur a ouvert une présentation", pids_avant: [], pids_apres: [5555], autres_presentations: 1, visible: false, erreur_lecture: false, attendu: false },
+  { cas: "instance lancée par l'export, devenue visible", pids_avant: [], pids_apres: [5555], autres_presentations: 0, visible: true, erreur_lecture: false, attendu: false },
+  { cas: "état de l'instance illisible", pids_avant: [], pids_apres: [5555], autres_presentations: null, visible: null, erreur_lecture: true, attendu: false },
+  { cas: 'aucun processus PowerPoint retrouvé après le rattachement', pids_avant: [], pids_apres: [], autres_presentations: 0, visible: false, erreur_lecture: false, attendu: false },
+];
+const MUTANTS = [
+  { nom: 'Quit() sans condition (8 scripts maison sur 9)', ligne: '$quitter = $true' },
+  { nom: 'garde sur le seul compte des présentations', ligne: '$quitter = ($autres -eq 0)' },
+  { nom: 'garde sans la visibilité', ligne: '$quitter = $lancee -and (-not $erreur) -and ($autres -eq 0)' },
+];
+
+function jouerDecision(ps1) {
+  const cas = CAS_DECISION.map(({ attendu, ...c }) => c);
+  const b64 = Buffer.from(JSON.stringify(cas), 'utf8').toString('base64');
+  const r = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', ps1, '-Decision', '-CasBase64', b64],
+    { encoding: 'utf8', timeout: 60000, windowsHide: true });
+  let j = null;
+  try { j = JSON.parse(String(r.stdout || '').trim().split(/\r?\n/).pop()); } catch { /* dit ci-dessous */ }
+  if (!j || !Array.isArray(j.decisions) || j.decisions.length !== CAS_DECISION.length) {
+    return { erreur: `mode -Decision sans réponse lisible (exit ${r.status}${r.error ? ', ' + r.error.code : ''}) : ${String(r.stderr || r.stdout || '').trim().slice(0, 200)}` };
+  }
+  return { ecarts: CAS_DECISION.filter((c, i) => j.decisions[i].quitter !== c.attendu).map((c) => c.cas) };
+}
+
+function verifierDecision() {
+  if (!fs.existsSync(PS1)) return { joue: true, findings: ["scripts/exporter-powerpoint.ps1 — absent : l'export par PowerPoint n'est plus livré"] };
+  if (process.platform !== 'win32') return { joue: false, motif: 'C5 NON JOUÉE : PowerShell et PowerPoint, Windows seulement' };
+  const findings = [];
+  // FIXTURE VERTE — la règle livrée rend la décision attendue sur chaque cas
+  const v = jouerDecision(PS1);
+  if (v.erreur) return { joue: true, findings: [`C5 — ${v.erreur}`] };
+  for (const cas of v.ecarts) findings.push(`C5 — exporter-powerpoint.ps1 décide mal : « ${cas} »`);
+  // FIXTURES ROUGES — trois mutants de la règle, dont celle des 8 scripts sur 9 : chacun doit être pris
+  const texte = fs.readFileSync(PS1, 'utf8');
+  const occurrences = texte.split(LIGNE_REGLE).length - 1;
+  if (occurrences !== 1) {
+    findings.push(`C5 — la ligne de la règle apparaît ${occurrences} fois dans exporter-powerpoint.ps1 au lieu d'une : les mutants ne savent plus où frapper`);
+    return { joue: true, findings };
+  }
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'self-test-decision-'));
+  try {
+    MUTANTS.forEach((m, i) => {
+      const f = path.join(tmp, `mutant-${i}.ps1`);
+      fs.writeFileSync(f, texte.replace(LIGNE_REGLE, () => m.ligne));
+      const r = jouerDecision(f);
+      if (r.erreur) findings.push(`C5 — mutant « ${m.nom} » injouable : ${r.erreur}`);
+      else if (!r.ecarts.length) findings.push(`fixture-rouge — C5 est AVEUGLE : le mutant « ${m.nom} » passe les ${CAS_DECISION.length} cas`);
+    });
+  } finally {
+    try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* rien */ }
+  }
+  return { joue: true, findings };
+}
+
+// ------------------------------------------------------- C6 : le verrou entre sessions parallèles
+async function verifierVerrou() {
+  if (!fs.existsSync(EXPORTEUR)) return ["scripts/exporter-pptx.mjs — absent : ni verrou, ni assainissement"];
+  const { prendreVerrou, rendreVerrou, AGE_MAX_VERROU_MS } = await import(pathToFileURL(EXPORTEUR).href);
+  const findings = [];
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'self-test-verrou-'));
+  const chemin = path.join(tmp, 'export-powerpoint.verrou');
+  const poser = (o) => fs.writeFileSync(chemin, typeof o === 'string' ? o : JSON.stringify(o));
+  try {
+    // VERTE — libre : obtenu, jeton écrit, rendu
+    const v = await prendreVerrou(chemin, { attenteMs: 1000 });
+    if (!v.obtenu) findings.push("C6 — un verrou libre n'est pas obtenu");
+    else if (JSON.parse(fs.readFileSync(chemin, 'utf8')).jeton !== v.jeton) findings.push('C6 — verrou obtenu sans son jeton dans le fichier');
+    if (!rendreVerrou(v) || fs.existsSync(chemin)) findings.push('C6 — verrou rendu, fichier resté en place');
+    // ROUGE — tenu par un processus vivant : ni obtenu, ni touché (deux sessions parallèles)
+    const tenu = JSON.stringify({ pid: process.pid, jeton: 'tenu-par-une-autre-session', debut: new Date().toISOString(), entree: 'autre.pptx' });
+    poser(tenu);
+    const r1 = await prendreVerrou(chemin, { attenteMs: 600, pasMs: 100 });
+    if (r1.obtenu) findings.push("fixture-rouge — C6 : le verrou n'exclut rien, il est obtenu alors qu'un processus vivant le tient");
+    else if (r1.tenu_par?.pid !== process.pid) findings.push('C6 — verrou tenu : le rapport ne nomme pas le processus qui le tient');
+    if (fs.readFileSync(chemin, 'utf8') !== tenu) findings.push("C6 — le verrou d'une autre session a été modifié");
+    if (rendreVerrou({ obtenu: true, chemin, jeton: 'pas-le-sien' }) || !fs.existsSync(chemin)) findings.push("C6 — rendreVerrou a supprimé le verrou d'une autre session");
+    // ROUGE — en cours d'écriture (illisible depuis moins de 10 s) : pas repris
+    poser('');
+    const r2 = await prendreVerrou(chemin, { attenteMs: 500, pasMs: 100 });
+    if (r2.obtenu) findings.push("fixture-rouge — C6 : un verrou en cours d'écriture est repris, deux exports se croiseraient");
+    // VERTE — processus terminé : repris, et dit
+    const mort = spawnSync(process.execPath, ['-e', '0']).pid;
+    poser({ pid: mort, jeton: 'processus-termine', debut: new Date().toISOString() });
+    const v2 = await prendreVerrou(chemin, { attenteMs: 1000 });
+    if (!v2.obtenu || !v2.repris.some((x) => x.pid === mort)) findings.push(`C6 — le verrou d'un processus terminé (${mort}) n'est pas repris`);
+    rendreVerrou(v2);
+    // VERTE — trop vieux, processus vivant (numéro resservi) : repris
+    poser({ pid: process.pid, jeton: 'trop-vieux', debut: new Date(Date.now() - 2 * AGE_MAX_VERROU_MS).toISOString() });
+    const v3 = await prendreVerrou(chemin, { attenteMs: 1000 });
+    if (!v3.obtenu || !v3.repris.length) findings.push("C6 — un verrou plus vieux que l'âge maximal n'est pas repris");
+    rendreVerrou(v3);
+    // DEUX PROCESSUS LANCÉS ENSEMBLE — jamais ensemble dans la section tenue
+    const code = [
+      `import { prendreVerrou, rendreVerrou } from ${JSON.stringify(pathToFileURL(EXPORTEUR).href)};`,
+      `const v = await prendreVerrou(${JSON.stringify(chemin)}, { attenteMs: 20000, pasMs: 50 });`,
+      'const debut = Date.now(); await new Promise((r) => setTimeout(r, 700)); const fin = Date.now();',
+      'const rendu = rendreVerrou(v);',
+      'process.stdout.write(JSON.stringify({ obtenu: v.obtenu, debut, fin, rendu }));',
+    ].join('\n');
+    const lancer = () => new Promise((resolve) => {
+      const p = spawn(process.execPath, ['--input-type=module', '-e', code], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+      let out = '';
+      p.stdout.on('data', (d) => { out += d; });
+      p.on('close', () => { try { resolve(JSON.parse(out)); } catch { resolve(null); } });
+    });
+    const [a, b] = await Promise.all([lancer(), lancer()]);
+    if (!a || !b) findings.push("C6 — un des deux processus concurrents n'a pas rendu de rapport");
+    else if (!a.obtenu || !b.obtenu) findings.push("C6 — un des deux processus concurrents n'a jamais obtenu le verrou");
+    else if (!(a.fin <= b.debut || b.fin <= a.debut)) findings.push(`fixture-rouge — C6 : deux processus ont tenu le verrou ensemble (${a.debut}-${a.fin} et ${b.debut}-${b.fin})`);
+    else if (!a.rendu || !b.rendu) findings.push("C6 — un processus concurrent n'a pas pu rendre son verrou");
+  } finally {
+    try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* rien */ }
+  }
+  return findings;
+}
+
+// --------------------------------------------- C7 : la chaîne d'assainissement, sans PowerPoint
+const ORACLE_POLICES = path.join(SKILL_DIR, '..', 'quality-oracles', 'scripts', 'oracle-polices-embarquees.mjs');
+const FIX_POLICES = path.join(SKILL_DIR, '..', 'quality-oracles', 'fixtures');
+
+// Les noms et les CRC-32 des parties d'un paquet zip, lus dans son répertoire central (rien n'est décompressé).
+function empreintesDuPaquet(fichier) {
+  const buf = fs.readFileSync(fichier);
+  const carte = new Map();
+  let fin = -1;
+  for (let i = buf.length - 22; i >= Math.max(0, buf.length - 22 - 65535); i--) if (buf.readUInt32LE(i) === 0x06054b50) { fin = i; break; }
+  if (fin < 0) return carte;
+  let p = buf.readUInt32LE(fin + 16);
+  for (let k = 0; k < buf.readUInt16LE(fin + 10); k++) {
+    if (buf.readUInt32LE(p) !== 0x02014b50) break;
+    const ln = buf.readUInt16LE(p + 28);
+    carte.set(buf.toString('utf8', p + 46, p + 46 + ln), buf.readUInt32LE(p + 16));
+    p += 46 + ln + buf.readUInt16LE(p + 30) + buf.readUInt16LE(p + 32);
+  }
+  return carte;
+}
+
+function exporterCli(argsExport) {
+  const r = spawnSync(process.execPath, [EXPORTEUR, ...argsExport], { encoding: 'utf8', timeout: 600000, windowsHide: true });
+  let j = null;
+  try { j = JSON.parse(r.stdout); } catch { /* rapport illisible : le code et j nul le disent */ }
+  return { code: r.status, j };
+}
+
+function pythonQuiRepond() {
+  const candidats = process.platform === 'win32' ? [['py', '-3'], ['python'], ['python3']] : [['python3'], ['python']];
+  return candidats.find((c) => spawnSync(c[0], [...c.slice(1), '-c', 'import sys'], { encoding: 'utf8', timeout: 15000 }).status === 0) || null;
+}
+
+// Un deck SANS police embarquée, dérivé de la fixture verte : parties ppt/fonts/ retirées, et leurs renvois avec.
+const PY_SANS_POLICE = [
+  'import re, sys, zipfile',
+  'src, dst = sys.argv[1:3]',
+  'with zipfile.ZipFile(src) as zi, zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as zo:',
+  '    for info in zi.infolist():',
+  '        if info.filename.startswith("ppt/fonts/"):',
+  '            continue',
+  '        data = zi.read(info.filename)',
+  '        if info.filename == "ppt/presentation.xml":',
+  '            data = re.sub(rb"<p:embeddedFontLst>.*?</p:embeddedFontLst>", b"", data, flags=re.S)',
+  '        if info.filename == "ppt/_rels/presentation.xml.rels":',
+  '            data = re.sub(rb"<Relationship [^>]*Target=\\"fonts/[^\\"]*\\"/>", b"", data)',
+  '        zo.writestr(info, data)',
+].join('\n');
+
+// TF-1535 — le deck vert, plus les deux parties de propriétés que PowerPoint écrit, à nom FICTIF.
+const PY_AVEC_METADONNEES = [
+  'import sys, zipfile',
+  'src, dst = sys.argv[1:3]',
+  'CORE = (\'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\\n<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" \'',
+  '        \'xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Jouet</dc:title><dc:creator>Prenom Fictif</dc:creator>\'',
+  '        \'<cp:lastModifiedBy>Prenom Fictif</cp:lastModifiedBy><cp:revision>3</cp:revision></cp:coreProperties>\')',
+  'APP = (\'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\\n<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties">\'',
+  '       \'<Application>Microsoft Office PowerPoint</Application><Company>Societe Fictive</Company><Manager>Chef Fictif</Manager></Properties>\')',
+  'with zipfile.ZipFile(src) as zi, zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as zo:',
+  '    for info in zi.infolist():',
+  '        zo.writestr(info, zi.read(info.filename))',
+  '    zo.writestr("docProps/core.xml", CORE)',
+  '    zo.writestr("docProps/app.xml", APP)',
+].join('\n');
+
+async function verifierChaine() {
+  if (!fs.existsSync(EXPORTEUR)) return { joue: true, findings: ["scripts/exporter-pptx.mjs — absent : ni verrou, ni assainissement"] };
+  const vert = path.join(FIX_POLICES, 'polices-embarquees-green.pptx');
+  const rouge = path.join(FIX_POLICES, 'polices-embarquees-red.pptx');
+  const sources = path.join(FIX_POLICES, 'polices-embarquees-sources');
+  const manquent = [ORACLE_POLICES, vert, rouge, sources].filter((f) => !fs.existsSync(f));
+  if (manquent.length) return { joue: false, motif: `C7 NON JOUÉE : le juge des polices embarquées ou ses fixtures fictives manquent (${manquent.map((f) => path.basename(f)).join(', ')}) — le skill quality-oracles doit être installé à côté de ce skill` };
+  const findings = [];
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'self-test-chaine-'));
+  try {
+    // VERTE — polices saines : livrées telles quelles
+    const s1 = path.join(tmp, 'vert.pptx');
+    const a = exporterCli([vert, '--deja-exporte', '--pptx', s1, '--polices', sources]);
+    if (a.code === 2 && a.j?.etat === 'non-joue') return { joue: false, motif: `C7 NON JOUÉE : ${a.j.motif}` };
+    if (a.code !== 0 || a.j?.etat !== 'embarquees') findings.push(`C7 — fixture verte : exit ${a.code}, état ${a.j?.etat} au lieu de 0 et embarquees (${a.j?.motif})`);
+    else if (!fs.readFileSync(s1).equals(fs.readFileSync(vert))) findings.push("C7 — fixture verte : la sortie diffère de l'entrée, alors que rien n'était à réparer");
+    // ROUGE — polices fausses : jugées FAIL, réencodées, rejugées PASS ; seules les parties de police changent
+    const s2 = path.join(tmp, 'rouge.pptx');
+    const b = exporterCli([rouge, '--deja-exporte', '--pptx', s2, '--polices', sources]);
+    if (b.code !== 0 || b.j?.etat !== 'reencodees') {
+      findings.push(`fixture-rouge — C7 : polices fausses, exit ${b.code} et état ${b.j?.etat} au lieu de 0 et reencodees (${b.j?.motif})`);
+    } else {
+      const avant = empreintesDuPaquet(rouge);
+      const apres = empreintesDuPaquet(s2);
+      const changees = [...avant.keys()].filter((n) => avant.get(n) !== apres.get(n));
+      if (!changees.length || apres.size !== avant.size || changees.some((n) => !n.startsWith('ppt/fonts/'))) {
+        findings.push(`C7 — fixture rouge réparée : parties changées ${changees.join(', ') || 'aucune'} — seules des parties ppt/fonts/ doivent changer`);
+      }
+      const juge = spawnSync(process.execPath, [ORACLE_POLICES, s2, '--polices', sources], { encoding: 'utf8', timeout: 300000, windowsHide: true });
+      let jj = null;
+      try { jj = JSON.parse(juge.stdout); } catch { /* dit ci-dessous */ }
+      if (jj?.verdict !== 'PASS') findings.push(`C7 — fixture rouge réparée : le juge rejoué à part rend ${jj?.verdict ?? 'un rapport illisible'} au lieu de PASS`);
+    }
+    // ROUGE — polices fausses et aucune police source : refus, rien n'est écrit
+    const vide = path.join(tmp, 'sans-source');
+    fs.mkdirSync(vide);
+    const s3 = path.join(tmp, 'refus.pptx');
+    const c = exporterCli([rouge, '--deja-exporte', '--pptx', s3, '--polices', vide]);
+    if (c.code !== 1 || c.j?.etat !== 'refus') findings.push(`fixture-rouge — C7 : polices fausses sans police source, exit ${c.code} et état ${c.j?.etat} au lieu de 1 et refus`);
+    if (fs.existsSync(s3)) findings.push('fixture-rouge — C7 : un deck refusé a tout de même été écrit');
+    // ROUGE — le défaut est dans la police SOURCE (fixtures/export/source-defectueuse) : le réencodage
+    // réussit, le juge rejoué rend encore FAIL, et la chaîne refuse sans rien écrire
+    const s6 = path.join(tmp, 'source-defectueuse.pptx');
+    const f = exporterCli([rouge, '--deja-exporte', '--pptx', s6, '--polices', path.join(SKILL_DIR, 'fixtures', 'export', 'source-defectueuse')]);
+    if (f.code !== 1 || f.j?.etat !== 'refus' || f.j?.polices?.recontrole?.verdict !== 'FAIL') {
+      findings.push(`fixture-rouge — C7 : police source défectueuse, exit ${f.code}, état ${f.j?.etat}, recontrôle ${f.j?.polices?.recontrole?.verdict} au lieu de 1, refus et FAIL`);
+    }
+    if (fs.existsSync(s6)) findings.push('fixture-rouge — C7 : un deck encore FAIL après réencodage a été écrit');
+    // ROUGE — la police source a perdu un glyphe que la copie embarquée portait (fixtures/export/
+    // source-incomplete) : réencoder effacerait une lettre que le juge ne verrait pas, vide des deux
+    // côtés. C'est la garde « glyphe perdu » du réencodage qui refuse, et rien n'est écrit
+    const s7 = path.join(tmp, 'source-incomplete.pptx');
+    const g7 = exporterCli([vert, '--deja-exporte', '--pptx', s7, '--polices', path.join(SKILL_DIR, 'fixtures', 'export', 'source-incomplete')]);
+    const perdus = (g7.j?.polices?.reencodage?.polices || []).reduce((n, p) => n + (p.glyphes_perdus || 0), 0);
+    if (g7.code !== 1 || g7.j?.etat !== 'refus' || perdus < 1) {
+      findings.push(`fixture-rouge — C7 : police source privée d'un glyphe, exit ${g7.code}, état ${g7.j?.etat}, ${perdus} glyphe(s) perdu(s) au lieu de 1, refus et au moins 1`);
+    }
+    if (fs.existsSync(s7)) findings.push("fixture-rouge — C7 : un deck réencodé avec un glyphe en moins a été écrit");
+    // VERTE — aucune police embarquée : livré tel quel, sans juge ni réencodage
+    const py = pythonQuiRepond();
+    if (!py) {
+      findings.push("C7 — aucun interpréteur Python ne répond : le deck sans police n'a pas pu être dérivé");
+    } else {
+      const script = path.join(tmp, 'sans-police.py');
+      const sans = path.join(tmp, 'sans-police.pptx');
+      fs.writeFileSync(script, PY_SANS_POLICE);
+      const g = spawnSync(py[0], [...py.slice(1), '-B', script, vert, sans], { encoding: 'utf8', timeout: 60000 });
+      const s4 = path.join(tmp, 'sans-police-livre.pptx');
+      const d = g.status === 0 ? exporterCli([sans, '--deja-exporte', '--pptx', s4]) : null;
+      if (!d) findings.push(`C7 — deck sans police non dérivé : ${String(g.stderr || '').trim().slice(-200)}`);
+      else if (d.code !== 0 || d.j?.etat !== 'aucune') findings.push(`C7 — deck sans police : exit ${d.code}, état ${d.j?.etat} au lieu de 0 et aucune`);
+      else if (!fs.readFileSync(s4).equals(fs.readFileSync(sans))) findings.push("C7 — deck sans police : la sortie diffère de l'entrée");
+
+      // TF-1535 — MÉTADONNÉES PERSONNELLES : le deck vert, plus un docProps/core.xml et un app.xml
+      // portant un nom de compte FICTIF, comme PowerPoint les écrit. Sens rouge : le juge les voit
+      // sur l'entrée. Sens vert : l'export les vide, le juge rejoué n'en voit plus, et seules les
+      // deux parties docProps changent.
+      const scriptMeta = path.join(tmp, 'avec-meta.py');
+      const avecMeta = path.join(tmp, 'avec-meta.pptx');
+      fs.writeFileSync(scriptMeta, PY_AVEC_METADONNEES);
+      const gm = spawnSync(py[0], [...py.slice(1), '-B', scriptMeta, vert, avecMeta], { encoding: 'utf8', timeout: 60000 });
+      if (gm.status !== 0) findings.push(`C7 — deck à métadonnées non dérivé : ${String(gm.stderr || '').trim().slice(-200)}`);
+      else {
+        const { metadonneesPersonnelles } = await import(pathToFileURL(EXPORTEUR).href);
+        const avantM = metadonneesPersonnelles(avecMeta) || [];
+        if (avantM.length !== 4) findings.push(`fixture-rouge — C7 TF-1535 : le juge voit ${avantM.length} champ(s) personnel(s) sur l'entrée au lieu de 4`);
+        const s8 = path.join(tmp, 'avec-meta-livre.pptx');
+        const m = exporterCli([avecMeta, '--deja-exporte', '--pptx', s8, '--polices', sources]);
+        const apresM = fs.existsSync(s8) ? metadonneesPersonnelles(s8) : null;
+        const av = empreintesDuPaquet(avecMeta), ap = fs.existsSync(s8) ? empreintesDuPaquet(s8) : new Map();
+        const changees = [...av.keys()].filter((n) => av.get(n) !== ap.get(n));
+        if (m.code !== 0 || m.j?.metadonnees?.controle !== 'PASS' || (m.j?.metadonnees?.videes || []).length !== 4) {
+          findings.push(`C7 TF-1535 : deck à métadonnées, exit ${m.code}, contrôle ${m.j?.metadonnees?.controle}, ${(m.j?.metadonnees?.videes || []).length} champ(s) vidé(s) au lieu de 0, PASS et 4 (${m.j?.motif})`);
+        } else if (!apresM || apresM.length) findings.push(`C7 TF-1535 : le deck livré porte encore ${apresM ? apresM.length : '?'} champ(s) personnel(s)`);
+        else if (ap.size !== av.size || changees.some((n) => !n.startsWith('docProps/')) || changees.length !== 2) {
+          findings.push(`C7 TF-1535 : parties changées ${changees.join(', ') || 'aucune'} — seules docProps/core.xml et docProps/app.xml doivent changer`);
+        } else {
+          const r = spawnSync(py[0], [...py.slice(1), '-c', 'import sys, zipfile; z = zipfile.ZipFile(sys.argv[1]); sys.exit(0 if z.testzip() is None else 1)', s8], { encoding: 'utf8', timeout: 60000 });
+          if (r.status !== 0) findings.push(`C7 TF-1535 : le deck nettoyé n'est pas un zip intègre (zipfile.testzip) : ${String(r.stderr || '').trim().slice(-200)}`);
+        }
+      }
+    }
+    // ROUGE — sortie déjà présente : rien n'est écrasé
+    const s5 = path.join(tmp, 'existe.pptx');
+    fs.writeFileSync(s5, 'deja la');
+    const e = exporterCli([vert, '--deja-exporte', '--pptx', s5]);
+    if (e.code !== 2 || fs.readFileSync(s5, 'utf8') !== 'deja la') findings.push(`fixture-rouge — C7 : une sortie existante n'est pas protégée (exit ${e.code})`);
+  } finally {
+    try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* rien */ }
+  }
+  return { joue: true, findings };
+}
+
+// ----------------------------------------------- C10 : l'étape 0, cadrer avant de générer (TF-1383)
+// Le fait (retours Produit-68 du 26/09/2026, RG-15) : les étapes du workflow ne passaient ni par la famille du
+// catalogue (G8) ni par la fiche de conception amont (D8, jugée par G6) ; la fiche fut remplie après la remise.
+// Le contrôle joue les deux commandes que prescrit l'étape 0, telles qu'écrites dans SKILL.md : la fiche
+// remplie du pilot (exemple) rend PASS, le modèle vide rend FAIL — une commande qui ne distingue pas les deux
+// ne cadre rien.
+async function verifierCadrage() {
+  const skillMd = fs.readFileSync(path.join(SKILL_DIR, 'SKILL.md'), 'utf8');
+  const findings = [];
+  const cmds = ['oracle-gabarits-documents.mjs --livrable', 'oracle-gabarits-documents.mjs --fiche'];
+  for (const c of cmds) if (!skillMd.includes(c)) findings.push(`C10 : l'étape 0 de SKILL.md ne prescrit plus « ${c} »`);
+  if (!/^0\. \*\*Cadrer avant de générer\*\*/m.test(skillMd)) findings.push("C10 : SKILL.md n'a plus d'étape 0 « Cadrer avant de générer » dans son workflow");
+  const { resolvePilot, motifPilotAbsent } = await import(pathToFileURL(path.join(SKILL_DIR, '..', 'quality-oracles', 'scripts', 'lib', 'pilot.mjs')).href).catch(() => ({}));
+  const pilot = resolvePilot ? resolvePilot(SKILL_DIR) : null;
+  if (!pilot) return { joue: false, findings, motif: 'C10 jouée sur le texte seul, commandes non rejouées : ' + (motifPilotAbsent ? motifPilotAbsent(SKILL_DIR) : 'module pilot.mjs du skill quality-oracles introuvable') };
+  const oracle = path.join(pilot, 'oracles', 'oracle-gabarits-documents.mjs');
+  const fiche = (nom) => {
+    const r = spawnSync(process.execPath, [oracle, '--fiche', path.join(pilot, 'gabarits', 'documents', nom)], { encoding: 'utf8', timeout: 60000 });
+    try { return JSON.parse(r.stdout).verdict; } catch { return '?'; }
+  };
+  const vert = fiche('FICHE-CONCEPTION-EXEMPLE.md'), rouge = fiche('FICHE-CONCEPTION.md');
+  if (vert !== 'PASS') findings.push(`C10 sens vert : la fiche d'exemple remplie rend ${vert} sous G6, attendu PASS`);
+  if (rouge !== 'FAIL') findings.push(`C10 sens rouge : le modèle de fiche vide rend ${rouge} sous G6, attendu FAIL`);
+  return { joue: true, findings };
+}
+
+// ------------------------------------------ C11 : le skill sur un poste Windows sans LibreOffice (TF-1386)
+// Le fait (retours Produit-68 du 26/09/2026, RG-18) : la passe QA prescrivait soffice puis pdftoppm, absents du
+// poste ; prepare_images.py --help s'arrêtait sur UnicodeEncodeError dans une console cp1252. Les deux sens :
+//   (A) un script qui imprime une flèche sans forcer l'UTF-8 échoue sous cp1252 (le détecteur voit le défaut) ;
+//       l'aide des scripts Python du skill sort en code 0 sous cp1252 ;
+//   (B) la capture par PowerPoint (--png) refuse d'écraser un dossier existant et de se combiner à
+//       --deja-exporte, sans ouvrir PowerPoint.
+function verifierPoste() {
+  const py = pythonQuiRepond();
+  if (!py) return { joue: false, findings: [], motif: 'C11 NON JOUÉE : python introuvable' };
+  const findings = [];
+  const dossier = fs.mkdtempSync(path.join(os.tmpdir(), 'poste-'));
+  try {
+    const env = { ...process.env, PYTHONIOENCODING: 'cp1252', PYTHONUTF8: '0' };
+    const jouer = (args) => spawnSync(py[0], [...py.slice(1), ...args], { encoding: 'utf8', timeout: 60000, env });
+    const fleche = path.join(dossier, 'fleche.py');
+    fs.writeFileSync(fleche, 'print("a \u2192 b")\n', 'utf8');
+    if (jouer([fleche]).status === 0) findings.push('C11 (A) : le détecteur est aveugle — une flèche imprimée sous cp1252 n\'a pas échoué');
+    for (const s of ['prepare_images.py', 'fetch_drive_assets.py']) {
+      const r = jouer([path.join(SKILL_DIR, 'scripts', s), '--help']);
+      if (r.status !== 0) findings.push(`C11 (A) : ${s} --help échoue sous une console cp1252 (code ${r.status}) — ${(r.stderr || '').trim().split('\n').pop().slice(0, 120)}`);
+    }
+    const deck = path.join(dossier, 'deck.pptx');
+    fs.writeFileSync(deck, 'x');
+    const existant = path.join(dossier, 'images');
+    fs.mkdirSync(existant);
+    const b1 = exporterCli([deck, '--png', existant]);
+    if (b1.code !== 2 || !/existe déjà/.test(b1.j?.motif || '')) findings.push(`C11 (B) : --png sur un dossier existant devrait rendre code 2 « existe déjà » (code ${b1.code}, motif ${(b1.j?.motif || '').slice(0, 80)})`);
+    const b2 = exporterCli([deck, '--png', path.join(dossier, 'neuf'), '--pptx', path.join(dossier, 'sortie.pptx'), '--deja-exporte']);
+    if (b2.code !== 2 || !/--png/.test(b2.j?.motif || '')) findings.push(`C11 (B) : --png avec --deja-exporte devrait être refusé à l'usage (code ${b2.code}, motif ${(b2.j?.motif || '').slice(0, 80)})`);
+  } finally {
+    try { fs.rmSync(dossier, { recursive: true, force: true }); } catch { /* rien */ }
+  }
+  return { joue: true, findings };
+}
+
+// ---------------------------------- C9 : les pieds de page d'un deck pptxgenjs (TF-1382, sans PowerPoint)
+// Le fait (retours Produit-68 du 26/09/2026, RG-14) : pptxgenjs n'émet ni `ftr` ni `sldNum`, S4 les exige, et
+// le skill ne livrait aucune étape pour les poser. Le deck de jeu est un VRAI sortie de pptxgenjs 4.0.1
+// (quality-oracles/fixtures/charte-pptx-pptxgenjs-brut.pptx), pieds nommés par objectName.
+function verifierPieds() {
+  const py = pythonQuiRepond();
+  const oracle = path.join(SKILL_DIR, '..', 'quality-oracles', 'scripts', 'oracle-charte-pptx-semantique.mjs');
+  const brut = path.join(SKILL_DIR, '..', 'quality-oracles', 'fixtures', 'charte-pptx-pptxgenjs-brut.pptx');
+  const script = path.join(SKILL_DIR, 'scripts', 'poser-pieds-de-page.py');
+  const absents = [['python', py], ['oracle-charte-pptx-semantique', fs.existsSync(oracle)], ['deck pptxgenjs de jeu', fs.existsSync(brut)], ['poser-pieds-de-page.py', fs.existsSync(script)]].filter(([, v]) => !v).map(([k]) => k);
+  if (absents.length) return { joue: false, motif: `C9 NON JOUÉE : ${absents.join(', ')} introuvable(s)` };
+  const dossier = fs.mkdtempSync(path.join(os.tmpdir(), 'pieds-'));
+  const findings = [];
+  try {
+    const poser = (...a) => {
+      const r = spawnSync(py[0], [...py.slice(1), script, ...a], { encoding: 'utf8', timeout: 60000, env: { ...process.env, PYTHONUTF8: '1' } });
+      let j = null; try { j = JSON.parse(r.stdout); } catch { /* rapport illisible : le code le dit */ }
+      return { code: r.status, j };
+    };
+    const juger = (f) => {
+      const r = spawnSync(process.execPath, [oracle, f], { encoding: 'utf8', timeout: 120000 });
+      try { return JSON.parse(r.stdout); } catch { return { verdict: '?', findings: [] }; }
+    };
+    const s4 = (j) => (j.findings || []).filter((x) => /^S4 /.test(x.msg));
+    const avant = fs.readFileSync(brut);
+    // sens ROUGE : le deck tel que pptxgenjs l'écrit échoue à S4 sur ses trois diapositives de contenu
+    const rouge = s4(juger(brut));
+    if (rouge.length !== 6) findings.push(`C9 sens rouge : le deck brut de pptxgenjs rend ${rouge.length} constat(s) S4, attendu 6 (3 diapositives x pied et pagination)`);
+    // sens VERT : le remède prescrit (étape 6 bis), JOUÉ, supprime les six constats
+    const sortie = path.join(dossier, 'livre.pptx');
+    const r1 = poser(brut, '--out', sortie);
+    if (r1.code !== 0 || !r1.j || r1.j.formes_devenues_espaces_reserves !== 6) findings.push(`C9 : poser-pieds-de-page rend code ${r1.code} et ${r1.j ? r1.j.formes_devenues_espaces_reserves : '?'} forme(s) posée(s), attendu 0 et 6`);
+    else {
+      const apres = juger(sortie);
+      if (s4(apres).length) findings.push(`C9 sens vert : après le remède, S4 rend encore ${s4(apres).length} constat(s) — ${s4(apres)[0].msg}`);
+      else if (apres.verdict !== 'PASS') findings.push(`C9 sens vert : après le remède, l'oracle rend ${apres.verdict} (${(apres.findings || []).map((x) => x.msg).join(' · ').slice(0, 160)})`);
+    }
+    if (!avant.equals(fs.readFileSync(brut))) findings.push('C9 : le deck d\'entrée a été modifié — le script doit écrire ailleurs');
+    // jamais d'écrasement
+    const r2 = poser(brut, '--out', sortie);
+    if (r2.code !== 2) findings.push(`C9 : une sortie existante est écrasée ou mal refusée (code ${r2.code}, attendu 2)`);
+    // des noms que le deck ne porte pas : refus net, rien d'écrit
+    const vide = path.join(dossier, 'vide.pptx');
+    const r3 = poser(brut, '--out', vide, '--pied', 'Nom absent', '--pagination', 'Autre nom absent');
+    if (r3.code !== 1 || fs.existsSync(vide)) findings.push(`C9 : des noms absents du deck devraient rendre code 1 sans rien écrire (code ${r3.code}, sortie ${fs.existsSync(vide) ? 'écrite' : 'absente'})`);
+  } finally {
+    try { fs.rmSync(dossier, { recursive: true, force: true }); } catch { /* rien */ }
+  }
+  return { joue: true, findings };
+}
+
+// ------------------------------------------------ C8 : l'essai réel par PowerPoint, sur demande
+function processusPowerPoint() {
+  const r = spawnSync('tasklist', ['/FI', 'IMAGENAME eq POWERPNT.EXE', '/FO', 'CSV', '/NH'], { encoding: 'utf8', timeout: 30000, windowsHide: true });
+  if (r.status !== 0) return null;
+  return String(r.stdout).split(/\r?\n/).filter((l) => /POWERPNT\.EXE/i.test(l)).map((l) => Number((l.split('","')[1] || '').replace(/"/g, '')));
+}
+
+// Le deck d'essai : texte fictif, dans une police INSTALLÉE PAR L'UTILISATEUR quand le poste en a une
+// qui s'embarque (PowerPoint n'embarque pas la police du thème par défaut, mesuré le 01/10/2026) :
+// c'est le cas réel d'une police de marque, et le seul qui exerce l'assainissement après l'export.
+const PY_DECK_ESSAI = [
+  'import glob, json, os, sys',
+  'from fontTools.ttLib import TTFont',
+  'from pptx import Presentation',
+  'choix = None',
+  'for f in sorted(glob.glob(os.path.join(os.environ.get("LOCALAPPDATA", ""), "Microsoft", "Windows", "Fonts", "*.ttf"))):',
+  '    try:',
+  '        t = TTFont(f, lazy=True)',
+  '        if t["OS/2"].fsType & 0x2 or t["OS/2"].usWeightClass != 400 or t["head"].macStyle & 2 or "glyf" not in t:',
+  '            continue',
+  '        choix = (t["name"].getDebugName(1) or "").strip() or None',
+  '    except Exception:',
+  '        continue',
+  '    if choix:',
+  '        break',
+  'prs = Presentation()',
+  'diapo = prs.slides.add_slide(prs.slide_layouts[1])',
+  'diapo.shapes.title.text = "Essai d\'export par PowerPoint"',
+  'diapo.placeholders[1].text = "Deck fictif du self-test de factory-pptx : polices embarquées, puis contrôlées."',
+  'for forme in (diapo.shapes.title, diapo.placeholders[1]) if choix else ():',
+  '    for p in forme.text_frame.paragraphs:',
+  '        for r in p.runs:',
+  '            r.font.name = choix',
+  'prs.save(sys.argv[1])',
+  'print(json.dumps({"police_utilisateur": choix}))',
+].join('\n');
+
+async function essaiPowerPoint() {
+  if (process.platform !== 'win32') return { joue: false, motif: 'C8 NON JOUÉE : PowerPoint par COM, Windows seulement' };
+  const avant = processusPowerPoint();
+  if (avant === null) return { joue: false, motif: "C8 NON JOUÉE : tasklist ne répond pas, l'essai ne sait pas si PowerPoint tourne et ne se lance pas" };
+  if (avant.length) return { joue: false, motif: `C8 NON JOUÉE : PowerPoint tourne (PID ${avant.join(', ')}), l'essai réel ne s'attache pas à une instance qu'il n'a pas lancée` };
+  const findings = [];
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'self-test-powerpoint-'));
+  try {
+    const script = path.join(tmp, 'deck-essai.py');
+    const deck = path.join(tmp, 'deck-essai.pptx');
+    fs.writeFileSync(script, PY_DECK_ESSAI);
+    const g = spawnSync('uv', ['run', '--quiet', '--no-project', '--with', 'python-pptx', '--with', 'fonttools', 'python', '-B', script, deck],
+      { encoding: 'utf8', timeout: 300000, windowsHide: true, env: { ...process.env, PYTHONUTF8: '1' } });
+    if (g.status !== 0 || !fs.existsSync(deck)) return { joue: false, motif: `C8 NON JOUÉE : deck d'essai non généré par python-pptx (uv) : ${String(g.stderr || g.error || '').trim().slice(-200)}` };
+    let police = null;
+    try { police = JSON.parse(String(g.stdout).trim().split(/\r?\n/).pop()).police_utilisateur; } catch { /* aucune police dite : traitée comme absente */ }
+    const sPptx = path.join(tmp, 'sortie.pptx');
+    const sPdf = path.join(tmp, 'sortie.pdf');
+    const e = exporterCli([deck, '--pptx', sPptx, '--pdf', sPdf, '--instance-neuve', '--attente', '120']);
+    const pp = e.j?.powerpoint;
+    if (e.code === 2 && pp && pp.pids_avant?.length) return { joue: false, motif: `C8 NON JOUÉE : PowerPoint lancé entre-temps (PID ${pp.pids_avant.join(', ')}), refusé par --instance-neuve` };
+    if (e.code !== 0) findings.push(`C8 — export réel : exit ${e.code}, ${e.j?.verdict} ${e.j?.etat} (${e.j?.motif})`);
+    if (!pp?.lancee_par_l_export) findings.push("C8 — l'instance n'est pas reconnue comme lancée par l'export");
+    if (!pp?.quittee) findings.push(`C8 — l'instance lancée par l'export n'a pas été quittée (${pp?.decision})`);
+    if (e.code === 0) {
+      if (!fs.existsSync(sPptx)) findings.push('C8 — PPTX livré absent');
+      if (!fs.existsSync(sPdf) || fs.readFileSync(sPdf).subarray(0, 5).toString('latin1') !== '%PDF-') findings.push('C8 — PDF livré absent ou illisible');
+      if (police && !['embarquees', 'reencodees'].includes(e.j?.polices?.etat)) {
+        findings.push(`C8 — deck en police ${police} : état des polices ${e.j?.polices?.etat} au lieu d'embarquees ou reencodees, l'assainissement réel n'a pas été exercé`);
+      }
+    }
+    const note = police ? null : "C8 : aucune police installée par l'utilisateur ne s'embarque sur ce poste, le deck d'essai garde la police du thème que PowerPoint n'embarque pas : l'assainissement réel n'est pas exercé";
+    // l'instance quittée doit disparaître : on la laisse s'éteindre, sans jamais rien tuer
+    let reste = processusPowerPoint();
+    for (let i = 0; i < 40 && reste && reste.length; i++) { await new Promise((r) => setTimeout(r, 500)); reste = processusPowerPoint(); }
+    if (reste?.length) findings.push(`C8 — un processus PowerPoint tourne encore 20 s après l'export (PID ${reste.join(', ')}) : instance non quittée, ou ouverte entre-temps par l'utilisateur`);
+    return { joue: true, findings, note, bilan: e.j ? { police_du_deck: police, etat: e.j.etat, motif: e.j.motif, decision: pp?.decision, polices: e.j.polices?.etat, pdf: e.j.pdf?.verdict } : null };
+  } finally {
+    try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* rien */ }
+  }
+}
+
+// ------------------------------- C12 : la documentation de la sortie de lire-marque.mjs égale sa sortie (TF-2355)
+// Le fait (retour du 16/09/2026, seq 152) : SKILL.md annonçait l'hexadécimal sans dièse par clé `usages_pptx`,
+// l'outil rendait un objet {theme, jeton, pptx} ; le script qui passait la clé à pptxgenjs échouait. La
+// documentation et la sortie vivaient à deux endroits sans fixture qui les compare. Le bloc json de SKILL.md
+// est confronté, par la FORME (clés et types, jamais les valeurs), à la sortie réelle sur la fixture verte.
+function formeDe(v) {
+  if (v === null) return 'null';
+  if (Array.isArray(v)) return 'array';
+  if (typeof v === 'object') return Object.fromEntries(Object.keys(v).sort().map((k) => [k, formeDe(v[k])]));
+  return typeof v;
+}
+function ecartsDeForme(doc, reel, chemin = 'usages_pptx') {
+  const ecarts = [];
+  if (typeof doc === 'string' || typeof reel === 'string') {
+    if (doc !== reel) ecarts.push(`${chemin} : documenté ${JSON.stringify(doc)}, rendu ${JSON.stringify(reel)}`);
+    return ecarts;
+  }
+  for (const k of new Set([...Object.keys(doc), ...Object.keys(reel)])) {
+    if (!(k in doc)) ecarts.push(`${chemin}.${k} : rendu par l'outil, absent de la documentation`);
+    else if (!(k in reel)) ecarts.push(`${chemin}.${k} : documenté, non rendu par l'outil`);
+    else ecarts.push(...ecartsDeForme(doc[k], reel[k], `${chemin}.${k}`));
+  }
+  return ecarts;
+}
+function blocUsagesDoc(skillMd) {
+  const bloc = [...skillMd.matchAll(/```json\r?\n([\s\S]*?)```/g)].map((m) => m[1]).find((b) => b.includes('"usages_pptx"'));
+  if (!bloc) return null;
+  try { return JSON.parse(bloc); } catch { return undefined; }
+}
+function verifierDocSortie() {
+  const findings = [];
+  const skillMd = fs.readFileSync(path.join(SKILL_DIR, 'SKILL.md'), 'utf8');
+  const doc = blocUsagesDoc(skillMd);
+  if (doc === null) return ["C12 : SKILL.md ne porte plus de bloc json « usages_pptx » : la sortie de lire-marque.mjs n'est plus documentée"];
+  if (doc === undefined) return ['C12 : le bloc json « usages_pptx » de SKILL.md est illisible'];
+  const v = jouerLecteur(path.join(FIX, 'marque-valide'), 'dtcg');
+  let lu;
+  try { lu = JSON.parse(v.out); } catch { return ['C12 : lire-marque.mjs sur la fixture verte rend une sortie illisible']; }
+  const formeReelle = formeDe(lu.usages_pptx);
+  const ecarts = ecartsDeForme(formeDe(doc.usages_pptx), formeReelle);
+  findings.push(...ecarts.map((e) => `C12 sens vert : ${e}`));
+  // sens ROUGE 1 : une clé de couleur documentée comme une chaîne (l'ancienne promesse) doit être vue
+  const ancienne = JSON.parse(JSON.stringify(doc));
+  ancienne.usages_pptx.fond_contenu = '<hex sans dièse>';
+  if (!ecartsDeForme(formeDe(ancienne.usages_pptx), formeReelle).some((e) => e.includes('fond_contenu'))) findings.push("fixture-rouge — C12 est AVEUGLE : une clé de couleur documentée comme une chaîne, rendue comme un objet, n'a pas été vue");
+  // sens ROUGE 2 : une clé retirée de la documentation doit être vue
+  const retiree = JSON.parse(JSON.stringify(doc));
+  delete retiree.usages_pptx.police_mono;
+  if (!ecartsDeForme(formeDe(retiree.usages_pptx), formeReelle).some((e) => e.includes('police_mono'))) findings.push('fixture-rouge — C12 est AVEUGLE : une clé rendue et non documentée n\'a pas été vue');
+  // la sortie réelle porte le champ des polices du poste que SKILL.md décrit
+  if (!lu.polices_poste || !lu.polices_poste.polices) findings.push('C12 : lire-marque.mjs ne rend plus `polices_poste`, que SKILL.md décrit');
+  if (!skillMd.includes('polices_poste')) findings.push('C12 : SKILL.md ne décrit plus `polices_poste`');
+  return findings;
+}
+
+// ----------------------------------------- C13 : le prérequis pptxgenjs se vérifie (TF-2326), sans installation
+// Le fait (09/11/2026) : SKILL.md déclarait pptxgenjs « installé globalement » ; `npm root -g` ne le contient pas,
+// et le script de construction sortait en 1 sans message. Trois cas joués sur des dossiers neufs : module absent
+// (exit 2, commande d'installation donnée), module présent localement (exit 0), module présent seulement
+// ailleurs, dans NODE_PATH (exit 2 : un import ne le voit pas).
+function verifierPrerequis() {
+  const findings = [];
+  const script = path.join(SKILL_DIR, 'scripts', 'verifier-prerequis.mjs');
+  const skillMd = fs.readFileSync(path.join(SKILL_DIR, 'SKILL.md'), 'utf8');
+  if (!skillMd.includes('scripts/verifier-prerequis.mjs')) findings.push("C13 : SKILL.md ne prescrit plus `scripts/verifier-prerequis.mjs` (étape 5 bis)");
+  const declareInstalle = (t) => /\binstallée?s? globalement/i.test(t);
+  if (declareInstalle(skillMd)) findings.push('C13 : SKILL.md déclare de nouveau pptxgenjs « installé globalement », ce que `npm root -g` ne confirme pas');
+  if (!declareInstalle('pptxgenjs (Node.js), installé globalement.')) findings.push('fixture-rouge — C13 est AVEUGLE : la déclaration « installé globalement » plantée n\'a pas été détectée');
+  if (!fs.existsSync(script)) return { findings: [...findings, 'C13 : scripts/verifier-prerequis.mjs absent'], note: null };
+  const dossier = fs.mkdtempSync(path.join(os.tmpdir(), 'prerequis-'));
+  try {
+    const jouer = (d, env = {}) => {
+      const r = spawnSync(process.execPath, [script, '--dossier', d, '--sans-global'], { encoding: 'utf8', timeout: 30000, env: { ...process.env, NODE_PATH: '', ...env } });
+      let j = null; try { j = JSON.parse(r.stdout); } catch { /* le code le dit */ }
+      return { code: r.status, j, err: r.stderr || '' };
+    };
+    const faux = (racine) => {
+      const m = path.join(racine, 'node_modules', 'pptxgenjs');
+      fs.mkdirSync(m, { recursive: true });
+      fs.writeFileSync(path.join(m, 'package.json'), JSON.stringify({ name: 'pptxgenjs', version: '0.0.0-fixture', main: 'index.js' }));
+      fs.writeFileSync(path.join(m, 'index.js'), 'module.exports = {};\n');
+    };
+    const vide = path.join(dossier, 'vide'); fs.mkdirSync(vide);
+    const ailleurs = path.join(dossier, 'ailleurs'); fs.mkdirSync(ailleurs);
+    const pose = path.join(dossier, 'pose'); fs.mkdirSync(pose);
+    const modulesAilleurs = path.join(dossier, 'modules-ailleurs'); fs.mkdirSync(modulesAilleurs);
+    faux(pose);
+    faux(path.join(dossier, 'hors-chaine'));
+    fs.renameSync(path.join(dossier, 'hors-chaine', 'node_modules', 'pptxgenjs'), path.join(modulesAilleurs, 'pptxgenjs'));
+    // sens ROUGE : module absent
+    const r1 = jouer(vide);
+    if (r1.code !== 2 || !r1.j || r1.j.etat !== 'non-resolu') findings.push(`C13 sens rouge : un dossier sans module doit rendre exit 2 « non-resolu » (code ${r1.code})`);
+    else if (!/^npm install pptxgenjs@\d/.test(r1.j.commande_d_installation || '') || !r1.err.includes('npm install pptxgenjs')) findings.push("C13 sens rouge : l'échec ne donne pas la commande d'installation");
+    // sens ROUGE : module seulement dans NODE_PATH, hors de la chaîne de résolution du dossier
+    const r2 = jouer(ailleurs, { NODE_PATH: modulesAilleurs });
+    if (r2.code !== 2 || !r2.j || !(r2.j.ailleurs || []).some((a) => a.ou === 'NODE_PATH')) findings.push(`C13 sens rouge : un module présent seulement dans NODE_PATH ne doit pas compter comme résolu (code ${r2.code})`);
+    // sens VERT : module présent sous le dossier de travail
+    const r3 = jouer(pose);
+    if (r3.code !== 0 || !r3.j || r3.j.etat !== 'resolu' || r3.j.version !== '0.0.0-fixture') findings.push(`C13 sens vert : un module posé dans le dossier de travail doit être résolu avec sa version (code ${r3.code})`);
+  } finally {
+    try { fs.rmSync(dossier, { recursive: true, force: true }); } catch { /* rien */ }
+  }
+  // l'état RÉEL de CE poste, dit au bilan : un poste sans le module n'est pas un skill défaillant, mais la commande est donnée
+  const live = spawnSync(process.execPath, [script, '--dossier', process.cwd(), '--sans-global'], { encoding: 'utf8', timeout: 30000 });
+  let lj = null; try { lj = JSON.parse(live.stdout); } catch { /* illisible */ }
+  const note = lj && lj.etat === 'resolu'
+    ? `C13 poste : pptxgenjs ${lj.version} se résout depuis ${process.cwd().split(path.sep).join('/')}`
+    : `C13 poste : pptxgenjs NE se résout PAS depuis ${process.cwd().split(path.sep).join('/')} — ${lj ? lj.commande_d_installation : 'état illisible'}, à exécuter dans le dossier de travail du deck`;
+  return { findings, note };
+}
+
+// ----------------------- C14 : polices du poste et mots doublés du PDF (TF-2354), sans PowerPoint
+// Le fait (16/09/2026) : sans la police exigée, PowerPoint substitue une autre face et l'export PDF répète le
+// dernier mot de chaque ligne coupée ; ni oracle-pptx ni oracle-charte-pptx-semantique ne le voyaient.
+function verifierPolicesEtDoublons() {
+  const findings = [];
+  const lire = (extra) => {
+    const r = spawnSync(process.execPath, [LECTEUR, `--marque=${path.join(FIX, 'marque-valide')}`, '--compact', ...extra], { encoding: 'utf8', timeout: 60000 });
+    let j = null; try { j = JSON.parse(r.stdout); } catch { /* le code le dit */ }
+    return { code: r.status, j, err: r.stderr || '' };
+  };
+  // sens ROUGE : le poste (liste donnée) n'installe aucune des trois polices de la fixture
+  const rouge = lire(['--polices-installees=Autre Police,Encore Une']);
+  const manq = rouge.j && rouge.j.polices_poste ? rouge.j.polices_poste.manquantes : null;
+  if (rouge.code !== 0 || !manq || manq.length !== 3) findings.push(`C14 sens rouge : trois polices absentes du poste doivent être relevées (code ${rouge.code}, manquantes ${manq ? manq.length : '?'})`);
+  if (!/non installée/.test(rouge.err)) findings.push("C14 sens rouge : l'absence d'une police n'est pas signalée sur stderr");
+  const strict = lire(['--polices-installees=Autre Police', '--exiger-polices']);
+  if (strict.code !== 2) findings.push(`C14 sens rouge : --exiger-polices doit rendre exit 2 quand une police manque (code ${strict.code})`);
+  // sens VERT : les trois polices installées (une graisse dans le nom du poste : la famille s'en déduit)
+  const vert = lire(['--polices-installees=Fixture Titre Bold,Fixture Corps Regular,Fixture Mono', '--exiger-polices']);
+  if (vert.code !== 0 || !vert.j || !vert.j.polices_poste || vert.j.polices_poste.manquantes.length !== 0) findings.push(`C14 sens vert : trois polices installées doivent passer, même avec --exiger-polices (code ${vert.code}, manquantes ${vert.j?.polices_poste?.manquantes?.length ?? '?'})`);
+  // détection réelle du poste : le champ existe, sa valeur dépend du poste (non_juge)
+  const reel = lire([]);
+  const pp = reel.j && reel.j.polices_poste;
+  if (!pp || !pp.methode || !Object.values(pp.polices || {}).every((x) => x.installee === null || typeof x.installee === 'boolean')) findings.push('C14 : la détection des polices du poste ne rend pas un booléen (ou null) par police');
+  // mots doublés
+  const py = pythonQuiRepond();
+  const script = path.join(SKILL_DIR, 'scripts', 'controler-mots-doubles.py');
+  const sain = path.join(FIX, 'pdf', 'export-sain.pdf');
+  const double = path.join(FIX, 'pdf', 'export-mots-doubles.pdf');
+  if (!py || !fs.existsSync(script) || !fs.existsSync(sain) || !fs.existsSync(double)) {
+    return { joue: false, findings, motif: 'C14 (mots doublés) NON JOUÉE : python, controler-mots-doubles.py ou les PDF de jeu introuvables' };
+  }
+  const jouer = (f, extra = []) => {
+    const r = spawnSync(py[0], [...py.slice(1), script, f, ...extra], { encoding: 'utf8', timeout: 60000, env: { ...process.env, PYTHONUTF8: '1' } });
+    let j = null; try { j = JSON.parse(r.stdout); } catch { /* le code le dit */ }
+    return { code: r.status, j };
+  };
+  const s = jouer(sain);
+  if (s.code === 2 && /aucun lecteur/.test((s.j && s.j.motif) || '')) return { joue: false, findings, motif: 'C14 (mots doublés) NON JOUÉE : aucun lecteur de PDF (PyMuPDF, pypdf, pdftotext)' };
+  if (s.code !== 0) findings.push(`C14 sens vert : un PDF sans doublon (« nous nous » admis) doit passer (code ${s.code}, doublons ${s.j ? s.j.doublons : '?'})`);
+  const d = jouer(double);
+  if (d.code !== 1 || !d.j || d.j.doublons < 3) findings.push(`C14 sens rouge : le PDF où le dernier mot de chaque ligne coupée est répété doit être refusé (code ${d.code}, doublons ${d.j ? d.j.doublons : '?'})`);
+  else if (!d.j.constats.some((c) => c.type.startsWith('fin de ligne'))) findings.push('C14 sens rouge : la répétition de la fin de ligne en tête de la suivante (le défaut du 16/09) n\'est pas relevée');
+  const t = jouer(double, ['--tolerance', '99']);
+  if (t.code !== 0) findings.push(`C14 : --tolerance 99 doit admettre les doublons (code ${t.code})`);
+  const a = jouer(path.join(FIX, 'pdf', 'absent.pdf'));
+  if (a.code !== 2) findings.push(`C14 : un PDF absent doit rendre exit 2 (code ${a.code})`);
+  return { joue: true, findings };
+}
+
+// ------------------------------- C15 : l'espace insécable se pose sur le fichier produit (TF-2328), S8 le juge
+// Le fait (09/11/2026) : le texte source portait U+00A0, le PPTX brut une espace ordinaire, et S8 avertissait à
+// chaque deck. Sens ROUGE : le deck de jeu de typographie (quality-oracles) fait avertir S8 six fois ; sens VERT :
+// après `scripts/poser-insecables.py`, S8 n'avertit plus, un second passage ne change rien, le deck d'entrée reste
+// intact, une sortie existante n'est jamais écrasée, et un deck déjà conforme ne bouge pas.
+function verifierInsecables() {
+  const py = pythonQuiRepond();
+  const oracle = path.join(SKILL_DIR, '..', 'quality-oracles', 'scripts', 'oracle-charte-pptx-semantique.mjs');
+  const rouge = path.join(SKILL_DIR, '..', 'quality-oracles', 'fixtures', 'charte-pptx-typographie-red.pptx');
+  const vert = path.join(SKILL_DIR, '..', 'quality-oracles', 'fixtures', 'charte-pptx-typographie-green.pptx');
+  const script = path.join(SKILL_DIR, 'scripts', 'poser-insecables.py');
+  const absents = [['python', py], ['oracle-charte-pptx-semantique', fs.existsSync(oracle)], ['deck de typographie rouge', fs.existsSync(rouge)], ['deck de typographie vert', fs.existsSync(vert)], ['poser-insecables.py', fs.existsSync(script)]].filter(([, v]) => !v).map(([k]) => k);
+  const findings = [];
+  const skillMd = fs.readFileSync(path.join(SKILL_DIR, 'SKILL.md'), 'utf8');
+  if (!skillMd.includes('scripts/poser-insecables.py')) findings.push('C15 : SKILL.md ne prescrit plus `scripts/poser-insecables.py` (étape 6 ter)');
+  if (absents.length) return { joue: false, findings, motif: `C15 NON JOUÉE (script rejoué) : ${absents.join(', ')} introuvable(s)` };
+  const dossier = fs.mkdtempSync(path.join(os.tmpdir(), 'insecables-'));
+  try {
+    const poser = (...a) => {
+      const r = spawnSync(py[0], [...py.slice(1), script, ...a], { encoding: 'utf8', timeout: 60000, env: { ...process.env, PYTHONUTF8: '1' } });
+      let j = null; try { j = JSON.parse(r.stdout); } catch { /* le code le dit */ }
+      return { code: r.status, j };
+    };
+    const s8 = (f) => {
+      const r = spawnSync(process.execPath, [oracle, f], { encoding: 'utf8', timeout: 120000 });
+      try { return (JSON.parse(r.stdout).findings || []).filter((x) => /^S8 /.test(x.msg)); } catch { return null; }
+    };
+    const avant = s8(rouge);
+    if (!avant || avant.length !== 1) findings.push(`C15 sens rouge : le deck de jeu doit faire avertir S8 une fois (constat par diapositive), reçu ${avant ? avant.length : '?'}`);
+    else if (!/6 espace\(s\) ordinaire/.test(avant[0].msg)) findings.push(`C15 sens rouge : S8 doit compter 6 espaces ordinaires sur le deck de jeu — ${avant[0].msg.slice(0, 90)}`);
+    const octets = fs.readFileSync(rouge);
+    const sortie = path.join(dossier, 'pose.pptx');
+    const r1 = poser(rouge, '--out', sortie);
+    if (r1.code !== 0 || !r1.j || r1.j.espaces_insecables_posees !== 6) findings.push(`C15 sens vert : poser-insecables doit poser 6 espaces (code ${r1.code}, posées ${r1.j ? r1.j.espaces_insecables_posees : '?'})`);
+    else {
+      const apres = s8(sortie);
+      if (!apres || apres.length) findings.push(`C15 sens vert : après la post-passe, S8 avertit encore (${apres ? apres.length : '?'} constat(s))`);
+      const deuxieme = path.join(dossier, 'deuxieme.pptx');
+      const r2 = poser(sortie, '--out', deuxieme);
+      if (r2.code !== 0 || !r2.j || r2.j.espaces_insecables_posees !== 0) findings.push(`C15 : un second passage doit ne rien changer (posées ${r2.j ? r2.j.espaces_insecables_posees : '?'})`);
+    }
+    if (!octets.equals(fs.readFileSync(rouge))) findings.push("C15 : le deck d'entrée a été modifié — le script doit écrire ailleurs");
+    const r3 = poser(rouge, '--out', sortie);
+    if (r3.code !== 2) findings.push(`C15 : une sortie existante est écrasée ou mal refusée (code ${r3.code}, attendu 2)`);
+    const r4 = poser(vert, '--out', path.join(dossier, 'vert.pptx'));
+    if (r4.code !== 0 || !r4.j || r4.j.espaces_insecables_posees !== 0) findings.push(`C15 : un deck déjà conforme ne doit rien recevoir (posées ${r4.j ? r4.j.espaces_insecables_posees : '?'})`);
+  } finally {
+    try { fs.rmSync(dossier, { recursive: true, force: true }); } catch { /* rien */ }
+  }
+  return { joue: true, findings };
+}
+
+// ----------------- C16 : la langue, l'en-tête de tableau et les formes décoratives d'un deck (TF-2368)
+// Le fait (seq 393) : 154 passages en anglais, un tableau sans en-tête et trois formes non marquées avaient
+// passé oracle-pptx et oracle-charte-pptx-semantique. Le deck de jeu est un VRAI sortie de pptxgenjs 4.0.1,
+// écrit comme l'écrivait le workflow avant TF-2368 (fixtures/accessibilite/gen-deck.mjs). Sens ROUGE : 9
+// passages en en-US, 1 tableau sans firstRow, 2 formes sans marque. Sens VERT : `--out`, le remède prescrit à
+// l'étape 6 quater, JOUÉ, rend un deck que le contrôle laisse passer. Puis une altération du vert à la fois.
+function verifierAccessibilite() {
+  const py = pythonQuiRepond();
+  const script = path.join(SKILL_DIR, 'scripts', 'accessibilite-deck.py');
+  const brut = path.join(FIX, 'accessibilite', 'deck-brut.pptx');
+  const findings = [];
+  const skillMd = fs.readFileSync(path.join(SKILL_DIR, 'SKILL.md'), 'utf8');
+  if (!skillMd.includes('scripts/accessibilite-deck.py')) findings.push("C16 : SKILL.md ne prescrit plus `scripts/accessibilite-deck.py` (étape 6 quater)");
+  if (!/lang: 'fr-FR'/.test(skillMd)) findings.push("C16 : SKILL.md ne prescrit plus `lang: 'fr-FR'` dans le script de génération (étape 6)");
+  const absents = [['python', py], ['accessibilite-deck.py', fs.existsSync(script)], ['deck-brut.pptx', fs.existsSync(brut)]].filter(([, v]) => !v).map(([k]) => k);
+  if (absents.length) return { joue: false, findings, motif: `C16 NON JOUÉE (script rejoué) : ${absents.join(', ')} introuvable(s)` };
+  const dossier = fs.mkdtempSync(path.join(os.tmpdir(), 'accessibilite-'));
+  try {
+    const jouer = (...a) => {
+      const r = spawnSync(py[0], [...py.slice(1), script, ...a], { encoding: 'utf8', timeout: 60000, env: { ...process.env, PYTHONUTF8: '1' } });
+      let j = null; try { j = JSON.parse(r.stdout); } catch { /* le code le dit */ }
+      return { code: r.status, j };
+    };
+    const rouge = jouer(brut);
+    const c = rouge.j && rouge.j.constats_avant;
+    if (rouge.code !== 1 || !c || c.L !== 9 || c.T !== 1 || c.D !== 2) findings.push(`C16 sens rouge : le deck brut doit rendre 9 passages en anglais, 1 tableau sans en-tête, 2 formes sans marque (code ${rouge.code}, reçu ${JSON.stringify(c)})`);
+    const octets = fs.readFileSync(brut);
+    const vert = path.join(dossier, 'vert.pptx');
+    const r1 = jouer(brut, '--out', vert);
+    if (r1.code !== 0 || !r1.j || r1.j.verdict !== 'PASS') findings.push(`C16 sens vert : le remède --out doit rendre un deck conforme (code ${r1.code}, restants ${JSON.stringify(r1.j && r1.j.constats_restants)})`);
+    else {
+      const re = jouer(vert);
+      if (re.code !== 0) findings.push(`C16 sens vert : le deck corrigé, recontrôlé à part, doit passer (code ${re.code})`);
+      // une altération du vert à la fois, refaite avec python (zip) : chacune doit rougir pour sa raison
+      const altere = (nom, regexp, remplacement, attendu) => {
+        const sortie = path.join(dossier, `${nom}.pptx`);
+        const r = spawnSync(py[0], [...py.slice(1), '-c', [
+          'import re, sys, zipfile',
+          'src, dst, motif, rempl = sys.argv[1:5]',
+          'with zipfile.ZipFile(src) as zi, zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as zo:',
+          '    for info in zi.infolist():',
+          '        d = zi.read(info.filename)',
+          '        if info.filename == "ppt/slides/slide1.xml":',
+          '            d, n = re.subn(motif, rempl, d.decode("utf-8"), count=1); d = d.encode("utf-8")',
+          '            assert n == 1, "altération sans effet"',
+          '        zo.writestr(info, d)',
+        ].join('\n'), vert, sortie, regexp, remplacement], { encoding: 'utf8', timeout: 60000, env: { ...process.env, PYTHONUTF8: '1' } });
+        if (r.status !== 0) { findings.push(`C16 : l'altération « ${nom} » a échoué à s'écrire — ${(r.stderr || '').trim().split('\n').pop()}`); return; }
+        const x = jouer(sortie);
+        if (x.code !== 1 || !x.j || !(x.j.constats || []).some((k) => k.regle === attendu)) findings.push(`C16 sens rouge : « ${nom} » doit rougir pour la règle ${attendu} (code ${x.code}, reçu ${JSON.stringify(x.j && x.j.constats_avant)})`);
+      };
+      altere('langue-anglaise', 'lang="fr-FR"', 'lang="en-US"', 'L');
+      altere('sans-entete', 'firstRow="1"', 'firstRow="0"', 'T');
+      altere('forme-non-marquee', '<a:extLst><a:ext uri="\\{C183D7F6-B498-43B3-948B-1728B52AA6E4\\}">.*?</a:extLst>', '', 'D');
+    }
+    if (!octets.equals(fs.readFileSync(brut))) findings.push("C16 : le deck d'entrée a été modifié — le script doit écrire ailleurs");
+    const r2 = jouer(brut, '--out', vert);
+    if (r2.code !== 2) findings.push(`C16 : une sortie existante est écrasée ou mal refusée (code ${r2.code}, attendu 2)`);
+  } finally {
+    try { fs.rmSync(dossier, { recursive: true, force: true }); } catch { /* rien */ }
+  }
+  return { joue: true, findings };
+}
+
+// --------------------- C17 : le style de tableau tranché par le porteur est écrit en usage dans la charte (TF-2371)
+// Le fait (D-44 (a), 29/09/2026) : la charte demandait de faire trancher le style d'un tableau avant emploi ; la
+// décision tranchée (en-tête sur le fond et l'encre du thème sombre, formes à recopier en accent) n'est pas
+// redescendue dans la charte. Le contrôle exige, au § 9, la décision, les clés rendues qui la portent, et aucune
+// couleur littérale (la valeur vit chez l'émetteur).
+const CLES_TABLEAU = ['fond_couverture', 'encre_couverture', 'accent_filets'];
+function verifierCharteTableau(texte, etiquette) {
+  const m = texte.match(/^## 9 [^\n]*\n([\s\S]*)$/m);
+  if (!m) return [`${etiquette} — section « 9 » absente de la charte`];
+  const sec = m[1];
+  const t = sec.match(/### Style d'un tableau de contenu[^\n]*\n([\s\S]*?)(?=^### |(?![\s\S]))/m);
+  if (!t) return [`${etiquette} — § 9 : le sous-titre « Style d'un tableau de contenu » est absent : la décision tranchée n'est pas écrite`];
+  const findings = [];
+  if (!/D-44/.test(t[0])) findings.push(`${etiquette} — § 9 : la décision D-44 n'est pas citée`);
+  for (const cle of CLES_TABLEAU) if (!t[1].includes(`\`${cle}\``)) findings.push(`${etiquette} — § 9 : la clé \`${cle}\` n'est pas nommée dans le style de tableau`);
+  for (const h of t[1].matchAll(/#[0-9A-Fa-f]{6}\b/g)) findings.push(`${etiquette} — § 9 : couleur en dur ${h[0]} dans le style de tableau (écrire la clé, jamais la valeur)`);
+  const non = sec.split('### Ce que la charte ne fixe pas encore')[1] || '';
+  if (/style de tableau/i.test(non)) findings.push(`${etiquette} — § 9 : le style de tableau figure encore parmi ce que la charte ne fixe pas`);
+  return findings;
+}
+function verifierCharte() {
+  const f = path.join(SKILL_DIR, 'references', 'charte.md');
+  if (!fs.existsSync(f)) return ['C17 : references/charte.md absent'];
+  const texte = fs.readFileSync(f, 'utf8');
+  const findings = verifierCharteTableau(texte, 'references/charte.md').map((x) => 'C17 ' + x);
+  // sens ROUGE : trois altérations du réel, une à la fois
+  const sansClef = texte.replace('encre `accent_filets`', 'encre d\'accent');
+  if (!verifierCharteTableau(sansClef, 'fixture-rouge').some((x) => x.includes('accent_filets'))) findings.push('fixture-rouge — C17 est AVEUGLE : une clé retirée du style de tableau n\'a pas été vue');
+  const avecValeur = texte.replace('fond `fond_couverture`', 'fond #0F172A');
+  if (!verifierCharteTableau(avecValeur, 'fixture-rouge').some((x) => x.includes('couleur en dur'))) findings.push('fixture-rouge — C17 est AVEUGLE : une couleur littérale dans le style de tableau n\'a pas été vue');
+  const sansDecision = texte.replace(/### Style d'un tableau de contenu[^\n]*\n/, '### Autre sujet\n');
+  if (!verifierCharteTableau(sansDecision, 'fixture-rouge').some((x) => x.includes('absent'))) findings.push('fixture-rouge — C17 est AVEUGLE : la décision retirée de la charte n\'a pas été vue');
+  return findings;
+}
+
+// ------------------- C18 : une grille par famille de pages sœurs, aucune barre latérale accolée (TF-2374)
+// Le fait (seq 444, 29/09/2026) : 5 pages d'évolution sur 2 grilles (cartes de 1,98 puis 1,62 po, bandeau qui
+// saute de 0,36 po) et 9 barres latérales, sans règle ni oracle. Deux decks de jeu, VRAIS sortis de pptxgenjs
+// 4.0.1 (fixtures/grilles/gen-decks.mjs) : le vert (une grille, aucune barre) passe, le rouge (la page 2 sur
+// une autre grille, 6 barres sur les pages 2 et 3) est refusé pour chaque règle.
+function verifierGrilles() {
+  const py = pythonQuiRepond();
+  const script = path.join(SKILL_DIR, 'scripts', 'controler-grilles.py');
+  const vert = path.join(FIX, 'grilles', 'grille-verte.pptx');
+  const rouge = path.join(FIX, 'grilles', 'grille-rouge.pptx');
+  const findings = [];
+  const layouts = fs.readFileSync(path.join(SKILL_DIR, 'references', 'layouts.md'), 'utf8');
+  if (!/Une grille par famille de pages sœurs/.test(layouts)) findings.push('C18 : references/layouts.md ne fixe plus la grille unique par famille de pages sœurs');
+  if (!/Barre latérale accolée à un bloc : proscrite/.test(layouts)) findings.push('C18 : references/layouts.md ne proscrit plus la barre latérale accolée à un bloc');
+  const absents = [['python', py], ['controler-grilles.py', fs.existsSync(script)], ['grille-verte.pptx', fs.existsSync(vert)], ['grille-rouge.pptx', fs.existsSync(rouge)]].filter(([, v]) => !v).map(([k]) => k);
+  if (absents.length) return { joue: false, findings, motif: `C18 NON JOUÉE (script rejoué) : ${absents.join(', ')} introuvable(s)` };
+  const jouer = (deck, familles) => {
+    const r = spawnSync(py[0], [...py.slice(1), script, deck, ...(familles ? ['--familles', JSON.stringify(familles)] : [])], { encoding: 'utf8', timeout: 60000, env: { ...process.env, PYTHONUTF8: '1' } });
+    let j = null; try { j = JSON.parse(r.stdout); } catch { /* le code le dit */ }
+    return { code: r.status, j };
+  };
+  const famille = { evolution: [1, 2, 3] };
+  const v = jouer(vert, famille);
+  if (v.code !== 0 || !v.j || v.j.nombre !== 0) findings.push(`C18 sens vert : trois pages sœurs sur une grille, sans barre, doivent passer (code ${v.code}, constats ${v.j ? v.j.nombre : '?'})`);
+  const r = jouer(rouge, famille);
+  const regles = r.j ? r.j.constats.map((c) => c.regle) : [];
+  if (r.code !== 1 || regles.filter((x) => x === 'B').length !== 6) findings.push(`C18 sens rouge : le deck rouge doit rendre 6 barres latérales (pages 2 et 3, trois cartes chacune) — code ${r.code}, B = ${regles.filter((x) => x === 'B').length}`);
+  const g = r.j ? r.j.constats.filter((c) => c.regle === 'G') : [];
+  if (g.length !== 1 || g[0].diapositive !== 2 || !/1\.62/.test(g[0].constat) || !/saut de 0\.36/.test(g[0].constat)) findings.push(`C18 sens rouge : la page 2 doit être refusée pour sa grille (cartes de 1,62 po, bandeau qui saute de 0,36 po) — ${g.length} constat(s) G, ${g[0] ? g[0].constat.slice(0, 100) : ''}`);
+  // sans --familles : seule la règle B joue, et le dit
+  const s = jouer(rouge, null);
+  if (s.code !== 1 || !s.j || s.j.constats.some((c) => c.regle === 'G') || !(s.j.non_juge || []).some((x) => /famille non d/.test(x))) findings.push('C18 : sans --familles, seule la règle des barres latérales doit jouer, et le non_juge doit le dire');
+  return { joue: true, findings };
+}
+
+// ------------------------- C19 : un SVG se rend par un moteur à dégradés, ou se refuse (TF-2377), jamais faux
+// Le fait (30/09/2026) : un logo à dégradé, rendu par un moteur qui ignore les dégradés, est sorti noir au lieu de
+// vert, sans erreur, et seul le regard sur le PNG l'a arrêté. Sens VERT : le SVG de jeu (dégradé de deux teintes
+// entre deux marges transparentes) rend un PNG rogné à la boîte (aucune marge) dont les deux extrémités portent
+// les deux teintes du dégradé. Sens ROUGE : sans moteur, une ressource externe, des dimensions inconnues, un
+// format ai : exit 2, message, rien d'écrit. Sans navigateur lançable au poste, le sens vert est dit NON JOUÉ.
+function verifierSvg() {
+  const py = pythonQuiRepond();
+  const script = path.join(SKILL_DIR, 'scripts', 'prepare_images.py');
+  const svg = path.join(FIX, 'svg', 'logo-degrade.svg');
+  const externe = path.join(FIX, 'svg', 'logo-ressource-externe.svg');
+  const findings = [];
+  const drive = fs.readFileSync(path.join(SKILL_DIR, 'references', 'drive-assets.md'), 'utf8');
+  if (!/Formats admis \(TF-2377\)/.test(drive)) findings.push('C19 : references/drive-assets.md ne dit plus les formats admis');
+  if (!/refusé avec un\s+message/.test(drive)) findings.push('C19 : references/drive-assets.md ne dit plus qu\'un autre format est refusé avec un message');
+  const absents = [['python', py], ['prepare_images.py', fs.existsSync(script)], ['logo-degrade.svg', fs.existsSync(svg)], ['logo-ressource-externe.svg', fs.existsSync(externe)]].filter(([, v]) => !v).map(([k]) => k);
+  if (absents.length) return { joue: false, findings, motif: `C19 NON JOUÉE : ${absents.join(', ')} introuvable(s)` };
+  const dossier = fs.mkdtempSync(path.join(os.tmpdir(), 'svg-'));
+  try {
+    const jouer = (args, timeout = 240000) => spawnSync(py[0], [...py.slice(1), script, ...args], { encoding: 'utf8', timeout, env: { ...process.env, PYTHONUTF8: '1' } });
+    const sortie = (nom) => path.join(dossier, nom);
+    // refus : jouables sans navigateur
+    const r1 = jouer(['--to-png', svg, '-o', sortie('aucun.png'), '--moteur-svg', 'aucun']);
+    if (r1.status !== 2 || !/REFUS - aucun moteur/.test(r1.stderr) || fs.existsSync(sortie('aucun.png'))) findings.push(`C19 sens rouge : sans moteur, un SVG doit être refusé (exit 2, message, rien d'écrit) — code ${r1.status}, ${(r1.stderr || '').trim().slice(0, 100)}`);
+    const r2 = jouer(['--to-png', externe, '-o', sortie('externe.png')]);
+    if (r2.status !== 2 || !/ressource externe/.test(r2.stderr) || fs.existsSync(sortie('externe.png'))) findings.push(`C19 sens rouge : un SVG à ressource externe doit être refusé — code ${r2.status}, ${(r2.stderr || '').trim().slice(0, 100)}`);
+    const sansDim = path.join(dossier, 'sans-dimensions.svg');
+    fs.writeFileSync(sansDim, '<svg xmlns="http://www.w3.org/2000/svg"><rect width="10" height="10"/></svg>\n', 'utf8');
+    const r3 = jouer(['--to-png', sansDim, '-o', sortie('sd.png')]);
+    if (r3.status !== 2 || !/dimensions sont inconnues/.test(r3.stderr)) findings.push(`C19 sens rouge : un SVG sans dimensions doit être refusé — code ${r3.status}, ${(r3.stderr || '').trim().slice(0, 100)}`);
+    for (const ext of ['.ai', '.eps', '.pdf', '.emf']) {
+      const f = path.join(dossier, `logo${ext}`);
+      fs.writeFileSync(f, 'x');
+      const r = jouer(['--to-png', f, '-o', sortie(`logo${ext}.png`)]);
+      if (r.status !== 2 || !/non rendu fidèlement|non rendu fidelement/.test(r.stderr) || !/Formats admis/.test(r.stderr)) findings.push(`C19 sens rouge : le format ${ext} doit être refusé avec la liste des formats admis — code ${r.status}`);
+    }
+    // sens vert : navigateur requis
+    const v = jouer(['--to-png', svg, '-o', sortie('rendu.png')]);
+    if (v.status === 2 && /aucun moteur de rendu SVG qui applique|aucun navigateur lançable|aucun navigateur lancable/.test(v.stderr)) {
+      return { joue: false, findings, motif: 'C19 (rendu du SVG) NON JOUÉ : aucun navigateur lançable par Playwright au poste ; les refus, eux, sont jugés' };
+    }
+    if (v.status !== 0 || !fs.existsSync(sortie('rendu.png'))) { findings.push(`C19 sens vert : le SVG de jeu doit être rendu (code ${v.status}) — ${(v.stderr || '').trim().slice(0, 140)}`); return { joue: true, findings }; }
+    const mesure = spawnSync(py[0], [...py.slice(1), '-c', [
+      'import json, sys',
+      'from PIL import Image',
+      'im = Image.open(sys.argv[1]).convert("RGBA")',
+      'w, h = im.size',
+      'print(json.dumps({"taille": [w, h], "boite": list(im.getchannel("A").getbbox() or []), "gauche": list(im.getpixel((int(w * 0.06), h // 2))), "droite": list(im.getpixel((int(w * 0.94), h // 2)))}))',
+    ].join('\n'), sortie('rendu.png')], { encoding: 'utf8', timeout: 60000, env: { ...process.env, PYTHONUTF8: '1' } });
+    let m = null; try { m = JSON.parse(mesure.stdout); } catch { /* le code le dit */ }
+    if (!m) { findings.push('C19 sens vert : le PNG rendu est illisible'); return { joue: true, findings }; }
+    if (m.taille[0] !== 960 || m.taille[1] !== 360) findings.push(`C19 sens vert : la boîte rognée du SVG de jeu (320 x 120 px, facteur 3) doit mesurer 960 x 360, reçu ${m.taille.join(' x ')}`);
+    if (m.boite[0] !== 0 || m.boite[1] !== 0 || m.boite[2] !== m.taille[0] || m.boite[3] !== m.taille[1]) findings.push(`C19 sens vert : le PNG n'est pas rogné à la boîte non transparente (boîte ${m.boite.join(',')})`);
+    const proche = (c, cible) => cible.every((v2, i) => Math.abs(c[i] - v2) <= 24);
+    if (!proche(m.gauche, [0, 136, 55])) findings.push(`C19 sens vert : l'extrémité gauche doit porter la teinte de départ du dégradé (0,136,55), reçu ${m.gauche.slice(0, 3).join(',')} — un moteur qui ignore le dégradé sort noir`);
+    if (!proche(m.droite, [113, 197, 158])) findings.push(`C19 sens vert : l'extrémité droite doit porter la teinte d'arrivée du dégradé (113,197,158), reçu ${m.droite.slice(0, 3).join(',')}`);
+  } finally {
+    try { fs.rmSync(dossier, { recursive: true, force: true }); } catch { /* rien */ }
+  }
+  return { joue: true, findings };
+}
+
+// -------------------- C20 : le fichier de cadrage est exigé avant de générer (TF-2379), jugé par factory-communication
+// Le fait (seq 224, 17/09/2026) : une session pouvait supposer l'audience, produire le deck et passer tous les
+// oracles ; deux retours humains de contenu en une journée sur le même deck. L'étape 0 exige désormais un fichier
+// de cadrage (audience, décision attendue, contexte, objection) jugé par `verifier-cadrage.mjs` du skill voisin.
+// Le contrôle joue la commande prescrite, telle qu'écrite dans SKILL.md : l'exemple rempli passe (exit 0), le gabarit
+// vide est refusé (exit 1), un fichier absent rend la main (exit 2).
+function verifierCadrageCommunication() {
+  const findings = [];
+  const skillMd = fs.readFileSync(path.join(SKILL_DIR, 'SKILL.md'), 'utf8');
+  const commande = 'node ../factory-communication/scripts/verifier-cadrage.mjs';
+  if (!skillMd.includes(commande)) findings.push(`C20 : l'étape 0 de SKILL.md ne prescrit plus « ${commande} » avant de générer`);
+  if (!/ne pas générer/i.test(skillMd)) findings.push("C20 : l'étape 0 de SKILL.md ne dit plus de ne pas générer sans cadrage complet");
+  const voisin = path.join(SKILL_DIR, '..', 'factory-communication');
+  const verifieur = path.join(voisin, 'scripts', 'verifier-cadrage.mjs');
+  const exemple = path.join(voisin, 'references', 'exemple-cadrage.md');
+  const gabarit = path.join(voisin, 'references', 'gabarit-cadrage.md');
+  if (![verifieur, exemple, gabarit].every((f) => fs.existsSync(f))) {
+    return { joue: false, findings, motif: 'C20 jouée sur le texte seul, commande non rejouée : le skill voisin factory-communication (verifier-cadrage.mjs, gabarit, exemple) est introuvable' };
+  }
+  const jouer = (f) => spawnSync(process.execPath, [verifieur, f], { encoding: 'utf8', timeout: 30000 }).status;
+  const v = jouer(exemple);
+  if (v !== 0) findings.push(`C20 sens vert : l'exemple de cadrage rempli doit autoriser la génération (exit ${v}, attendu 0)`);
+  const r = jouer(gabarit);
+  if (r !== 1) findings.push(`C20 sens rouge : le gabarit de cadrage vide ne doit pas autoriser la génération (exit ${r}, attendu 1)`);
+  const a = jouer(path.join(os.tmpdir(), 'cadrage-qui-n-existe-pas.md'));
+  if (a !== 2) findings.push(`C20 sens rouge : un fichier de cadrage absent doit rendre exit 2 (exit ${a})`);
+  return { joue: true, findings };
+}
+
+// ------------- C21 : la règle des intercalaires dit ce que S1 juge (TF-2401)
+// Le fait (10/11/2026, TF-2325) : S1 d'oracle-charte-pptx-semantique admet deux formes, toutes les parties ont leur
+// intercalaire, ou aucune (le sommaire du gabarit B de factory-propale) ; un deck mixte reste refusé. SKILL.md disait
+// « un intercalaire par partie, sans exception » et charte.md § 6 « soit tous, soit aucun (deck sans sommaire) » : le
+// skill de rendu et son juge disaient deux règles. Le contrôle exige aux deux endroits les deux formes, le gabarit B
+// et le refus du deck mixte, puis joue S1 sur un deck du gabarit B et sur un deck mixte. Sens rouge : la phrase d'avant
+// le lot (constantes ci-dessous, recopiées de l'état de départ) doit être refusée à chaque endroit.
+const AVANT_SKILL_INTERCALAIRES = [
+  '- **Sommaire ⇒ un intercalaire par partie, sans exception.** Si le deck contient une',
+  '  slide sommaire, CHAQUE entrée du sommaire ouvre sa section par un intercalaire sombre',
+  '  « {NN} · {Titre} » — numérotation et intitulés strictement identiques au sommaire.',
+  "  Interdit d'en poser pour certaines parties seulement : soit toutes, soit aucune",
+  '  (deck sans sommaire). Vérifier la bijection sommaire ↔ intercalaires au QA final.',
+].join('\n');
+const AVANT_CHARTE_INTERCALAIRES = [
+  '## 6 · Navigation — sommaire et intercalaires',
+  '',
+  'Règle de **bijection**, sans exception : si le deck contient une slide sommaire, **chaque**',
+  'entrée du sommaire ouvre sa section par un intercalaire sombre `{NN} · {Titre}`, numérotation',
+  'et intitulés **strictement identiques** au sommaire. Soit tous, soit aucun (deck sans sommaire).',
+  'La bijection se vérifie à la passe QA finale.',
+].join('\n');
+function blocIntercalairesSkill(texte) {
+  const m = texte.match(/^- \*\*Sommaire[^\n]*\n(?: {2}[^\n]*\n?)*/m);
+  return m ? m[0] : null;
+}
+function blocIntercalairesCharte(texte) {
+  const m = texte.match(/^## 6 · Navigation[^\n]*\n[\s\S]*?(?=^## 7 |(?![\s\S]))/m);
+  return m ? m[0] : null;
+}
+function ecartsIntercalaires(bloc, etiquette) {
+  if (!bloc) return [`${etiquette} — la règle des intercalaires est introuvable`];
+  const plat = bloc.replace(/\s+/g, ' ');
+  const f = [];
+  if (/sans exception/i.test(plat)) f.push(`${etiquette} — « sans exception » : S1 admet deux formes, la règle n'en dit qu'une`);
+  if (!/gabarit B/.test(plat)) f.push(`${etiquette} — la forme sans intercalaire n'est pas rattachée au gabarit B de factory-propale`);
+  if (!/(toutes|chaque)[^.]*intercalaire/i.test(plat)) f.push(`${etiquette} — la forme « toutes les parties ont leur intercalaire » n'est pas écrite`);
+  if (!/aucune? (?:partie )?(?:n'a|n'en|d'intercalaire)|sans intercalaire/i.test(plat)) f.push(`${etiquette} — la forme « aucune partie n'a d'intercalaire » n'est pas écrite`);
+  if (!/mixte|certaines parties seulement/i.test(plat)) f.push(`${etiquette} — le refus du deck mixte n'est pas écrit`);
+  return f;
+}
+function verifierIntercalaires() {
+  const findings = [];
+  const skillMd = fs.readFileSync(path.join(SKILL_DIR, 'SKILL.md'), 'utf8');
+  const charteF = path.join(SKILL_DIR, 'references', 'charte.md');
+  if (!fs.existsSync(charteF)) return { joue: false, findings: ['C21 : references/charte.md absent'], motif: 'C21 NON JOUÉE : charte.md absent' };
+  const charte = fs.readFileSync(charteF, 'utf8');
+  findings.push(...ecartsIntercalaires(blocIntercalairesSkill(skillMd), 'C21 SKILL.md'));
+  findings.push(...ecartsIntercalaires(blocIntercalairesCharte(charte), 'C21 references/charte.md § 6'));
+  // sens ROUGE : la phrase d'avant le lot est refusée à chaque endroit, par plusieurs règles
+  const rS = ecartsIntercalaires(AVANT_SKILL_INTERCALAIRES, 'fixture-rouge SKILL.md');
+  const rC = ecartsIntercalaires(AVANT_CHARTE_INTERCALAIRES, 'fixture-rouge charte.md');
+  if (!rS.some((x) => x.includes('sans exception')) || !rS.some((x) => x.includes('gabarit B'))) findings.push("fixture-rouge — C21 est AVEUGLE : la phrase d'avant le lot, dans SKILL.md, n'est pas refusée pour « sans exception » et pour le gabarit B absent");
+  if (!rC.some((x) => x.includes('sans exception')) || !rC.some((x) => x.includes('gabarit B'))) findings.push("fixture-rouge — C21 est AVEUGLE : la phrase d'avant le lot, dans charte.md, n'est pas refusée pour « sans exception » et pour le gabarit B absent");
+  // sens ROUGE encore : une règle retirée du texte est vue (un extracteur qui ne trouve rien ne juge rien)
+  if (ecartsIntercalaires(blocIntercalairesSkill(skillMd.replace(/^- \*\*Sommaire[^\n]*\n(?: {2}[^\n]*\n?)*/m, '')), 'fixture-rouge').length !== 1) findings.push('fixture-rouge — C21 est AVEUGLE : un SKILL.md sans la règle des intercalaires n\'est pas refusé comme « introuvable »');
+  // S1 joue les deux formes : le deck du gabarit B passe, le deck mixte est refusé
+  const oracle = path.join(SKILL_DIR, '..', 'quality-oracles', 'scripts', 'oracle-charte-pptx-semantique.mjs');
+  const fx = path.join(SKILL_DIR, '..', 'quality-oracles', 'fixtures');
+  const gabaritB = path.join(fx, 'charte-pptx-gabarit-b-green.pptx');
+  const mixte = path.join(fx, 'charte-pptx-semantique-red.pptx');
+  if (![oracle, gabaritB, mixte].every((f) => fs.existsSync(f))) {
+    return { joue: false, findings, motif: 'C21 jouée sur le texte seul, S1 non rejouée : oracle-charte-pptx-semantique ou ses decks de jeu (quality-oracles) introuvables' };
+  }
+  const juger = (f) => {
+    const r = spawnSync(process.execPath, [oracle, f], { encoding: 'utf8', timeout: 120000 });
+    try { return JSON.parse(r.stdout); } catch { return { verdict: '?', findings: [] }; }
+  };
+  const s1 = (j) => (j.findings || []).filter((x) => /^S1 /.test(x.msg) && x.sev !== 'info');
+  const vert = juger(gabaritB);
+  if (s1(vert).length) findings.push(`C21 sens vert : le deck du gabarit B (sommaire sans aucun intercalaire) reçoit ${s1(vert).length} constat(s) S1 — ${s1(vert)[0].msg}`);
+  if (!(vert.findings || []).some((x) => /^conforme/.test(x.msg) && /gabarit B/.test(x.msg))) findings.push("C21 sens vert : S1 ne dit plus « forme du gabarit B » sur le deck sans intercalaire : la forme admise n'est plus nommée par le juge");
+  const rouge = juger(mixte);
+  if (!s1(rouge).some((x) => /sans intercalaire correspondant/.test(x.msg))) findings.push('C21 sens rouge : le deck mixte (une entrée de sommaire sans intercalaire alors que d\'autres en ont) n\'est plus refusé par S1');
+  return { joue: true, findings };
+}
+
+// ------------- C22 : un masque de couverture ou d'intercalaire ne porte pas d'espace réservé de titre (TF-2599)
+// Le fait (12/11/2026) : cinq supports de formation livrés avec 25 espaces réservés de titre vides, sur la couverture et
+// chaque intercalaire ; PowerPoint y affiche « Cliquez pour ajouter un titre » par-dessus le titre posé en zone libre.
+// Le skill ne disait pas qu'un masque de ces diapositives ne porte pas d'espace réservé de titre, et aucun oracle ne le
+// voyait. Le contrôle exige la règle dans SKILL.md (le masque, le titre en zone libre, la règle PH1), puis joue PH1 d'oracle-pptx
+// sur la paire de decks de jeu de quality-oracles. Sens rouge : un SKILL.md sans la règle est refusé (un extracteur qui ne
+// trouve rien ne juge rien), et le deck à espace réservé vide est refusé par PH1.
+const REGLE_MASQUE_PH = /^ {3}\*\*Un masque de couverture ou d'intercalaire[^\n]*\n(?: {3}[^\n]*\n?)*/m;
+function ecartsMasquePh(bloc) {
+  if (!bloc) return ['C22 SKILL.md — la règle « un masque de couverture ou d\'intercalaire ne porte pas d\'espace réservé de titre » est introuvable'];
+  const plat = bloc.replace(/\s+/g, ' ');
+  const f = [];
+  if (!/ne porte pas d'espace réservé de titre/.test(plat)) f.push('C22 SKILL.md — la règle ne dit pas que le masque ne porte pas d\'espace réservé de titre');
+  if (!/zone libre/.test(plat)) f.push('C22 SKILL.md — la règle ne dit pas dans quel cas (titre posé en zone libre)');
+  if (!/Cliquez pour ajouter un titre/.test(plat)) f.push('C22 SKILL.md — la règle ne dit pas ce que l\'espace réservé vide fait voir');
+  if (!/PH1/.test(plat)) f.push('C22 SKILL.md — la règle ne nomme pas PH1, la règle d\'oracle-pptx qui la juge');
+  return f;
+}
+function verifierMasquePh() {
+  const findings = [];
+  const skillMd = fs.readFileSync(path.join(SKILL_DIR, 'SKILL.md'), 'utf8');
+  const bloc = (skillMd.match(REGLE_MASQUE_PH) || [null])[0];
+  findings.push(...ecartsMasquePh(bloc));
+  if (ecartsMasquePh((skillMd.replace(REGLE_MASQUE_PH, '').match(REGLE_MASQUE_PH) || [null])[0]).length !== 1) findings.push('fixture-rouge — C22 est AVEUGLE : un SKILL.md sans la règle du masque n\'est pas refusé comme « introuvable »');
+  const oracle = path.join(SKILL_DIR, '..', 'quality-oracles', 'scripts', 'oracle-pptx.mjs');
+  const fx = path.join(SKILL_DIR, '..', 'quality-oracles', 'fixtures');
+  const rouge = path.join(fx, 'pptx-placeholder-vide-red.pptx');
+  const vert = path.join(fx, 'pptx-placeholder-vide-green.pptx');
+  if (![oracle, rouge, vert].every((f) => fs.existsSync(f))) {
+    return { joue: false, findings, motif: 'C22 jouée sur le texte seul, PH1 non rejouée : oracle-pptx ou ses decks de jeu (quality-oracles) introuvables' };
+  }
+  const juger = (f) => {
+    const r = spawnSync(process.execPath, [oracle, f], { encoding: 'utf8', timeout: 120000 });
+    try { return JSON.parse(r.stdout); } catch { return { verdict: '?', findings: [] }; }
+  };
+  const ph1 = (j) => (j.findings || []).filter((x) => x.regle === 'PH1');
+  const jv = juger(vert), jr = juger(rouge);
+  if (jv.verdict !== 'PASS' || ph1(jv).length) findings.push(`C22 sens vert : le deck aux espaces réservés remplis rend ${jv.verdict}, ${ph1(jv).length} constat(s) PH1`);
+  if (jr.verdict !== 'FAIL' || ph1(jr).length !== 2) findings.push(`C22 sens rouge : le deck à espaces réservés de titre vides rend ${jr.verdict} avec ${ph1(jr).length} constat(s) PH1 au lieu de 2 (couverture et diapositive 2)`);
+  return { joue: true, findings };
+}
+
+// ---------------------------------------------------------------- exécution
+const findings = [];
+const nonJuge = [...NON_JUGE];
+let verdict = 'PASS';
+
+// C1 — fixture VERTE : le skill réel
+const skillMdPath = path.join(SKILL_DIR, 'SKILL.md');
+if (!fs.existsSync(skillMdPath)) {
+  findings.push(`${NOM_SKILL}/SKILL.md — absent : un skill sans SKILL.md n'est pas un skill`);
+  verdict = 'FAIL';
+} else {
+  findings.push(...verifierChemins(SKILL_DIR, fs.readFileSync(skillMdPath, 'utf8'), `${NOM_SKILL}/SKILL.md`));
+}
+
+// C1 — fixture ROUGE : un SKILL.md temporaire qui cite un fichier absent DOIT rougir
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'self-test-rouge-'));
+try {
+  const rouge = [
+    '# Fixture rouge', '',
+    'Renvoi vers `references/fichier-absent-fixture-rouge.md` — ce fichier n\'existe pas.', '',
+    'Renvoi déclaré : `scripts/outil-fantome.py` — **non livré** (doit être EXEMPTÉ).', '',
+  ].join('\n');
+  fs.writeFileSync(path.join(tmp, 'SKILL.md'), rouge);
+  const fr = verifierChemins(tmp, rouge, 'fixture-rouge/SKILL.md');
+  const attrapeAbsent = fr.some((x) => x.includes('fichier-absent-fixture-rouge.md'));
+  const exempteDeclare = !fr.some((x) => x.includes('outil-fantome.py'));
+  if (!attrapeAbsent) { findings.push('fixture-rouge — C1 est AVEUGLE : un chemin absent n\'a pas été détecté'); verdict = 'FAIL'; }
+  if (!exempteDeclare) { findings.push('fixture-rouge — C1 rougit sur un manque DÉCLARÉ « non livré » : exemption cassée'); verdict = 'FAIL'; }
+} finally {
+  try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* rien */ }
+}
+
+// C2 — noms interdits
+const table = chargerTable();
+let c2Jouee = false;
+if (!table) {
+  nonJuge.push(
+    'C2 NON JOUÉE : table des noms interdits introuvable. Pistes explorées : '
+    + PISTES_TABLE.join(' · ')
+    + ". REMÈDE : cloner le canal confidentiel du parc (`<racine>\\_confidentiel\\tables\\noms-interdits.json`), "
+    + 'ou désigner la table par --referentiel=<chemin> ou la variable FORGE_NOMS_INTERDITS. '
+    + "La table vit HORS de tout dépôt publié : ne jamais l'embarquer dans le skill.",
+  );
+} else {
+  c2Jouee = true;
+  // C2 — fixture ROUGE, entièrement SYNTHÉTIQUE : un terme inventé, jamais un nom réel.
+  // Elle prouve que le détecteur voit quelque chose, sans écrire nulle part ce qu'il protège.
+  const tmp2 = fs.mkdtempSync(path.join(os.tmpdir(), 'self-test-noms-'));
+  try {
+    const invente = 'ZRGTEST-ORGA';
+    fs.writeFileSync(path.join(tmp2, 'SKILL.md'), `# Fixture rouge C2\n\nMission menée chez ${invente} en 2026.\n`);
+    if (!verifierNoms(tmp2, [invente]).length) {
+      findings.push('fixture-rouge — C2 est AVEUGLE : un terme planté n\'a pas été détecté');
+    }
+    if (verifierNoms(tmp2, ['ZZQX']).length) {
+      findings.push('fixture-verte — C2 rougit sur un terme absent : le détecteur est faux positif');
+    }
+  } finally {
+    try { fs.rmSync(tmp2, { recursive: true, force: true }); } catch { /* rien */ }
+  }
+  // C2 — fixture VERTE : le skill réel, jugé contre la table du parc.
+  findings.push(...verifierNoms(SKILL_DIR, table.termes));
+}
+
+// C3 — consommation du système de marque, fixtures verte et rouge
+findings.push(...verifierMarque());
+
+// C4 — fixture ROUGE synthétique d'abord : le détecteur doit voir une valeur plantée.
+const textePlante = [
+  'Fond de couverture #ABC123 posé en dur.',
+  'Titres en Montserrat, corps en Inter.',
+].join('\n');
+const rougeC4 = valeursEnDur(textePlante, 'fixture-rouge-c4');
+if (!rougeC4.some((x) => x.includes('#ABC123'))) findings.push('fixture-rouge — C4 est AVEUGLE : une couleur en dur n\'a pas été détectée');
+if (!rougeC4.some((x) => x.includes('police en dur'))) findings.push('fixture-rouge — C4 est AVEUGLE : une police en dur n\'a pas été détectée');
+if (valeursEnDur('Jamais la police Montserrat ici : elle est interdite.', 'fixture-verte-c4').length) {
+  findings.push('fixture-verte — C4 rougit sur une police nommée pour être INTERDITE : l\'exemption est cassée');
+}
+// C4 — fixture VERTE : le SKILL.md réel.
+if (fs.existsSync(skillMdPath)) {
+  findings.push(...valeursEnDur(fs.readFileSync(skillMdPath, 'utf8'), `${NOM_SKILL}/SKILL.md`));
+}
+
+// C5 à C7 — l'export par PowerPoint, prouvé sans ouvrir PowerPoint (TF-1502). Un contrôle que le
+// poste ne permet pas de jouer est dit au non_juge et rend le verdict SKIP, jamais PASS.
+const c5 = verifierDecision();
+if (c5.joue) findings.push(...c5.findings); else nonJuge.push(c5.motif);
+findings.push(...await verifierVerrou());
+const c7 = await verifierChaine();
+if (c7.joue) findings.push(...c7.findings); else nonJuge.push(c7.motif);
+const c9 = verifierPieds();
+if (c9.joue) findings.push(...c9.findings); else nonJuge.push(c9.motif);
+const c11 = verifierPoste();
+if (c11.joue) findings.push(...c11.findings); else nonJuge.push(c11.motif);
+const c10 = await verifierCadrage();
+findings.push(...c10.findings);
+if (!c10.joue) nonJuge.push(c10.motif);
+findings.push(...verifierDocSortie());
+const c13 = verifierPrerequis();
+findings.push(...c13.findings);
+if (c13.note) nonJuge.push(c13.note);
+const c14 = verifierPolicesEtDoublons();
+findings.push(...c14.findings);
+if (!c14.joue) nonJuge.push(c14.motif);
+const c15 = verifierInsecables();
+findings.push(...c15.findings);
+if (!c15.joue) nonJuge.push(c15.motif);
+const c16 = verifierAccessibilite();
+findings.push(...c16.findings);
+if (!c16.joue) nonJuge.push(c16.motif);
+findings.push(...verifierCharte());
+const c18 = verifierGrilles();
+findings.push(...c18.findings);
+if (!c18.joue) nonJuge.push(c18.motif);
+const c19 = verifierSvg();
+findings.push(...c19.findings);
+if (!c19.joue) nonJuge.push(c19.motif);
+const c20 = verifierCadrageCommunication();
+findings.push(...c20.findings);
+if (!c20.joue) nonJuge.push(c20.motif);
+const c21 = verifierIntercalaires();
+findings.push(...c21.findings);
+if (!c21.joue) nonJuge.push(c21.motif);
+const c22 = verifierMasquePh();
+findings.push(...c22.findings);
+if (!c22.joue) nonJuge.push(c22.motif);
+// C8 — l'essai réel, sur demande seulement, et jamais quand PowerPoint tourne
+let c8 = { joue: false, motif: "C8 NON JOUÉE : l'essai réel par PowerPoint ne se joue que sur demande (--essai-powerpoint)" };
+if (args.includes('--essai-powerpoint')) c8 = await essaiPowerPoint();
+if (c8.joue) findings.push(...c8.findings); else nonJuge.push(c8.motif);
+if (c8.note) nonJuge.push(c8.note);
+
+if (findings.length) verdict = 'FAIL';
+else if (!c2Jouee || !c5.joue || !c7.joue) verdict = 'SKIP';
+
+const code = verdict === 'PASS' ? 0 : verdict === 'FAIL' ? 1 : 2;
+process.stdout.write(JSON.stringify({
+  oracle: 'self-test-skill',
+  skill: NOM_SKILL,
+  artefact: SKILL_DIR.replace(/\\/g, '/'),
+  controles: {
+    C1_liens_relatifs: 'jouée',
+    C2_noms_interdits: c2Jouee ? 'jouée' : 'NON jouée (table absente)',
+    C3_consommation_marque: 'jouée',
+    C4_valeurs_de_marque_en_dur: 'jouée',
+    C5_decision_quitter_powerpoint: c5.joue ? 'jouée' : 'NON jouée (Windows seulement)',
+    C6_verrou_entre_sessions: 'jouée',
+    C7_chaine_assainissement: c7.joue ? 'jouée' : 'NON jouée (juge ou prérequis absents)',
+    C9_pieds_de_page_pptxgenjs: c9.joue ? 'jouée' : 'NON jouée (oracle, deck de jeu ou python absents)',
+    C11_poste_windows_sans_libreoffice: c11.joue ? 'jouée' : 'NON jouée (python absent)',
+    C10_cadrage_amont: c10.joue ? 'jouée' : 'texte seul (pilot introuvable)',
+    C12_documentation_egale_sortie: 'jouée',
+    C13_prerequis_pptxgenjs: 'jouée',
+    C14_polices_poste_et_mots_doubles: c14.joue ? 'jouée' : 'polices jouées, mots doublés NON joués',
+    C15_espaces_insecables: c15.joue ? 'jouée' : 'texte seul (outils absents)',
+    C16_langue_entete_formes_decoratives: c16.joue ? 'jouée' : 'texte seul (python ou deck de jeu absents)',
+    C17_style_de_tableau_dans_la_charte: 'jouée',
+    C18_grilles_et_barres_laterales: c18.joue ? 'jouée' : 'texte seul (python ou decks de jeu absents)',
+    C19_svg_rendu_ou_refuse: c19.joue ? 'jouée' : 'refus joués, rendu du SVG NON joué (navigateur absent)',
+    C20_cadrage_exige_avant_de_generer: c20.joue ? 'jouée' : 'texte seul (skill voisin introuvable)',
+    C21_regle_des_intercalaires_egale_s1: c21.joue ? 'jouée' : 'texte seul (oracle ou decks de jeu introuvables)',
+    C22_masque_sans_espace_reserve_de_titre: c22.joue ? 'jouée' : 'texte seul (oracle ou decks de jeu introuvables)',
+    C8_essai_reel_powerpoint: c8.joue ? 'jouée' : 'NON jouée',
+  },
+  ...(c8.bilan ? { essai_powerpoint: c8.bilan } : {}),
+  verdict,
+  findings,
+  non_juge: nonJuge,
+}, null, 2) + '\n');
+process.exit(code);

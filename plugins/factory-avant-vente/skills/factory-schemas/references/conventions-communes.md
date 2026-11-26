@@ -1,0 +1,368 @@
+# Conventions communes Factory · à appliquer sur tous les canevas
+
+Ce document énonce les règles non-négociables. À lire intégralement avant de produire un schéma. Pour les détails par canevas, voir les fichiers `canevas-*.md` séparés.
+
+## 1 · Palette sémantique
+
+La couleur encode le **type fonctionnel** du nœud, pas un choix esthétique arbitraire. À chaque ramp correspond un trio (fond pâle, texte foncé, bordure intermédiaire), et **ce trio est trois jetons**, jamais trois valeurs.
+
+| Sémantique | Ramp | Fond | Texte | Bordure | Usage typique |
+|---|---|---|---|---|---|
+| Pipelines, automation, Agent IA | purple | `--c-purple-bg` | `--c-purple-fg` | `--c-purple-stroke` | Pipelines Azure DevOps, modules de l'orchestrateur, briques d'outillage |
+| Modules centraux, référentiels, environnements DEV | blue | `--c-blue-bg` | `--c-blue-fg` | `--c-blue-stroke` | Repos source, RG DEV POC / DEV MVP, services PaaS standards |
+| Pilotage, dashboards, observabilité, STAGING | teal | `--c-teal-bg` | `--c-teal-fg` | `--c-teal-stroke` | Dashboard portfolio, App Insights, Log Analytics, Elastic, RG STAGING |
+| Cartographie, éléments critiques, PROD, sécurité | coral | `--c-coral-bg` | `--c-coral-fg` | `--c-coral-stroke` | RG PROD, Sentinel, Defender, alertes critiques |
+| Exports externes, synchronisations, intégrations | amber | `--c-amber-bg` | `--c-amber-fg` | `--c-amber-stroke` | Acteurs humains, EasyVista, CMDB, Cosign, Storage da-dossiers |
+| Acteurs, données partagées, services transverses | gray | `--c-gray-bg` | `--c-gray-fg` | `--c-gray-stroke` | Sources git, hub Azure, modules TF, RG Sandbox |
+
+**Les valeurs hexadécimales ne s'écrivent qu'à un seul endroit : le `:root` du §8**, et sa projection sombre. Un nœud, un texte, une flèche, un marqueur s'écrivent `style="fill:var(--c-purple-bg)"` ou par une classe du §3, jamais `fill="#ede9fe"`. Ce tableau donnait les hexadécimaux, et une page construite en les recopiant a rendu 147 écarts durs à `oracle-tokens` (T1, 80 couleurs en dur) et 19 à `oracle-bascule` (une palette sans variante sombre) avant d'être corrigée à la main en six passes (relevé du produit, lot Produit-84 20261019a, TF-1890 ; chiffres rapportés, non rejoués ici). Les valeurs claires et sombres de chaque jeton vivent dans `assets/template-multi-bandes.html`, qui reste la source.
+
+**Règle de cohérence :** ne pas mélanger les ramps pour un même type de nœud. Si un pipeline est purple à un endroit, il est purple partout. Tracer la sémantique avant de commencer à colorier.
+
+## 2 · Typographies obligatoires
+
+Trois familles, jamais plus. **Jamais de Syne.**
+
+**Depuis le 23/09/2026 (D-5 (a) du 22/09, exécutée par D-11 (a)) : la charte de police est celle
+des présentations de l'émetteur.** Montserrat et Inter passent en tête de pile ; Roboto et DM
+Sans, la charte d'avant, restent en premier repli — un schéma produit avant l'alignement n'est
+pas fautif. Détail des jetons : `--head`/`--sans` en §8 ci-dessous.
+
+| Famille | Usage | Poids typiques |
+|---|---|---|
+| `Montserrat` (Roboto en repli) | Titres H1/H2/H3, titres de nœuds dans le SVG | 700 (titres médians), 800 (H1, titres principaux) |
+| `Inter` (DM Sans en repli) | Corps de texte, sous-titres, légendes, prose | 400 (corps), 500 (emphase légère) |
+| `JetBrains Mono` | Code inline (noms de pipelines, paths, identifiants Azure), eyebrows, labels SVG | 400 |
+
+Tailles indicatives dans le SVG :
+- Titre de nœud : `font-size: 12-13px; font-weight: 700; font-family: Montserrat`
+- Sous-titre : `font-size: 10.5-11px; font-family: Inter`
+- Label monospace (code, eyebrow) : `font-size: 9.5-10px; font-family: JetBrains Mono; letter-spacing: 0.06em`
+- Titre de bande : `font-size: 9.5-10.5px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase`
+
+## 3 · Classes CSS SVG standardisées
+
+Réutiliser ces classes telles quelles, ne pas en inventer d'autres pour la même fonction. À déclarer dans le bloc `<style>` de la page hôte (cf canevas).
+
+### Classes textuelles
+```css
+.svg-th { font-family: var(--head); font-weight: 700; font-size: 12.5px; fill: var(--ink); }
+.svg-ts { font-family: var(--sans); font-size: 10.5px; fill: var(--ink-soft); }
+.svg-tm { font-family: var(--mono); font-size: 9.5px; fill: var(--ink-muted); letter-spacing: 0.06em; }
+.svg-tlabel { font-family: var(--mono); font-size: 9.5px; fill: var(--ink-muted); letter-spacing: 0.04em; }
+.svg-tband { font-family: var(--mono); font-weight: 700; font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; }
+```
+
+### Classes de flèches
+```css
+.svg-arr { fill: none; stroke: var(--c-slate-fg); stroke-width: 1.5; }
+.svg-arr-strong { fill: none; stroke: var(--ink); stroke-width: 2; }
+.svg-arr-dashed { fill: none; stroke: var(--c-slate-stroke); stroke-width: 1.4; stroke-dasharray: 5 3; }
+.svg-arr-ai { fill: none; stroke: var(--c-purple-fg); stroke-width: 2; }       /* Chaîne Agent IA */
+.svg-arr-auto { fill: none; stroke: var(--c-blue-fg); stroke-width: 1.6; }   /* Provisioning automatique */
+.svg-arr-manual { fill: none; stroke: var(--c-amber-mid); stroke-width: 1.8; stroke-dasharray: 5 3; }  /* Action humaine */
+.svg-arr-deliv { fill: none; stroke: var(--c-slate-mid); stroke-width: 1.3; stroke-dasharray: 2 3; }   /* Livrable / intégration */
+```
+
+### Classes de nœuds par ramp
+Une classe par couleur sémantique, à appliquer sur un `<g>` qui contient `<rect>` + `<text>` :
+```css
+.svg-c-purple rect { fill: var(--c-purple-bg); stroke: var(--c-purple-stroke); stroke-width: 1.4; }
+.svg-c-purple text { fill: var(--c-purple-fg); }
+.svg-c-blue rect   { fill: var(--c-blue-bg); stroke: var(--c-blue-stroke); stroke-width: 1.4; }
+.svg-c-blue text   { fill: var(--c-blue-fg); }
+/* ...etc pour teal, coral, amber, gray */
+```
+
+### Cadre englobant en pointillé
+```css
+.svg-frame { fill: none; stroke-width: 1.2; stroke-dasharray: 4 4; }
+```
+À appliquer sur un `<rect>` qui englobe toute une zone fonctionnelle (ex. : la bande des pipelines, le cadre d'une organisation Azure DevOps). La couleur du stroke encode la nature de la zone (violet pour l'Agent IA, gris pour neutre).
+
+### Superpositions voulues et `data-overlap-ok` (TF-0424, lot Produit-05 20260820a)
+
+`render_page.py` V4 juge les **chevauchements entre nœuds** et entre nœud et flèche. Les formes
+internes d'un **groupe titré** (`<g><title>…</title><rect/><text/></g>`) se superposent par
+construction — un nœud de schéma est UN objet — et ne sont plus jugées : grouper chaque nœud
+dans un `<g>` porteur d'un `<title>` suffit, **sans poser `data-overlap-ok` sur chaque forme**
+(l'exemple de référence en portait 581, déduits de l'exemple faute de doc). `data-overlap-ok`
+reste la déclaration d'une superposition voulue **entre nœuds** (badge sur un coin de boîte,
+étiquette à cheval sur une flèche) : il se pose sur l'un des deux éléments frères concernés,
+et il documente un choix, pas une gêne.
+
+## 4 · Markers de flèches
+
+Toujours définir les markers dans `<defs>` au début du SVG, avec `refX=9` (pointe nette qui touche bien le bord du nœud cible) :
+
+```svg
+<defs>
+  <marker id="arrL" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+    <path d="M0,0 L10,5 L0,10 z" style="fill:var(--c-slate-fg)"/>
+  </marker>
+  <marker id="arrAI" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+    <path d="M0,0 L10,5 L0,10 z" style="fill:var(--c-purple-fg)"/>
+  </marker>
+  <marker id="arrAuto" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+    <path d="M0,0 L10,5 L0,10 z" style="fill:var(--c-blue-fg)"/>
+  </marker>
+  <marker id="arrMan" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+    <path d="M0,0 L10,5 L0,10 z" style="fill:var(--c-amber-mid)"/>
+  </marker>
+</defs>
+```
+
+Pour les flèches bidirectionnelles, ajouter un marker `*-Start` avec `refX=1` et l'utiliser via `marker-start="url(#arrNetStart)"`.
+
+## 5 · Règles de routage des flèches (critiques)
+
+### Règle d'or
+**Une flèche ne traverse jamais un nœud non concerné.** Avant de tracer, vérifier que la trajectoire est libre. Si elle ne l'est pas, dévier en L.
+
+### Forme des flèches
+- **L pur** (un seul coude) : depuis A descend verticalement, puis va horizontalement vers B. Ou inverse. **Jamais en escalier multiple** (plusieurs coudes successifs).
+- **Ligne droite** quand A et B sont alignés horizontalement ou verticalement.
+- **Pas de courbes de Bézier** sauf cas exceptionnel justifié.
+
+### Couloirs verticaux dédiés
+Quand plusieurs flèches descendent en parallèle d'une bande supérieure vers une bande inférieure :
+- Chaque flèche a un **x unique** correspondant au centre vertical de son nœud source ET de son nœud cible (alignement vertical strict des nœuds source et cible).
+- Si les nœuds source et cible ne sont pas à la même position x, dévier dans un **couloir libre** (zone entre deux bandes sans nœud) avant de rejoindre le x cible.
+- Éviter les arrivées multiples au même point : décaler les points d'arrivée latéralement (ex. 580, 660, 740, 820 pour quatre flèches qui convergent vers un même nœud large).
+
+### Marqueurs aux extrémités
+- **`refX=9`** pour que la pointe touche le bord du nœud sans le pénétrer (les marqueurs `refX=8` ou moins laissent un espace visible disgracieux).
+- Couleur du marker = couleur de la flèche (jamais de mismatch).
+
+## 6 · Titres de bande
+
+**Toujours dans une pastille blanche encadrée**, placée hors du couloir des flèches descendantes. **La pastille et son texte forment UN groupe titré** (TF-0424, TF-1660) : `render_page.py` V4 juge sinon le texte contre son propre cadre. Format type :
+
+```svg
+<g id="bande-2-pastille"><title>Bande 2 · Orchestration · pipelines Azure DevOps</title>
+  <rect x="140" y="195" width="185" height="22" rx="6" stroke-width="0.8" style="fill:var(--bg);stroke:var(--c-purple-fg)"/>
+  <text x="152" y="211" class="svg-tband" style="fill:var(--c-purple-fg);font-size:9.5px">2 · Orchestration</text>
+</g>
+```
+
+La pastille a :
+- Une **bordure** dans la couleur sémantique de la bande (purple pour pipelines, slate pour bandes neutres), déclarée dans un SEUL `style` (deux attributs `style` sur un même élément ne s'écrivent pas : le second est ignoré).
+- Une **hauteur ~22px** pour englober le texte sans trop charger.
+- Une **largeur ajustée au texte** (laisser ~14px de padding interne) : à 9,5 px en capitales espacées, compter 7 px par caractère.
+- Un **placement dans une zone libre de tout couloir**, jamais sous une flèche descendante (TF-1890). Quand des flèches traversent la bande d'en-tête à intervalle régulier (210 px dans le gabarit : x = 127, 337, 547…), la pastille se pose ENTRE deux couloirs : largeur 185 px au plus, libellé de 18 caractères au plus, le libellé long passant dans le `<title>` du groupe. Une pastille calée à gauche sur 290 px recouvrait la flèche et la cachait ; c'était le placement de l'exemple de référence.
+
+Numérotation préfixée (`1 · `, `2 · `, `3 · `) pour les bandes hiérarchisées.
+
+## 7 · Tooltips structurés
+
+### Convention de formatage du contenu
+
+Le contenu du `<title>` SVG doit suivre le format `Titre | Puce 1 | Puce 2 | ... | Puce N` :
+- **Avant le premier `|`** : titre du tooltip (texte court, type nom et nature du nœud)
+- **Après chaque `|`** : une puce
+- Chaque puce peut commencer par un libellé suivi de `:` qui sera mis en gras (« Trigger : », « Agent pool : », « Rôle : »)
+- Les codes inline (paths, identifiants Azure, noms de SP) sont entourés de backticks (\`) qui seront rendus en monospace sur fond gris.
+
+Exemple :
+```svg
+<title>Pipeline Mission 1 · Récupération du POC | Trigger : webhook tag git `vX.Y.Z-poc` | Agent pool : `factory-squad-linux` | Service Connection : `sp-azp-squad` via WIF OIDC | Artefact : `poc-context.json` | Aval : enchaîne automatiquement M2</title>
+```
+
+### Script de rendu
+
+Le script JavaScript qui transforme ces `<title>` en tooltips HTML stylés est **embarqué dans `assets/template-multi-bandes.html`** (bloc « SCRIPT TOOLTIPS CUSTOM », juste avant `</body>`, avec sa feuille `.nh-tooltip`) : une page hôte construite depuis ce gabarit le porte déjà. Une page hôte construite autrement le reprend de ce gabarit, au même endroit. Il n'existe pas de fichier `assets/tooltip-script.html` (TF-1660 : ce renvoi pointait vers un fichier absent du paquet). Il :
+- Intercepte le hover sur tous les éléments porteurs de `<title>` dans les `.diagram-wrap svg`
+- Désactive le tooltip natif du navigateur (souvent étalé sur une seule ligne, sans formatage)
+- Affiche à la place un tooltip HTML carré, fond slate-800, puces avec marqueur violet, codes en monospace
+- Restaure le `<title>` au mouseleave pour conserver l'accessibilité lecteurs d'écran
+
+### Couverture obligatoire
+
+- **100 % des nœuds visibles** doivent porter un `<title>` structuré.
+- **100 % des flèches porteuses de sens métier** doivent porter un `<title>` (les flèches purement décoratives en sont exemptées).
+- Les acteurs humains, intégrations externes et bandes transverses doivent avoir des tooltips particulièrement détaillés (3-5 puces).
+
+### Style éditorial des puces
+
+- Phrases déclaratives, sans abréviations non explicitées.
+- Pas de point final sur une puce courte (style libellé). Point final si la puce contient plusieurs phrases.
+- Pas de jargon non défini : le tooltip doit pouvoir être lu par un membre de la Design Authority qui ne connaît pas tous les détails techniques.
+
+## 8 · Page HTML hôte (variables CSS racine)
+
+Toujours déclarer ces variables dans `:root` de la page hôte pour permettre les ajustements globaux :
+
+```css
+:root {
+  --bg: #ffffff;
+  --bg-soft: #f7f8fa;
+  --bg-softer: #fbfbfc;
+  --ink: #0f172a;
+  --ink-soft: #334155;
+  --ink-muted: #64748b;
+  --line: #e2e8f0;
+  --line-soft: #eef1f5;
+  --line-strong: #cbd5e1;
+  --accent: #2563eb;
+
+  --c-purple-bg: #ede9fe;   --c-purple-fg: #5b21b6;   --c-purple-stroke: #c4b5fd;
+  --c-blue-bg:   #dbeafe;   --c-blue-fg:   #1d4ed8;   --c-blue-stroke:   #93c5fd;
+  --c-teal-bg:   #ccfbf1;   --c-teal-fg:   #0f766e;   --c-teal-stroke:   #5eead4;
+  --c-coral-bg:  #fee2e2;   --c-coral-fg:  #b91c1c;   --c-coral-stroke:  #fca5a5;
+  --c-amber-bg:  #fef3c7;   --c-amber-fg:  #92400e;   --c-amber-stroke:  #fcd34d;
+  --c-gray-bg:   #f1f3f7;   --c-gray-fg:   #374151;   --c-gray-stroke:   #cbd5e1;
+  /* Jetons nommes par TF-0856 (04/09/2026) : ces valeurs vivaient en dur dans les canevas. */
+  --c-purple-mid: #7c3aed;
+  --c-purple-deep: #4c1d95;
+  --c-purple-ink: #2e1065;
+  --c-slate-fg: #475569;
+  --c-slate-mid: #64748b;
+  --c-slate-stroke: #94a3b8;
+  --c-amber-mid: #b45309;
+  --ink-strong: #1e293b;
+  --bg-soft-2: #f1f5f9;
+  /* Jetons de police (oracle-tokens T2, TF-0856 ; tête de pile alignée D-5 (a)/D-11 (a), 23/09/2026). */
+  --sans: 'Inter', 'DM Sans', system-ui, -apple-system, sans-serif;
+  --head: 'Montserrat', 'Roboto', system-ui, -apple-system, sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, monospace;
+  /* Jetons de focus (oracle-tokens T8) : un anneau posé doit être prescrit ici. */
+  --focus-anneau: 2px solid var(--accent);
+  --focus-decalage: 2px;
+}
+```
+
+### Thème sombre, bascule et déclaration de page (TF-1890, 19/10/2026)
+
+Le gabarit portait un `:root` clair et rien d'autre. Un schéma construit dessus échouait à
+`oracle-bascule` dès qu'un bouton de thème s'y ajoutait (la palette `--c-*` n'avait pas de variante
+sombre), et à `check_html` G1 quand l'auteur le contournait par `prefers-color-scheme`. Le gabarit
+`assets/template-multi-bandes.html` porte désormais, **et c'est lui la source, pas ce document** :
+
+- **la projection sombre** `:root[data-theme="dark"]` sous `@media screen` : elle redéfinit chaque jeton de
+  couleur du `:root` et rien d'autre (aucune couleur en dur dans une règle de nœud, de texte ou de flèche).
+  Sous `@media screen`, l'impression reste claire quel que soit le thème affiché ;
+- **le bouton de bascule** `.theme-toggle` dans l'en-tête, son script d'initialisation avant la première
+  peinture et son câblage (clé `factory-theme` dans `localStorage`, `aria-pressed`). Le clair est le défaut,
+  strictement : le sombre est un choix du lecteur, jamais l'héritage de l'OS (`check_html` G1) ;
+- **`data-page="donnees"` sur `<body>`** : une page de schémas et de tableaux se déclare page de données
+  (prose pleine largeur par défaut, `lisibilite.md`), au lieu d'être jugée comme une note en prose ;
+- **les jetons de focus** `--focus-anneau` et `--focus-decalage`, que le bouton consomme.
+
+Un jeton ajouté au `:root` reçoit sa valeur sombre dans la projection, le même jour : c'est ce que
+`oracle-bascule` B-T4 mesure. La recette du skill (`scripts/self-test.mjs`) joue `check_html`, les oracles
+de forge-design et `render_page.py` aux deux thèmes sur une instance du gabarit, et ses cas rouges le prouvent.
+
+## 9 · Encapsulation du SVG
+
+Le SVG est toujours dans une `div.diagram-wrap` :
+
+```css
+.diagram-wrap {
+  background: var(--bg-soft);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 28px 20px;
+  overflow-x: auto;
+  margin: 20px 0 12px;
+  position: relative;  /* requis pour ancrage du tooltip custom */
+}
+.diagram-wrap svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
+.caption {
+  font-style: italic; font-size: 13px;
+  color: var(--ink-muted); text-align: center;
+  margin-top: 6px; margin-bottom: 4px;
+}
+```
+
+Le SVG utilise **toujours `viewBox`**, jamais `width` / `height` fixes en pixels. Cela permet le responsive et l'impression PDF.
+
+## 10 · Accessibilité
+
+- Toujours `role="img"` sur le `<svg>` racine.
+- Toujours `aria-labelledby="diag{N}-title diag{N}-desc"` qui pointe vers un `<title id="diag{N}-title">` et un `<desc id="diag{N}-desc">` placés en premiers enfants du SVG.
+- Le `<title>` du SVG racine est une phrase courte décrivant ce que montre le schéma (sera lu par les lecteurs d'écran avant le contenu).
+- Le `<desc>` est plus long (3-5 phrases) et décrit la structure pour permettre la compréhension sans voir.
+- Contraste minimum WCAG AA respecté sur toutes les paires fond/texte (la palette ci-dessus est conçue pour respecter cela).
+- Pas de couleur seule comme porteur d'information : doubler avec un libellé ou une forme (ex. les flèches d'action humaine sont à la fois orange ET en pointillé).
+
+## 11 · Responsive et print
+
+```css
+@media screen and (max-width: 720px) {
+  /* Le SVG se RÉDUIT à la largeur (max-width: 100%; height: auto, §9) : jamais de défilement
+     horizontal, jamais de min-width sur le SVG. */
+}
+@media print {
+  .diagram-wrap { background: var(--bg); break-inside: avoid; }
+  body { font-size: 11pt; }
+}
+```
+
+**Pas de défilement horizontal (TF-1660, 14/10/2026).** Cette section prescrivait « le scroll
+horizontal via `overflow-x` du wrapper » ; le socle `factory-page-html` juge V1 **bloquant même
+dans un conteneur `overflow-x:auto`** (`composants.md` §6), et la page instanciée rendait 4 V1 à
+390 px. Le schéma se réduit à la largeur offerte ; un schéma devenu illisible une fois réduit se
+découpe, il ne défile pas.
+
+Le rendu doit être directement utilisable via "Imprimer en PDF" du navigateur sans réglage particulier. Tester systématiquement.
+
+## 12 · Légende
+
+Toujours présente en bas du SVG (ou à la fin de la page si plusieurs schémas), structurée en deux lignes :
+
+- Ligne 1 : pastilles colorées qui rappellent la sémantique (pipelines, environnements, intégrations, etc.)
+- Ligne 2 : courtes flèches échantillon avec leur libellé (Chaîne Agent IA, Provisioning, Action humaine, Livrable / intégration, Référence numérotée)
+
+Format des items de légende :
+```svg
+<g transform="translate(40, 1108)">
+  <rect x="0" y="0" width="14" height="14" rx="3" style="fill:var(--c-purple-bg);stroke:var(--c-purple-fg)"/>
+  <text x="22" y="11" class="svg-ts" style="font-size:11px">Pipelines Agent IA</text>
+  <!-- ...autres items espacés de ~180px... -->
+</g>
+```
+
+## 13 · Footer
+
+Toujours en bas de la page hôte, format imposé :
+
+```html
+<footer class="footer">
+  <div class="brand">{footer.marque}</div>
+  <div>{footer.droite_gabarit : Type document · Audience · Année}</div>
+</footer>
+```
+
+La marque du footer est **paramétrable**, et c'est le seul point de la charte qui le soit.
+
+- **Défaut, et valeur employée quand rien n'est déclaré** : la signature de l'**émetteur**, lue par
+  `node scripts/lire-signature.mjs [--marque <dossier de marque>]` (`footer.marque` à gauche,
+  `footer.droite_gabarit` à droite, `annee_reference` pour l'année). Elle vit dans son `MARQUE.md`, tableau
+  « Baseline, signatures et coordonnées publiques » (TF-2350). **Exit 2 ⇒ rendre la main** : le skill n'écrit
+  aucune marque de son cru. Les gabarits HTML portent `{{MARQUE_FOOTER}}` et `{{ANNEE_REF}}` à remplacer.
+- **Engagement client** : un fichier `charte-livrable.json` à la racine du projet en cours
+  (ou sous `$FORGE_ROOT`) porte `{ "marque": "…", "baseline": "…", "annee": "<année>" }` ; s'il
+  existe, ses valeurs remplacent la marque et la baseline du footer, et le reste de la charte
+  — polices, palette, routage des flèches, tooltips — ne bouge PAS.
+- **Ce fichier ne se commite jamais dans un dépôt publié** : il porte un nom de client, et un
+  nom de client dans un dépôt public est une fuite. C'est une donnée, pas du code (loi n° 4).
+
+*Pourquoi un paramètre et pas un skill par client (27/08/2026).* Un second générateur avait été
+forké pour un engagement : même canevas, même palette, même typographie, marque échangée. Le
+fork a divergé — il lui manquait une section entière du générateur maison — et son NOM, qui
+portait celui du client, fuitait dans un registre publié. Un paramètre ne diverge pas et ne
+nomme personne.
+
+Année : `annee_reference` de la signature lue chez l'émetteur, jusqu'à modification explicite des instructions.
+
+CSS du footer :
+```css
+.footer {
+  margin-top: 80px; padding-top: 24px;
+  border-top: 1px solid var(--line);
+  display: flex; justify-content: space-between;
+  flex-wrap: wrap; gap: 12px;
+  font-size: 12px; color: var(--ink-muted);
+}
+.footer .brand { font-family: var(--head); font-weight: 700; letter-spacing: 0.06em; }
+```

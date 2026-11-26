@@ -1,0 +1,619 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""Complétude RENDU vs SOURCE — la page porte-t-elle ce que sa source dit ? (TF-1174)
+
+LE FAIT PAYÉ, 16/09/2026 (lot Produit-64 20260916b, retour RD-10). Une édition d'un générateur a
+sorti un `append` de sa boucle de regroupement de prose : toute la prose sauf le dernier fragment
+de chaque chapitre a disparu de la page rendue. Le livrable est passé de 11 996 à environ
+3 000 mots visibles, et les neuf encadrés « Exemple de lecture » sont tombés à ZÉRO.
+
+LES SIX ORACLES JOUÉS SUR CETTE PAGE AMPUTÉE : `render_page.py` (7 largeurs) PASS ·
+`check_markdown.py --style` PASS — il juge la SOURCE, qui n'a pas bougé · `oracle-slop` PASS ·
+`oracle-tokens` PASS · `oracle-mobile` PASS · `check_html.py` FAIL, mais sur L7 et L10 SEULEMENT,
+c'est-à-dire sur l'ABSENCE d'un chapeau et d'un exemple de lecture — jamais sur la disparition du
+texte. Une page amputée n'a en effet ni débordement, ni contraste faible, ni marqueur de page
+générée, ni couleur en dur : elle est PARFAITEMENT CONFORME ET PRESQUE VIDE.
+
+CE QUE L'ÉCART RÉVÈLE — classe `controle-vrai-sur-le-mauvais-invariant`. Les six oracles mesurent
+la FORME. Aucun ne mesure la COMPLÉTUDE. C'est une grandeur corrélée prise pour l'invariant : tant
+qu'un générateur ne perd rien, forme et contenu vont ensemble et personne ne voit la substitution ;
+le jour où la corrélation se rompt, six verdicts verts couvrent une page vide.
+
+LA RÈGLE, ET ELLE NE DEMANDE AUCUNE FINESSE — elle demande de COMPTER :
+
+    rendu  = mots visibles du corps HTML (balises, commentaires, scripts et styles retirés)
+    source = mots visibles du ou des Markdown dont il sort
+    si rendu < source : ARRÊT — la page porte moins de texte que sa source
+
+Le seuil est volontairement grossier, et c'est ce qui le rend sûr : un rendu porte EN PLUS les
+libellés du générateur (menus, inventaires, légendes de schéma), il est donc normalement PLUS
+riche que sa source. Un rendu plus pauvre est une PERTE, sans jugement à rendre — aucune
+pertinence, aucune lisibilité, aucun chapeau n'est jugé ici.
+
+EXTENSION TF-1436, 28/09/2026 (lot Produit-78 20260928a, RP-2). Le compte de MOTS ne voit pas la
+STRUCTURE : une liste numérotée de 8 éléments fondue en un seul paragraphe garde ses mots, perd
+ses 8 `<li>` — `check_completude.py` rendait PASS à 100,3 % sur une page qui avait perdu sa liste
+et rétrogradé ses titres. La règle s'étend, au même compas :
+
+    pour chaque niveau de titre (1 à 6)     : rendu(niveau) doit être ≥ source(niveau)
+    pour les listes NUMÉROTÉES et à PUCES   : rendu(type) doit être ≥ source(type)
+    sinon : ÉCART — un titre ou un élément de liste a été PERDU ou DÉPLACÉ vers un autre niveau/type
+
+Un titre ou un élément EN PLUS ne fait jamais échouer (même logique que les mots : un générateur
+peut ajouter son propre titre de page ou son sommaire). Ce comptage n'est PAS couvert par
+`--seuil` : contrairement aux mots, une dérogation de couverture ne rouvre jamais la structure —
+la perdre n'est jamais négociable au même geste qu'une simple pauvreté de contenu.
+
+EXTENSION TF-2362, 10/11/2026 (retour RA-212 du lot du produit marketing, seq 294). Le socle prescrit ce
+contrôle pour TOUTE page issue d'un générateur, mais il ne comparait qu'un HTML à une source Markdown. Le kit
+apporteurs sort d'un module Python de données et se livre en PDF : aucun oracle ne disait si le PDF portait tout
+le texte de sa source, et un contrôle ad hoc (K10) a dû s'écrire. La prescription n'était pas jouable sur cette
+cible. Elle l'est maintenant : une SOURCE DE DONNÉES (`--source-donnees`, JSON ou module Python lu SANS
+l'exécuter) et une CIBLE HTML ou PDF, comparées par CHAÎNES — chaque chaîne de la source doit se retrouver dans
+le texte de la cible, un compte de mots ne dit pas quelle phrase a disparu :
+
+    pour chaque chaîne de la source (feuille d'un JSON, littéral d'un module) :
+        retrouvée dans le texte visible de la cible (espaces, casse, apostrophes, traits d'union de fin de
+        ligne et balisage de la chaîne normalisés) ; sinon : CHAÎNE MANQUANTE, nommée avec son chemin
+
+Usage :
+    python check_completude.py page.html --source source.md [--source autre.md ...]
+    python check_completude.py page.html --source source.md --output json
+    python check_completude.py page.html --source source.md --seuil 0.9   # DÉROGATION, déclarée
+    python check_completude.py kit.pdf --source-donnees contenu.json [--ignorer-cles id,href] [--min-chars 2]
+    python check_completude.py page.html --source-donnees module_de_contenu.py
+
+Verdict machine : exit 0 = PASS · 1 = FAIL (perte de texte) · 2 = indéterminé (SKIP motivé —
+fichier illisible, source absente). Un fichier qu'on ne peut pas lire ne rend JAMAIS un PASS.
+"""
+from __future__ import annotations
+
+import argparse
+import ast
+import html as _html
+import json
+import re
+import sys
+import unicodedata
+from pathlib import Path
+
+# Windows : forcer stdout/stderr en UTF-8 pour ne pas planter (cp1252) à l'impression de
+# caractères hors Latin-1 (TF-1884 : « → » levait UnicodeEncodeError en console Windows).
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
+SEUIL_DEFAUT = 1.0
+
+# --- HTML : ce qui ne se voit pas à l'écran -------------------------------------------------
+_COMMENTAIRE = re.compile(r"<!--.*?-->", re.S)
+_INVISIBLE = re.compile(r"<(script|style|template|noscript)\b[^>]*>.*?</\1\s*>", re.S | re.I)
+_CORPS = re.compile(r"<body\b[^>]*>(.*)</body\s*>", re.S | re.I)
+_BALISE = re.compile(r"<[^>]+>", re.S)
+
+# --- Markdown : la syntaxe n'est pas du texte ------------------------------------------------
+_FRONTMATTER = re.compile(r"\A---\r?\n.*?\r?\n---\r?\n", re.S)
+_CLOTURE = re.compile(r"^[ \t]*(```|~~~).*?^[ \t]*\1[ \t]*$", re.S | re.M)
+_IMAGE = re.compile(r"!\[([^\]]*)\]\([^)]*\)")
+_LIEN = re.compile(r"\[([^\]]*)\]\([^)]*\)")
+_LIEN_REF = re.compile(r"^\[[^\]]+\]:\s*\S+.*$", re.M)
+_CODE_EN_LIGNE = re.compile(r"`([^`]*)`")
+_MARQUEUR_LIGNE = re.compile(r"^[ \t]*(#{1,6}|>|[-*+]|\d+\.)[ \t]+", re.M)
+_SEPARATEUR_TABLE = re.compile(r"^[ \t]*\|?[ \t:\-|]+\|[ \t:\-|]*$", re.M)
+_REGLE_HORIZONTALE = re.compile(r"^[ \t]*([-*_])(?:[ \t]*\1){2,}[ \t]*$", re.M)
+
+# Un « mot » porte au moins un caractère alphanumérique : une puce, un filet ou un tuyau de
+# tableau n'est pas du texte, et les compter des deux côtés ne ferait que brouiller l'écart.
+_MOT = re.compile(r"[^\W_]", re.U)
+
+# --- Structure : titres par niveau, éléments de liste par type (TF-1436) --------------------
+# Côté Markdown : un titre ATX (pas de Setext ===/---) et un item de liste marqué -, *, + ou
+# N. / N) — la même forme que celle déjà reconnue par le générateur d'études (lib-vue-html.mjs).
+# Une ligne engagée par « > » (citation) n'ouvre aucune des deux : elle n'a pas d'équivalent
+# séparé côté Markdown pour un item imbriqué, le compter brouillerait l'écart plus qu'il ne l'éclaire.
+_TITRE_MD = re.compile(r"^[ \t]*(#{1,6})(?=[ \t]|$)", re.M)
+_ITEM_NUMEROTE_MD = re.compile(r"^[ \t]*\d+[.)][ \t]+", re.M)
+_ITEM_PUCE_MD = re.compile(r"^[ \t]*[-*+][ \t]+", re.M)
+# Côté HTML : les six niveaux de titre, et ol/ul/li pour distinguer numéroté de puces — le TYPE
+# se lit sur la liste qui ENCLOT le <li>, jamais sur le <li> seul.
+_BALISE_STRUCTURE_HTML = re.compile(r"<(h[1-6]|ol|/ol|ul|/ul|li)\b[^>]*>", re.I)
+
+
+def _corps_visible_html(source: str) -> str:
+    """Le corps de la page, commentaires et blocs invisibles retirés — partagé par le compte de
+    mots (TF-1174) et le compte de structure (TF-1436) : les deux doivent lire le MÊME corps."""
+    texte = _COMMENTAIRE.sub(" ", source)
+    texte = _INVISIBLE.sub(" ", texte)
+    corps = _CORPS.search(texte)
+    return corps.group(1) if corps else texte
+
+
+def mots_visibles_html(source: str) -> list:
+    """Les mots que le lecteur voit dans le corps de la page."""
+    texte = _BALISE.sub(" ", _corps_visible_html(source))
+    texte = _html.unescape(texte)
+    return [m for m in texte.split() if _MOT.search(m)]
+
+
+def elements_structure_html(source: str) -> dict:
+    """Titres par niveau et éléments de liste par type, RENDUS (TF-1436)."""
+    texte = _corps_visible_html(source)
+    titres = {n: 0 for n in range(1, 7)}
+    listes_numerotees = 0
+    listes_puces = 0
+    pile = []  # empile 'ol'/'ul' à l'ouverture, dépile à la fermeture ; un <li> compte pour le
+    # sommet de pile courant — sa liste la plus proche, pas une balise plus loin dans le corps.
+    for m in _BALISE_STRUCTURE_HTML.finditer(texte):
+        tag = m.group(1).lower()
+        if tag in ("ol", "ul"):
+            pile.append(tag)
+        elif tag in ("/ol", "/ul"):
+            if pile:
+                pile.pop()
+        elif tag == "li":
+            if pile and pile[-1] == "ol":
+                listes_numerotees += 1
+            elif pile:
+                listes_puces += 1
+            # un <li> hors de tout <ol>/<ul> (HTML mal formé) n'est rattaché à aucun type : rien
+            # côté Markdown ne s'y compare, le compter brouillerait l'écart plus qu'il ne l'éclaire.
+        else:
+            titres[int(tag[1:])] += 1
+    return {"titres": titres, "listes_numerotees": listes_numerotees, "listes_puces": listes_puces}
+
+
+def mots_visibles_markdown(source: str) -> list:
+    """Les mots que la source DIT — sa syntaxe retirée, son texte gardé."""
+    texte = _FRONTMATTER.sub(" ", source)
+    texte = _COMMENTAIRE.sub(" ", texte)
+    texte = _CLOTURE.sub(" ", texte)
+    texte = _LIEN_REF.sub(" ", texte)
+    texte = _IMAGE.sub(r"\1", texte)
+    texte = _LIEN.sub(r"\1", texte)
+    texte = _CODE_EN_LIGNE.sub(r"\1", texte)
+    texte = _REGLE_HORIZONTALE.sub(" ", texte)
+    texte = _SEPARATEUR_TABLE.sub(" ", texte)
+    texte = _MARQUEUR_LIGNE.sub(" ", texte)
+    texte = texte.replace("|", " ")
+    # Le balisage HTML toléré dans un Markdown ne compte pas non plus.
+    texte = _BALISE.sub(" ", texte)
+    texte = _html.unescape(texte)
+    return [m for m in texte.split() if _MOT.search(m)]
+
+
+def _texte_structure_markdown(source: str) -> str:
+    """La source, débarrassée de ce qui pourrait imiter un titre ou une puce sans en être un
+    (frontmatter, commentaire, bloc de code, filet, séparateur de tableau) — même ordre de
+    retrait que `mots_visibles_markdown`, sans toucher aux marqueurs de titre ou de liste."""
+    texte = _FRONTMATTER.sub(" ", source)
+    texte = _COMMENTAIRE.sub(" ", texte)
+    texte = _CLOTURE.sub(" ", texte)
+    texte = _REGLE_HORIZONTALE.sub(" ", texte)
+    texte = _SEPARATEUR_TABLE.sub(" ", texte)
+    return texte
+
+
+def elements_structure_markdown(source: str) -> dict:
+    """Titres par niveau et éléments de liste par type, DITS par la source (TF-1436)."""
+    texte = _texte_structure_markdown(source)
+    titres = {n: 0 for n in range(1, 7)}
+    for m in _TITRE_MD.finditer(texte):
+        titres[len(m.group(1))] += 1
+    listes_numerotees = len(_ITEM_NUMEROTE_MD.findall(texte))
+    listes_puces = len(_ITEM_PUCE_MD.findall(texte))
+    return {"titres": titres, "listes_numerotees": listes_numerotees, "listes_puces": listes_puces}
+
+
+def structure_agregee(structures: list) -> dict:
+    """Somme de plusieurs structures (page multi-sources) — même geste que `total_source` pour
+    les mots : chaque source s'additionne, aucune n'efface l'autre."""
+    total = {"titres": {n: 0 for n in range(1, 7)}, "listes_numerotees": 0, "listes_puces": 0}
+    for s in structures:
+        for n in range(1, 7):
+            total["titres"][n] += s["titres"][n]
+        total["listes_numerotees"] += s["listes_numerotees"]
+        total["listes_puces"] += s["listes_puces"]
+    return total
+
+
+_NOM_NIVEAU = {1: "1 (#)", 2: "2 (##)", 3: "3 (###)", 4: "4 (####)", 5: "5 (#####)", 6: "6 (######)"}
+
+
+def constats_structure(source_agg: dict, rendu: dict) -> list:
+    """Un écart par niveau de titre ou par type de liste où le rendu porte MOINS que la source —
+    jamais l'inverse : un générateur ajoute normalement son propre titre de page ou son sommaire."""
+    constats = []
+    for niveau in range(1, 7):
+        n_source, n_rendu = source_agg["titres"][niveau], rendu["titres"][niveau]
+        if n_rendu < n_source:
+            constats.append(
+                f"TITRE PERDU OU DÉPLACÉ : la source porte {n_source} titre(s) de niveau "
+                f"{_NOM_NIVEAU[niveau]}, la page en rend {n_rendu} à ce niveau — "
+                f"{n_source - n_rendu} manquant(s), perdu(s) ou glissé(s) vers un autre niveau. "
+                "Remonter au générateur avant toute autre correction")
+    for cle, libelle in (("listes_numerotees", "numérotée(s)"), ("listes_puces", "à puces")):
+        n_source, n_rendu = source_agg[cle], rendu[cle]
+        if n_rendu < n_source:
+            constats.append(
+                f"ÉLÉMENT DE LISTE PERDU OU DÉPLACÉ : la source porte {n_source} élément(s) de "
+                f"liste {libelle}, la page en rend {n_rendu} — {n_source - n_rendu} manquant(s), "
+                "perdu(s) ou rendus sous une autre forme (paragraphe, autre type de liste). "
+                "Remonter au générateur avant toute autre correction")
+    return constats
+
+
+def non_juge(seuil: float) -> list:
+    """Ce que ce contrôle NE regarde pas — publié à chaque exécution, PASS ou FAIL."""
+    notes = [
+        "LA COMPLÉTUDE N'EST PAS LA FIDÉLITÉ. Ce contrôle COMPTE des mots ; il ne dit pas que ce "
+        "sont LES MÊMES mots, ni qu'ils sont au bon endroit, ni dans le bon ordre. Une page qui "
+        "remplacerait chaque paragraphe par un autre de longueur égale passerait",
+        "LA FORME N'EST PAS JUGÉE ICI : débordement, contraste, chevauchement, jetons, marqueurs "
+        "de page générée relèvent de `check_html.py`, `render_page.py` et des oracles de "
+        "`factory-forge-design`. Les six ont rendu PASS sur la page amputée du 16/09",
+        "LE TEXTE PRODUIT PAR LE JAVASCRIPT à l'ouverture n'est pas compté : ce script lit le "
+        "fichier, il ne l'exécute pas. Une page dont la prose est injectée au runtime sera "
+        "comptée trop pauvre — c'est un FAUX POSITIF assumé, et il se lève en fournissant le "
+        "rendu après exécution",
+        "LA SOURCE EST CRUE SUR PAROLE : que le ou les Markdown fournis soient bien ceux dont la "
+        "page sort est une déclaration de l'appelant, jamais une mesure",
+        "LA STRUCTURE COMPTÉE EST GROSSIÈRE ELLE AUSSI (TF-1436) : titres ATX (#, pas de Setext "
+        "===/---) et éléments de liste marqués -, *, + ou N. / N) au premier caractère de la "
+        "ligne ; un titre ou un item imbriqué dans une citation (>) n'est pas compté séparément. "
+        "Un MÊME NOMBRE à un niveau ou un type ne dit rien de l'ORDRE ni du CONTENU, seulement "
+        "que rien n'y a disparu ni glissé ailleurs",
+        "LA DÉROGATION DE SEUIL NE COUVRE QUE LES MOTS : un titre ou un élément de liste perdu ou "
+        "déplacé reste bloquant même sous --seuil abaissé — la structure n'est pas négociable au "
+        "même geste qu'une simple pauvreté de contenu",
+    ]
+    if seuil < SEUIL_DEFAUT:
+        notes.append(
+            f"DÉROGATION DÉCLARÉE : le seuil joué est {seuil:.3f}, sous le seuil du socle "
+            f"({SEUIL_DEFAUT:.3f} — un rendu est normalement PLUS riche que sa source, puisqu'il "
+            "porte en plus les libellés du générateur). Ce PASS ne vaut que sous cette dérogation")
+    return notes
+
+
+def verifier_completude(page: str, sources: list, seuil: float = SEUIL_DEFAUT) -> dict:
+    """Le verdict : le rendu porte-t-il au moins ce que la source dit — en mots ET en structure ?"""
+    rendu = mots_visibles_html(page)
+    structure_rendu = elements_structure_html(page)
+    par_source = [{"mots": len(mots_visibles_markdown(t)), "source": n} for n, t in sources]
+    total_source = sum(s["mots"] for s in par_source)
+    structure_source = structure_agregee([elements_structure_markdown(t) for _, t in sources])
+    couverture = (len(rendu) / total_source) if total_source else None
+    fails = []
+    if total_source == 0:
+        verdict = "SKIP"
+        fails.append("SOURCE VIDE : aucune source ne porte de mot visible — rien à comparer, et "
+                     "un PASS ici ne voudrait rien dire")
+    else:
+        if couverture < seuil:
+            manquants = total_source - len(rendu)
+            fails.append(
+                f"PERTE DE TEXTE : la page rendue porte {len(rendu)} mots visibles pour "
+                f"{total_source} mots de source — couverture {couverture:.1%}, sous le seuil "
+                f"{seuil:.1%}. Il manque au moins {manquants} mots. Un rendu porte normalement EN "
+                "PLUS les libellés du générateur : plus pauvre que sa source, il a PERDU quelque "
+                "chose. Remonter au générateur avant toute autre correction")
+        fails.extend(constats_structure(structure_source, structure_rendu))
+        verdict = "FAIL" if fails else "PASS"
+    return {
+        "verdict": verdict,
+        "mots_rendu": len(rendu),
+        "mots_source": total_source,
+        "sources": par_source,
+        "couverture": round(couverture, 4) if couverture is not None else None,
+        "seuil": seuil,
+        "structure_rendu": structure_rendu,
+        "structure_source": structure_source,
+        "fails": fails,
+        "non_juge": non_juge(seuil),
+    }
+
+
+# --- TF-2362 : source de DONNÉES, cible HTML ou PDF, comparaison par CHAÎNES -----------------
+_APOSTROPHES = str.maketrans({"’": "'", "‘": "'", "ʼ": "'", "“": '"', "”": '"',
+                              "«": '"', "»": '"'})
+CLES_IGNOREES_DEFAUT = ()
+MIN_CHARS_DEFAUT = 2
+AFFICHAGE_MANQUANTES = 20
+
+
+def _forme(chaine: str) -> str:
+    """Une chaîne ramenée à ce que la comparaison peut tenir pour la même : balisage et entités retirés, NFKC,
+    apostrophes et guillemets droits, tiret conditionnel supprimé, casse et espaces ôtés (un PDF coupe les lignes
+    n'importe où et peut passer en capitales)."""
+    t = _html.unescape(_BALISE.sub(" ", chaine))
+    t = unicodedata.normalize("NFKC", t).replace("­", "").translate(_APOSTROPHES)
+    return re.sub(r"\s+", "", t).casefold()
+
+
+def _forme_sans_trait(forme: str) -> str:
+    """Seconde chance : un mot coupé en fin de ligne par une césure automatique a gagné un trait d'union."""
+    return forme.replace("-", "").replace("‐", "").replace("‑", "")
+
+
+def chaines_de_json(valeur, ignorer=(), chemin="$") -> list:
+    """Les feuilles TEXTE d'un JSON, avec leur chemin ; les clés d'objet ne sont pas du contenu."""
+    if isinstance(valeur, str):
+        return [(chemin, valeur)]
+    if isinstance(valeur, dict):
+        out = []
+        for k, v in valeur.items():
+            if k in ignorer:
+                continue
+            out += chaines_de_json(v, ignorer, f"{chemin}.{k}")
+        return out
+    if isinstance(valeur, (list, tuple)):
+        out = []
+        for i, v in enumerate(valeur):
+            out += chaines_de_json(v, ignorer, f"{chemin}[{i}]")
+        return out
+    return []
+
+
+def chaines_de_module(source: str, ignorer=()) -> tuple:
+    """Les littéraux texte des affectations de PREMIER NIVEAU d'un module Python, lus par `ast` : le module n'est
+    JAMAIS exécuté ni importé (une source de contenu est une donnée). Rend (chaînes, non_lues) — non_lues compte
+    ce qu'un littéral ne dit pas (f-string, calcul dont le texte se produit à l'exécution)."""
+    arbre = ast.parse(source)
+    chaines, non_lues = [], [0]
+
+    def visiter(noeud, chemin):
+        if isinstance(noeud, ast.Constant):
+            if isinstance(noeud.value, str):
+                chaines.append((chemin, noeud.value))
+        elif isinstance(noeud, ast.Dict):
+            for k, v in zip(noeud.keys, noeud.values):
+                nom = k.value if isinstance(k, ast.Constant) else None
+                if nom in ignorer:
+                    continue
+                visiter(v, f"{chemin}.{nom}" if nom is not None else chemin)
+        elif isinstance(noeud, (ast.List, ast.Tuple, ast.Set)):
+            for i, e in enumerate(noeud.elts):
+                visiter(e, f"{chemin}[{i}]")
+        elif isinstance(noeud, ast.JoinedStr):
+            non_lues[0] += 1
+        elif (isinstance(noeud, ast.BinOp) and isinstance(noeud.op, ast.Add)
+              and isinstance(noeud.left, ast.Constant) and isinstance(noeud.right, ast.Constant)
+              and isinstance(noeud.left.value, str) and isinstance(noeud.right.value, str)):
+            chaines.append((chemin, noeud.left.value + noeud.right.value))
+        elif isinstance(noeud, ast.Call):
+            for a in noeud.args:
+                visiter(a, chemin)
+            for kw in noeud.keywords:
+                if kw.arg not in ignorer:
+                    visiter(kw.value, f"{chemin}.{kw.arg}" if kw.arg else chemin)
+        elif not isinstance(noeud, ast.Name):
+            non_lues[0] += 1
+
+    for n in arbre.body:
+        if isinstance(n, ast.Assign) and n.value is not None:
+            cibles = [t.id for t in n.targets if isinstance(t, ast.Name)]
+            if cibles and not cibles[0].startswith("__"):
+                visiter(n.value, cibles[0])
+        elif isinstance(n, ast.AnnAssign) and n.value is not None and isinstance(n.target, ast.Name):
+            visiter(n.value, n.target.id)
+    return chaines, non_lues[0]
+
+
+def texte_de_cible(chemin: Path) -> tuple:
+    """(texte, motif_de_skip) : le texte visible d'une cible HTML ou PDF."""
+    if chemin.suffix.lower() == ".pdf":
+        try:
+            import pymupdf  # type: ignore
+            with pymupdf.open(str(chemin)) as doc:
+                return "\n".join(p.get_text() for p in doc), ""
+        except ImportError:
+            pass
+        except Exception as e:  # noqa: BLE001 — PDF illisible : SKIP motivé, jamais PASS
+            return "", f"PDF illisible ({type(e).__name__}) : {e}"
+        try:
+            from pypdf import PdfReader  # type: ignore
+            return "\n".join((p.extract_text() or "") for p in PdfReader(str(chemin)).pages), ""
+        except ImportError:
+            return "", "ni pymupdf ni pypdf : le texte d'un PDF ne se lit pas"
+        except Exception as e:  # noqa: BLE001
+            return "", f"PDF illisible ({type(e).__name__}) : {e}"
+    source = chemin.read_text(encoding="utf-8")
+    return _html.unescape(_BALISE.sub(" ", _corps_visible_html(source))), ""
+
+
+def non_juge_donnees(non_lues: int, ignorees: tuple) -> list:
+    notes = [
+        "LA PRÉSENCE N'EST NI L'ORDRE NI LA MULTIPLICITÉ : une chaîne est retrouvée si elle figure QUELQUE PART "
+        "dans la cible ; deux chaînes identiques en source et une seule en cible, ou une page dont les sections "
+        "sont permutées, passent",
+        "LA NORMALISATION RENFORCE LE PASS : espaces, casse, apostrophes, guillemets, tiret conditionnel, balisage "
+        "de la chaîne et trait d'union de fin de ligne sont ôtés des deux côtés ; une différence de casse ou de "
+        "ponctuation de fin de ligne ne se voit pas ici",
+        "TOUTE CHAÎNE DE LA SOURCE EST CRUE AFFICHÉE : un identifiant, une classe, une adresse, un code de couleur "
+        "ou une clé de traduction qui n'est pas du texte de page apparaît comme MANQUANT, et se déclare à ignorer "
+        "(--ignorer-cles) ; l'inverse (du texte de page qui ne vient pas de la source) n'est jamais jugé",
+        "LE TEXTE D'UN PDF EST CELUI QUE LIT LE PDF (couche texte) : un texte rendu en image ou en tracé, ou un PDF "
+        "scanné, n'a pas de chaîne à retrouver et sera compté manquant",
+        "LA COMPLÉTUDE N'EST PAS LA FIDÉLITÉ : ce contrôle dit que le texte de la source est dans la cible, pas "
+        "que la mise en page, les montants ou les nombres calculés par le générateur sont justes",
+    ]
+    if non_lues:
+        notes.append(f"{non_lues} expression(s) du module de contenu ne se lisent pas comme un littéral (f-string, "
+                     "appel, calcul) : le texte qu'elles produisent n'est pas dans la source jugée")
+    if ignorees:
+        notes.append("CLÉS IGNORÉES, déclarées par l'appelant : " + ", ".join(sorted(ignorees)))
+    return notes
+
+
+def verifier_donnees(texte_cible: str, chaines: list, non_lues: int = 0, ignorees: tuple = (),
+                     min_chars: int = MIN_CHARS_DEFAUT) -> dict:
+    """Le verdict par CHAÎNES : chaque chaîne de la source se retrouve-t-elle dans le texte de la cible ?"""
+    cible = _forme(texte_cible)
+    cible_sans_trait = _forme_sans_trait(cible)
+    jugees = [(c, t) for c, t in chaines if len(_forme(t)) >= min_chars]
+    manquantes, sans_trait = [], 0
+    for chemin, chaine in jugees:
+        f = _forme(chaine)
+        if f in cible:
+            continue
+        if _forme_sans_trait(f) in cible_sans_trait:
+            sans_trait += 1
+            continue
+        manquantes.append({"chemin": chemin, "chaine": chaine})
+    fails = []
+    if not jugees:
+        verdict = "SKIP"
+        fails.append("SOURCE VIDE : aucune chaîne jugeable dans la source de données — rien à comparer, et un PASS "
+                     "ici ne voudrait rien dire")
+    else:
+        for m in manquantes[:AFFICHAGE_MANQUANTES]:
+            coupe = "…" if len(m["chaine"]) > 90 else ""
+            fails.append(f"CHAÎNE MANQUANTE : {m['chemin']} = « {m['chaine'][:90]}{coupe} » ne se retrouve pas "
+                         "dans la cible. Remonter au générateur avant toute autre correction")
+        if len(manquantes) > AFFICHAGE_MANQUANTES:
+            fails.append(f"… et {len(manquantes) - AFFICHAGE_MANQUANTES} autre(s) chaîne(s) manquante(s) "
+                         f"({len(manquantes)} au total, toutes dans `chaines_manquantes` en JSON)")
+        verdict = "FAIL" if manquantes else "PASS"
+    return {
+        "verdict": verdict, "mode": "donnees",
+        "chaines_source": len(chaines), "chaines_jugees": len(jugees),
+        "chaines_retrouvees": len(jugees) - len(manquantes),
+        "retrouvees_a_un_trait_dunion_pres": sans_trait,
+        "chaines_manquantes": manquantes, "fails": fails,
+        "non_juge": non_juge_donnees(non_lues, ignorees),
+    }
+
+
+def lire_source_donnees(chemin: Path, ignorer: tuple) -> tuple:
+    """(chaines, non_lues) d'un JSON ou d'un module Python ; lève OSError/ValueError/SyntaxError si illisible."""
+    contenu = chemin.read_text(encoding="utf-8-sig")
+    if chemin.suffix.lower() == ".py":
+        chaines, non_lues = chaines_de_module(contenu, ignorer)
+        return [(f"{chemin.name}:{c}", t) for c, t in chaines], non_lues
+    if chemin.suffix.lower() == ".json":
+        return [(f"{chemin.name}:{c}", t) for c, t in chaines_de_json(json.loads(contenu), ignorer)], 0
+    raise ValueError(f"extension non gérée pour une source de données : {chemin.suffix} (.json ou .py)")
+
+
+def main_donnees(args) -> None:
+    ignorer = tuple(k.strip() for k in args.ignorer_cles.split(",") if k.strip())
+    chaines, non_lues = [], 0
+    for chemin in args.source_donnees:
+        try:
+            c, n = lire_source_donnees(Path(chemin), ignorer)
+        except (OSError, ValueError, SyntaxError) as e:
+            print(f"Erreur lecture de la source de données {chemin} : {e}", file=sys.stderr)
+            sys.exit(2)
+        chaines += c
+        non_lues += n
+    try:
+        texte, motif = texte_de_cible(Path(args.page))
+    except OSError as e:
+        print(f"Erreur lecture de la cible : {e}", file=sys.stderr)
+        sys.exit(2)
+    if motif:
+        print(f"SKIP : {motif}", file=sys.stderr)
+        sys.exit(2)
+    r = verifier_donnees(texte, chaines, non_lues, ignorer, args.min_chars)
+    r["page"] = args.page
+    r["sources"] = list(args.source_donnees)
+    if args.output == "json":
+        print(json.dumps(r, ensure_ascii=False, indent=2))
+    else:
+        print(f"Cible   : {args.page}")
+        for s in r["sources"]:
+            print(f"Source  : {s} (données)")
+        print(f"Verdict : {r['verdict']}")
+        print(f"Chaînes : {r['chaines_retrouvees']} retrouvée(s) sur {r['chaines_jugees']} jugée(s) "
+              f"({r['chaines_source']} dans la source, {r['retrouvees_a_un_trait_dunion_pres']} à un trait d'union près)")
+        for f in r["fails"]:
+            print(f"  x {f}")
+        print("\nPérimètre de NON-MESURE (ce verdict ne dit rien de ceci) :")
+        for note in r["non_juge"]:
+            print(f"  non jugé — {note}")
+    sys.exit({"PASS": 0, "FAIL": 1}.get(r["verdict"], 2))
+
+
+def main():
+    ap = argparse.ArgumentParser(
+        description="Complétude : la page rendue porte-t-elle ce que sa source dit ? (TF-1174, TF-2362)")
+    ap.add_argument("page", help="Chemin de la page HTML rendue.")
+    ap.add_argument("--source", action="append", default=[], metavar="FICHIER.md",
+                    help="Markdown dont la page sort ; répétable pour une page multi-sources.")
+    ap.add_argument("--seuil", type=float, default=SEUIL_DEFAUT,
+                    help=f"couverture minimale rendu/source (défaut {SEUIL_DEFAUT:g} — sous ce "
+                         "seuil, la dérogation est DÉCLARÉE au verdict)")
+    ap.add_argument("--source-donnees", action="append", default=[], metavar="FICHIER.json|.py",
+                    dest="source_donnees",
+                    help="TF-2362 : source de DONNÉES (JSON, ou module Python lu sans l'exécuter) ; compare par "
+                         "chaînes, la cible peut être un HTML ou un PDF. Exclusif de --source.")
+    ap.add_argument("--ignorer-cles", default=",".join(CLES_IGNOREES_DEFAUT), dest="ignorer_cles",
+                    help="clés de la source de données qui ne sont pas du texte de page (id, href, classe…), "
+                         "séparées par des virgules")
+    ap.add_argument("--min-chars", type=int, default=MIN_CHARS_DEFAUT, dest="min_chars",
+                    help=f"longueur minimale d'une chaîne jugée, après normalisation (défaut {MIN_CHARS_DEFAUT})")
+    ap.add_argument("--output", choices=["text", "json"], default="text")
+    args = ap.parse_args()
+
+    if args.source_donnees:
+        if args.source:
+            print("Erreur : --source (Markdown) et --source-donnees s'excluent — deux modes de comparaison.",
+                  file=sys.stderr)
+            sys.exit(2)
+        main_donnees(args)
+    if Path(args.page).suffix.lower() == ".pdf":
+        print("Erreur : une cible PDF se compare à une source de données (--source-donnees) ; la comparaison de "
+              "mots d'un Markdown et de sa structure ne porte que sur un HTML.", file=sys.stderr)
+        sys.exit(2)
+    if args.seuil <= 0:
+        print("Erreur : --seuil doit être strictement positif.", file=sys.stderr)
+        sys.exit(2)
+    if not args.source:
+        print("Erreur : au moins une --source est requise — ce contrôle COMPARE, il ne juge pas "
+              "une page seule.", file=sys.stderr)
+        sys.exit(2)
+
+    try:
+        page = Path(args.page).read_text(encoding="utf-8")
+    except OSError as e:
+        print(f"Erreur lecture de la page : {e}", file=sys.stderr)
+        sys.exit(2)
+    sources = []
+    for chemin in args.source:
+        try:
+            sources.append((chemin, Path(chemin).read_text(encoding="utf-8")))
+        except OSError as e:
+            print(f"Erreur lecture de la source : {e}", file=sys.stderr)
+            sys.exit(2)
+
+    r = verifier_completude(page, sources, args.seuil)
+    r["page"] = args.page
+
+    if args.output == "json":
+        print(json.dumps(r, ensure_ascii=False, indent=2))
+    else:
+        print(f"Page    : {args.page}")
+        for s in r["sources"]:
+            print(f"Source  : {s['source']} — {s['mots']} mots visibles")
+        print(f"Verdict : {r['verdict']}")
+        couv = f"{r['couverture']:.1%}" if r["couverture"] is not None else "—"
+        print(f"Rendu   : {r['mots_rendu']} mots visibles pour {r['mots_source']} de source "
+              f"(couverture {couv}, seuil {r['seuil']:.1%})")
+        ts, tr = r["structure_source"]["titres"], r["structure_rendu"]["titres"]
+        niveaux = ", ".join(f"h{n} {ts[n]}→{tr[n]}" for n in range(1, 7) if ts[n] or tr[n])
+        print(f"Titres  : {niveaux or 'aucun titre côté source'}")
+        print(f"Listes  : numérotées {r['structure_source']['listes_numerotees']}→"
+              f"{r['structure_rendu']['listes_numerotees']} · à puces "
+              f"{r['structure_source']['listes_puces']}→{r['structure_rendu']['listes_puces']}")
+        for f in r["fails"]:
+            print(f"  x {f}")
+        print("\nPérimètre de NON-MESURE (ce verdict ne dit rien de ceci) :")
+        for note in r["non_juge"]:
+            print(f"  non jugé — {note}")
+
+    sys.exit({"PASS": 0, "FAIL": 1}.get(r["verdict"], 2))
+
+
+if __name__ == "__main__":
+    main()

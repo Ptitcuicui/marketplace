@@ -1,0 +1,5536 @@
+"""Rendu multi-breakpoints + mesures zéro-défaut-visuel d'une page HTML Factory.
+
+Oracle mesuré de la checklist canonique references/zero-defaut-visuel.md :
+  - V1  débordement horizontal (bloquant)
+  - V2  contraste texte/fond WCAG AA : >= 4.5:1, ou >= 3:1 pour texte large (bloquant)
+  - V9  actif visuel INDISCERNABLE du fond peint derriere lui (bloquant) —
+        mesure au pixel sur une capture de l'element, pas sur son fichier
+  - V22 marques d'un <canvas> INDISCERNABLES de leur fond (bloquant) — mesure au pixel
+        sur une capture de l'élément ; le contenu d'un canvas reste hors du DOM (TF-1859)
+  - V4  chevauchements significatifs entre éléments frères (bloquant,
+        sauf superposition déclarée data-overlap-ok, et sauf formes internes
+        d'un même <svg> de petite taille — dessin d'icône, pas mise en page)
+  - V3/V7  alignements et espacements irréguliers entre frères (avertissements)
+  - contrôles d'une même rangée alignés à 2 px près (bloquant, TF-0773)
+  - tableau rogné dans un conteneur défilant à >= 1280 px (bloquant, TF-0771)
+  - bloc de texte < 70 % de son conteneur sur une page de données (bloquant, TF-0778)
+  - sommaire encore visible après défilement (bloquant, TF-0772)
+  - V25 colonne large et vide face à une colonne étranglée (avertissement, TF-1966)
+  - V26 panneau déplié au fond transparent ou recouvert (bloquant, TF-1963)
+  - V27 filtres de colonne masqués par le repli en cartes (bloquant, TF-1965)
+  - V28 encre déséquilibrée : plus du quart du cadre vide à droite, par tranches de 40 px (avertissement depuis D-234 (a), TF-2691 ; TF-2679)
+  - V1 : la bande de sommaire défilante de L25 n'est pas un débordement (TF-1992)
+
+V5 (croisements de flèches) et V6 (images déformées) restent à l'inspection
+visuelle des PNG produits — ce script ne les juge pas.
+
+Usage :
+    python render_page.py <page.html> [--widths 3840,2560,1920,1280,768,390] [--selector body]
+                          [--scale 2] [--output json] [--out <dossier>]
+                          [--timeout 30000]   # TF-0365 : page très haute
+
+Sortie : un PNG par breakpoint (suffixe -w{largeur}) + rapport PASS/FAIL.
+Code retour 0 = PASS (aucun bloquant), 1 = FAIL.
+
+Les PNG ne tombent JAMAIS dans un arbre de LIVRAISON. Deux cas :
+  - page hors livraison → `<dossier du HTML>/.oracles/`, sous-dossier d'atelier
+    que l'orchestrateur quality-oracles ignore déjà à la marche ;
+  - page sous `output/`, `old/`, `dist/`… → dossier temporaire nommé, chemin
+    imprimé au rapport.
+
+Le premier correctif (TF-0058) n'avait déplacé les captures que d'un cran : un
+`.oracles/` DANS `output/` reste dans ce que le client reçoit, et un audit y a
+laissé 25 Mo qu'il a fallu déplacer à la main (reconstat TF-0230, 14/08).
+`--out <dossier>` fait foi quand il est donné — c'est ainsi qu'un run journalise
+ses captures. Le chemin de chaque PNG reste dans le rapport, puisque V5 et V6
+s'inspectent dessus.
+
+Fonctionne dans les deux environnements de la forge (généralisé depuis
+factory-schemas/scripts/render_schema.py — composition, pas duplication) :
+  - Claude Code (réseau ouvert) : `pip install playwright && playwright install chromium`.
+  - Sandbox Claude.ai web : Chromium pré-installé auto-détecté (/opt/pw-browsers) ;
+    polices WOFF2 de factory-schemas réutilisées si le skill est présent.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+from datetime import date
+from pathlib import Path
+from typing import NamedTuple
+from urllib.parse import urlsplit
+
+# Windows : forcer stdout/stderr en UTF-8 pour ne pas planter (cp1252) à l'impression
+# des rapports contenant des caractères hors Latin-1 (tirets cadratins, ①-⑤, ✓…).
+# reconfigure() : Python 3.7+ ; garde-fou si le flux ne le supporte pas.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
+SCRIPT_DIR = Path(__file__).parent
+PREINSTALLED_BROWSER_ROOTS = ["/opt/pw-browsers"]
+
+# ---- LES ÉCHÉANCES (D-4 (b), décision humaine du 16/09/2026) --------------------------------
+#
+# Une forme ancienne qu'on ne peut pas casser d'un commit est admise JUSQU'À UNE DATE, recensée
+# d'ici là, refusée après. Le fait qui l'a fait naître : 1 716 occurrences de l'exemption de
+# recouvrement en forme nue, mesurées dans le parc le 16/09 — les rendre bloquantes le jour même
+# aurait rougi tout ce qui existe avant qu'aucune migration n'ait commencé, et un recensement sans
+# fin est un compteur qu'on regarde monter.
+#
+# LA DATE VIT DANS UNE DONNÉE (references/echeances.json, loi transverse n° 4) : elle se décale,
+# s'avance ou se lève par décision humaine, sans republier le socle. Donnée absente ou illisible :
+# l'échéance est réputée NON POSÉE, la famille garde sa sévérité déclarée, et le fait est dit —
+# jamais un blocage par accident, jamais un silence non plus.
+ECHEANCES_PATH = SCRIPT_DIR.parent / "references" / "echeances.json"
+
+
+def _echeances():
+    """Rend {cle: entree} depuis la donnée, ou {} si elle est absente ou illisible."""
+    try:
+        brut = json.loads(ECHEANCES_PATH.read_text(encoding="utf-8"))
+        return {e["cle"]: e for e in brut.get("echeances", []) if e.get("cle")}
+    except Exception:
+        return {}
+
+
+def _phrase_echeance(cle):
+    """La phrase que le constat porte : la date, et ce qui se passe a cette date.
+
+    Une echeance qu'on ne LIT pas dans le message est une echeance que personne ne voit venir :
+    le recensement redeviendrait le compteur qu'on regarde monter, que la decision D-4 (b)
+    existe justement pour eviter.
+    """
+    depassee, limite, jours = _echeance_depassee(cle)
+    if not limite:
+        return ("Aucune echeance n'est posee pour cette forme : elle reste admise sans terme "
+                "(references/echeances.json ne la declare pas).")
+    if depassee:
+        return (f"ECHEANCE DEPASSEE depuis le {limite} (decision humaine D-4 (b) du 16/09/2026) : "
+                "cette forme n'est plus admise, et ce constat est desormais BLOQUANT.")
+    return (f"Cette forme est admise jusqu'au {limite}, soit {jours} jour(s) (decision humaine "
+            "D-4 (b) du 16/09/2026). Passe cette date, le constat devient BLOQUANT : migrer au "
+            "fil des pages qu'on rouvre, sans tour dedie.")
+
+
+def _echeance_depassee(cle, aujourdhui=None):
+    """(depassee, date, jours_restants) — jours_restants negatif une fois la date passee."""
+    e = _echeances().get(cle)
+    if not e or not e.get("admise_jusqu_au"):
+        return (False, None, None)
+    try:
+        limite = date.fromisoformat(str(e["admise_jusqu_au"]))
+    except ValueError:
+        return (False, None, None)
+    jour = aujourdhui or date.today()
+    return (jour > limite, e["admise_jusqu_au"], (limite - jour).days)
+# Polices bundlées : celles de factory-schemas si le skill est installé à côté.
+FONT_DIR_CANDIDATES = [
+    SCRIPT_DIR / "fonts",
+    SCRIPT_DIR.parent.parent / "factory-schemas" / "scripts" / "fonts",
+    Path("/mnt/skills/user/factory-schemas/scripts/fonts"),
+]
+
+# TF-0422 (lot Produit-05 20260820a, 21/08) : 1920 entre dans les largeurs par défaut — le défaut de
+# colonne étroite (texte à 40 % d'un écran de 1 800 px, livré vert, refusé par le client) ne se
+# voit qu'à partir de ~1 600 px ; 1280/768/390 ne le montraient jamais.
+#
+# TF-1066 (12/09/2026, règle E5 du pilot, décision humaine « pour le design, prends à minima par
+# défaut FullHD (1920px en largeur) pour les desktops, et du responsive design pour monter jusqu'à
+# du 4K »). Une page se CONÇOIT à 1920 px et se VÉRIFIE jusqu'à 3840 : 2560 et 3840 entrent donc
+# dans la grille par défaut. Ce qu'elles montrent et que 1920 taisait : une prose qui s'étire sur
+# 2 880 px de plancher `75vw` (E4 dit que la mesure de lecture est portée par le CONTENEUR), un
+# tableau de données qui laisse la moitié de l'écran vide, une grille qui gagne des marges au lieu
+# de gagner des colonnes. 1280 RESTE : les postes de bureau étroits existent encore, et c'est là
+# que le repli des tableaux se déclenche (ROGNAGE_DONNEES_MIN_VIEWPORT).
+DEFAULT_WIDTHS = [3840, 2560, 1920, 1280, 768, 390]
+
+# L2 au rendu : un bloc de texte doit occuper au moins ce ratio de la largeur que
+# son conteneur lui offre. En dessous, la page laisse du vide la ou le lecteur
+# attend du texte. Ne s'applique qu'au-dela d'un viewport de bureau : sous cette
+# largeur, une bride de lecture est sans effet visible.
+L2_MIN_RATIO = 0.85
+# TF-0440 — seuil du CONTENEUR de lecture : en deçà de 85 % de ce que son parent lui offre,
+# une colonne calée à gauche est une gouttière, pas une mesure de lecture. Même valeur que
+# L2_MIN_RATIO, et pour la même raison — ce qui change est ce qu'on mesure, pas le seuil.
+L2C_MIN_RATIO = 0.85
+L2_MIN_VIEWPORT = 1100
+L2_MIN_CHARS = 120
+
+# Gouttiere d'etiquettes : dans une grille a deux pistes dont la seconde porte du
+# texte long et la premiere une etiquette courte, la premiere piste ne doit pas
+# manger plus que cette part de la largeur. Au-dela, le contenu est tasse sur la
+# droite -- et L2 ne le voit pas, puisque chaque colonne remplit bien SA case.
+#
+# Le seuil est a 20 %, pas a 25 % : le defaut CONSTATE mesurait 22 % (267px sur
+# 1215). Un seuil pose au-dessus du defaut qui l'a motive ne prouve rien. 20 % est
+# aussi la borne haute de la doctrine ; la grille legitime du meme rapport, qui
+# porte les etiquettes Constat / Impact / Action, mesure 10 % et reste hors cause.
+# TF-0491 (23/08) — l2_freres : le meme defaut signale TROIS FOIS par un client, sous trois
+# formes ("colonne de texte a 40 % de la fenetre", "le texte d'intro devrait etre sur toute la
+# ligne", "les lotissements ne prennent qu'une partie de la largeur"), sur quatre versions
+# livrees. Cause unique : de la prose bornee a 1 080 px placee AU-DESSUS de cartes occupant
+# 1 424 px. Aucune des trois mesures L2 ne peut le voir : elles comparent un bloc a ce que son
+# conteneur lui OFFRE, et un conteneur borne offre 1 080 px — le bloc les remplit, donc PASS.
+# Ce que voit le lecteur est ailleurs : la rupture d'alignement ENTRE FRERES EMPILES.
+# Seuil a 80 % : en dessous, l'oeil accroche le decalage du bord droit.
+L2_FRERES_MIN_RATIO = 0.80
+# Un frere trop etroit ne fait pas reference : un encart de 300 px a cote d'une prose de 240 px
+# n'est pas une rupture d'alignement, c'est une mise en page.
+L2_FRERES_MIN_LARGEUR = 500
+L2_COL_MAX = 0.20
+L2_ETIQUETTE_MAX = 60
+ALIGN_TOLERANCE_PX = 2.0
+OVERLAP_MIN_RATIO = 0.10  # intersection > 10 % du plus petit élément = significative
+# TF-0778 (02/09) — sur une PAGE DE DONNÉES, un bloc de texte qui n'occupe pas au moins ce
+# ratio de son conteneur est un défaut. Seuil à 70 % et non 85 % (celui de L2) : L2 mesure une
+# BRIDE (elle retire max-width et compare), cette règle-ci mesure ce que le lecteur voit, sur
+# n'importe quel élément porteur de texte — `.chapo` n'est ni un `p` ni un `.prose`, et c'est
+# exactement ce qui a échappé à L2 sur le livrable fautif.
+DONNEES_PROSE_MIN_RATIO = 0.70
+# TF-0771 (02/09) — au-delà de cette largeur de fenêtre, un tableau rogné DANS un conteneur
+# défilant est un défaut bloquant, pas un « écart acceptable ». En deçà, le défilement
+# horizontal est la parade prescrite par le socle (composants.md §6).
+ROGNAGE_DONNEES_MIN_VIEWPORT = 1280
+# TF-0930 (08/09, retour humain « augmente la largeur complète du document ») — le CONTENEUR
+# d'une page de données, et non plus seulement la prose ou le tableau qu'il porte. Le socle
+# bridait `.wrap` par `--w: clamp(75vw, 1680px, 92vw)` : 1 260 px dans une fenêtre de 1 370,
+# 1 680 dans une fenêtre de 1 920 — alors que I1 et L26 disent « pleine largeur adaptative ».
+# Aucun contrôle ne le voyait : L26 de check_html ne juge une bride que sur un conteneur DE
+# TABLEAU et ne sait pas résoudre `var(--w)` ; V13 compare un bloc à son parent, et un bloc
+# qui remplit un conteneur bridé rend 100 %. Le défaut vit entre le conteneur et la FENÊTRE.
+# Seuil à 96 % et non 100 % : la marge absorbe la gouttière de défilement et les arrondis de
+# `vw` ; le défaut constaté mesurait 92 % (1 260 / 1 370), largement sous le plancher.
+DONNEES_CONTENEUR_MIN_RATIO = 0.96
+# TF-1909 (RA-17, 18/10/2026) — règle E4 du socle : le contenu principal occupe 75 à 100 % de la
+# fenêtre. Mesuré sur l'EMPAN du contenu (gouttières de la page créditées), aux largeurs de bureau
+# (L2_MIN_VIEWPORT) ; le token canonique `clamp(75vw, 1680px, 92vw)` y vaut exactement 75 % à 2 560
+# et 3 840 px, d'où une tolérance de 4 px pour l'arrondi.
+CONTENU_MIN_RATIO = 0.75
+# TF-1917 (RT-134, 18/10/2026) — la borne BASSE de la mesure de lecture que V18 ne borne que par le
+# haut : un bloc de prose de plus de 3 lignes (donc 4 et plus) sous 45 caracteres par ligne pleine.
+V24_MIN_CPL = 45
+V24_MIN_LIGNES = 4
+# TF-0772 (02/09) — un sommaire ne se juge qu'au-delà de trois chapitres ET de deux écrans :
+# c'est le seuil de la règle écrite (lisibilite.md L25), et il tient les deux mesures ensemble.
+SOMMAIRE_MIN_CHAPITRES = 3
+SOMMAIRE_MIN_ECRANS = 2
+# Plafond des avertissements V7 détaillés. Au-delà, le reste est agrégé en une ligne :
+# un avertissement qui défile enterre les bloquants V1/V2/V4 au lieu de les servir.
+V7_MAX_DETAILS = 20
+
+
+def ensure_browser_path() -> None:
+    if os.environ.get("PLAYWRIGHT_BROWSERS_PATH"):
+        return
+    for root in PREINSTALLED_BROWSER_ROOTS:
+        if Path(root).is_dir() and any(Path(root).glob("chromium*")):
+            os.environ["PLAYWRIGHT_BROWSERS_PATH"] = root
+            return
+
+
+def ensure_local_fonts() -> None:
+    """Installe les WOFF2 disponibles au cache fontconfig local (best-effort, idempotent)."""
+    if shutil.which("fc-cache") is None:
+        return
+    src = next((d for d in FONT_DIR_CANDIDATES if d.is_dir()), None)
+    if src is None:
+        return
+    user_fonts = Path.home() / ".fonts" / "factory-page-html"
+    user_fonts.mkdir(parents=True, exist_ok=True)
+    copied = False
+    for woff2 in src.glob("*.woff2"):
+        target = user_fonts / woff2.name
+        if not target.exists():
+            shutil.copy2(woff2, target)
+            copied = True
+    if copied:
+        subprocess.run(["fc-cache", "-f", str(user_fonts)],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+
+
+# ---------------------------------------------------------------------------
+# TF-2176 (05/11/2026) - UNE SEULE DEFINITION DE « ROGNE PAR UN ANCETRE », DEUX MESURES.
+# V15 (MESURE_ENTETE_JS) l'a depuis TF-2170 ; la famille `entete_desaligne` (MEASURE_JS) mesurait
+# encore le meme `<th>` rogne : 2 constats sur la fixture v15-entete-rogne-par-ancetre.html. La
+# fonction vit ici, une fois, et se pose dans les deux scripts par le jeton __ROGNE_PAR_ANCETRE__
+# (mesure_js() pour MEASURE_JS, la ligne qui suit MESURE_ENTETE_JS pour V15) : deux copies a la
+# main auraient derive, comme les composants embarques que embarquer-composants.mjs scelle.
+# ---------------------------------------------------------------------------
+ROGNE_PAR_ANCETRE_JS = r"""  // TF-2170 (lot Produit-84 20261105a) - UN ELEMENT ROGNE PAR UN ANCETRE N'EST PAS VU. Un `<th>`
+  // dont l'ancetre (`<thead>`, bande, conteneur) est une boite a `overflow` hidden|clip de ~1 px
+  // - le motif « reserve au lecteur d'ecran » - garde sa taille reelle et se mesurait comme pose
+  // sur les lignes : 11 bloquants par theme sur un rapport, alors que l'ecran n'en montre rien ;
+  // le gabarit du produit avait du reduire l'en-tete a 1 px pour faire taire le constat. Rogne =
+  // la boite de l'element n'a pas plus de 1 px de recouvrement avec la boite d'un ancetre qui
+  // rogne, sur l'axe que cet ancetre rogne. `overflow: auto|scroll` ne rogne pas (l'element reste
+  // atteignable par defilement : c'est la branche b, qui mesure justement ce cas). Limites : un
+  // element `fixed` echappe a ses ancetres ; un `absolute` n'est rogne que par les ancetres
+  // situes a partir de son bloc conteneur ; `clip`/`clip-path` poses sur l'element lui-meme ne
+  // sont pas lus (seul l'`overflow` des ancetres l'est, comme la decision l'a pose).
+  const rogneParAncetre = (el) => {
+    const cs0 = getComputedStyle(el);
+    if (cs0.position === 'fixed') return false;
+    const r = el.getBoundingClientRect();
+    let sorti = cs0.position === 'absolute';   // tant que le bloc conteneur n'est pas franchi
+    for (let a = el.parentElement; a && a !== document.documentElement; a = a.parentElement) {
+      const s = getComputedStyle(a);
+      if (sorti) {
+        if (s.position === 'static') continue;
+        sorti = false;                          // `a` est le bloc conteneur : il rogne, lui, l'absolute
+      }
+      const rogneX = s.overflowX === 'hidden' || s.overflowX === 'clip';
+      const rogneY = s.overflowY === 'hidden' || s.overflowY === 'clip';
+      if (!rogneX && !rogneY) continue;
+      const c = a.getBoundingClientRect();
+      if (rogneX && Math.min(r.right, c.right) - Math.max(r.left, c.left) <= 1) return true;
+      if (rogneY && Math.min(r.bottom, c.bottom) - Math.max(r.top, c.top) <= 1) return true;
+    }
+    return false;
+  };
+"""
+
+# ---------------------------------------------------------------------------
+# Mesures exécutées DANS la page (bounding boxes et styles calculés réels).
+# ---------------------------------------------------------------------------
+MEASURE_JS = r"""
+() => {
+  const issues = { v1_overflow: [], v2_contrast: [], v3_align: [], v4_overlap: [], v7_spacing: [],
+                   l2_width: [], l2_gouttiere: [], l2_conteneur: [], l2_filet: [], l2_freres: [],
+                   contenu_rogne: [], controles_desalignes: [], rognage_donnees: [],
+                   prose_etroite: [], sommaire_perdu: [], etats_indiscernables: [],
+                   conteneur_bride_donnees: [], overlap_en_bloc: [], mot_coupe: [],
+                   decor_sur_ancetre: [], entete_desaligne: [], largeurs_melangees: [],
+                   contenu_etroit: [], prose_verticale: [], colonnes_desequilibrees: [], equilibre_droite: [],
+                   panneau_deplie: [], filtres_masques_repli: [], unmeasured: [] };
+  const doc = document.documentElement;
+
+  const visible = (el) => {
+    const s = getComputedStyle(el);
+    if (s.display === 'none' || s.visibility === 'hidden' || parseFloat(s.opacity) === 0) return false;
+    const r = el.getBoundingClientRect();
+    return r.width > 1 && r.height > 1;
+  };
+  // TF-2220 (Produit-86, 05/11/2026) : le contenu d'un <details> FERME n'est pas peint, et sa mise en page
+  // suit la largeur du RESUME (154 px mesures sur un livrable, 1 376 px une fois ouvert). Une regle de largeur
+  // de texte ne le juge pas : `--etats-ouverts` ouvre le panneau et le juge a sa largeur reelle.
+  const dansDetailsFerme = (el) => {
+    const resume = el.closest('summary');
+    for (let d = el.closest('details'); d; d = d.parentElement ? d.parentElement.closest('details') : null) {
+      if (!d.open && !(resume && resume.parentElement === d)) return true;
+    }
+    return false;
+  };
+  const label = (el) => {
+    let t = el.tagName.toLowerCase();
+    if (el.id) t += '#' + el.id;
+    else if (el.classList.length) t += '.' + el.classList[0];
+    const txt = (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 40);
+    return txt ? `${t} « ${txt}${txt.length >= 40 ? '…' : ''} »` : t;
+  };
+  // TF-2707 / TF-2700 / TF-2706 (factory-site, 15/11/2026) — UNE MESURE PRISE PENDANT UNE ANIMATION N'EST PAS
+  // UNE MESURE DE LA PAGE. L'outil chargeait la page et mesurait 250 ms plus tard, a l'instant ou elle se trouvait :
+  // une encre sombre a 1,01:1 sur un papier clair (libelle en fondu d'entree), un sceau a 1,06:1 (couleur dominante =
+  // papier), « agent » a 1,76:1 sur un fond absent sous ce mot au repos (animation CSS infinie), et 34 a 35 chevauchements
+  // bloquants par largeur entre les scenes d'une animation SVG empilees et montrees une a une par opacite.
+  //   · une animation FINIE (entree, fondu, delai compris) est menee a son terme avant toute mesure : la page se mesure
+  //     reposee, comme TF-2299 le fait deja pour une scene ;
+  //   · une animation INFINIE ne se termine pas, et le texte qu'elle fait varier n'a pas d'etat de repos : un constat de
+  //     contraste pris sur un element qu'elle anime (ou qui descend d'un element qu'elle anime, ou qui se peint sur une
+  //     forme qu'elle anime) est range en NON JUGE avec son instant, jamais en bloquant ; V4 ne compare pas deux elements
+  //     dont les racines animees en boucle par opacite different (des scenes empilees, montrees une a une) ;
+  //   · ce qu'aucune animation n'anime reste juge comme avant : rien n'est assoupli, le non juge se DIT.
+  // L'instant de la mesure ne change aucun verdict d'une page sans animation.
+  for (const a of document.getAnimations()) {
+    try { if (a.effect && a.effect.getTiming().iterations !== Infinity) a.finish(); } catch (e) { /* une animation qui refuse reste */ }
+  }
+  const PEINT_ANIME = new Set(['opacity', 'visibility', 'color', 'fill', 'stroke', 'fillOpacity', 'strokeOpacity',
+    'stopColor', 'stopOpacity', 'backgroundColor', 'background', 'filter', 'mixBlendMode']);
+  const enBoucle = new Map();   // element -> proprietes de peinture qu'une animation INFINIE y fait varier
+  for (const a of document.getAnimations()) {
+    try {
+      const e = a.effect;
+      if (!e || !e.target || e.pseudoElement || e.getTiming().iterations !== Infinity) continue;
+      const props = new Set();
+      for (const k of e.getKeyframes()) for (const p of Object.keys(k)) if (PEINT_ANIME.has(p)) props.add(p);
+      if (!props.size) continue;
+      const deja = enBoucle.get(e.target) || new Set();
+      props.forEach((p) => deja.add(p));
+      enBoucle.set(e.target, deja);
+    } catch (e) { /* une animation illisible ne decide de rien */ }
+  }
+  // L'element le plus HAUT, soi compris, qu'une animation infinie fait varier (par opacite ou visibilite seules si demande).
+  const boucleDe = (el, parOpacite) => {
+    let trouve = null;
+    for (let n = el; n && n.nodeType === 1; n = n.parentElement) {
+      const p = enBoucle.get(n);
+      if (p && (!parOpacite || p.has('opacity') || p.has('visibility'))) trouve = n;
+    }
+    return trouve;
+  };
+  const boucleDans = (el) => { for (const n of enBoucle.keys()) if (el !== n && el.contains(n)) return n; return null; };
+  const decritBoucle = (n) => `${[...enBoucle.get(n)].join(', ')} sur ${label(n)}`;
+  // TF-2677 (factory-site, 15/11/2026) — UNE DISPENSE data-colonne-ok NE VAUT QUE SUR LE CONTENEUR
+  // BRIDEUR. Posee sur <main>, <body>, <html> ou [role=main] qui occupent la largeur de leur parent, elle
+  // n'est la bride de rien : elle dispensait la page entiere (v2 de factory-site : la moitie de la page
+  // vide a droite, vue par l'humain sur une capture). Elle ne vaut sur ces elements que s'ils sont EUX-MEMES
+  // plus etroits que leur parent (la carte de 420 px d'un ecran de connexion est sa propre bride).
+  const dispenseValide = (el) => {
+    if (!el.matches('main, body, html, [role=main]')) return true;
+    const p = el.parentElement;
+    if (!p) return false;
+    const rn = el.getBoundingClientRect(), rp = p.getBoundingClientRect();
+    return rp.width > 0 && rn.width / rp.width < __L2C_MIN_RATIO__;
+  };
+  // Le plus proche ancetre-ou-soi qui porte une dispense VALIDE (null sinon) : remplace `closest('[data-colonne-ok]')`.
+  const dispenseDe = (el) => {
+    for (let a = el; a; a = a.parentElement) {
+      if (a.hasAttribute && a.hasAttribute('data-colonne-ok') && dispenseValide(a)) return a;
+    }
+    return null;
+  };
+  // TF-2776 (Produit-12, RS-47 ; D-235 (a) du porteur, 23/11/2026) — UNE NAVIGATION LATERALE DECLAREE SORT DE LA MESURE
+  // DE V17 ET DE L2. Sur un ecran d'application, la navigation prend une piste a cote du contenu : V17 comptait
+  // le contenu contre la fenetre ENTIERE (un `main` de 1 180 px dans 1 440 : 82 %, sous le plancher de 96 %), et la
+  // gouttiere d'etiquettes de L2 prenait la piste de la navigation pour une colonne d'etiquettes (une navigation de 320 px
+  // dans 1 440 : 22 %, au-dessus du seuil de 20 %). Les deux accusaient la navigation, jamais le contenu. Seule la
+  // MESURE change : les seuils et les regles restent ceux d'avant, et une page sans navigation declaree est mesuree comme avant.
+  //   · declaree = un `nav`, un `aside` ou un element portant `data-navigation` (le contenu d'une navigation declaree
+  //     n'est pas de la prose de lecture : L2 ne le juge pas non plus) ;
+  //   · laterale = a COTE du bloc mesure (elle en partage la hauteur de plus de 8 px, et se tient entierement a sa gauche ou
+  //     a sa droite) ; une navigation en bandeau, au-dessus ou au-dessous, ne retire rien ; une navigation qui CONTIENT le
+  //     bloc, ou que le bloc contient, ne retire rien non plus ;
+  //   · retiree = le cadre de comparaison (la fenetre pour V17, le parent pour L2) perd la largeur de la navigation.
+  const NAV_DECLAREE = 'nav, aside, [data-navigation]';
+  const navsDeclarees = [...document.querySelectorAll(NAV_DECLAREE)]
+    .filter((el) => visible(el) && !(el.parentElement && el.parentElement.closest(NAV_DECLAREE)));
+  const cadreSansNav = (el, cadre) => {
+    const rn = el.getBoundingClientRect();
+    let g = cadre.left, d = cadre.right, retire = 0;
+    for (const nv of navsDeclarees) {
+      if (nv === el || nv.contains(el) || el.contains(nv)) continue;
+      const rv = nv.getBoundingClientRect();
+      if (Math.min(rv.bottom, rn.bottom) - Math.max(rv.top, rn.top) <= 8) continue;
+      if (rv.right <= rn.left + 4 && rv.left >= cadre.left - 4) g = Math.max(g, rv.right);
+      else if (rv.left >= rn.right - 4 && rv.right <= cadre.right + 4) d = Math.min(d, rv.left);
+      else continue;
+      retire += rv.width;
+    }
+    return { left: g, right: d, width: Math.max(d - g, 0), retire };
+  };
+
+  // ---- V1 : débordement horizontal --------------------------------------
+  const docDeborde = doc.scrollWidth > doc.clientWidth + 1;
+  if (docDeborde) {
+    issues.v1_overflow.push({ what: 'document', detail:
+      `scrollWidth ${doc.scrollWidth}px > viewport ${doc.clientWidth}px` });
+  }
+  // TF-0382 (lot Produit-10 20260818b) — trois défauts d'un seul `break`, et le pire n'est pas
+  // le plafond.
+  //
+  // MESURÉ : sur un rapport réel à 1280 px, la sortie portait EXACTEMENT 16 éléments, tous
+  // descendants du MÊME tableau (8 colonnes, 77 lignes). Le plafond était donc atteint à
+  // l'intérieur d'un seul sous-arbre — table + thead + tr + th + tbody + td d'un même tableau
+  // comptaient pour six défauts alors qu'il n'y en a qu'UN. Conséquence : deux autres tableaux
+  // de gabarit identique n'ont JAMAIS été examinés, et rien ne le disait. Un lecteur comprenait
+  // « 16 défauts » là où il fallait lire « 16 relevés, inventaire interrompu » — un chiffre qui
+  // n'est ni un compte ni une borne annoncée. Et `blocking` additionne ce chiffre : la sévérité
+  // affichée était elle-même plafonnée.
+  //
+  // Trois corrections, dans l'ordre où elles comptent :
+  //   1. on ne s'arrête PLUS : tout est parcouru, le compte exact est connu ;
+  //   2. on regroupe par SOUS-ARBRE responsable — l'ancêtre débordant le plus extérieur est la
+  //      cause, ses descendants débordent parce qu'il déborde. Le plafond est alors atteint pour
+  //      de vraies raisons ;
+  //   3. le détail seul est plafonné, et la troncature est DÉCLARÉE avec son plafond et le total.
+  // TF-1992 (RA-2, lot Produit-85 20261024a, 22/10/2026) — LA BANDE DE SOMMAIRE DEFILANTE QUE L25
+  // PRESCRIT N'EST PAS UN DEBORDEMENT. L25 demande un sommaire visible en permanence, « bande
+  // repliable sur mobile » ; une bande d'ancres `overflow-x: auto` sous 900 px en est la forme, et V1
+  // la comptait comme un debordement bloquant : un produit l'a contournee par `flex-wrap`, c'est-a-dire
+  // en degradant le geste que la regle voisine prescrit. Une regle qui interdit le remede d'une autre
+  // regle se corrige du cote de celle qui se trompe (classe regle-qui-interdit-son-propre-remede).
+  // CE QUI EST EXCLU, et rien d'autre : un element dont le bord depasse la fenetre MAIS qui vit dans
+  // un conteneur defilant (overflow-x auto|scroll) lui-meme contenu dans la fenetre ET lui-meme dans un
+  // sommaire declare — `nav.toc`, `nav[aria-label^="Sommaire"]` ou une barre `[role=tablist]`, les
+  // memes selecteurs que `sommaire_perdu` et L25. Le conteneur defilant qui deborde, lui, reste
+  // accuse ; un tableau, une grille ou une bande hors sommaire aussi. Ce qui est exclu se COMPTE et se
+  // dit (`unmeasured`) : une exemption qui ne se voit pas est un angle mort.
+  const SOMMAIRE_DECLARE = 'nav.toc, nav[aria-label^="Sommaire"], nav[aria-label^="sommaire"], [role="tablist"]';
+  const bandeDeSommaire = (el) => {
+    const nav = el.closest(SOMMAIRE_DECLARE);
+    if (!nav) return null;
+    for (let p = el.parentElement; p; p = p.parentElement) {
+      const cs = getComputedStyle(p);
+      if (cs.overflowX === 'auto' || cs.overflowX === 'scroll') {
+        return p.getBoundingClientRect().right <= doc.clientWidth + 1 ? p : null;
+      }
+      if (p === nav) break;
+    }
+    return null;
+  };
+  const debordants = [];
+  const bandesExclues = new Map();
+  for (const el of document.body.querySelectorAll('*')) {
+    if (!visible(el)) continue;
+    const r = el.getBoundingClientRect();
+    if (r.right > doc.clientWidth + 1 && getComputedStyle(el).position !== 'fixed') {
+      const bande = bandeDeSommaire(el);
+      if (bande) { bandesExclues.set(bande, (bandesExclues.get(bande) || 0) + 1); continue; }
+      debordants.push({ el, right: r.right });
+    }
+  }
+  for (const [bande, n] of bandesExclues) {
+    issues.unmeasured.push({ what: label(bande), detail:
+      `bande de sommaire a defilement horizontal (L25) : ${n} element(s) au-dela de la fenetre de ` +
+      `${doc.clientWidth}px, contenus par le conteneur defilant — non comptes en V1 (TF-1992), mais ` +
+      `comptes ici : la bande elle-meme tient dans la fenetre` });
+  }
+  const ensemble = new Set(debordants.map(d => d.el));
+  // La CAUSE est l'ancêtre débordant le plus extérieur : si le parent déborde, l'enfant déborde
+  // avec lui et ne constitue pas un second défaut à corriger.
+  const racine = (el) => {
+    let cause = el;
+    for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
+      if (ensemble.has(p)) cause = p;
+    }
+    return cause;
+  };
+  const groupes = new Map();
+  for (const d of debordants) {
+    const cause = racine(d.el);
+    const g = groupes.get(cause) || { el: cause, right: 0, descendants: 0 };
+    g.right = Math.max(g.right, d.right);
+    if (d.el !== cause) g.descendants += 1;
+    groupes.set(cause, g);
+  }
+  const PLAFOND_V1 = 16;
+  const causes = [...groupes.values()];
+  for (const g of causes.slice(0, PLAFOND_V1)) {
+    issues.v1_overflow.push({
+      what: label(g.el),
+      detail: `bord droit à ${Math.round(g.right)}px pour un viewport de ${doc.clientWidth}px`
+        + (g.descendants
+          ? ` — ${g.descendants} descendant(s) débordent AVEC lui, comptés dans ce seul défaut`
+          : ''),
+    });
+  }
+  // La troncature se DIT, avec son plafond et le compte exact : sans ce drapeau, une liste
+  // plafonnée se lit comme un inventaire complet.
+  if (causes.length > PLAFOND_V1) {
+    // `total` compte TOUS les défauts V1, l'entrée « document » comprise : un total qui oublie
+    // une entrée déjà listée n'est ni le compte de la liste ni celui du réel. Défaut mesuré sur
+    // ma propre première écriture — blocking valait 19 pour une liste de 17.
+    const totalV1 = causes.length + (docDeborde ? 1 : 0);
+    issues.v1_tronque = {
+      plafond: PLAFOND_V1,
+      total: totalV1,
+      detaillees: issues.v1_overflow.length,
+      causes_regroupees: causes.length,
+      elements_debordants: debordants.length,
+      motif: `inventaire des débordements TRONQUÉ : ${totalV1} défaut(s) V1 mesuré(s) — `
+        + `${causes.length} cause(s) distincte(s) regroupant ${debordants.length} élément(s)`
+        + `${docDeborde ? ', plus le document lui-même' : ''} — dont `
+        + `${issues.v1_overflow.length} détaillé(s) ci-dessus. Le compte, lui, est exact : `
+        + `c'est lui qui dit l'ampleur`,
+    };
+  }
+
+  // ---- V2 : contraste WCAG ----------------------------------------------
+  // Complement « reste-svg-sombre » (15/10/2026) — UN FOND ECRIT EN oklch() EST UN FOND. Le
+  // navigateur rend la couleur calculee dans l'espace ou elle est ecrite (oklch, oklab, lab, lch,
+  // color()…) : seule la forme rgb() etait lue, un panneau sombre en oklch etait SAUTE, la remontee
+  // finissait sur le blanc par defaut, et un libelle clair d'une maquette sombre sortait a 2,14:1.
+  // Une couleur unie dans un autre espace se convertit par le navigateur lui-meme (canevas 1 px).
+  const parseColor = (c) => {
+    const m = (c || '').match(/rgba?\(([\d.]+),\s*([\d.]+),\s*([\d.]+)(?:,\s*([\d.]+))?\)/);
+    if (m) return { r: +m[1], g: +m[2], b: +m[3], a: m[4] === undefined ? 1 : +m[4] };
+    if (!/^\s*(?:oklch|oklab|lab|lch|color|hsla?|hwb)\(|^\s*#/i.test(c || '')) return null;
+    const cv = (window.__rpCouleurCv ||= document.createElement('canvas'));
+    cv.width = cv.height = 1;
+    const ctx = cv.getContext('2d', { willReadFrequently: true });
+    ctx.clearRect(0, 0, 1, 1);
+    ctx.fillStyle = '#000'; ctx.fillStyle = c;
+    ctx.fillRect(0, 0, 1, 1);
+    const [r, g, b, a] = ctx.getImageData(0, 0, 1, 1).data;
+    return { r, g, b, a: a / 255 };
+  };
+  const lum = ({ r, g, b }) => {
+    const f = (v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); };
+    return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b);
+  };
+  const ratio = (c1, c2) => {
+    const [a, b] = [lum(c1), lum(c2)].sort((x, y) => y - x);
+    return (a + 0.05) / (b + 0.05);
+  };
+  const blend = (fg, bg) => ({
+    r: fg.r * fg.a + bg.r * (1 - fg.a),
+    g: fg.g * fg.a + bg.g * (1 - fg.a),
+    b: fg.b * fg.a + bg.b * (1 - fg.a), a: 1 });
+  // TF-0582 (lot Produit-02 20260824) : ce qui PEINT sans etre un `background-color`.
+  //
+  // Le fait fondateur, mesure en production : un fond peint par `.color-exp::before` (50 % de la
+  // largeur) sous un texte dont l'element porte `background: transparent`. Une mesure qui compare
+  // `color` a `background-color` — ce que font la plupart des outils, dont axe-core — remonte
+  // alors au conteneur, y lit un fond clair, et CONCLUT QUE TOUT VA BIEN sur un texte a 1,0 de
+  // ratio. Le faux PASS est pire que l'absence de controle : il porte une signature.
+  //
+  // Cette sonde ne mesure pas ces cas — elle les DECLARE non mesurables. C'est le corollaire que
+  // l'item demandait d'ecrire : une sonde dit ce qu'elle ne voit pas, sinon son silence se lit
+  // comme un verdict.
+  const peintHorsFond = (el) => {
+    let node = el;
+    while (node && node !== document.documentElement.parentElement) {
+      const s = getComputedStyle(node);
+      if (s.mixBlendMode && s.mixBlendMode !== 'normal') return `mix-blend-mode:${s.mixBlendMode}`;
+      if (s.filter && s.filter !== 'none') return `filter:${s.filter}`;
+      for (const pseudo of ['::before', '::after']) {
+        const ps = getComputedStyle(node, pseudo);
+        if (!ps || ps.content === 'none') continue;
+        const fondPseudo = parseColor(ps.backgroundColor);
+        const imagePseudo = ps.backgroundImage && ps.backgroundImage !== 'none';
+        // Un pseudo-element qui peint ET qui a une surface : un `::before` sans dimension ne
+        // couvre rien, et l'accuser ferait crier la sonde sur des puces decoratives.
+        const surface = parseFloat(ps.width) > 0 && parseFloat(ps.height) > 0;
+        if (surface && ((fondPseudo && fondPseudo.a > 0.05) || imagePseudo))
+          return `${pseudo} peint (${imagePseudo ? ps.backgroundImage.slice(0, 40) : ps.backgroundColor})`;
+      }
+      node = node.parentElement;
+    }
+    return null;
+  };
+
+  const effectiveBg = (el) => {
+    let node = el;
+    while (node && node !== document.documentElement.parentElement) {
+      const s = getComputedStyle(node);
+      if (s.backgroundImage && s.backgroundImage !== 'none') return { image: true };
+      const c = parseColor(s.backgroundColor);
+      if (c && c.a >= 0.99) return { color: c };
+      if (c && c.a > 0) {
+        const behind = effectiveBg(node.parentElement || document.documentElement);
+        if (behind.image) return behind;
+        return { color: blend(c, behind.color || { r: 255, g: 255, b: 255, a: 1 }) };
+      }
+      node = node.parentElement;
+    }
+    return { color: { r: 255, g: 255, b: 255, a: 1 } };  // défaut : blanc
+  };
+  const seenText = new Set();
+  const decorsAncetres = new Map();   // TF-1417 : ancetre peint -> textes rendus non mesurables
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  let n;
+  while ((n = walker.nextNode())) {
+    const el = n.parentElement;
+    if (!el || !n.textContent.trim() || !visible(el) || seenText.has(el)) continue;
+    seenText.add(el);
+    const s = getComputedStyle(el);
+    // TF-1368 (lot Produit-68 20260924a, RG-7) — UN TEXTE SVG SE PEINT PAR `fill`, SUR LA FORME
+    // POSEE DESSOUS. V2 comparait `color` (l'encre heritee de la page) au fond des ancetres HTML :
+    // 28 libelles sur 35 d'un schema remis, a 1:1 ou 1,05:1 sur leur boite, passaient. Pour un
+    // <text> ou <tspan>, l'encre est `fill`, et le fond est la derniere forme remplie qui le
+    // precede dans son groupe (puis dans les groupes englobants) et recouvre le centre du texte ;
+    // sans forme dessous, le fond est celui de la page sous le <svg>. Une encre ou une forme
+    // peinte par degrade ou motif (`url(...)`) se DECLARE non mesuree, jamais devinee.
+    const svgTexte = el.namespaceURI === 'http://www.w3.org/2000/svg' && el.closest('text');
+    let fg = parseColor(s.color);
+    let bgSvg = null;
+    let formeFond = null;   // TF-2700 : la forme SVG sur laquelle le texte se peint, si une animation en boucle la fait varier
+    if (svgTexte) {
+      const opa = (st) => (parseFloat(st.opacity) || (st.opacity === '0' ? 0 : 1));
+      // `fill` calcule se rend dans l'espace ou il est ecrit (oklch(), color-mix()…) : une
+      // couleur unie que parseColor ne lit pas se convertit par le navigateur lui-meme ; seuls
+      // `url(...)` (degrade, motif) et `none` restent non mesurables.
+      const versRgb = (c) => {
+        const direct = parseColor(c);
+        if (direct || !c || c === 'none' || c.startsWith('url(')) return direct;
+        const cv = (window.__tf1368cv ||= document.createElement('canvas'));
+        cv.width = cv.height = 1;
+        const ctx = cv.getContext('2d', { willReadFrequently: true });
+        ctx.clearRect(0, 0, 1, 1);
+        ctx.fillStyle = '#000'; ctx.fillStyle = c;
+        ctx.fillRect(0, 0, 1, 1);
+        const [r, g, b, a] = ctx.getImageData(0, 0, 1, 1).data;
+        return { r, g, b, a: a / 255 };
+      };
+      const fillTxt = versRgb(s.fill);
+      if (!fillTxt) {
+        issues.unmeasured.push({ what: label(el), detail:
+          `texte SVG peint par \`fill: ${s.fill.slice(0, 40)}\` — contraste NON MESURE (TF-1368) : `
+          + `une encre en degrade, motif ou \`none\` ne se reduit pas a une couleur` });
+        continue;
+      }
+      fg = { ...fillTxt, a: fillTxt.a * (parseFloat(s.fillOpacity) || 0) * opa(s) };
+      const rt = svgTexte.getBoundingClientRect();
+      const cx = rt.left + rt.width / 2, cy = rt.top + rt.height / 2;
+      const FORMES = new Set(['rect', 'circle', 'ellipse', 'polygon', 'path']);
+      let forme = null;
+      for (let enfant = svgTexte; enfant && !forme && enfant.tagName.toLowerCase() !== 'svg';
+           enfant = enfant.parentElement) {
+        for (let prec = enfant.previousElementSibling; prec && !forme; prec = prec.previousElementSibling) {
+          const candidats = FORMES.has(prec.tagName.toLowerCase()) ? [prec]
+            : [...prec.querySelectorAll('rect,circle,ellipse,polygon,path')].reverse();
+          for (const c of candidats) {
+            const cs = getComputedStyle(c);
+            if (cs.fill === 'none' || cs.display === 'none' || cs.visibility === 'hidden') continue;
+            const rc = c.getBoundingClientRect();
+            if (rc.width < 1 || rc.height < 1) continue;
+            if (cx >= rc.left && cx <= rc.right && cy >= rc.top && cy <= rc.bottom) { forme = c; break; }
+          }
+        }
+      }
+      const svgRacine = el.closest('svg');
+      const sousSvg = effectiveBg(svgRacine.parentElement || document.body);
+      formeFond = forme;
+      if (forme) {
+        const fs_ = getComputedStyle(forme);
+        const fillForme = versRgb(fs_.fill);
+        if (!fillForme) {
+          issues.unmeasured.push({ what: label(el), detail:
+            `texte SVG sur une forme peinte par \`fill: ${fs_.fill.slice(0, 40)}\` — contraste NON `
+            + `MESURE (TF-1368) : un degrade ou un motif ne se reduit pas a une couleur` });
+          continue;
+        }
+        const aForme = fillForme.a * (parseFloat(fs_.fillOpacity) || 0) * opa(fs_);
+        if (aForme >= 0.99) bgSvg = { color: { ...fillForme, a: 1 } };
+        else if (sousSvg.image) bgSvg = sousSvg;
+        else bgSvg = { color: blend({ ...fillForme, a: aForme }, sousSvg.color) };
+      } else {
+        bgSvg = sousSvg;
+      }
+    }
+    if (!fg) continue;
+    const bg = bgSvg || effectiveBg(el);
+    if (bg.image) {
+      issues.unmeasured.push({ what: label(el), detail: 'texte sur background-image — contraste non mesurable, à vérifier visuellement' });
+      continue;
+    }
+    // TF-0582 : avant de conclure, dire ce qu'on ne voit pas. Un fond peint par un
+    // pseudo-élément, un mix-blend-mode ou un filtre échappe à toute mesure par styles calculés.
+    const horsFond = peintHorsFond(el);
+    if (horsFond) {
+      // TF-1417 (lot Produit-64 20260924e, RD-27) — LE DECOR PEINT SUR L'ANCETRE AVEUGLE TOUT
+      // SON TEXTE. Un rail de gouttiere en `.ch-corps::before` degrade rendait 440 lignes « NON
+      // MESURABLE » sur une page de guide ; sorti en element frere, 4. La regle d'auteur
+      // (composants.md, « Un decor se peint sur un element frere ») se juge ici : un ::before /
+      // ::after qui peint une surface d'au moins 24 px de cote sur un ANCETRE strict du texte est
+      // compte, une fois par ancetre. Une puce ou une pastille (moins de 24 px) n'est pas un decor.
+      for (let anc = el.parentElement; anc && anc !== document.documentElement; anc = anc.parentElement) {
+        let trouve = false;
+        for (const pseudo of ['::before', '::after']) {
+          const ps = getComputedStyle(anc, pseudo);
+          if (!ps || ps.content === 'none') continue;
+          const fondPseudo = parseColor(ps.backgroundColor);
+          const imagePseudo = ps.backgroundImage && ps.backgroundImage !== 'none';
+          const w = parseFloat(ps.width) || 0, h = parseFloat(ps.height) || 0;
+          if (w > 0 && h > 0 && (w >= 24 || h >= 24)
+              && ((fondPseudo && fondPseudo.a > 0.05) || imagePseudo)) {
+            const deja = decorsAncetres.get(anc) || { pseudo, textes: 0 };
+            deja.textes += 1;
+            decorsAncetres.set(anc, deja);
+            trouve = true;
+            break;
+          }
+        }
+        if (trouve) break;
+      }
+      issues.unmeasured.push({ what: label(el), detail:
+        `contraste NON MESURABLE par styles calculés — ${horsFond}. Un fond peint hors `
+        + `\`background-color\` échappe à cette sonde : mesurer au pixel après rendu, ou vérifier `
+        + `visuellement. Le silence d'une sonde n'est pas un verdict (TF-0582)` });
+      continue;
+    }
+    const fgFlat = fg.a < 1 ? blend(fg, bg.color) : fg;
+    const r = ratio(fgFlat, bg.color);
+    const size = parseFloat(s.fontSize);
+    const bold = parseInt(s.fontWeight, 10) >= 700;
+    const large = size >= 24 || (size >= 18.66 && bold);
+    const threshold = large ? 3.0 : 4.5;
+    if (r < threshold) {
+      // TF-2700 : un texte qu'une animation en boucle fait varier (lui, un ancetre, ou la forme sous lui) n'a pas d'etat de
+      // repos : le ratio pris a cet instant est range en NON JUGE, avec la propriete animee, jamais en bloquant.
+      const anime = boucleDe(el, false) || (formeFond ? boucleDe(formeFond, false) : null);
+      if (anime) {
+        issues.unmeasured.push({ what: label(el), detail:
+          `contraste ${r.toFixed(2)}:1 mesure A UN INSTANT d'une animation en boucle (${decritBoucle(anime)}) — NON JUGE, `
+          + `jamais bloquant (TF-2700) : ce texte n'a pas d'etat de repos a mesurer. Declarer les etats de l'animation `
+          + `par scenes ([data-scene], TF-2299) pour les juger un par un` });
+        continue;
+      }
+      issues.v2_contrast.push({ what: label(el), detail:
+        `ratio ${r.toFixed(2)}:1 < ${threshold}:1 (${Math.round(size)}px${bold ? ' gras' : ''}, ` +
+        `texte ${svgTexte ? 'SVG fill ' + s.fill : s.color} sur fond rgb(${Math.round(bg.color.r)},${Math.round(bg.color.g)},${Math.round(bg.color.b)}))` });
+      if (issues.v2_contrast.length > 20) break;
+    }
+  }
+  for (const [anc, d] of decorsAncetres) {
+    issues.decor_sur_ancetre.push({ what: label(anc), detail:
+      `decor peint en ${d.pseudo} sur l'ANCETRE de ${d.textes} element(s) de texte : leur contraste `
+      + `n'est pas mesurable, et un verdict PASS ne les a pas juges. Sortir le decor en element `
+      + `FRERE du texte (<div aria-hidden="true">), composants.md « Un decor se peint sur un element `
+      + `frere » (TF-1417)` });
+  }
+
+  // TF-1369 — un connecteur SVG (trait sans remplissage) : defini ici, avant le jugement par
+  // boite qui l'ecarte, et repris par la passe des fleches qui juge son trace.
+  const SVGNS = 'http://www.w3.org/2000/svg';
+  const estConnecteurV4 = (el) => {
+    if (!el || el.namespaceURI !== SVGNS) return false;
+    const t = el.tagName.toLowerCase();
+    if (!['line', 'polyline', 'path'].includes(t) || typeof el.getTotalLength !== 'function') return false;
+    const cs = getComputedStyle(el);
+    if (cs.stroke === 'none' || cs.display === 'none' || cs.visibility === 'hidden') return false;
+    if (t === 'line') return true;
+    const f = parseColor(cs.fill);
+    return cs.fill === 'none' || (f !== null && f.a === 0);
+  };
+  // ---- V3 / V4 / V7 : frères d'un même parent ---------------------------
+  const parents = new Set();
+  for (const el of document.body.querySelectorAll('*')) {
+    if (el.children.length >= 2) parents.add(el);
+  }
+  const scenesEmpilees = new Set();   // TF-2706 : racines animees en boucle par opacite dont des paires n'ont pas ete jugees
+  let pairesEmpilees = 0;
+  for (const parent of parents) {
+    const kids = [...parent.children].filter(visible)
+      .map((k) => ({ el: k, r: k.getBoundingClientRect() }));
+    if (kids.length < 2) continue;
+    // V4 chevauchements — sauf dessin d'icône : les formes internes d'un même
+    // <svg> de petite taille (rect du corps, path du rabat, etc.) se
+    // chevauchent par construction du dessin, ce n'est pas de la mise en page.
+    const svgIcone = (() => {
+      const racine = parent.tagName.toLowerCase() === 'svg' ? parent
+        : (parent.closest ? parent.closest('svg') : null);
+      if (!racine) return false;
+      const rr = racine.getBoundingClientRect();
+      return rr.width > 0 && rr.height > 0 && rr.width < 48 && rr.height < 48;
+    })();
+    // TF-0424 (lot Produit-05 20260820a) : les formes INTERNES d'un groupe SVG titre (<g><title>…)
+    // se superposent par construction — un rect et son text sont un seul noeud de schema, pas
+    // deux elements de mise en page. V4 ne juge que les chevauchements ENTRE noeuds et entre
+    // noeud et fleche ; data-overlap-ok n'est plus a poser sur chaque forme d'un noeud.
+    const groupeTitre = parent.tagName.toLowerCase() === 'g' &&
+      [...parent.children].some((c) => c.tagName.toLowerCase() === 'title');
+    // TF-1628 (lot Produit-79 20261007f, RA-8) — UN LOGO EST UNE FIGURE UNIQUE. V4 lisait les
+    // traces d un logo SVG inline comme des blocs de mise en page : 120 constats bloquants sur un
+    // seul logo, leves seulement en titrant chaque groupe. Un <svg role="img"> qui porte un nom
+    // accessible (aria-label, aria-labelledby ou <title>) et AUCUN <text> se declare image unique :
+    // ses formes se superposent par construction, comme celles d un groupe titre (TF-0424). La
+    // condition « aucun <text> » garde les schemas — role="img" y est de regle (conventions-
+    // communes.md de factory-schemas) et leurs libelles restent juges (TF-1146).
+    const svgFigure = (() => {
+      const racine = parent.tagName.toLowerCase() === 'svg' ? parent
+        : (parent.closest ? parent.closest('svg') : null);
+      if (!racine || (racine.getAttribute('role') || '').trim() !== 'img') return false;
+      const nomme = (racine.getAttribute('aria-label') || '').trim()
+        || (racine.getAttribute('aria-labelledby') || '').trim()
+        || [...racine.children].some((c) => c.tagName.toLowerCase() === 'title');
+      return Boolean(nomme) && !racine.querySelector('text');
+    })();
+    for (let i = 0; i < kids.length; i++) {
+      for (let j = i + 1; j < kids.length; j++) {
+        const a = kids[i], b = kids[j];
+        if (svgIcone || groupeTitre || svgFigure) continue;
+        // TF-2706 : des scenes EMPILEES, montrees une a une par une animation en boucle sur l'opacite, se superposent par
+        // construction : deux elements dont les racines animees different ne sont pas deux blocs de mise en page. Le compte
+        // se dit en fin de passe (non juge) ; deux elements d'une MEME scene (meme racine) restent juges.
+        {
+          const racA = boucleDe(a.el, true), racB = boucleDe(b.el, true);
+          if (racA && racB && racA !== racB) { scenesEmpilees.add(racA); scenesEmpilees.add(racB); pairesEmpilees += 1; continue; }
+        }
+        // TF-1369 — un connecteur se juge par son TRACE (passe dediee plus bas), plus par sa boite.
+        if (estConnecteurV4(a.el) || estConnecteurV4(b.el)) continue;
+        // TF-1146 (16/09, lot Produit-64 20260916a, retour RD-6) — L EXEMPTION S APPLIQUAIT A L
+        // ELEMENT, PAS A LA PAIRE, ET COUVRAIT DONC AUSSI LE RECOUVREMENT NON VOULU. Dans le
+        // schema des trois couches, le libelle de fleche « expose ses sorties a » etait imprime
+        // A L INTERIEUR de la boite voisine, sous son sous-titre : un lecteur y lisait une
+        // troisieme ligne de legende. Le defaut a traverse DEUX livraisons et quatre executions
+        // des trois oracles, et a ete trouve en regardant une capture. Aucun controle ne pouvait
+        // le voir : V1 ne voit rien (le texte est dans le cadre), V2 ne voit rien (il est
+        // lisible — c est sa PLACE qui est fausse), L1 ne voit rien (texte SVG hors modele de
+        // prose), et V4 ne voyait rien parce que le <text> portait data-overlap-ok et etait
+        // exempte EN BLOC.
+        //
+        // L exemption reste indispensable — un libelle pose SUR sa boite la recouvre par
+        // construction, et sans elle V4 crierait sur chaque boite de chaque schema. Elle devient
+        // donc une PAIRE DECLAREE : data-overlap-ok="<id de l element recouvert>", plusieurs ids
+        // separes par des espaces. Un recouvrement avec un AUTRE element que ceux declares
+        // redevient un constat.
+        //
+        // La forme NUE (attribut sans valeur) continue d exempter en bloc : 1 716 occurrences
+        // mesurees le 16/09 dans dix pages de deux depots du parc, la casser rendrait tout le
+        // parc rouge d un coup. Elle n est plus silencieuse pour autant — elle est recensee et
+        // publiee, famille `overlap_en_bloc`, avec son geste de migration.
+        const _paires = (el) => {
+          const v = el.getAttribute('data-overlap-ok');
+          return v === null ? null : v.trim().split(/\s+/).filter(Boolean);
+        };
+        const pa = _paires(a.el), pb = _paires(b.el);
+        if ((pa !== null && pa.length === 0) || (pb !== null && pb.length === 0)) continue;
+        if (pa !== null || pb !== null) {
+          // TF-1281 (lot Produit-64 20260921a, RD-13) — UN CALQUE NE S EXPRIME PAS PAR PAIRES.
+          // N traits de branche qui se croisent tous demandaient N ids et N-1 ids dans chacun
+          // (400 declarations pour une figure). Deux elements qui declarent le MEME JETON
+          // s exemptent mutuellement : data-overlap-ok="calque-traits" sur chaque trait. Un
+          // element qui ne declare pas ce jeton (le numero d un moment) reste juge.
+          const declare = (pa || []).includes(b.el.id) || (pb || []).includes(a.el.id)
+            || (pa !== null && pb !== null && pa.some((x) => pb.includes(x)));
+          if (declare) continue;
+          // Paire NON declaree : le recouvrement est juge, comme s il n y avait pas d exemption.
+        }
+        // RT-124 (lot Produit-02 20261003b, D-55 (a) du 03/10/2026) — L ETIQUETTE ECRITE DANS SA
+        // MARQUE N EST PAS UN CHEVAUCHEMENT. Deux regles du socle etaient inconciliables : le skill
+        // dataviz prescrit l etiquetage DIRECT (la part ecrite dans le segment d une barre
+        // empilee), et V4 le jugeait « rect.seg x text.dans, intersection 100 % du plus petit » —
+        // sept constats sur la page servie, contournes en reportant la part apres le total.
+        // L invariant est celui de TF-1146 : un libelle APPARTIENT a la marque qu il annote. Un
+        // <text> se declare etiquette de sa marque — `data-etiquette-de="<id de la marque>"`, ou
+        // classe `etiquette-marque` (la marque est alors celle qui le contient) — et n est exempte
+        // que s il est CONTENU dans le rectangle de sa marque (1 px de tolerance) : une etiquette
+        // qui deborde sur le segment voisin ne dit plus a quel segment elle appartient, et reste
+        // un constat.
+        const etiquetteDans = (t, m) => {
+          if (t.tagName.toLowerCase() !== 'text' || m.tagName.toLowerCase() === 'text') return false;
+          const cibles = (t.getAttribute('data-etiquette-de') || '').trim().split(/\s+/).filter(Boolean);
+          const declaree = cibles.length ? (m.id !== '' && cibles.includes(m.id))
+            : t.classList.contains('etiquette-marque');
+          if (!declaree) return false;
+          const rt = t.getBoundingClientRect(), rm = m.getBoundingClientRect();
+          return rt.left >= rm.left - 1 && rt.right <= rm.right + 1 &&
+                 rt.top >= rm.top - 1 && rt.bottom <= rm.bottom + 1;
+        };
+        if (etiquetteDans(a.el, b.el) || etiquetteDans(b.el, a.el)) continue;
+        // TF-0444 (21/08) : <colgroup> et <col> sont des elements de DECLARATION, pas de mise
+        // en page. Leur boite englobe par construction celle du tableau — donc tout tableau
+        // portant un colgroup produisait deux faux positifs BLOQUANTS (« colgroup x thead »,
+        // « colgroup x tbody »). Mesure : 50 defauts V4 sur un livrable par ailleurs sain,
+        // a 1920 px comme a 1280 px. Consequence : la SEULE construction que HTML prevoit pour
+        // declarer des largeurs de colonnes etait interdite par l'oracle, et le run s'en
+        // detournait en portant les largeurs sur les <th> — un contournement a refaire a
+        // chaque fois. Meme nature d'exclusion que position: fixed ci-dessous.
+        const declaratif = (el) => ['colgroup', 'col'].includes(el.tagName.toLowerCase());
+        if (declaratif(a.el) || declaratif(b.el)) continue;
+        const sa = getComputedStyle(a.el), sb = getComputedStyle(b.el);
+        if (sa.position === 'absolute' || sb.position === 'absolute' ||
+            sa.position === 'fixed' || sb.position === 'fixed') continue;  // superpositions par construction
+        // TF-1061 (11/09) — UNE BARRE QUI SURVOLE N'EST PAS UN CHEVAUCHEMENT. header.doc.colle du
+        // boilerplate (sticky, z-index 20, fond opaque) rendait un bloquant V4 sur quatre etats
+        // sur cinq de la matrice : recouvrir ce qu'il survole est sa fonction. Les TROIS
+        // conditions ensemble : `sticky`, z-index au-dessus de l'autre, fond opaque. Une barre
+        // transparente ou sous l'autre reste jugee (fixture v4-sticky-transparent.html).
+        const zIndex = (s) => { const z = parseInt(s.zIndex, 10); return isNaN(z) ? 0 : z; };
+        // reste-v4-opaque (15/10/2026) : le fond se lit par parseColor, qui convertit aussi
+        // oklch(), lab(), hsl(), # … — une barre opaque ecrite en oklch etait jugee transparente.
+        const opaque = (s) => {
+          const c = parseColor(s.backgroundColor || '');
+          return !!c && c.a >= 0.99;
+        };
+        const survole = (s, t) => s.position === 'sticky' && zIndex(s) > zIndex(t) && opaque(s);
+        if (survole(sa, sb) || survole(sb, sa)) continue;
+        // Un element INLINE reparti sur plusieurs lignes a une boite englobante qui
+        // couvre toute la largeur du bloc : elle recouvre mecaniquement ses voisins
+        // de la premiere ligne, sans qu'aucun pixel ne se superpose reellement. Trois
+        // faux positifs de cette nature ont deja fait deformer une mise en page.
+        // getClientRects() rend une boite PAR LIGNE : on mesure celles-la.
+        const boites = (el, s, r) => (s.display.startsWith('inline') &&
+                                      el.getClientRects().length > 1)
+                                     ? Array.from(el.getClientRects()) : [r];
+        const ba = boites(a.el, sa, a.r), bb = boites(b.el, sb, b.r);
+        let ix = 0, iy = 0, inter = 0;
+        for (const ra of ba) for (const rb of bb) {
+          const x = Math.min(ra.right, rb.right) - Math.max(ra.left, rb.left);
+          const y = Math.min(ra.bottom, rb.bottom) - Math.max(ra.top, rb.top);
+          if (x > 1 && y > 1 && x * y > inter) { inter = x * y; ix = x; iy = y; }
+        }
+        // DEUX INLINE FRERES DE LIGNES CONSECUTIVES NE SE CHEVAUCHENT PAS (TF-0559, 24/08).
+        // La boite d'un element inline vaut la HAUTEUR D'EM de la police, pas l'interligne :
+        // deux inline sur des lignes voisines se recouvrent donc des que line-height est
+        // inferieur a cette hauteur, SANS QU'AUCUN PIXEL PEINT NE SE SUPERPOSE. La parade
+        // existante ne couvrait que l'inline reparti sur plusieurs lignes (une boite par
+        // ligne) ; deux FRERES restaient juges sur leur boite d'em.
+        //
+        // Mesure du 19/08 sur 1 246 surlignages d'un livrable reel : a interligne 1,22 le
+        // recouvrement vaut 5 px et rend un BLOQUANT a 390 px ; a 1,3 il vaut encore 3 px ;
+        // a 1,45 il disparait. Le seuil n'est donc pas arbitraire — c'est exactement l'ecart
+        // entre hauteur d'em et interligne, et on l'ignore quand le recouvrement tient dedans.
+        //
+        // Meme nature d'exclusion que colgroup/col et que le groupe SVG titre : une boite qui
+        // ne peint rien n'est pas une collision. Ce qui reste juge : un vrai recouvrement
+        // horizontal, et tout chevauchement entre elements de NIVEAU BLOC.
+        if (inter > 0 && a.el.parentElement && a.el.parentElement === b.el.parentElement
+            && sa.display.startsWith('inline') && sb.display.startsWith('inline')) {
+          const marge = (el, s) => {
+            const em = parseFloat(s.fontSize) || 0;
+            let lh = parseFloat(s.lineHeight);
+            if (!isFinite(lh) || lh <= 0) lh = em * 1.2;
+            // La boite d'em depasse l'interligne de cette difference : au-dela, c'est un vrai
+            // chevauchement ; en dessous, c'est de la geometrie de police.
+            return Math.max(0, em * 1.15 - lh);
+          };
+          const toleree = Math.max(marge(a.el, sa), marge(b.el, sb)) + 1;
+          if (iy <= toleree) continue;
+        }
+        let boiteRelevee = false;
+        if (inter > 0) {
+          const aire = (bs) => bs.reduce((t, r) => t + r.width * r.height, 0);
+          const smaller = Math.min(aire(ba), aire(bb));
+          if (smaller > 0 && inter / smaller > __OVERLAP_MIN_RATIO__) {
+            boiteRelevee = true;
+            issues.v4_overlap.push({ what: `${label(a.el)} × ${label(b.el)}`, detail:
+              `intersection ${Math.round(ix)}×${Math.round(iy)}px (${Math.round(100 * inter / smaller)} % du plus petit)` });
+          }
+        }
+        // TF-1891 (lot Produit-84 20261019b, RT-10) — UN TEXTE DE PREMIER NIVEAU POSE SUR UN LIBELLE
+        // D'UN GROUPE FRERE SANS TITRE. Le jugement par boite compare le texte au groupe ENTIER : un
+        // libelle COURT du groupe, recouvert par un texte long, pese moins de 10 % du plus petit des
+        // deux (ici le texte long) et passait sans constat — « Sources lues au 19/10/2026 », ancre a
+        // droite, posee sur le dernier libelle d'une legende <g transform> sans <title> : PASS, 0 V4,
+        // defaut vu sur la capture seule. Le groupe sans titre n'est pas un noeud de schema (TF-0424) :
+        // ses <text> sont des libelles a part entiere. On compare donc le texte de premier niveau a
+        // CHAQUE <text> descendant du groupe frere, boite contre boite, au meme seuil (10 % du plus
+        // petit des deux textes), avec la meme grammaire d'exemption que la paire (data-overlap-ok="<id>"
+        // ou jeton partage). Un groupe qui a un <title> reste un noeud : il se juge par sa boite.
+        if (!boiteRelevee && inter > 0) {
+          const texteSvg = (el) => el.namespaceURI === SVGNS && el.tagName.toLowerCase() === 'text';
+          const groupeSansTitre = (el) => el.namespaceURI === SVGNS && el.tagName.toLowerCase() === 'g'
+            && ![...el.children].some((c) => c.tagName.toLowerCase() === 'title');
+          let tx = null, gr = null;
+          if (texteSvg(a.el) && groupeSansTitre(b.el)) { tx = a.el; gr = b.el; }
+          else if (texteSvg(b.el) && groupeSansTitre(a.el)) { tx = b.el; gr = a.el; }
+          if (tx) {
+            const rtx = tx.getBoundingClientRect();
+            for (const d of gr.querySelectorAll('text')) {
+              if (!visible(d)) continue;
+              const rd = d.getBoundingClientRect();
+              const dx = Math.min(rtx.right, rd.right) - Math.max(rtx.left, rd.left);
+              const dy = Math.min(rtx.bottom, rd.bottom) - Math.max(rtx.top, rd.top);
+              if (dx <= 1 || dy <= 1) continue;
+              const petit = Math.min(rtx.width * rtx.height, rd.width * rd.height);
+              if (!(petit > 0 && (dx * dy) / petit > __OVERLAP_MIN_RATIO__)) continue;
+              const pt = _paires(tx), pd = _paires(d);
+              if ((pt !== null && pt.length === 0) || (pd !== null && pd.length === 0)) continue;
+              if ((pt || []).includes(d.id) || (pd || []).includes(tx.id)
+                  || (pt !== null && pd !== null && pt.some((x) => pd.includes(x)))) continue;
+              issues.v4_overlap.push({ what: `${label(tx)} × ${label(d)}`, detail:
+                `texte de premier niveau sur un libelle d'un groupe frere sans titre : intersection `
+                + `${Math.round(dx)}×${Math.round(dy)}px (${Math.round(100 * dx * dy / petit)} % du plus petit texte). `
+                + `Deplacer le texte, ou declarer la paire voulue : data-overlap-ok="<id du libelle>" `
+                + `sur le texte de premier niveau (TF-1891)` });
+            }
+          }
+        }
+      }
+    }
+    // V3 alignement + V7 espacement : uniquement les séries homogènes (≥ 3 frères de même tag)
+    const byTag = {};
+    for (const k of kids) (byTag[k.el.tagName] ||= []).push(k);
+    for (const tag of Object.keys(byTag)) {
+      const serie = byTag[tag];
+      if (serie.length < 3) continue;
+      const lefts = serie.map((k) => k.r.left), tops = serie.map((k) => k.r.top);
+      // V3 mesure le MEILLEUR alignement plausible (bord, centre, bord opposé) — même
+      // leçon que V7 (TF-0059/TF-0066) : sur une rangée d'éléments de tailles variables,
+      // le seul bord haut (ou gauche) diverge mécaniquement alors que la rangée est
+      // alignée par le centre ou la base. Juger le pire axe fabriquait des faux positifs.
+      const etendue = (vals) => Math.max(...vals) - Math.min(...vals);
+      const vSpread = Math.min(etendue(tops),
+        etendue(serie.map((k) => k.r.bottom)),
+        etendue(serie.map((k) => k.r.top + k.r.height / 2)));
+      const hSpread = Math.min(etendue(lefts),
+        etendue(serie.map((k) => k.r.right)),
+        etendue(serie.map((k) => k.r.left + k.r.width / 2)));
+      const sameRow = vSpread <= __ALIGN_TOL__;
+      const sameCol = hSpread <= __ALIGN_TOL__;
+      // Une « presque-rangée » suppose des membres LATÉRALEMENT SÉQUENTIELS : deux membres
+      // qui se recouvrent sur l'axe de la rangée (titre au-dessus de son sous-titre, badge
+      // + pile de lignes) forment un COMPOSITE assumé, pas une rangée ratée. Même garde en
+      // colonne. Et un groupe déjà aligné sur un axe n'est pas un presque-aligné de l'autre.
+      const seChevauchent = (horizontal) => {
+        const tri = serie.slice().sort((a, b) => horizontal ? a.r.left - b.r.left : a.r.top - b.r.top);
+        for (let i = 1; i < tri.length; i++) {
+          const p = tri[i - 1].r, c = tri[i].r;
+          const rec = horizontal
+            ? Math.min(p.right, c.right) - Math.max(p.left, c.left)
+            : Math.min(p.bottom, c.bottom) - Math.max(p.top, c.top);
+          const petit = horizontal ? Math.min(p.width, c.width) : Math.min(p.height, c.height);
+          if (rec > 0.5 * petit) return true;
+        }
+        return false;
+      };
+      const nearlyRow = !sameRow && !sameCol && vSpread <= 12 && !seChevauchent(true);
+      const nearlyCol = !sameCol && !sameRow && hSpread <= 12 && !seChevauchent(false);
+      if (nearlyRow) issues.v3_align.push({ what: `${serie.length}×${tag.toLowerCase()} dans ${label(parent)}`,
+        detail: `rangée presque alignée : ${Math.round(vSpread)}px au meilleur axe (haut/centre/base)` });
+      if (nearlyCol) issues.v3_align.push({ what: `${serie.length}×${tag.toLowerCase()} dans ${label(parent)}`,
+        detail: `colonne presque alignée : ${Math.round(hSpread)}px au meilleur axe (gauche/centre/droite)` });
+      // V7 mesure l'ESPACE ENTRE LES BOITES, jamais le pas d'un bord gauche (ou d'un
+      // haut) au suivant. Avec le pas, une colonne de <p> de longueurs differentes
+      // affiche mecaniquement des ecarts differents : la variation vient de la hauteur
+      // du texte, pas du rythme. Ce sont ces faux positifs qui ont produit 288
+      // avertissements sur un document dense et noye le signal V1/V4. L'espace entre
+      // boites, lui, vaut la marge reellement appliquee : constant en flux de prose
+      // regulier, variable des qu'un element rompt l'echelle d'espacement.
+      const horiz = sameRow || nearlyRow;
+      const vert = !horiz && (sameCol || nearlyCol);
+      if (horiz || vert) {
+        const tri = serie.slice().sort((a, b) => horiz ? a.r.left - b.r.left : a.r.top - b.r.top);
+        const gaps = [];
+        for (let i = 1; i < tri.length; i++) {
+          gaps.push(horiz ? tri[i].r.left - tri[i - 1].r.right
+                          : tri[i].r.top - tri[i - 1].r.bottom);
+        }
+        if (gaps.length >= 2 && Math.max(...gaps) - Math.min(...gaps) > __ALIGN_TOL__ * 2 &&
+            Math.max(...gaps) - Math.min(...gaps) < 40) {
+          issues.v7_spacing.push({ what: `${serie.length}×${tag.toLowerCase()} dans ${label(parent)}`,
+            detail: `espaces de ${gaps.map((g) => Math.round(g)).join(' / ')}px` });
+        }
+      }
+    }
+  }
+  // ---- V4 (fleches) : TF-1369 — une fleche se juge par son TRACE, pas par sa boite ---------
+  // Lot Produit-68 20260924a, RG-8 : sur un schema remis, 5 liaisons droites traversaient les
+  // boites intermediaires (11 traversees) et 18 paires de fleches etaient confondues, sans un
+  // constat V4 — la boite d'une ligne droite a une aire nulle, `visible()` l'ecarte. A l'inverse,
+  // 42 des 45 constats V4 du schema venaient de la boite d'une fleche COUDEE, qui recouvre ses
+  // voisins sans qu'aucun trait ne les touche. Les connecteurs (`line`, `polyline`, `path` sans
+  // remplissage, avec un trait) sortent donc du jugement par boite, et leur trace est echantillonne
+  // tous les 2 px a l'ecran :
+  //   · TRAVERSEE : un point du trace a l'interieur (3 px de marge) d'une forme remplie FEUILLE
+  //     (rect, cercle, ellipse, polygone qui n'en contient aucune autre — une bande ou un cadre
+  //     de fond n'est pas une boite) qui ne porte aucune de ses deux extremites ;
+  //   · seules les LIAISONS sont jugees : un trait a marqueur de fleche, ou dont les deux
+  //     extremites touchent deux formes distinctes — une grille ou un axe de graphique n'en est pas ;
+  //   · CONFUSION : deux liaisons dont les traces courent a moins de 1,5 px l'un de l'autre
+  //     sur 24 px ou plus — le lecteur ne sait plus lequel va ou.
+  // Exemption : `data-overlap-ok` sur le connecteur, nue (tout) ou par ids / jetons partages,
+  // meme grammaire que V4 (TF-1146, TF-1281).
+  const horsJugement = (el) => {
+    const svg = el.closest('svg');
+    if (!svg) return true;
+    const rr = svg.getBoundingClientRect();
+    if (rr.width < 48 && rr.height < 48) return true;              // icone
+    return (svg.getAttribute('role') || '').trim() === 'img' && !svg.querySelector('text')
+      && Boolean((svg.getAttribute('aria-label') || '').trim()
+        || (svg.getAttribute('aria-labelledby') || '').trim()
+        || [...svg.children].some((c) => c.tagName.toLowerCase() === 'title'));   // logo (TF-1628)
+  };
+  const tracer = (el) => {
+    let total = 0;
+    try { total = el.getTotalLength(); } catch (e) { return null; }
+    const m = el.getScreenCTM();
+    if (!m || !(total > 0)) return null;
+    const echelle = Math.max(Math.hypot(m.a, m.b), Math.hypot(m.c, m.d)) || 1;
+    const pas = 2 / echelle;
+    const pts = [];
+    for (let l = 0; l <= total + 1e-6; l += pas) {
+      const p = el.getPointAtLength(Math.min(l, total));
+      const q = new DOMPoint(p.x, p.y).matrixTransform(m);
+      pts.push({ x: q.x, y: q.y });
+    }
+    return pts;
+  };
+  const declarations = (el) => {
+    const v = el.getAttribute('data-overlap-ok');
+    return v === null ? null : v.trim().split(/\s+/).filter(Boolean);
+  };
+  const exempte = (c, autre) => {
+    // TF-2706 : deux elements de scenes EMPILEES (racines animees en boucle par opacite differentes) ne se jugent pas entre eux.
+    const racC = boucleDe(c, true), racA = boucleDe(autre, true);
+    if (racC && racA && racC !== racA) { scenesEmpilees.add(racC); scenesEmpilees.add(racA); pairesEmpilees += 1; return true; }
+    const pc = declarations(c), po = declarations(autre);
+    if (pc !== null && pc.length === 0) return true;
+    if (po !== null && po.length === 0 && estConnecteurV4(autre)) return true;
+    return (pc || []).includes(autre.id) || (po || []).includes(c.id)
+      || (pc !== null && po !== null && pc.some((x) => po.includes(x)));
+  };
+  const connecteurs = [...document.querySelectorAll('svg line, svg polyline, svg path')]
+    .filter((el) => estConnecteurV4(el) && !horsJugement(el))
+    .map((el) => ({ el, pts: tracer(el) })).filter((c) => c.pts && c.pts.length >= 2);
+  if (connecteurs.length) {
+    const formes = [...document.querySelectorAll('svg rect, svg circle, svg ellipse, svg polygon')]
+      .filter((el) => {
+        if (horsJugement(el)) return false;
+        const cs = getComputedStyle(el);
+        if (cs.display === 'none' || cs.visibility === 'hidden' || cs.fill === 'none') return false;
+        const f = parseColor(cs.fill);
+        if (f !== null && f.a === 0) return false;
+        const r = el.getBoundingClientRect();
+        return r.width >= 8 && r.height >= 8;
+      })
+      .map((el) => ({ el, r: el.getBoundingClientRect(), svg: el.closest('svg') }));
+    const contient = (a, b) => a !== b && a.left <= b.left + 0.5 && a.right >= b.right - 0.5
+      && a.top <= b.top + 0.5 && a.bottom >= b.bottom - 0.5;
+    const feuilles = formes.filter((f) => !formes.some((g) => g.svg === f.svg && g !== f && contient(f.r, g.r)));
+    const dans = (p, r, m) => p.x > r.left + m && p.x < r.right - m && p.y > r.top + m && p.y < r.bottom - m;
+    const PLAFOND_FLECHES = 40;
+    let constatsFleches = 0;
+    // UNE LIAISON RELIE DEUX BOITES. Une grille ou un axe de graphique traverse ses barres par
+    // construction (mesure du 12/10/2026 sur l'exemple des barres empilees du socle : 19 faux
+    // constats). N'est jugee qu'une LIAISON : un trait qui porte un marqueur de fleche, ou dont
+    // les deux extremites touchent (6 px) deux formes feuilles distinctes sans y entrer.
+    const accroche = (p, svg) => feuilles.find((f) => f.svg === svg && dans(p, f.r, -6));
+    const liaisons = connecteurs.filter((c) => {
+      const cs = getComputedStyle(c.el);
+      if ((cs.markerEnd && cs.markerEnd !== 'none') || (cs.markerStart && cs.markerStart !== 'none')) return true;
+      const svg = c.el.closest('svg');
+      const a1 = accroche(c.pts[0], svg), a2 = accroche(c.pts[c.pts.length - 1], svg);
+      // Une liaison QUITTE ses boites ; une ligne de grille dont l'extremite frole une barre la
+      // traverse aussitot (mesure a 390 px, ou la tolerance de 6 px atteint les barres voisines).
+      if (!(a1 && a2 && a1 !== a2)) return false;
+      if (c.pts.some((p) => dans(p, a1.r, 3) || dans(p, a2.r, 3))) return false;
+      // TF-1875 (19/10/2026) — UNE LIAISON S'ELOIGNE DE SA BOITE DE DEPART ET S'ARRETE CONTRE SA BOITE
+      // D'ARRIVEE. Une ligne de grille de barres empilees (douze colonnes, 390 px) a ses deux
+      // extremites aux bords du trace, a moins de 6 px de la premiere et de la derniere barre quand
+      // leurs totaux frolent une graduation : elle etait prise pour une liaison et « traversait » les
+      // neuf barres du milieu (9 constats a 390 px, 0 a 1440 — la tolerance de 6 px est en pixels
+      // ecran, l'ecart entre colonnes ne l'est pas). Une grille PASSE a cote de ces barres : leur
+      // centre est DEVANT son depart et DERRIERE son arrivee, a l'inverse d'une liaison. Le test est
+      // le produit scalaire de la direction du trace avec le vecteur extremite -> centre de la boite.
+      const n = c.pts.length, p0 = c.pts[0], pN = c.pts[n - 1];
+      const dir = (p, q) => { const l = Math.hypot(q.x - p.x, q.y - p.y) || 1; return { x: (q.x - p.x) / l, y: (q.y - p.y) / l }; };
+      const centre = (r) => ({ x: (r.left + r.right) / 2, y: (r.top + r.bottom) / 2 });
+      const u0 = dir(p0, c.pts[1]), uN = dir(c.pts[n - 2], pN);
+      const c1 = centre(a1.r), c2 = centre(a2.r);
+      const departDe = (u0.x * (c1.x - p0.x) + u0.y * (c1.y - p0.y)) <= 0;
+      const arriveA = (uN.x * (c2.x - pN.x) + uN.y * (c2.y - pN.y)) >= 0;
+      return departDe && arriveA;
+    });
+    for (const c of liaisons) {
+      const svg = c.el.closest('svg');
+      const debut = c.pts[0], fin = c.pts[c.pts.length - 1];
+      for (const f of feuilles) {
+        if (f.svg !== svg || exempte(c.el, f.el)) continue;
+        if (dans(debut, f.r, -3) || dans(fin, f.r, -3)) continue;   // la boite porte une extremite
+        const interieurs = c.pts.filter((p) => dans(p, f.r, 3)).length;
+        if (interieurs && constatsFleches < PLAFOND_FLECHES) {
+          constatsFleches++;
+          issues.v4_overlap.push({ what: `${label(c.el)} × ${label(f.el)}`, detail:
+            `fleche qui TRAVERSE une boite qui n'est ni son depart ni son arrivee, sur ~${interieurs * 2} px `
+            + `de trace — cachee derriere elle ou peinte dessus, elle montre une liaison qui n'existe pas (TF-1369)` });
+        }
+      }
+    }
+    // UN TRAIT QUI BARRE UN TEXTE. Le jugement par boite l'attrapait pour un trace courbe ou coude
+    // (fixture v4-calque-recouvre-numero.html, TF-1281) : il reste juge, par le trace, pour toute
+    // liaison et pour tout connecteur dont la boite a une surface. Une ligne droite de grille ou
+    // d'axe (boite d'aire nulle, jamais jugee jusqu'ici) n'est pas une liaison et reste hors champ.
+    const textes = [...document.querySelectorAll('svg text')].filter((t) => !horsJugement(t) && visible(t))
+      .map((t) => ({ el: t, r: t.getBoundingClientRect(), svg: t.closest('svg') }));
+    for (const c of connecteurs) {
+      const rc = c.el.getBoundingClientRect();
+      if (!liaisons.includes(c) && !(rc.width > 1 && rc.height > 1)) continue;
+      const svg = c.el.closest('svg');
+      for (const t of textes) {
+        if (t.svg !== svg || exempte(c.el, t.el)) continue;
+        const dedans = c.pts.filter((p) => dans(p, t.r, 1)).length;
+        if (dedans && constatsFleches < PLAFOND_FLECHES) {
+          constatsFleches++;
+          issues.v4_overlap.push({ what: `${label(c.el)} × ${label(t.el)}`, detail:
+            `trait qui BARRE un texte sur ~${dedans * 2} px de trace — decaler le libelle, ou declarer `
+            + `la paire par data-overlap-ok (TF-1369, TF-1281)` });
+        }
+      }
+    }
+    for (let i = 0; i < liaisons.length; i++) {
+      for (let j = i + 1; j < liaisons.length; j++) {
+        const a = liaisons[i], b = liaisons[j];
+        if (a.el.closest('svg') !== b.el.closest('svg') || exempte(a.el, b.el)) continue;
+        let commun = 0;
+        for (const p of a.pts) {
+          if (b.pts.some((q) => Math.abs(p.x - q.x) <= 1.5 && Math.abs(p.y - q.y) <= 1.5)) commun++;
+        }
+        if (commun * 2 >= 24 && constatsFleches < PLAFOND_FLECHES) {
+          constatsFleches++;
+          issues.v4_overlap.push({ what: `${label(a.el)} × ${label(b.el)}`, detail:
+            `deux fleches CONFONDUES sur ~${commun * 2} px de trace : le lecteur ne sait plus laquelle `
+            + `va ou — decaler l'une, ou declarer le calque par data-overlap-ok (TF-1369)` });
+        }
+      }
+    }
+    if (constatsFleches >= PLAFOND_FLECHES) {
+      issues.unmeasured.push({ what: 'V4 fleches', detail:
+        `inventaire des fleches TRONQUE a ${PLAFOND_FLECHES} constats : les suivants ne sont pas listes` });
+    }
+  }
+  // ---- L2 (rendu) : le texte occupe-t-il la place qu'on lui donne ? ------
+  // Le controle statique de L2 lit le CSS du conteneur. Il ne voit pas le cas le
+  // plus courant : le conteneur occupe bien la largeur, et c'est le PARAGRAPHE
+  // qui est bride par un `max-width` en `ch`. Resultat en 1440 px : une colonne
+  // de texte a 50 % et une marge droite vide de la meme taille. Passe au vert
+  // pendant deux iterations, releve a l'oeil par l'utilisateur.
+  //
+  // Mesure exacte plutot qu'heuristique : on retire `max-width` le temps d'une
+  // mesure et on compare. Si l'element s'elargit fortement, c'est bien une
+  // bride qui laissait du vide -- pas une colonne legitimement etroite (une
+  // colonne de grille ne bouge pas quand on retire son max-width).
+  // ---- L2-filet (TF-0500, 22/08/2026) : un texte ecrase en colonne d'un mot -----------------
+  // L2-largeur ne pouvait STRUCTURELLEMENT pas voir ce defaut, pour trois raisons dont chacune
+  // suffisait : sa collecte ignorait `caption` ; la ligne `closest('table')` l'aurait ecartee de
+  // toute facon, une legende etant toujours dans un tableau ; et son seuil de 1100 px la rendait
+  // muette sous cette largeur, or le defaut n'existe QUE sous 640 px — la ou les mises en page
+  // basculent de table a block. Le seuil de 1100 px n'est PAS supprime : il protege d'un faux
+  // positif precis (une bride de lecture est sans effet visible sur ecran etroit).
+  //
+  // Cette regle ne mesure pas une mesure de lecture mais un RAPPORT D'ASPECT ANORMAL : un bloc
+  // dont la largeur tombe sous 25 % de celle de son conteneur ALORS QUE son contenu passe a la
+  // ligne a presque chaque mot est un defaut a toute largeur. Les deux conditions sont exigees
+  // ensemble : une colonne etroite qui respire n'est pas un defaut, un texte long dans une boite
+  // large non plus.
+  {
+    const vusF = new Set();
+    for (const el of document.body.querySelectorAll('p, dd, li, blockquote, caption, .va, .prose')) {
+      if (!visible(el) || vusF.has(el)) continue;
+      if (dansDetailsFerme(el)) continue;           // TF-2220 : un panneau fermé n'est pas jugé à la largeur de son résumé
+      vusF.add(el);
+      const txt = (el.textContent || '').trim();
+      const mots = txt.split(/\s+/).filter(Boolean).length;
+      if (mots < 6) continue;                       // trop court pour distinguer un filet d'un titre
+      if (el.closest(NAV_DECLAREE)) continue;       // TF-2776 : une navigation declaree sort de la mesure
+      // `caption` est volontairement admise : l'exclusion `closest('table')` de L2-largeur vise
+      // les CELLULES, pas la legende, et c'est elle qui portait le defaut mesure.
+      if (el.closest('table') && el.tagName !== 'CAPTION') continue;
+      const par = el.parentElement;
+      if (!par) continue;
+      const w = el.getBoundingClientRect().width;
+      const wp = par.getBoundingClientRect().width;
+      if (w <= 0 || wp <= 0) continue;
+      if (w / wp >= 0.25) continue;                 // il occupe sa place : rien a dire
+      const cs2 = getComputedStyle(el);
+      let lh = parseFloat(cs2.lineHeight);
+      if (!isFinite(lh) || lh <= 0) lh = parseFloat(cs2.fontSize) * 1.2;
+      const lignes = Math.round(el.getBoundingClientRect().height / lh);
+      if (lignes < mots * 0.8) continue;            // il passe a la ligne normalement
+      issues.l2_filet.push({ what: label(el), detail:
+        `${Math.round(w)}px de large pour ${Math.round(wp)}px de conteneur (${Math.round(100 * w / wp)}%), `
+        + `${lignes} ligne(s) pour ${mots} mot(s) — texte ecrase en filet` });
+    }
+  }
+
+  if (window.innerWidth >= __L2_MIN_VIEWPORT__) {
+    const vus = new Set();
+    for (const el of document.body.querySelectorAll('p, dd, li, blockquote, .va, .prose')) {
+      if (!visible(el)) continue;
+      const txt = (el.textContent || '').trim();
+      if (txt.length < __L2_MIN_CHARS__) continue;
+      if (el.closest('table') || el.closest(NAV_DECLAREE)) continue;   // TF-2776 : nav, aside ou data-navigation
+      if (dansDetailsFerme(el)) continue;           // TF-2220
+      const cs = getComputedStyle(el);
+      if (cs.display === 'inline') continue;
+      // TF-0421 (lot Produit-05 20260820a) : la bride se mesure QUELLE QUE SOIT la propriete.
+      // `width: min(75ch, 100%)` passait (maxWidth === 'none') et laissait 60 % de la fenetre
+      // vide a 1 800 px — livre vert, refuse par le client. On retire max-width ET width le temps
+      // d'une mesure : l'element dit alors la place que son conteneur lui offre. Une colonne de
+      // grille ne bouge pas ; un paragraphe bride, si. La mesure de lecture se pose sur le
+      // CONTENEUR (.chap.lire), jamais sur le paragraphe (lisibilite.md L2).
+      const w1 = el.getBoundingClientRect().width;
+      const avantMax = el.style.maxWidth, avantW = el.style.width;
+      el.style.maxWidth = 'none'; el.style.width = 'auto';
+      const w2 = el.getBoundingClientRect().width;
+      el.style.maxWidth = avantMax; el.style.width = avantW;
+      if (w2 <= 0) continue;
+      const ratio = w1 / w2;
+      if (ratio < __L2_MIN_RATIO__) {
+        const bride = cs.maxWidth !== 'none' ? `max-width:${cs.maxWidth}` : `width:${cs.width} (conteneur ${Math.round(w2)}px)`;
+        const cle = el.tagName + '|' + (el.className || '') + '|' + bride;
+        if (vus.has(cle)) continue;
+        vus.add(cle);
+        issues.l2_width.push({ what: label(el), detail:
+          `largeur ${Math.round(w1)}px pour ${Math.round(w2)}px disponibles ` +
+          `(ratio ${ratio.toFixed(2)}, seuil __L2_MIN_RATIO__) — bride par ${bride}. Trois ` +
+          `sorties PASSENT (TF-1799, chacune jouee au banc) : (1) document de lecture — la bride ` +
+          `sur le CONTENEUR, centré (.chap.lire, margin-inline:auto), pas sur le texte, et ` +
+          `data-mesure-lecture sur ce conteneur s'il a des freres plus larges ; un conteneur ` +
+          `bride CALE A GAUCHE echoue a « conteneur de lecture calé à gauche » ; (2) ecran ` +
+          `d'application ou page de donnees — data-page="donnees" sur sa racine, et la prose ` +
+          `prend la largeur ; (3) colonne etroite voulue — la bride sur le conteneur, declaree ` +
+          `par data-colonne-ok` });
+      }
+    }
+  }
+
+  // ---- L2 (rendu, suite) : le CONTENEUR de lecture calé à gauche ---------
+  // TF-0440. L2 ci-dessus mesure le paragraphe contre son conteneur — donc déplacer la bride
+  // d'un cran la satisfait sans rien changer pour le lecteur. Mesuré le 21/08 sur la même
+  // page : bride sur `p` → BLOQUANT (ratio 0,57) ; MÊME bride portée par un div parent
+  // (`width: min(100%, 82ch)`, `p { max-width: none }`) → PASS aux trois breakpoints, alors
+  // que le texte occupe TOUJOURS 57 % de la fenêtre. La règle devenait satisfaisable sans être
+  // tenue, et un run de bonne foi la satisfaisait en créant la gouttière qu'elle interdisait.
+  //
+  // Le discriminant n'est pas la largeur — une colonne de lecture étroite est LÉGITIME, c'est
+  // même la doctrine (.chap.lire). C'est l'ASYMÉTRIE : une colonne CENTRÉE est une mesure de
+  // lecture, le blanc se répartit des deux côtés et l'œil revient au début de ligne sans
+  // effort. Une colonne calée à GAUCHE laisse tout le blanc à droite — c'est exactement ce que
+  // le lecteur humain a refusé le 21/08 (« la moitié de la page vide à droite »).
+  //
+  // Trois conditions cumulatives, pour ne rien condamner à tort :
+  //   1. le conteneur occupe moins de __L2C_MIN_RATIO__ de la largeur que son parent lui offre ;
+  //   2. sa marge droite dépasse le double de sa marge gauche (donc : pas centré) ;
+  //   3. AUCUN frère ne porte de contenu à sa droite (sinon ce n'est pas du vide, c'est une
+  //      mise en page à deux pistes — déjà couverte par l2_gouttiere).
+  // Échappatoire déclarative : `data-colonne-ok` sur le conteneur, pour une colonne étroite
+  // voulue et assumée. Déclarée, jamais devinée.
+  if (window.innerWidth >= __L2_MIN_VIEWPORT__) {
+    const vusC = new Set();
+    for (const el of document.body.querySelectorAll('p, li, blockquote, .va, .prose')) {
+      if (!visible(el)) continue;
+      if ((el.textContent || '').trim().length < __L2_MIN_CHARS__) continue;
+      if (el.closest('table') || el.closest(NAV_DECLAREE)) continue;   // TF-2776 : nav, aside ou data-navigation
+      // Le conteneur BRIDEUR : le premier ancêtre notablement plus étroit que son propre parent.
+      let boite = null;
+      for (let n = el.parentElement; n && n !== document.body; n = n.parentElement) {
+        const p = n.parentElement;
+        if (!p) break;
+        const rn = n.getBoundingClientRect(), rp = p.getBoundingClientRect();
+        // TF-2776 : la navigation laterale declaree a cote du bloc n'est pas offerte au bloc : le cadre est le parent
+        // moins elle (sans navigation declaree, `cadre` est le parent lui-meme : mesure inchangee).
+        const cadre = cadreSansNav(n, rp);
+        if (cadre.width > 0 && rn.width / cadre.width < __L2C_MIN_RATIO__) { boite = { n, rn, rp: cadre }; break; }
+      }
+      if (!boite) continue;
+      // TF-2677 : la dispense ne vaut QUE sur le conteneur brideur lui-même. `closest` la laissait remonter
+      // d'un ancêtre : posée sur <main>, elle éteignait la règle pour toute la page (refus humain du 21/08 :
+      // la moitié de la page vide à droite). Une dispense sur un ancêtre ne dispense rien ; elle se dit au non_juge.
+      if (boite.n.hasAttribute('data-colonne-ok')) continue;
+      const gauche = boite.rn.left - boite.rp.left;      // `rp` est le cadre sans navigation declaree (TF-2776)
+      const droite = boite.rp.right - boite.rn.right;
+      if (droite <= gauche * 2) continue;          // centré, ou décalé vers la droite : légitime
+      if (droite < 40) continue;                   // vide négligeable
+      // Un frère occupe-t-il la place à droite ? Alors ce n'est pas une gouttière.
+      const voisin = [...(boite.n.parentElement ? boite.n.parentElement.children : [])].some((f) => {
+        if (f === boite.n || !visible(f)) return false;
+        const rf = f.getBoundingClientRect();
+        if (!(f.textContent || '').trim() && !f.querySelector('img, svg, canvas')) return false;
+        return rf.left >= boite.rn.right - 4 &&
+               Math.min(rf.bottom, boite.rn.bottom) - Math.max(rf.top, boite.rn.top) > 8;
+      });
+      if (voisin) continue;
+      const cle = boite.n.tagName + '|' + (boite.n.className || '');
+      if (vusC.has(cle)) continue;
+      vusC.add(cle);
+      issues.l2_conteneur.push({ what: label(boite.n), detail:
+        `conteneur de lecture calé à gauche — ${Math.round(boite.rn.width)}px pour ` +
+        `${Math.round(boite.rp.width)}px offerts, ${Math.round(droite)}px de vide à droite ` +
+        `contre ${Math.round(gauche)}px à gauche, et aucun contenu voisin. Trois sorties ` +
+        `PASSENT (TF-1799, chacune jouee au banc) : la colonne centrée (.chap.lire, ` +
+        `margin-inline:auto) ou un voisin utile a sa droite ; ecran d'application ou page de ` +
+        `donnees — data-page="donnees" sur sa racine et la bride retiree, la prose prend la ` +
+        `largeur ; colonne etroite a dessein — data-colonne-ok sur le conteneur. Reporter la ` +
+        `bride sur le paragraphe ne passe pas : « bride par max-width » l'accuse` });
+    }
+  }
+
+  // ---- L2 (rendu, suite) : la gouttiere d'etiquettes --------------------
+  // Angle mort de la mesure precedente : une grille `etiquette | contenu` ou la
+  // colonne d'etiquettes prend 22 % de la largeur. Chaque colonne remplit bien sa
+  // case -- le ratio de L2 vaut 1,00 -- et pourtant le lecteur voit un tiers de
+  // page vide et un contenu tasse a droite. C'est la GRILLE qu'il faut mesurer,
+  // pas le bloc de texte.
+  //
+  // Garde-fous contre les faux positifs : il faut que la seconde piste porte du
+  // texte LONG et la premiere une etiquette COURTE. Deux colonnes de contenu
+  // (cartes, baremes) ont deux textes longs et sortent du perimetre ; un vrai
+  // tableau de donnees n'est pas une grille CSS et n'y entre jamais.
+  if (window.innerWidth >= __L2_MIN_VIEWPORT__) {
+    const vusG = new Set();
+    for (const el of document.body.querySelectorAll('*')) {
+      const cs = getComputedStyle(el);
+      if (cs.display !== 'grid' && cs.display !== 'inline-grid') continue;
+      const pistes = cs.gridTemplateColumns.split(' ').map(parseFloat).filter((x) => !isNaN(x));
+      if (pistes.length !== 2) continue;
+      const w = el.getBoundingClientRect().width;
+      if (!w) continue;
+      const enfants = Array.prototype.filter.call(el.children, visible);
+      if (enfants.length < 2) continue;
+      // TF-2776 : la piste d'une navigation declaree n'est pas une colonne d'etiquettes (elle sort de la mesure).
+      if (enfants[0].closest(NAV_DECLAREE) || enfants[0].querySelector(NAV_DECLAREE) || enfants[1].closest(NAV_DECLAREE)) continue;
+      const t1 = (enfants[0].textContent || '').trim().length;
+      const t2 = (enfants[1].textContent || '').trim().length;
+      if (t2 < __L2_MIN_CHARS__ || t1 > __L2_ETIQUETTE_MAX__) continue;
+      const part = pistes[0] / w;
+      if (part <= __L2_COL_MAX__) continue;
+      const cle = (el.className || el.tagName) + '|' + cs.gridTemplateColumns;
+      if (vusG.has(cle)) continue;
+      vusG.add(cle);
+      issues.l2_gouttiere.push({ what: label(el), detail:
+        `colonne d'etiquettes ${Math.round(pistes[0])}px sur ${Math.round(w)}px ` +
+        `(${Math.round(part * 100)} %, seuil ${Math.round(__L2_COL_MAX__ * 100)} %) — ` +
+        `etiquette « ${(enfants[0].textContent || '').trim().slice(0, 30)} » ` +
+        `contre ${t2} caracteres de contenu` });
+    }
+  }
+
+  // ---- L2 (rendu, suite) : la gouttiere d'etiquettes en <table> (TF-0694, 27/08) --------
+  //
+  // LA REGLE DECRIVAIT EXACTEMENT CE DEFAUT, AU SEUIL EXACT, ET RENDAIT PASS DESSUS. Son
+  // commentaire disait notre cas au mot pres — « une grille etiquette | contenu ou la colonne
+  // d'etiquettes prend 22 % de la largeur » — et son implementation commencait par
+  // `if (cs.display !== 'grid') continue;`, en assumant l'exclusion : « un vrai tableau de
+  // donnees n'est pas une grille CSS et n'y entre jamais ».
+  //
+  // OR UNE MISE EN PAGE `intitule | contenu` EN <table> N'EST PAS UN TABLEAU DE DONNEES : c'est
+  // la meme intention, exprimee avec l'autre outil. La regle n'a pas echoue, ELLE N'A PAS ETE
+  // APPELEE, et rien ne le disait — le pire des verdicts. Mesure du 27/08 sur la fiche fautive
+  // (colonne d'intitules a 32 %) : verdict PASS, `l2_gouttiere` 0 constat, comme les huit autres
+  // familles. Le defaut a traverse DEUX fiches livrees et TROIS regenerations avant qu'un humain
+  // ne l'ouvre. Gaspillage mesure : 12,6 % a 19,4 % de la largeur de page perdus sur 7 tables/8.
+  //
+  // CE QUI CHANGE, ET CE QUI NE CHANGE PAS. Les garde-fous anti-faux-positifs sont les MEMES
+  // (premiere cellule courte, seconde longue) : ils suffisent a ecarter un vrai tableau de
+  // donnees, ou les deux colonnes portent des valeurs comparables. Le seuil de 20 % NE BOUGE
+  // PAS — le lot en apporte une confirmation independante. Seule la MESURE change : on prend la
+  // largeur RENDUE de la premiere colonne, et non une piste de grille declaree, parce qu'un
+  // tableau n'en a pas.
+  //
+  // BORNE DELIBEREE : il faut que la MAJORITE des lignes a deux cellules soient du type
+  // `etiquette | contenu`, et au moins deux. Une seule ligne conforme dans un tableau de vingt
+  // ne fait pas une mise en page, et juger sur elle rendrait la regle bruyante.
+  if (window.innerWidth >= __L2_MIN_VIEWPORT__) {
+    const vusT = new Set();
+    for (const t of document.querySelectorAll('table')) {
+      if (!visible(t)) continue;
+      const w = t.getBoundingClientRect().width;
+      if (!w) continue;
+      const lignes = [...t.rows].filter((r) => r.cells.length === 2 && visible(r));
+      if (lignes.length < 2) continue;
+      let etiquettes = 0;
+      let large = 0;
+      let exemple = '';
+      let contenu = 0;
+      for (const r of lignes) {
+        const t1 = (r.cells[0].textContent || '').trim();
+        const t2 = (r.cells[1].textContent || '').trim();
+        if (t1.length <= __L2_ETIQUETTE_MAX__ && t2.length >= __L2_MIN_CHARS__) {
+          etiquettes += 1;
+          const l1 = r.cells[0].getBoundingClientRect().width;
+          if (l1 > large) { large = l1; exemple = t1; contenu = t2.length; }
+        }
+      }
+      if (etiquettes < 2 || etiquettes * 2 <= lignes.length) continue;
+      const part = large / w;
+      if (part <= __L2_COL_MAX__) continue;
+      const cle = (t.className || t.tagName) + '|' + Math.round(part * 100);
+      if (vusT.has(cle)) continue;
+      vusT.add(cle);
+      issues.l2_gouttiere.push({ what: label(t), detail:
+        `mise en page « intitule | contenu » en <table> : colonne d'intitules ` +
+        `${Math.round(large)}px sur ${Math.round(w)}px (${Math.round(part * 100)} %, seuil ` +
+        `${Math.round(__L2_COL_MAX__ * 100)} %) sur ${etiquettes} ligne(s) de ${lignes.length} — ` +
+        `intitule « ${exemple.slice(0, 30)} » contre ${contenu} caracteres de contenu. Un <table> ` +
+        `n'est pas exempte : c'est la meme intention avec l'autre outil, et le lecteur voit le ` +
+        `meme tiers de page vide` });
+    }
+  }
+
+  // ---- L2 (rendu, suite) : la rupture d'alignement ENTRE FRERES (TF-0491) --------------
+  // Les trois mesures L2 ci-dessus comparent un bloc a ce que son CONTENEUR lui offre. Elles
+  // sont aveugles au cas le plus visible pour un lecteur : deux blocs EMPILES l'un sur l'autre,
+  // qui ne commencent pas au meme bord ou ne finissent pas au meme bord. Le client l'a signale
+  // trois fois en quatre versions, sous trois formulations differentes, sans que la cause soit
+  // vue — parce que chaque bloc, pris seul, remplissait bien sa boite.
+  //
+  // Ce n'est PAS un bloquant, et c'est délibéré : une mesure de lecture etroite au-dessus d'un
+  // tableau large est un choix typographique defendable. Mais alors il se DECLARE
+  // (`data-mesure-lecture`) au lieu d'etre subi. Un avertissement qui nomme LES DEUX blocs
+  // laisse l'auteur trancher ; un bloquant l'obligerait a mentir pour passer.
+  //
+  // Trois gardes, pour ne rien condamner a tort :
+  //   1. les deux blocs sont EMPILES (aucun recouvrement vertical) — deux colonnes cote a cote
+  //      ont des largeurs differentes par construction, c'est une mise en page, pas un defaut ;
+  //   2. le frere de reference est LARGE (>= __L2F_MIN_LARGEUR__ px) et porte du contenu ;
+  //   3. le bloc etroit porte du TEXTE LONG (>= __L2_MIN_CHARS__) : un titre, une legende ou un
+  //      bouton sont courts par nature et n'ont jamais a s'aligner sur un tableau.
+  if (window.innerWidth >= __L2_MIN_VIEWPORT__) {
+    const vusF = new Set();
+    const contenu = (el) => (el.textContent || '').trim().length > 0
+      || !!el.querySelector('img, svg, canvas, table, input, button');
+    for (const parent of document.body.querySelectorAll('*')) {
+      // On ne juge que les FLUX VERTICAUX. Dans une grille ou une boite flexible, la largeur
+      // d'un enfant est decidee par sa PISTE, pas par lui : comparer deux enfants de pistes
+      // differentes n'a aucun sens. Mesure qui a impose la garde : six constats sur la page du
+      // registre du pilot, ou une cellule « Demandeur » de 250 px occupe une colonne de grille
+      // pendant que la cellule « Impact » s'etend sur les deux (1 301 px). La page est SAINE ;
+      // c'est la mesure qui etait fausse. La grille reste jugeable comme BLOC, en tant que
+      // frere d'un autre bloc — c'est le cas de la fixture rouge, ou les cartes sont la
+      // reference.
+      const dParent = getComputedStyle(parent).display;
+      if (!(dParent === 'block' || dParent === 'flow-root' || dParent === 'list-item')) continue;
+      const enfants = [...parent.children].filter((c) => visible(c) && contenu(c));
+      if (enfants.length < 2) continue;
+      const boites = enfants.map((c) => ({ c, r: c.getBoundingClientRect() }));
+      for (const petit of boites) {
+        const texte = (petit.c.textContent || '').trim();
+        if (texte.length < __L2_MIN_CHARS__) continue;
+        if (petit.c.closest('table, nav, thead, tbody')) continue;
+        if (petit.c.closest('[data-mesure-lecture]')) continue;   // ecart DECLARE : on se tait
+        // Un bloc qui PARTAGE SA LIGNE avec un frere fait partie d'une rangee : sa largeur est
+        // celle de sa piste, et la comparer a un bloc d'une AUTRE rangee est un faux positif.
+        // Mesure : six constats de ce type sur la page du registre du pilot (une cellule
+        // « Demandeur » de 250 px face a un bloc « Impact » de 1 301 px, ratio 0,19) — la page
+        // est saine, c'est une grille de metadonnees. Meme garde que l2_conteneur avec son
+        // « aucun frere a droite », et c'est la seule qui distingue une rangee d'un empilement.
+        const enLigne = boites.some((a) => a.c !== petit.c
+          && Math.min(a.r.bottom, petit.r.bottom) - Math.max(a.r.top, petit.r.top) > 8);
+        if (enLigne) continue;
+        // Le frere de reference : le plus large, empile (aucun recouvrement vertical).
+        let ref = null;
+        for (const autre of boites) {
+          if (autre.c === petit.c) continue;
+          if (autre.r.width < __L2F_MIN_LARGEUR__) continue;
+          // Un TITRE ou un filet occupe toute la largeur par nature : le prendre pour reference
+          // rendrait le constat vrai geometriquement et faux pour le lecteur, qui ne compare pas
+          // sa prose a un titre. La reference doit etre un BLOC DE CONTENU — plusieurs lignes de
+          // haut, pas une ligne unique. Trouve en jouant la fixture : le premier jet nommait h1.
+          if (autre.c.matches('h1, h2, h3, h4, h5, h6, hr, header, footer, figcaption')) continue;
+          if (autre.r.height < 48) continue;
+          const empile = autre.r.top >= petit.r.bottom - 4 || autre.r.bottom <= petit.r.top + 4;
+          if (!empile) continue;
+          if (!ref || autre.r.width > ref.r.width) ref = autre;
+        }
+        if (!ref) continue;
+        const ratio = petit.r.width / ref.r.width;
+        if (ratio >= __L2F_MIN_RATIO__) continue;
+        const cle = label(petit.c) + '|' + label(ref.c);
+        if (vusF.has(cle)) continue;
+        vusF.add(cle);
+        issues.l2_freres.push({ what: `${label(petit.c)} sous/sur ${label(ref.c)}`, detail:
+          `rupture d'alignement entre freres empiles : ${Math.round(petit.r.width)}px de texte ` +
+          `contre ${Math.round(ref.r.width)}px pour le bloc voisin (ratio ${ratio.toFixed(2)}, ` +
+          `seuil __L2F_MIN_RATIO__) — le lecteur voit un bord droit qui ne tombe pas au meme ` +
+          `endroit. Aligner les deux blocs, ou DECLARER la mesure de lecture par ` +
+          `data-mesure-lecture sur le bloc etroit`});
+      }
+    }
+  }
+
+  // ---- CONTENU ROGNE (TF-0551, 24/08) : ce qu'un oracle VISUEL ne peut pas voir --------
+  //
+  // LE FAIT, ET C'EST LE DEFAUT LE PLUS GRAVE QUE CE SOCLE AIT LAISSE PASSER. Une fiche livree,
+  // declaree conforme la veille par les deux controles, avait perdu DEUX SECTIONS ENTIERES et son
+  // pied de page. Le gabarit est une feuille A4 a hauteur FIGEE — .page{height:297mm;
+  // overflow:hidden} — et le contenu ajoute l'a depassee. Mesure : boite 1123px, contenu 1441px,
+  // 318px sous la ligne de flottaison, 41 elements feuilles porteurs de texte devenus invisibles.
+  // AUCUN SIGNAL, ni a l'ecran ni a l'impression. Le defaut n'a ete vu que parce qu'on a compare
+  // les mots du PDF a ceux de la page : 1132 contre 1313.
+  //
+  // LA CAUSE EST STRUCTURELLE, et c'est pourquoi cette regle ne pouvait pas exister avant d'etre
+  // payee : un controle qui juge l'apparence de ce qui reste VISIBLE ne peut rien dire de ce qui a
+  // ete ROGNE. `overflow:hidden` EST le mecanisme qui rend un defaut invisible a un oracle visuel.
+  // On ne regarde donc plus l'apparence : on compare la taille du CONTENU a celle de la BOITE.
+  //
+  // PORTEE VOLONTAIREMENT ETROITE — `hidden` et `clip` seulement. `auto` et `scroll` laissent au
+  // lecteur la possibilite de defiler a l'ecran ; les juger ici accuserait des zones de defilement
+  // legitimes, dont le socle prescrit lui-meme l'usage pour les tableaux larges.
+  {
+    const MARGE = 2;                       // 2px : le bruit d'arrondi d'un rendu, pas une perte
+    for (const el of document.body.querySelectorAll('*')) {
+      if (!visible(el)) continue;
+      // TF-0847 (05/09) — UN CHAMP DE SAISIE DEFILE NATIVEMENT. La feuille du navigateur lui pose
+      // un rognage, donc une adresse plus longue que le champ entrait ici : « zero element de
+      // texte invisible » et BLOQUANT quand meme, aux quatre largeurs, pendant que la zone de
+      // texte voisine passait. Le produit avait troque son champ contre une zone de texte.
+      if (el.matches('input, select')) continue;
+      const cs = getComputedStyle(el);
+      const oy = cs.overflowY, ox = cs.overflowX;
+      const masqueY = oy === 'hidden' || oy === 'clip';
+      const masqueX = ox === 'hidden' || ox === 'clip';
+      if (!masqueY && !masqueX) continue;
+      const dy = masqueY ? el.scrollHeight - el.clientHeight : 0;
+      const dx = masqueX ? el.scrollWidth - el.clientWidth : 0;
+      if (dy <= MARGE && dx <= MARGE) continue;
+      // TRONCATURE ASSUMEE ET VISIBLE : une seule ligne coupee avec des points de suspension est
+      // un choix que le lecteur VOIT. Ce n'est pas du contenu perdu en silence, et l'accuser ferait
+      // condamner un usage que la charte prescrit pour les libelles longs.
+      if (cs.textOverflow === 'ellipsis' && dy <= MARGE) continue;
+      if (el.hasAttribute('data-rognage-assume')) continue;
+      // CE QUI EST PERDU, nomme comme L2 le fait pour les largeurs : les elements FEUILLES
+      // porteurs de texte dont le haut tombe sous la ligne de flottaison de la boite.
+      const boite = el.getBoundingClientRect();
+      const perdus = [];
+      for (const f of el.querySelectorAll('*')) {
+        if (f.children.length) continue;                       // pas une feuille
+        const t = (f.textContent || '').trim();
+        if (!t) continue;
+        const r = f.getBoundingClientRect();
+        if (r.top - boite.top >= el.clientHeight - MARGE
+            || r.left - boite.left >= el.clientWidth - MARGE) perdus.push(f);
+      }
+      const cites = perdus.slice(0, 3).map((f) => label(f)).join(' · ');
+      issues.contenu_rogne.push({ what: label(el), detail:
+        (dy > MARGE ? `contenu ${el.scrollHeight}px pour une boite de ${el.clientHeight}px ` +
+                      `(${dy}px sous la ligne de flottaison)` : '') +
+        (dy > MARGE && dx > MARGE ? ' et ' : '') +
+        (dx > MARGE ? `contenu ${el.scrollWidth}px de large pour ${el.clientWidth}px` : '') +
+        ` — overflow:${masqueY ? oy : ox} MASQUE ce debordement : ${perdus.length} element(s) de ` +
+        `texte invisible(s)` + (cites ? `, dont ${cites}` : '') + '. Aucun signal n\'est donne au ' +
+        `lecteur, ni a l'ecran ni a l'impression. Une hauteur de page est un PLANCHER ` +
+        `(min-height), jamais un plafond : remplacer height par min-height, ou declarer la ` +
+        `troncature par data-rognage-assume si elle est voulue et visible` });
+    }
+  }
+
+  // ---- CONTROLES D'UNE MEME RANGEE, alignes a 2 px pres (TF-0773, 02/09) ---------------
+  //
+  // LE FAIT : sur une capture d'un livrable servi, quatre champs d'hypotheses d'une meme rangee
+  // de grille tombaient sur DEUX hauteurs. Retour humain, mot pour mot : « textbox pas
+  // alignes ». Aucune famille ne mesurait l'alignement des CONTROLES — V3 juge des series de
+  // blocs, L2 des largeurs de texte, et une rangee de formulaire n'est ni l'un ni l'autre.
+  //
+  // LA CAUSE, et c'est elle qu'il faut nommer dans le message : l'etiquette de l'un des champs
+  // portait son etiquette de STATUT dans le libelle, donc passait sur deux lignes, donc
+  // poussait son champ vers le bas. La regle de socle qui en decoule : une etiquette de statut
+  // se pose SOUS le champ, jamais dans le libelle (lisibilite.md L26 bis).
+  //
+  // GARDES : on ne juge qu'une rangee reelle (deux enfants d'une meme grille ou boite flexible
+  // dont les boites se recouvrent verticalement), et l'ecart declare se tait
+  // (`data-alignement-ok`).
+  //
+  // TF-1663 (lot Produit-81 20261013b, RT-8) — UNE GRILLE DE MISE EN PAGE N'EST PAS UNE RANGEE.
+  // La grille « sommaire lateral + contenu » d'une page au socle (L25) a deux enfants qui portent
+  // chacun un controle : le champ de recherche du sommaire (L13) et le premier bouton de filtre
+  // d'un tableau, 3 000 px plus bas dans <main>. Mesure du 13/10 : bloquant a 1280, 1920, 2560 et
+  // 3840 px, « ecart de 2 920px », et le seul geste offert etait data-alignement-ok sur la page
+  // entiere, qui faisait taire la regle pour toute vraie rangee qu'elle contient. Deux gardes,
+  // aucune ne touche une rangee de champs :
+  //   · un enfant dont le premier controle vit sous un <nav> est une NAVIGATION, pas un champ ;
+  //   · un enfant plus haut que la fenetre est une REGION de page, pas la cellule d'un champ
+  //     (une etiquette et son champ ne font jamais un ecran de haut).
+  // Les grilles imbriquees restent jugees : une rangee de champs DANS <main> l'est toujours.
+  //
+  // TF-2162 (lot Produit-86 20261104a, RD-6) — LES CASES D'UN PANNEAU OU D'UN MENU DEPLIE NE SONT
+  // PAS UNE RANGEE. Un menu de colonnes ouvert range ses cases en grille, les libelles courent sur
+  // une a trois lignes, et les cases centrees dans leur libelle tombent a des hauteurs differentes :
+  // 7 constats bloquants sur un produit, levables seulement par data-alignement-ok. Un enfant dont
+  // le premier controle est une CASE (checkbox, radio) et qui vit dans un panneau ou un menu deplie
+  // n'est pas compte. Panneau ou menu deplie = un `details`, un role menu|listbox|dialog, un
+  // `[popover]`, ou la cible `aria-controls` d'un bouton `aria-expanded="true"`. Les CHAMPS de
+  // saisie du meme panneau restent juges (ctrl-champs-dans-panneau-deplie.html) ; un menu qui ne
+  // porte aucun de ces marqueurs n'est pas reconnu, `data-alignement-ok` reste le geste.
+  {
+    const premierControle = (el) => el.matches('input, select, textarea, button')
+      ? el : el.querySelector('input, select, textarea, button');
+    const hauteurFenetre = window.innerHeight || 900;
+    const cibles = [...document.querySelectorAll('[aria-expanded="true"][aria-controls]')]
+      .flatMap((t) => t.getAttribute('aria-controls').split(/\s+/).filter(Boolean))
+      .map((id) => document.getElementById(id)).filter(Boolean);
+    const dansPanneauDeplie = (el) => !!el.closest('details, [role="menu"], [role="listbox"], [role="dialog"], [popover]')
+      || cibles.some((p) => p.contains(el));
+    const estCase = (c) => { const x = premierControle(c); return !!x && x.matches('input[type="checkbox"], input[type="radio"]'); };
+    for (const boite of document.body.querySelectorAll('*')) {
+      const cs = getComputedStyle(boite);
+      if (cs.display !== 'grid' && cs.display !== 'flex') continue;
+      if (boite.closest('table, nav, .tf-panel')) continue;
+      const enfants = [...boite.children]
+        .filter((c) => visible(c) && premierControle(c) && visible(premierControle(c)))
+        .filter((c) => !premierControle(c).closest('nav')
+                       && c.getBoundingClientRect().height <= hauteurFenetre)
+        .filter((c) => !(estCase(c) && dansPanneauDeplie(c)));
+      if (enfants.length < 2) continue;
+      const boites = enfants.map((c) => ({ c, r: c.getBoundingClientRect(),
+                                           ctrl: premierControle(c).getBoundingClientRect() }));
+      const rangees = [];
+      for (const b of boites) {
+        const rang = rangees.find((g) => g.some((x) =>
+          Math.min(x.r.bottom, b.r.bottom) - Math.max(x.r.top, b.r.top) > 4));
+        if (rang) rang.push(b); else rangees.push([b]);
+      }
+      for (const rang of rangees) {
+        if (rang.length < 2) continue;
+        if (rang.some((x) => x.c.closest('[data-alignement-ok]'))) continue;
+        const hauts = rang.map((x) => x.ctrl.top);
+        const ecart = Math.max(...hauts) - Math.min(...hauts);
+        if (ecart <= __ALIGN_TOL__) continue;
+        const bas = rang.find((x) => x.ctrl.top === Math.max(...hauts));
+        issues.controles_desalignes.push({ what: label(boite), detail:
+          `${rang.length} controles d'une meme rangee sur ${new Set(hauts.map(Math.round)).size} ` +
+          `hauteurs — ecart de ${Math.round(ecart)}px (tolerance __ALIGN_TOL__px), le plus bas ` +
+          `etant ${label(bas.c)}. Cause la plus frequente : une etiquette qui passe sur deux ` +
+          `lignes parce qu'elle porte son statut dans son libelle — l'etiquette de statut se ` +
+          `pose SOUS le champ. Ecart voulu : data-alignement-ok` });
+      }
+    }
+  }
+
+  // ---- ROGNAGE d'un tableau DANS un conteneur defilant (TF-0771, 02/09) -----------------
+  //
+  // LE FAIT : une console de donnees livree a 1 440 px rendait V1 a 1 301 px pour 1 136
+  // disponibles, V3 a 1 256, V7 a 1 376. render_page AVAIT releve le debordement ; la revue l'a
+  // classe « acceptable » parce que le conteneur defilait — sans mesurer ce que le lecteur
+  // perdait. Retour humain : « les pages doivent profiter de toute la largeur de l'ecran ».
+  //
+  // CE QUI CHANGE : un conteneur `overflow-x:auto` rend un tableau CONSULTABLE, il ne le rend
+  // pas LISIBLE, et sur un grand ecran il n'a aucune excuse — la place est la. Au-dela de
+  // __ROGNAGE_MIN_VIEWPORT__ px de fenetre, le rognage d'un TABLEAU dans un conteneur defilant
+  // est BLOQUANT. Sous ce seuil, le defilement reste la parade prescrite (composants.md §6).
+  if (window.innerWidth >= __ROGNAGE_MIN_VIEWPORT__) {
+    for (const boite of document.body.querySelectorAll('*')) {
+      const cs = getComputedStyle(boite);
+      if (!(cs.overflowX === 'auto' || cs.overflowX === 'scroll')) continue;
+      const t = boite.querySelector('table');
+      if (!t || !visible(t)) continue;
+      const perdu = boite.scrollWidth - boite.clientWidth;
+      if (perdu <= 1) continue;
+      if (boite.closest('[data-rognage-assume]')) {
+        issues.unmeasured.push({ what: label(boite), detail:
+          `rognage de tableau DECLARE assume (data-rognage-assume) : ${perdu}px hors champ a ` +
+          `${window.innerWidth}px de fenetre — non juge, mais compte` });
+        continue;
+      }
+      issues.rognage_donnees.push({ what: label(boite), detail:
+        `tableau rogne dans un conteneur defilant : ${boite.scrollWidth}px de contenu pour ` +
+        `${boite.clientWidth}px disponibles (${perdu}px hors champ) a ${window.innerWidth}px de ` +
+        `fenetre. Un conteneur qui defile rend le tableau CONSULTABLE, pas LISIBLE : au-dela de ` +
+        `__ROGNAGE_MIN_VIEWPORT__px la place existe, la page doit la prendre (page de donnees = ` +
+        `pleine largeur adaptative). Replier en cartes, reduire les colonnes, ou assumer par ` +
+        `data-rognage-assume — un ecart assume se declare, il ne se classe pas « acceptable » ` +
+        `en revue` });
+    }
+  }
+
+  // ---- PROSE ETROITE sur une page de DONNEES (TF-0778, 02/09) --------------------------
+  //
+  // LE FAIT : `.chapo { max-width: 90ch }` dans une console pleine largeur — « repete des
+  // dizaines de fois sans etre definitivement corrige », dit le retour humain. L2 ne l'a jamais
+  // vu parce qu'elle ne regarde que `p, dd, li, blockquote, .va, .prose` : un `.chapo` en
+  // `<div>` n'est aucun des six. La regle de socle tranche les deux doctrines de largeur : page
+  // de donnees = pleine largeur, la colonne de lecture ne vaut que pour la prose — et un bloc
+  // de texte y occupe la largeur de son conteneur, ou deux lignes.
+  const pageDonnees = !!document.querySelector(
+    '[data-page="donnees"], [data-page="données"], [data-page="data"], [data-page="console"]');
+  if (pageDonnees && window.innerWidth >= __L2_MIN_VIEWPORT__) {
+    const vusP = new Set();
+    for (const el of document.body.querySelectorAll('*')) {
+      if (!visible(el)) continue;
+      if (el.closest('table, nav, .tf-panel, [data-mesure-lecture]')) continue;
+      if (dansDetailsFerme(el)) continue;           // TF-2220
+      const cs = getComputedStyle(el);
+      if (cs.display === 'inline' || cs.display === 'none') continue;
+      // Le texte PROPRE de l'element : un conteneur qui herite du texte de ses enfants n'est
+      // pas un bloc de texte, et le juger accuserait la page entiere pour un seul paragraphe.
+      const propre = [...el.childNodes]
+        .filter((n) => n.nodeType === 3).map((n) => n.textContent.trim()).join(' ').trim();
+      if (propre.length < __L2_MIN_CHARS__) continue;
+      const par = el.parentElement;
+      if (!par) continue;
+      const w = el.getBoundingClientRect().width, wp = par.getBoundingClientRect().width;
+      if (w <= 0 || wp <= 0) continue;
+      const ratio = w / wp;
+      if (ratio >= __DONNEES_PROSE_MIN__) continue;
+      const cle = el.tagName + '|' + (el.className || '');
+      if (vusP.has(cle)) continue;
+      vusP.add(cle);
+      issues.prose_etroite.push({ what: label(el), detail:
+        `page de donnees : bloc de texte a ${Math.round(w)}px pour ${Math.round(wp)}px offerts ` +
+        `(${Math.round(ratio * 100)} %, plancher ${Math.round(__DONNEES_PROSE_MIN__ * 100)} %) — ` +
+        `sur une page de donnees, un bloc de prose prend la largeur de son conteneur, ou deux ` +
+        `lignes. La colonne de lecture reste legitime pour un passage de prose ASSUME : le ` +
+        `declarer par data-mesure-lecture` });
+    }
+  }
+
+  // ---- CONTENEUR BRIDE sur une page de DONNEES (TF-0930, 08/09) -----------------------
+  //
+  // LE FAIT : retour humain « augmente la largeur complete du document » sur une page de
+  // mapping a sept colonnes. Le socle bride `.wrap` par `--w: clamp(75vw, 1680px, 92vw)`,
+  // soit 1 260 px dans une fenetre de 1 370 et 1 680 dans une fenetre de 1 920 — pendant que
+  // I1 et L26 ecrivent « pleine largeur adaptative ». Personne ne le voyait : L26 ne juge une
+  // bride que sur un conteneur DE TABLEAU et ne resout pas `var(--w)` ; la prose etroite
+  // compare un bloc a SON PARENT, et un bloc qui remplit un conteneur bride rend 100 %.
+  // La mesure qui manque est celle du conteneur contre la FENETRE.
+  if (pageDonnees && window.innerWidth >= __DONNEES_CONTENEUR_MIN_VIEWPORT__) {
+    const vusC = new Set();
+    // Le conteneur principal, et lui seul : un `.wrap` imbrique dans un autre conteneur
+    // n'est pas ce que le lecteur voit comme la largeur du document.
+    const candidats = [...document.querySelectorAll('.wrap, main, [data-page]')].filter((el) =>
+      el !== document.body && el !== doc && visible(el)
+      && !(el.parentElement && el.parentElement.closest('.wrap, main')));
+    for (const el of candidats) {
+      const w = el.getBoundingClientRect().width;
+      if (w <= 0) continue;
+      // TF-2776 : une navigation laterale declaree a cote du conteneur sort de la fenetre qu'on lui oppose.
+      const cadre = cadreSansNav(el, { left: 0, right: window.innerWidth });
+      if (cadre.width <= 0) continue;
+      const ratio = w / cadre.width;
+      if (ratio >= __DONNEES_CONTENEUR_MIN__) continue;
+      const cle = label(el);
+      if (vusC.has(cle)) continue;
+      vusC.add(cle);
+      const cs = getComputedStyle(el);
+      issues.conteneur_bride_donnees.push({ what: cle, detail:
+        `page de donnees : conteneur a ${Math.round(w)}px pour ${Math.round(cadre.width)}px de ` +
+        `fenetre${cadre.retire ? ` (${window.innerWidth}px moins ${Math.round(cadre.retire)}px de navigation declaree)` : ''} ` +
+        `(${Math.round(ratio * 100)} %, plancher ` +
+        `${Math.round(__DONNEES_CONTENEUR_MIN__ * 100)} %) — max-width calcule ` +
+        `${cs.maxWidth}. Une page qui se DECLARE page de donnees est PLEINE LARGEUR ` +
+        `adaptative : la place existe, la page doit la prendre. Retirer le plafond sur ce ` +
+        `conteneur ; la prose y est pleine largeur par defaut, une colonne de lecture (.chap.lire) ` +
+        `reste une OPTION DECLAREE chapitre par chapitre (TF-1622)` });
+    }
+  }
+
+  // ---- TF-1909 (RA-17, lot Produit-79 20261018b) : LE CONTENU CONTRE LA FENETRE (E4, 75 %) ----
+  //
+  // LE FAIT. Un rapport dont tous les chapitres portaient `.chap.lire` (1 080 px, centres) a passe
+  // check_html (selecteur exact du jeton) et render_page (7 largeurs x 2 themes), puis a ete refuse
+  // par l'exploitant : son contenu n'occupait que 28 % d'une fenetre de 3 840 px, la ou la regle E4
+  // du socle exige 75 a 100 %. Recidive de TF-1622. Aucune famille ne comparait le CONTENU a la
+  // FENETRE : L2 compare un bloc a son conteneur (qui le remplit : 100 %), V17 compare le conteneur
+  // a la fenetre mais sur une page de donnees seulement, V21 compare des freres entre eux (trois
+  // chapitres de 1 080 px sont homogenes), V18 ne compte que des caracteres par ligne.
+  //
+  // LA MESURE. L'EMPAN HORIZONTAL des blocs de contenu (paragraphes, listes, tableaux, figures,
+  // images et graphiques de plus de 120 x 40 px) hors bandeaux et navigations, contre la largeur de
+  // la fenetre, des GOUTTIERES DE LA PAGE creditees (le padding des ancetres du plus petit conteneur
+  // commun : le token canonique `clamp(75vw, 1680px, 92vw)` + `padding: 24px` rend 2 832 px de texte
+  // dans 3 840 — 73,75 % — et c'est pourtant 75 % de page). Un ASIDE ou une NAVIGATION laterale
+  // (moins de 45 % de la fenetre, face au contenu) compte dans l'empan : une page a barre laterale
+  // occupe sa fenetre. Un bandeau pleine largeur ne masque PAS un corps etroit, il n'est pas compte.
+  //   Sorties qui PASSENT (chacune jouee au banc) : le contenu prend la largeur (le token du socle) ;
+  //   un passage de lecture (.chap.lire) INSERE dans une page dont un autre bloc est large ; une
+  //   colonne etroite voulue, DECLAREE par data-colonne-ok sur son conteneur.
+  if (window.innerWidth >= __L2_MIN_VIEWPORT__) {
+    const HORS = 'nav, header, footer, aside, [role=navigation], [role=banner], [role=contentinfo], '
+      + '[role=complementary], .tf-panel, dialog';
+    const blocs = [...document.body.querySelectorAll(
+      'p, li, dd, dt, blockquote, pre, table, figure, img, svg, canvas')]
+      .filter((el) => !el.closest(HORS) && !dispenseDe(el) && !el.parentElement.closest('svg') && visible(el))
+      .filter((el) => {
+        if (!/^(img|svg|canvas)$/i.test(el.tagName)) return true;
+        const r = el.getBoundingClientRect();
+        return r.width >= 120 && r.height >= 40;
+      });
+    const chars = blocs.reduce((n, el) => n + (el.textContent || '').trim().length, 0);
+    if (blocs.length >= 2 && chars >= __L2_MIN_CHARS__) {
+      const y0 = window.scrollY;
+      let gauche = Infinity, droite = -Infinity, haut = Infinity, bas = -Infinity;
+      for (const el of blocs) {
+        const r = el.getBoundingClientRect();
+        gauche = Math.min(gauche, r.left); droite = Math.max(droite, r.right);
+        haut = Math.min(haut, r.top + y0); bas = Math.max(bas, r.bottom + y0);
+      }
+      for (const el of document.body.querySelectorAll(
+        'aside, nav, [role=navigation], [role=complementary]')) {
+        if (!visible(el)) continue;
+        const r = el.getBoundingClientRect();
+        if (r.width > 0.45 * window.innerWidth) continue;
+        const face = Math.min(bas, r.bottom + y0) - Math.max(haut, r.top + y0);
+        if (face < 100) continue;
+        gauche = Math.min(gauche, r.left); droite = Math.max(droite, r.right);
+      }
+      let lca = blocs[0].parentElement;
+      while (lca && !blocs.every((b) => lca.contains(b))) lca = lca.parentElement;
+      let padG = 0, padD = 0;
+      for (let e = lca; e && e !== doc; e = e.parentElement) {
+        const cs = getComputedStyle(e);
+        padG += parseFloat(cs.paddingLeft) || 0; padD += parseFloat(cs.paddingRight) || 0;
+      }
+      const empan = (droite - gauche) + padG + padD;
+      const ratio = empan / window.innerWidth;
+      if ((empan + 4) / window.innerWidth < __CONTENU_MIN__) {
+        issues.contenu_etroit.push({ what: lca ? label(lca) : 'body', detail:
+          `le contenu occupe ${Math.round(empan)}px d'une fenetre de ${window.innerWidth}px ` +
+          `(${Math.round(ratio * 100)} %, plancher ${Math.round(__CONTENU_MIN__ * 100)} % — regle E4 : ` +
+          `le contenu principal occupe 75 a 100 % de la fenetre). Trois sorties PASSENT (chacune jouee ` +
+          `au banc) : laisser le contenu prendre la largeur du conteneur du socle ` +
+          `(--w: clamp(75vw, 1680px, 92vw)) au lieu d'envelopper chaque chapitre dans .chap.lire ; ` +
+          `n'employer .chap.lire que pour un PASSAGE de lecture insere dans une page dont un autre ` +
+          `bloc est large (tableau, grille, graphique) ; ou declarer la colonne etroite voulue par ` +
+          `data-colonne-ok sur son conteneur` });
+      }
+    }
+  }
+
+  // ---- TF-1917 (RT-134, lot Produit-02 20261018d) : LA BORNE BASSE DE LA MESURE DE LECTURE --------
+  //
+  // LE FAIT. Un produit demande « les textes sont trop verticaux » ; la refonte elargit le conteneur
+  // a 1 280 px mais passe a QUATRE colonnes de cartes : les lignes restent a une trentaine de
+  // caracteres. Critique d'implementation, V18 et relecture d'intention passent — V18 ne borne que le
+  // MAXIMUM (135 caracteres par ligne), jamais le minimum. Retour humain : « tu en ajoutes un de plus
+  // en largeur, alors qu'il aurait fallu en supprimer 1 pour arriver a 2 max. »
+  //
+  // LA MESURE. Meme geometrie que V18 : les lignes REELLEMENT peintes (un `Range` par caractere, le
+  // haut de chaque boite), pas une division par la taille de police. Le compte retenu est celui des
+  // lignes PLEINES (toutes sauf la derniere, partielle par nature) : divise par toutes les lignes,
+  // il accuserait un bloc de 55 caracteres par ligne dont la derniere ligne tient en trois mots.
+  // Un bloc de PLUS DE TROIS lignes (au moins quatre) sous 45 caracteres par ligne est signale.
+  // Aux largeurs de bureau seulement : sous L2_MIN_VIEWPORT, une colonne etroite est le telephone,
+  // pas un choix de mise en page.
+  // PERIMETRE : de la prose (p, li, dd, blockquote, .prose, .chapo, .va), pas des libelles — sont
+  // exclus les tableaux et leurs cellules (le repli en cartes a son propre controle), les
+  // navigations, les blocs de code, les legendes et notes (figcaption, small, .legende, .note-bas),
+  // les infobulles et panneaux de filtre, les textes de tuile de chiffre cle (.kpi, .tuile), les
+  // boutons et resumes de details, et une colonne etroite DECLAREE (data-colonne-ok, ou la mesure de
+  // lecture declaree data-mesure-lecture : l'auteur a assume sa largeur, V18 la tient deja pour telle).
+  if (window.innerWidth >= __L2_MIN_VIEWPORT__) {
+    const MIN_CPL = __V24_MIN_CPL__, MIN_LIGNES = __V24_MIN_LIGNES__;
+    const SELECTEUR = 'p, li, dd, blockquote, .prose, .chapo, .va';
+    const EXCLUS = 'table, nav, pre, code, figcaption, small, .legende, .note-bas, .tf-panel, '
+      + '[role=tooltip], .kpi, .tuile, button, summary, [data-mesure-lecture]';
+    const lignesPleines = (el) => {
+      // Les caracteres peints par ligne : un Range par caractere visible, regroupes par `top`.
+      const marche = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+      const tops = [];
+      for (let n = marche.nextNode(); n; n = marche.nextNode()) {
+        if (n.parentElement && n.parentElement.closest('script, style')) continue;
+        const t = n.textContent;
+        for (let i = 0; i < t.length; i++) {
+          if (!t[i].trim()) continue;
+          const r = document.createRange();
+          r.setStart(n, i); r.setEnd(n, i + 1);
+          const b = r.getBoundingClientRect();
+          if (b.width > 0 && b.height > 0) tops.push(b.top);
+        }
+      }
+      const tolerance = Math.max(4, 0.4 * (parseFloat(getComputedStyle(el).fontSize) || 16));
+      const lignes = [];
+      for (const top of tops) {
+        const l = lignes.find((x) => Math.abs(x.top - top) <= tolerance);
+        if (l) l.n += 1; else lignes.push({ top, n: 1 });
+      }
+      lignes.sort((a, b) => a.top - b.top);
+      return lignes.map((l) => l.n);
+    };
+    const verticales = [];
+    for (const el of document.body.querySelectorAll(SELECTEUR)) {
+      if (el.closest(EXCLUS) || dispenseDe(el) || el.querySelector(SELECTEUR)) continue;
+      if (!visible(el) || dansDetailsFerme(el)) continue;   // TF-2220
+      if (getComputedStyle(el).display === 'inline') continue;
+      const longueur = (el.textContent || '').replace(/\s+/g, ' ').trim().length;
+      if (longueur < MIN_LIGNES * MIN_CPL * 0.3) continue;   // sous ~54 caracteres : pas de prose
+      const r = el.getBoundingClientRect();
+      // Pre-filtre peu couteux : un caractere moyen mesure ~0,5 em ; un bloc qui en offre plus du
+      // double du plancher par ligne ne peut pas etre en dessous, il ne se mesure pas.
+      const em = parseFloat(getComputedStyle(el).fontSize) || 16;
+      if (r.width / (0.5 * em) > 2 * MIN_CPL) continue;
+      const par = lignesPleines(el);
+      if (par.length < MIN_LIGNES) continue;
+      const pleines = par.slice(0, -1);
+      const cpl = Math.round(pleines.reduce((a, b) => a + b, 0) / pleines.length);
+      if (cpl >= MIN_CPL) continue;
+      verticales.push({ el, cpl, lignes: par.length, largeur: Math.round(r.width) });
+    }
+    verticales.slice(0, 8).forEach((v) => {
+      issues.prose_verticale.push({ what: label(v.el), detail:
+        `${v.cpl} caracteres par ligne pleine mesures (${v.lignes} lignes peintes, bloc de ${v.largeur}px ` +
+        `dans une fenetre de ${window.innerWidth}px ; plancher ${MIN_CPL} au-dela de ${MIN_LIGNES - 1} ` +
+        `lignes) — un texte aussi etroit se lit « trop vertical » : l'oeil change de ligne tous les ` +
+        `quatre ou cinq mots. Diminuer le nombre de colonnes (passer de 4 a 2 au plus) ou laisser le ` +
+        `bloc prendre la largeur du conteneur ; une colonne etroite voulue se declare par ` +
+        `data-colonne-ok sur son conteneur` });
+    });
+    if (verticales.length > 8) {
+      issues.prose_verticale.push({ what: `${verticales.length - 8} autre(s) bloc(s)`, detail:
+        `${verticales.length} blocs de prose au total sous ${MIN_CPL} caracteres par ligne : ` +
+        `${verticales.length - 8} non detailles (le detail est plafonne a 8)` });
+    }
+  }
+
+  // ---- TF-1966 (RT-15, lot Produit-84 20261019e) : L'EQUILIBRE DES COLONNES D'UN TABLEAU --------------
+  //
+  // LE FAIT. Un tableau donnait 41 % de sa largeur a une colonne remplie a 10 %, pendant qu'une colonne
+  // etroite enroulait son texte sur des lignes hautes : la rangee mesurait 607 px ; apres un `colgroup`
+  // derive du contenu, 347 px. render_page rendait PASS : V1 regarde le bord droit, V4 les recouvrements,
+  // V18 la mesure de lecture d'une prose, L2 un bloc de texte — aucune famille ne comparait la LARGEUR
+  // d'une colonne a la place que son contenu y occupe.
+  //
+  // LA MESURE. Par colonne du corps : sa part de la largeur du tableau, l'EMPRISE de son contenu (la
+  // boite des lignes REELLEMENT peintes, un Range sur le contenu de chaque cellule — pas la largeur du
+  // bloc, qui vaut toujours celle de la cellule) rapportee a sa largeur utile, et le nombre de lignes de
+  // sa cellule mediane. Une colonne « large et vide » : au moins 25 % du tableau, emprise maximale sous
+  // 30 % de sa largeur utile. Une colonne « etranglee » : plus etroite que la precedente, emprise au
+  // moins 85 % de sa largeur utile, cellule mediane sur 3 lignes ou plus. Les deux ensemble disent que
+  // la place existe et qu'elle est mal repartie. AVERTISSEMENT (regle neuve, D-70 (b)) : une largeur de
+  // colonne imposee est parfois voulue. Ecart voulu : `data-colonnes-ok` sur le tableau ou un ancetre.
+  // Aux largeurs de bureau seulement, sur un tableau d'au moins 3 lignes de corps qui est encore un
+  // tableau (le repli en cartes a son propre controle).
+  if (window.innerWidth >= __L2_MIN_VIEWPORT__) {
+    for (const t of document.body.querySelectorAll('table')) {
+      if (!visible(t) || t.closest('[data-colonnes-ok]')) continue;
+      const rangees = [...t.tBodies].flatMap((b) => [...b.rows])
+        .filter((r) => getComputedStyle(r).display === 'table-row');
+      if (rangees.length < 3) continue;
+      const tw = t.getBoundingClientRect().width;
+      const nb = Math.max(...rangees.map((r) => r.cells.length));
+      if (tw < 480 || nb < 2) continue;
+      const cols = [];
+      for (let c = 0; c < nb; c++) {
+        const cellules = rangees.map((r) => r.cells[c]).filter((x) => x && x.colSpan === 1 && visible(x));
+        if (cellules.length < 3) { cols.push(null); continue; }
+        const mesures = cellules.map((td) => {
+          const cs = getComputedStyle(td);
+          const utile = td.getBoundingClientRect().width
+            - (parseFloat(cs.paddingLeft) || 0) - (parseFloat(cs.paddingRight) || 0);
+          const rg = document.createRange(); rg.selectNodeContents(td);
+          const b = rg.getBoundingClientRect();
+          const vide = !(td.textContent || '').trim() && !td.querySelector('img, svg, canvas, input, button');
+          const lh = parseFloat(cs.lineHeight) || 1.4 * (parseFloat(cs.fontSize) || 16);
+          return { utile, emprise: vide ? 0 : b.width, lignes: vide ? 0 : Math.max(1, Math.round(b.height / lh)) };
+        });
+        const utile = mesures[0].utile;
+        if (!(utile > 0)) { cols.push(null); continue; }
+        const lignes = mesures.map((m) => m.lignes).sort((a, b) => a - b);
+        cols.push({
+          c, part: cellules[0].getBoundingClientRect().width / tw, utile,
+          remplissage: Math.max(...mesures.map((m) => m.emprise)) / utile,
+          mediane: lignes[Math.floor(lignes.length / 2)],
+          titre: ((t.tHead && t.tHead.rows[0] && t.tHead.rows[0].cells[c]) || cellules[0]).textContent
+            .trim().replace(/\s+/g, ' ').slice(0, 24),
+        });
+      }
+      const vastes = cols.filter((k) => k && k.part >= 0.25 && k.remplissage <= 0.30);
+      for (const v of vastes) {
+        const etrangle = cols.find((k) => k && k.c !== v.c && k.utile < v.utile
+          && k.remplissage >= 0.85 && k.mediane >= 3);
+        if (!etrangle) continue;
+        issues.colonnes_desequilibrees.push({ what: label(t), detail:
+          `la colonne « ${v.titre} » prend ${Math.round(v.part * 100)} % de la largeur du tableau et son ` +
+          `contenu n'en occupe que ${Math.round(v.remplissage * 100)} %, pendant que la colonne ` +
+          `« ${etrangle.titre} » (${Math.round(etrangle.part * 100)} % de la largeur) remplit sa place et ` +
+          `passe sur ${etrangle.mediane} lignes en mediane — la place existe, elle est mal repartie, et la ` +
+          `rangee s'allonge pour rien. Poser un <colgroup> dont les largeurs derivent du contenu (part de ` +
+          `chaque colonne proportionnelle a son emprise), ou assumer la repartition par data-colonnes-ok ` +
+          `sur le tableau` });
+        break;
+      }
+    }
+  }
+
+  // ---- TF-1963 (RT-12, lot Produit-84 20261019d) : UN PANNEAU DEPLIE SE MESURE ---------------------
+  //
+  // LE FAIT. Une copie temoin du composant de filtres, privee de ses jetons de couleur, a rendu
+  // `render_page --etats-ouverts` PASS alors que ses cinq panneaux avaient `background-color:
+  // rgba(0,0,0,0)` : le texte du tableau passait a travers la liste de valeurs. L'utilisateur l'a vu ;
+  // aucune famille ne mesurait le FOND d'un panneau, et V4 ne compare que des boites de TEXTE entre
+  // elles — un panneau transparent n'en est pas une. L'etat deplie etait rendu, pas mesure.
+  //
+  // LA MESURE, sur chaque panneau visible (`.tf-panel`, dialogue, listbox, menu, `[data-panneau]`, ou
+  // tout bloc positionne au-dessus du flux — absolute/fixed, z-index > 0 — qui porte au moins deux
+  // controles ; ni bandeau, ni navigation, ni scrim plein ecran) : (1) NEUF points d'echantillon dans
+  // la partie de sa boite qui est dans la fenetre ; en chacun, la pile d'elements du navigateur : si
+  // AUCUN element de la pile, du plus haut jusqu'au panneau compris, n'a un fond opaque (alpha 0,9 au
+  // moins, ou une image de fond), et qu'un element de texte vit DESSOUS, le point laisse voir la page ;
+  // trois points sur neuf suffisent. (2) trois controles du panneau (premier, median, dernier) : l'element
+  // peint au centre de chacun doit lui appartenir — sinon il est RECOUVERT. Un panneau dont aucune partie
+  // n'est dans la fenetre n'est pas mesurable : il est compte au non-mesure, jamais passe sous silence.
+  {
+    const SEL = '.tf-panel, [role="dialog"], [role="listbox"], [role="menu"], [aria-modal="true"], '
+      + 'dialog[open], [data-panneau]';
+    const CONTROLES = 'input, button, label, select, textarea, a[href], [role="option"], [role="menuitem"]';
+    const HORS_PANNEAU = 'header, nav, footer, [role=banner], [role=navigation], [role=contentinfo]';
+    const aire = window.innerWidth * window.innerHeight;
+    const candidats = new Set(document.body.querySelectorAll(SEL));
+    for (const el of document.body.querySelectorAll('*')) {
+      if (candidats.has(el)) continue;
+      const cs = getComputedStyle(el);
+      if (!(cs.position === 'absolute' || cs.position === 'fixed')) continue;
+      const z = parseInt(cs.zIndex, 10);
+      if (!(z > 0) || !visible(el) || el.closest(HORS_PANNEAU)) continue;
+      if (el.querySelectorAll(CONTROLES).length >= 2) candidats.add(el);
+    }
+    const opaque = (e) => {
+      const cs = getComputedStyle(e);
+      if (cs.backgroundImage && cs.backgroundImage !== 'none') return true;
+      if (cs.backdropFilter && cs.backdropFilter !== 'none') return true;
+      const c = parseColor(cs.backgroundColor);
+      return !!c && c.a >= 0.9;
+    };
+    const texteDessous = (e, panneau) => {
+      if (e === document.documentElement || e === document.body || panneau.contains(e) || e.contains(panneau)) return false;
+      if (/^(img|svg|canvas|video)$/i.test(e.tagName)) return true;
+      return [...e.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim().length > 1);
+    };
+    let nbJuges = 0;
+    for (const el of candidats) {
+      if (!visible(el) || el.closest(HORS_PANNEAU)) continue;
+      if ([...candidats].some((autre) => autre !== el && el.contains(autre))) continue;   // le plus interieur
+      const r = el.getBoundingClientRect();
+      if (r.width * r.height >= 0.8 * aire) continue;                                      // scrim, pas un panneau
+      const x0 = Math.max(r.left, 0), x1 = Math.min(r.right, window.innerWidth);
+      const y0 = Math.max(r.top, 0), y1 = Math.min(r.bottom, window.innerHeight);
+      if (x1 - x0 < 8 || y1 - y0 < 8) {
+        issues.unmeasured.push({ what: label(el), detail:
+          `panneau deplie hors de la fenetre (aucune partie visible) : fond et recouvrement NON mesures (TF-1963)` });
+        continue;
+      }
+      nbJuges += 1;
+      let traversants = 0;
+      for (const fx of [0.2, 0.5, 0.8]) for (const fy of [0.2, 0.5, 0.8]) {
+        const pile = document.elementsFromPoint(x0 + fx * (x1 - x0), y0 + fy * (y1 - y0));
+        const iPanneau = pile.findIndex((e) => e === el);
+        if (iPanneau < 0) continue;                       // point recouvert par autre chose : voir (2)
+        if (pile.slice(0, iPanneau + 1).some(opaque)) continue;
+        if (pile.slice(iPanneau + 1).some((e) => texteDessous(e, el))) traversants += 1;
+      }
+      const fond = getComputedStyle(el).backgroundColor;
+      if (traversants >= 3) {
+        issues.panneau_deplie.push({ what: label(el), detail:
+          `panneau deplie TRANSPARENT : fond ${fond}, et le texte de la page se lit a travers sur ` +
+          `${traversants} des 9 points mesures. Cause la plus frequente : un jeton de couleur (--surface, ` +
+          `--card, --bg) que la page n'a pas declare et que le composant consomme sans repli (TF-1964). ` +
+          `Donner au panneau un fond opaque, ou declarer le jeton` });
+      }
+      const controles = [...el.querySelectorAll(CONTROLES)].filter(visible);
+      const choisis = controles.length ? [controles[0], controles[Math.floor(controles.length / 2)],
+        controles[controles.length - 1]] : [];
+      const recouverts = [];
+      for (const c of new Set(choisis)) {
+        const cr = c.getBoundingClientRect();
+        const cx = cr.left + cr.width / 2, cy = cr.top + cr.height / 2;
+        if (cx < 0 || cy < 0 || cx > window.innerWidth || cy > window.innerHeight) continue;
+        const haut = document.elementFromPoint(cx, cy);
+        if (haut && !el.contains(haut) && !haut.contains(c)) recouverts.push([c, haut]);
+      }
+      if (recouverts.length) {
+        issues.panneau_deplie.push({ what: label(el), detail:
+          `panneau deplie RECOUVERT : ${recouverts.length} controle(s) sur ${new Set(choisis).size} mesures ` +
+          `(par exemple ${label(recouverts[0][0])}) ont au centre ${label(recouverts[0][1])}, qui n'appartient ` +
+          `pas au panneau — le lecteur ne les voit pas, ou ne les atteint pas. Revoir le z-index ou la ` +
+          `position du panneau` });
+      }
+    }
+  }
+
+  // ---- TF-1965 (RT-14, lot Produit-84 20261019d) : LES FILTRES DE COLONNE ONT UNE PLACE EN CARTES ---
+  //
+  // LE FAIT. Le repli en cartes du socle masque le `thead` (`display:none`) sous 900 px ; les
+  // declencheurs de filtre de colonne vivent dans ses `<th>`. Mesure : cinq boutons en 0 x 0 a 390 px,
+  // seule la recherche restait, render_page PASS. Une affordance qui n'existe pas sur le petit ecran est
+  // une affordance qui n'existe pas (loi n 1) — et rien ne le disait.
+  //
+  // LA MESURE. Dans un tableau visible, un declencheur `.tf-btn` dont un ancetre (le thead, au
+  // plus) est `display:none`. Le composant (table-filters.css) sort les filtres du thead masque et les
+  // pose en barre au-dessus des cartes ; une page qui n'embarque pas cette feuille, ou qui replie sans
+  // elle, est accusee. Ecart voulu : `data-filtres-remplaces="<raison, 8 caracteres au moins>"` sur le
+  // tableau ou un ancetre — la recherche de la page remplace alors les filtres, et le dit.
+  for (const t of document.body.querySelectorAll('table')) {
+    if (!visible(t)) continue;
+    const remplace = t.closest('[data-filtres-remplaces]');
+    if (remplace && (remplace.getAttribute('data-filtres-remplaces') || '').trim().length >= 8) continue;
+    const masques = [...t.querySelectorAll('.tf-btn')].filter((b) => {
+      for (let p = b; p && p !== t.parentElement; p = p.parentElement) {
+        if (getComputedStyle(p).display === 'none') return true;
+      }
+      return false;
+    });
+    if (!masques.length) continue;
+    issues.filtres_masques_repli.push({ what: label(t), detail:
+      `${masques.length} declencheur(s) de filtre de colonne masque(s) a ${window.innerWidth}px : leur ` +
+      `en-tete est en display:none (repli en cartes). Embarquer table-filters.css, qui pose les filtres ` +
+      `en barre au-dessus des cartes, ou declarer que la recherche les remplace : ` +
+      `data-filtres-remplaces="<raison>" sur le tableau` });
+  }
+
+  // ---- TF-1146 : RECENSEMENT DES EXEMPTIONS V4 EN BLOC ---------------------------------
+  //
+  // Une exemption qui ne se voit pas est un angle mort qui ne se corrige jamais. L invariant
+  // que V4 pretend tenir n est pas « deux rectangles se recouvrent » — c est « un libelle
+  // appartient a l element qu il annote ». Tant que les deux sont correles, V4 a raison ; le
+  // jour ou un libelle change d element sans changer de geometrie, elle est muette. Le
+  // recensement rend ce silence LISIBLE, page par page, avec son geste de migration.
+  {
+    const enBloc = [...document.querySelectorAll('[data-overlap-ok]')]
+      .filter((el) => !(el.getAttribute('data-overlap-ok') || '').trim());
+    if (enBloc.length) {
+      const echantillon = enBloc.slice(0, 3).map(label).join(' · ');
+      issues.overlap_en_bloc.push({
+        what: `${enBloc.length} element(s) exemptes EN BLOC — ${echantillon}` +
+              (enBloc.length > 3 ? ` … et ${enBloc.length - 3} autre(s)` : ''),
+        detail:
+          `data-overlap-ok sans valeur exempte l ELEMENT, pas la PAIRE : V4 ne juge AUCUN de ` +
+          `leurs recouvrements, voulu ou non. Un libelle de fleche tombe dans la boite VOISINE ` +
+          `y est invisible — c est exactement le defaut qui a traverse deux livraisons et quatre ` +
+          `executions des trois oracles avant d etre vu sur une capture (TF-1146). Geste : ` +
+          `declarer la paire, data-overlap-ok="<id de l element recouvert>" (plusieurs ids ` +
+          `separes par des espaces). Un recouvrement avec un autre element que ceux declares ` +
+          `redevient alors un constat. Un CALQUE (traits qui se croisent tous) declare un meme ` +
+          `jeton sur chacun, data-overlap-ok="calque-traits" : ils s exemptent entre eux et rien ` +
+          `d autre (TF-1281). Un noeud de schema (boite et textes) se groupe dans un <g> portant ` +
+          `un <title> : V4 ne juge plus son interieur, et le lecteur gagne une infobulle. ` +
+          `__ECHEANCE_OVERLAP__`,
+      });
+    }
+  }
+
+  // ---- SOMMAIRE PERDU AU DEFILEMENT (TF-0772, 02/09) ----------------------------------
+  //
+  // La moitie mesurable de L25 : `check_html` exige que le sommaire EXISTE, cette famille exige
+  // qu'il reste ATTEIGNABLE. Un sommaire pose en tete d'une page de 4 000 px disparait au
+  // premier tiers de la lecture et ne navigue plus rien — c'est le defaut du livrable servi, ou
+  // il n'y avait meme pas de sommaire du tout.
+  //
+  // Mesure : on defile aux 60 % de la page, on regarde si le sommaire est encore dans la
+  // fenetre, on revient. Deux seuils, ceux de la regle ecrite : plus de trois chapitres, plus
+  // de deux ecrans de haut.
+  {
+    const chapitres = [...document.querySelectorAll('h2')].filter(visible);
+    // TF-1145 (16/09) — TOUS les navs candidats, pas le premier. Cette famille lisait le MEME
+    // premier nav que L6 de check_html, avec le MEME selecteur, et lui demandait l'inverse :
+    // L6 veut des annonces de douze caracteres, cette famille veut qu'il tienne dans la fenetre.
+    // Sur un document long les deux ne tiennent pas ensemble — un sommaire EN CARTES, ou
+    // l'annonce se lit, ne peut pas etre collant. La page livree portait TROIS navigations, dont
+    // une barre sticky mesuree encore en fenetre apres 20 000 px de defilement, et cette famille
+    // rendait BLOQUANT aux six largeurs en designant les cartes. Elle juge desormais LE PLUS
+    // PERMANENT : si UNE navigation reste atteignable, le lecteur n'a rien perdu.
+    // TF-1626 (RA-6, 13/10/2026) — une barre d'onglets (role=tablist, deux onglets au moins)
+    // navigue elle aussi : « un menu vertical en plus des onglets n'a aucun intérêt ». Collante,
+    // elle suffit ; elle est jugee ici comme les autres navigations, sur sa permanence.
+    const navs = [...document.querySelectorAll(
+      'nav.toc, nav[aria-label^="Sommaire"], nav[aria-label^="sommaire"], [role="tablist"]')]
+      .filter((n) => n.getAttribute('role') !== 'tablist' || n.querySelectorAll('[role="tab"]').length >= 2);
+    const hauteur = document.documentElement.scrollHeight;
+    if (chapitres.length > __SOMMAIRE_MIN_CHAP__ && navs.length
+        && hauteur > window.innerHeight * __SOMMAIRE_MIN_ECRANS__) {
+      const y0 = window.scrollY;
+      window.scrollTo(0, Math.round(hauteur * 0.6));
+      const restants = navs.filter((nav) => {
+        const r = nav.getBoundingClientRect();
+        return r.bottom > 0 && r.top < window.innerHeight && r.width > 1 && r.height > 1;
+      });
+      window.scrollTo(0, y0);
+      if (!restants.length) {
+        issues.sommaire_perdu.push({ what: navs.map(label).join(' + '), detail:
+          `AUCUNE des ${navs.length} navigation(s) de la page n'est dans la fenetre apres ` +
+          `defilement : ${chapitres.length} chapitres sur ${Math.round(hauteur)}px ` +
+          `(${(hauteur / window.innerHeight).toFixed(1)} ecrans), et rien n'est atteignable aux ` +
+          `60 % de la page. Au-dela de trois chapitres ou deux ecrans, UNE navigation au moins ` +
+          `est VISIBLE EN PERMANENCE : laterale collee sur bureau ` +
+          `(position: sticky; top: var(--hh)), bande repliable sur mobile. Il suffit qu'UNE ` +
+          `tienne — une barre en titres seuls et un sommaire annote ne s'excluent pas (TF-1145)` });
+      }
+    }
+  }
+
+  // ---- TF-1623 (RA-4, 13/10/2026) : L'EN-TETE ALIGNE SUR SA COLONNE ---------------------
+  //
+  // Retour humain : « les entetes de colonnes ne sont pas alignes avec les contenus ». Valeurs
+  // numeriques a droite, `<th>` a gauche, et le declencheur de filtre poussait encore le
+  // libelle de 30 px : aucune famille ne mesurait l'alignement d'un en-tete sur ses cellules.
+  // Mesure : le bord du LIBELLE de l'en-tete (texte propre, hors declencheur, panneau et note
+  // du composant) contre le bord du CONTENU de la premiere cellule visible de sa colonne, du
+  // cote ou la cellule s'aligne (droite, gauche ou centre). Ecart > 6 px : avertissement.
+  {
+    const bordTexte = (el, exclus) => {
+      const r = document.createRange();
+      const rects = [];
+      const marcher = (n) => {
+        for (const c of n.childNodes) {
+          if (c.nodeType === 3 && c.textContent.trim()) {
+            r.selectNodeContents(c);
+            rects.push(...[...r.getClientRects()].filter((x) => x.width > 0.5 && x.height > 0.5));
+          } else if (c.nodeType === 1 && !(exclus && c.matches(exclus)) && !masqueA11y(c)) marcher(c);
+        }
+      };
+      marcher(el);
+      if (!rects.length) return null;
+      return { gauche: Math.min(...rects.map((x) => x.left)), droite: Math.max(...rects.map((x) => x.right)) };
+    };
+    // TF-1800 (lot Produit-83 20261015b, RA-6) — un texte RESERVE AU LECTEUR D'ECRAN (motif
+    // visually-hidden : boite de 1 px, clip ou clip-path qui le rogne) ne se voit pas : il ne se
+    // desaligne de rien. Il etait mesure, et une colonne d'actions sans libelle visible rendait
+    // « decale de 176px ». Un tel element est exclu, qu'il soit le <th> ou dans le <th>.
+    const masqueA11y = (el) => {
+      const s = getComputedStyle(el), r = el.getBoundingClientRect();
+      if (s.position === 'absolute' && (r.width <= 1.5 || r.height <= 1.5)) return true;
+      if (/rect\(\s*0(px)?[\s,]+0(px)?[\s,]+0(px)?[\s,]+0(px)?\s*\)/.test(s.clip || '')) return true;
+      if (/inset\(\s*50%/.test(s.clipPath || '')) return true;
+      return false;
+    };
+    __ROGNE_PAR_ANCETRE__
+    let vusA = 0;
+    for (const t of document.querySelectorAll('table')) {
+      if (vusA >= 6 || !visible(t)) continue;
+      const tete = t.tHead && t.tHead.rows[t.tHead.rows.length - 1];
+      const ligne = [...t.tBodies].flatMap((b) => [...b.rows])
+        .find((tr) => visible(tr) && !tr.hasAttribute('data-tf-empty') && !tr.hasAttribute('data-detail'));
+      if (!tete || !ligne || tete.cells.length !== ligne.cells.length) continue;
+      // TF-1965 : en repli en cartes les lignes du corps sont des CARTES (display:block) et le thead,
+      // quand il reste, est une BARRE de filtres : aucune colonne a laquelle comparer un libelle.
+      if (getComputedStyle(ligne).display !== 'table-row') continue;
+      [...tete.cells].forEach((th, i) => {
+        if (vusA >= 6) return;
+        const td = ligne.cells[i];
+        if (!td || th.colSpan > 1 || td.colSpan > 1 || masqueA11y(th)) return;
+        // TF-2176 : un en-tete ROGNE par un ancetre (thead reserve au lecteur d'ecran) ne se voit pas, comme pour V15.
+        if (rogneParAncetre(th)) return;
+        const a = getComputedStyle(td).textAlign;
+        const bt = bordTexte(th, '.tf-btn, .tf-panel, .tf-unique, button, [hidden]');
+        // Cote cellule : la BOITE de chaque enfant (un badge porte son propre padding, son bord est
+        // celui que l'oeil aligne), le texte nu par ses lignes peintes.
+        const bd = (() => {
+          const r = document.createRange(), xs = [];
+          for (const c of td.childNodes) {
+            if (c.nodeType === 3 && c.textContent.trim()) {
+              r.selectNodeContents(c);
+              xs.push(...[...r.getClientRects()].filter((x) => x.width > 0.5));
+            } else if (c.nodeType === 1 && visible(c)) xs.push(c.getBoundingClientRect());
+          }
+          return xs.length ? { gauche: Math.min(...xs.map((x) => x.left)), droite: Math.max(...xs.map((x) => x.right)) } : null;
+        })();
+        if (!bt || !bd) return;
+        const cote = (a === 'right' || a === 'end') ? 'droite' : (a === 'center' ? 'centre' : 'gauche');
+        const ecart = cote === 'droite' ? Math.abs(bt.droite - bd.droite)
+          : cote === 'gauche' ? Math.abs(bt.gauche - bd.gauche)
+          : Math.abs((bt.gauche + bt.droite) / 2 - (bd.gauche + bd.droite) / 2);
+        if (ecart <= 6) return;
+        vusA++;
+        issues.entete_desaligne.push({ what: label(th), detail:
+          `libelle d'en-tete decale de ${Math.round(ecart)}px par rapport aux valeurs de sa ` +
+          `colonne, alignees a ${cote} — l'oeil ne relie plus le libelle a sa colonne. Aligner ` +
+          `le <th> comme ses cellules ; le composant de filtres le fait pour une colonne ` +
+          `alignee a droite (th.tf-num, declencheur a gauche du libelle, TF-1623)` });
+      });
+    }
+  }
+
+  // ---- Plafond V7 : au-dela d'un certain nombre, ce n'est plus une liste de cas
+  // isoles mais un defaut d'echelle d'espacement. On garde les premiers, on agrege
+  // le reste en une ligne : un avertissement qui defile sur 288 lignes ne se lit
+  // pas, et il enterre les bloquants V1/V2/V4 qui, eux, doivent sauter aux yeux.
+  if (issues.v7_spacing.length > __V7_MAX__) {
+    const reste = issues.v7_spacing.length - __V7_MAX__;
+    issues.v7_spacing = issues.v7_spacing.slice(0, __V7_MAX__);
+    issues.v7_spacing.push({ what: `+ ${reste} autre(s) serie(s) non detaillee(s)`,
+      detail: `avertissements V7 plafonnes a __V7_MAX__ — a ce volume, reprendre l'echelle ` +
+              `d'espacement du gabarit plutot que les series une a une` });
+  }
+
+  // ---- V16 : DEUX ETATS QUI SE RESSEMBLENT NE SONT PAS DEUX ETATS (TF-0910, 08/09/2026) ---
+  //
+  // LE FAIT PAYE. Les cinq teintes d'etat du socle — --green-fill #DCFCE7, --teal-fill,
+  // --amber-fill #FEF3C7, --red-fill #FEE2E2 — et --surface vivent toutes autour de L* 93-97 :
+  // des pastels de meme clarte, distingues par une pointe de teinte. Le texte encre dessus tient
+  // 4,5:1, donc V2 rendait PASS sur chacun, un par un. Retour humain sur le livrable servi :
+  // « les bulles des statuts ne sont pas suffisamment differentes pour etre differenciees ». Le
+  // produit a refait la palette hors socle — fonds pleins, encre blanche, un glyphe par palier.
+  //
+  // POURQUOI V2 NE POUVAIT PAS LE VOIR. V2 mesure un badge CONTRE SON FOND. Le defaut vit ENTRE
+  // deux badges : c'est une distance, pas un ratio, et aucune mesure d'un badge seul ne la porte.
+  //
+  // CE QUI EST MESURE. Pour tout jeu d'au moins trois badges d'une meme classe de base portant au
+  // moins trois fonds distincts, la distance de chaque PAIRE de fonds : Delta-E CIE76 (Lab) et
+  // ecart de luminance relative WCAG. Une paire sous LES DEUX seuils (dE 20 et dL 0,25) est un
+  // constat. Les seuils sont cumulatifs a dessein : deux teintes eloignees en teinte MAIS de meme
+  // clarte restent separables, et deux clartes eloignees aussi — il faut les deux pour perdre le
+  // lecteur. Le cas paye tenait 0 sur les deux.
+  const V16_BASES = ['badge', 'statut', 'etat', 'pill', 'chip', 'tag', 'state'];
+  const V16_DE = 20, V16_DL = 0.25;
+  {
+    const lab = ({ r, g, b }) => {
+      const f = (v) => { v /= 255; return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); };
+      const [R, G, B] = [f(r), f(g), f(b)];
+      // sRGB -> XYZ (D65), puis XYZ -> L*a*b* (blanc de reference D65)
+      const X = (R * 0.4124 + G * 0.3576 + B * 0.1805) / 0.95047;
+      const Y = (R * 0.2126 + G * 0.7152 + B * 0.0722);
+      const Z = (R * 0.0193 + G * 0.1192 + B * 0.9505) / 1.08883;
+      const g2 = (t) => t > 0.008856 ? Math.cbrt(t) : (7.787 * t + 16 / 116);
+      const [fx, fy, fz] = [g2(X), g2(Y), g2(Z)];
+      return { L: 116 * fy - 16, a: 500 * (fx - fy), b: 200 * (fy - fz) };
+    };
+    const deltaE = (c1, c2) => {
+      const p = lab(c1), q = lab(c2);
+      return Math.sqrt((p.L - q.L) ** 2 + (p.a - q.a) ** 2 + (p.b - q.b) ** 2);
+    };
+    const groupes = new Map();
+    for (const el of document.querySelectorAll('[class]')) {
+      if (!visible(el)) continue;
+      const base = [...el.classList].find((c) => V16_BASES.includes(c));
+      if (!base) continue;
+      const bg = effectiveBg(el);
+      if (bg.image) continue;
+      const cle = `${Math.round(bg.color.r)},${Math.round(bg.color.g)},${Math.round(bg.color.b)}`;
+      if (!groupes.has(base)) groupes.set(base, new Map());
+      const variantes = groupes.get(base);
+      if (!variantes.has(cle)) {
+        variantes.set(cle, { couleur: bg.color, exemple: el,
+                             texte: (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 24),
+                             membres: 0 });
+      }
+      variantes.get(cle).membres += 1;
+    }
+    for (const [base, variantes] of groupes) {
+      // Moins de trois teintes distinctes : ce n'est pas un CODAGE par couleur, c'est un badge
+      // et son accent. Accuser ce cas ferait crier la sonde sur toute page a deux badges.
+      if (variantes.size < 3) continue;
+      const liste = [...variantes.values()];
+      const total = liste.reduce((n, v) => n + v.membres, 0);
+      if (total < 3) continue;
+      for (let i = 0; i < liste.length; i += 1) {
+        for (let j = i + 1; j < liste.length; j += 1) {
+          const dE = deltaE(liste[i].couleur, liste[j].couleur);
+          const dL = Math.abs(lum(liste[i].couleur) - lum(liste[j].couleur));
+          if (dE >= V16_DE || dL >= V16_DL) continue;
+          const rgb = (c) => `rgb(${Math.round(c.r)},${Math.round(c.g)},${Math.round(c.b)})`;
+          const memeTexte = liste[i].texte === liste[j].texte;
+          issues.etats_indiscernables.push({
+            what: `.${base} — « ${liste[i].texte || '(sans libellé)'} » et « ${liste[j].texte || '(sans libellé)'} »`,
+            detail: `fonds ${rgb(liste[i].couleur)} et ${rgb(liste[j].couleur)} : `
+              + `ecart de couleur (Delta-E CIE76) ${dE.toFixed(1)} < ${V16_DE} ET `
+              + `ecart de luminance ${dL.toFixed(3)} < ${V16_DL} — `
+              + `${variantes.size} états codés par la couleur, deux d'entre eux indiscernables. `
+              + (memeTexte
+                  ? `Les deux badges portent le MÊME libellé : la couleur est le SEUL porteur de `
+                    + `l'information (WCAG 1.4.1). `
+                  : ``)
+              + `Les jetons \`*-fill\` du socle sont des fonds de CARTE (L* 93-97, tous voisins) : `
+              + `pour un badge d'état, employer un fond PLEIN à encre blanche (\`*-solid\`) et `
+              + `ajouter un indice non colorimétrique — un glyphe par palier, et une légende qui `
+              + `donne couleur + forme + libellé (charte-et-tokens.md, zero-defaut-visuel.md V16)` });
+          if (issues.etats_indiscernables.length >= 12) break;
+        }
+        if (issues.etats_indiscernables.length >= 12) break;
+      }
+    }
+  }
+
+  // ---- V9 : un ACTIF VISUEL se juge dans le CONTEXTE ou il est servi (TF-0633, 25/08) -----
+  //
+  // LE FAIT, remonte par un produit et paye en production. Un logo blanc devenu bleu fonce avait
+  // ete verifie — le SVG modifie rendu en PNG, le texte parasite disparu. C'etait VRAI, et sans
+  // aucun rapport avec le defaut : un logo blanc devenu bleu fonce n'est visible que POSE SUR SON
+  // FOND SOMBRE. Le defaut n'existait pas dans le fichier, il existait dans le contexte d'usage.
+  // Une capture du bandeau de navigation l'a fait sauter aux yeux immediatement.
+  //
+  // POURQUOI V2 NE LE VOYAIT PAS : V2 mesure `color` contre le fond effectif, donc du TEXTE. Un
+  // actif visuel n'a pas de `color` — il a des pixels. La sonde etait litteralement vraie et sans
+  // valeur sur ce cas, exactement le defaut de portee que N-33 decrit.
+  //
+  // CE QUI EST COLLECTE ICI, et pas plus : les cibles et le fond effectif calcule DANS la page,
+  // la ou `effectiveBg` et `peintHorsFond` vivent deja. La mesure des pixels se fait cote Python,
+  // sur une capture de l'element — parce que c'est la seule facon de voir ce qui est SERVI plutot
+  // que ce qui est DECLARE, et parce qu'un `<img>` charge depuis un fichier ne se lit pas au
+  // canvas sans salir le contexte.
+  issues.v9_cibles = [];
+  {
+    let n = 0;
+    for (const el of document.querySelectorAll('img, svg')) {
+      if (!visible(el)) continue;
+      const r = el.getBoundingClientRect();
+      // Sous 8 px de cote, ce n'est plus un actif visuel : pastille, filet, pixel de suivi.
+      // Les accuser ferait crier la sonde sur du decor, et une sonde qui crie se fait eteindre.
+      if (r.width < 8 || r.height < 8) continue;
+      const bg = effectiveBg(el);
+      const horsFond = peintHorsFond(el);
+      n += 1;
+      el.setAttribute('data-v9', String(n));
+      issues.v9_cibles.push({
+        n,
+        what: label(el),
+        bg: bg.image ? null : bg.color,
+        // Le silence d'une sonde n'est pas un verdict (TF-0582) : ce qu'on ne peut pas mesurer
+        // se DIT, avec sa raison, au lieu de passer pour un vert.
+        nonMesurable: bg.image
+          ? "fond peint par une background-image — contraste de l'actif non mesurable par styles calcules"
+          : (horsFond ? `fond peint hors background-color (${horsFond})`
+            // TF-2707 : un actif qu'une animation en boucle fait varier a un contraste qui change avec l'instant de la capture.
+            : (boucleDe(el, false) || boucleDans(el) ? `actif sous une animation en boucle (${decritBoucle(boucleDe(el, false) || boucleDans(el))}) : son contraste change avec l'instant de la capture (TF-2707)` : null)),
+      });
+    }
+  }
+
+  // ---- V22 : les MARQUES d'un <canvas> (TF-1859, RA-14 du lot Produit-79 20261017c) ----------
+  //
+  // LE FAIT. Une page avec Apache ECharts (canvas) : jetons `--cat-1` a `--cat-6` absents, barres
+  // presque blanches, legende sans pastille. render_page PASS en clair et en sombre aux 7 largeurs.
+  // Le contenu d'un canvas n'est pas dans le DOM : V1 a V4 n'ont rien a mesurer, V2 ne lit que des
+  // textes du DOM, V9 ne recense que `img, svg`. Ici, SEUL le recensement ; la mesure des pixels se
+  // fait cote Python sur une capture de l'element (comme V9).
+  issues.canvas_cibles = [];
+  {
+    let n = 0;
+    for (const el of document.querySelectorAll('canvas')) {
+      if (!visible(el)) continue;
+      const r = el.getBoundingClientRect();
+      // Sous 48 px de cote, ce n'est pas un graphique : pastille, signature, pixel de calcul.
+      if (r.width < 48 || r.height < 48) continue;
+      n += 1;
+      el.setAttribute('data-v22', String(n));
+      issues.canvas_cibles.push({ n, what: label(el), largeur: Math.round(r.width), hauteur: Math.round(r.height) });
+    }
+  }
+
+  // ---- V19 : un mot COUPE EN DEUX LIGNES SANS TRAIT D'UNION (TF-1350, 24/09/2026) ---------
+  //
+  // LE FAIT, trouve sur une cellule de tableau a cinq colonnes, 7 % de la largeur : « Remediation »
+  // en gras se rend « Remediatio » puis « n » sur la ligne suivante, sans cesure ni trait d'union,
+  // a 1920 ET 1280 px. check_html PASS (42 regles), render_page PASS (0 bloquant, 7 largeurs),
+  // run-oracles-design PASS (9/9) : AUCUN des trois scripts du socle ne voyait le defaut. CAUSE :
+  // `overflow-wrap: break-word` est legitime sur de la prose (L19 statique ne vise QUE `anywhere`
+  // et `break-all`) — seul le RENDU distingue le mot coupe du debordement evite, et
+  // `references/lisibilite.md` §L19 declarait elle-meme ce controle-la « n'existe pas encore ».
+  //
+  // LA MESURE : pour chaque mot d'un noeud de texte visible, un `Range` sur son etendue rend
+  // `getClientRects()` — un mot dont les rectangles tombent sur deux lignes (ecart de `top` au-
+  // dela du bruit d'arrondi) EST coupe au rendu. Tokeniser sur la LETTRE exclut deja les mots
+  // composes d'un trait d'union («Factory», «sous-ensemble») : chacune de leurs moities est son
+  // propre token, et une coupure PILE au trait d'union n'en fragmente aucune — c'est la cesure
+  // volontaire que la regle doit laisser passer. Portee alignee sur L19 : `code`, `pre`, `kbd`,
+  // `samp`, `a[href]` restent legitimes et non juges (identifiants, chemins). Exemption explicite,
+  // MEME attribut que la regle statique (`lisibilite.md` §L19) : `data-coupure-ok="<raison>"`.
+  {
+    const RE_MOT = /[\p{L}\p{N}]+(?:['’][\p{L}\p{N}]+)*/gu;
+    const feuille = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+      acceptNode(n) {
+        const p = n.parentElement;
+        if (!p || !n.textContent || !n.textContent.trim()) return NodeFilter.FILTER_REJECT;
+        if (p.closest('script, style, noscript, code, pre, kbd, samp, a[href], [data-coupure-ok]')) {
+          return NodeFilter.FILTER_REJECT;
+        }
+        return visible(p) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+      },
+    });
+    let n;
+    while ((n = feuille.nextNode())) {
+      const texte = n.textContent;
+      RE_MOT.lastIndex = 0;
+      let m;
+      while ((m = RE_MOT.exec(texte))) {
+        const mot = m[0];
+        if (mot.length < 2) continue;      // un caractere seul ne se « coupe » pas
+        const r = document.createRange();
+        r.setStart(n, m.index);
+        r.setEnd(n, m.index + mot.length);
+        const rects = [...r.getClientRects()].filter((rc) => rc.width > 0 && rc.height > 0);
+        if (rects.length < 2) continue;
+        const tops = rects.map((rc) => rc.top);
+        if (Math.max(...tops) - Math.min(...tops) <= 2) continue;   // memes rects, meme ligne
+        issues.mot_coupe.push({ what: label(n.parentElement), detail:
+          `V19 mot coupe sur deux lignes SANS trait d'union : « ${mot} » rendu en ` +
+          `${rects.length} fragments — overflow-wrap casse la prose au milieu du mot. Exemption ` +
+          `declaree : data-coupure-ok="<raison>" sur l'element ou un ancetre` });
+        if (issues.mot_coupe.length >= 20) break;
+      }
+      if (issues.mot_coupe.length >= 20) break;
+    }
+  }
+
+  // ---- V21 : LARGEURS DE CONTENU MELANGEES (TF-1307, reecriture du 17/10/2026) -------------
+  //
+  // LE FAIT, retour humain du 11/09/2026 (TF-1038) : « homogeneise la largeur des contenus de la
+  // page principale pour ne pas avoir des grandes largeurs mixees avec des petites ». Sur le
+  // document vise, le chapitre 6 (cartes) occupait toute la largeur du conteneur et le chapitre 7
+  // (decisions) etait bride par `.chap.lire` a 1 080 px, centre : le lecteur voit la colonne de
+  // contenu changer de largeur d'un chapitre au suivant, dans un ordre qui suit la NATURE du
+  // contenu et non la lecture. Ni L2-rendu (un bloc de texte contre SON conteneur) ni L2-freres
+  // (un bloc de texte contre son frere empile) ne voient cet ecart : chaque chapitre, pris seul,
+  // est conforme.
+  //
+  // LA MESURE : pour un meme parent en flux vertical, les blocs de contenu (`section`, `article`,
+  // `.chap`, `[role=region]`) qui sont ses enfants DIRECTS, visibles, empiles, et assez fournis
+  // pour etre des chapitres (>= 48 px de haut, >= 80 caracteres) sont comparees a la largeur
+  // RENDUE de leur boite. Plus d'une largeur distincte (ecart > max(8 px, 1,5 %)) = un constat
+  // par parent. Une grille ou une boite flexible n'est pas jugee : la largeur d'un enfant y est
+  // celle de sa piste. Exception declaree : `data-largeur-exception="<raison>"` sur la section.
+  {
+    const BLOCS = 'section, article, .chap, [role="region"]';
+    const parents = new Set();
+    for (const b of document.querySelectorAll(BLOCS)) if (b.parentElement) parents.add(b.parentElement);
+    for (const parent of parents) {
+      const dP = getComputedStyle(parent).display;
+      if (!(dP === 'block' || dP === 'flow-root' || dP === 'list-item')) continue;
+      const freres = [...parent.children].filter((c) => c.matches(BLOCS) && visible(c)
+        && !c.hasAttribute('data-largeur-exception')
+        && !c.closest('table, nav, thead, [data-largeur-exception]')
+        && c.getBoundingClientRect().height >= 48
+        && (c.textContent || '').trim().length >= 80);
+      if (freres.length < 2) continue;
+      const boites = freres.map((c) => ({ c, r: c.getBoundingClientRect() }));
+      // Des blocs qui se partagent une ligne (flottants, en ligne) ne sont pas un empilement.
+      if (boites.some((a, i) => boites.some((b, j) => j > i
+        && Math.min(a.r.bottom, b.r.bottom) - Math.max(a.r.top, b.r.top) > 8))) continue;
+      const largeurs = boites.map((b) => b.r.width);
+      const max = Math.max(...largeurs), min = Math.min(...largeurs);
+      if (max - min <= Math.max(8, max * 0.015)) continue;
+      const groupes = [];
+      for (const b of [...boites].sort((x, y) => x.r.width - y.r.width)) {
+        const g = groupes[groupes.length - 1];
+        if (g && b.r.width - g.ref <= Math.max(8, b.r.width * 0.015)) g.noms.push(label(b.c));
+        else groupes.push({ ref: b.r.width, noms: [label(b.c)] });
+      }
+      const dits = groupes.map((g) => `${Math.round(g.ref)} px (${g.noms.length} : ` +
+        `${g.noms.slice(0, 2).join(' ; ')}${g.noms.length > 2 ? ' ; …' : ''})`).join(' contre ');
+      issues.largeurs_melangees.push({ what: label(parent), detail:
+        `V21 largeurs de contenu melangees : ${boites.length} blocs de contenu freres, ` +
+        `${groupes.length} largeurs rendues distinctes — ${dits}. La largeur de contenu est une ` +
+        `propriete de la PAGE : egaliser vers le conteneur de lecture (.chap.lire) sur une page de ` +
+        `lecture, vers la pleine largeur sur une page de donnees (data-page="donnees"). Ecart ` +
+        `voulu : data-largeur-exception="<raison>" sur le bloc concerne` });
+    }
+  }
+
+  if (pairesEmpilees) {
+    // Dit une fois par passe, jamais tu : sans ce non juge, le silence de V4 sur une animation se lirait comme un vert.
+    issues.unmeasured.push({ what: 'V4 scenes empilees par une animation en boucle', detail:
+      `${pairesEmpilees} paire(s) d'elements de ${scenesEmpilees.size} racine(s) animee(s) en boucle par opacite (${[...scenesEmpilees].slice(0, 3).map(label).join(' ; ')}`
+      + `${scenesEmpilees.size > 3 ? ' ; …' : ''}) NON JUGEE(S) en V4 (TF-2706) : des scenes empilees et montrees une a une se superposent par construction. `
+      + `Deux elements d'une MEME scene restent juges ; declarer les scenes ([data-scene], TF-2299) pour les juger une a une` });
+  }
+  return issues;
+}
+"""
+
+
+# ---------------------------------------------------------------------------
+# V15 — L'EN-TETE DE TABLEAU, MESURE APRES DEFILEMENT (TF-0901, lot Produit-10 20260907e).
+#
+# LE TROU, ET IL ETAIT TRIPLE. Une page dont les HUIT en-tetes de tableau etaient poses sur
+# leurs propres lignes a ete rendue PASS par trois oracles le 07/09/2026, et vue par l'humain a
+# la premiere ouverture. Chacun des trois etait aveugle POUR SA PROPRE RAISON :
+#   · `check_html` L29 juge les DECLARATIONS de la feuille — le style en ligne pose par un
+#     script est invisible a la lecture du fichier ;
+#   · `render_page` V4 compare les enfants d'un MEME parent — le decalage vivait sur les `th`,
+#     donc sur des freres decales PAREIL, et `thead`/`tbody` gardaient leurs boites naturelles ;
+#   · l'oracle de filtres juge le marquage, qui etait juste.
+# Et le seul defilement que cet outil pratiquait servait le sommaire (V14, a 60 % de la page).
+#
+# CE QUE V15 MESURE, en deux branches :
+#   a. AU REPOS (page en haut), tout `th` de `thead` dont la boite recouvre une ligne du corps de
+#      plus de 2 px. Un en-tete correct ne recouvre RIEN au repos : il est a sa place naturelle.
+#      C'est la signature du `top` applique a un element non collant — decalage PERMANENT, une a
+#      deux lignes mangees a chaque instant. BLOQUANT.
+#   b. APRES DEFILEMENT, le tableau amene 400 px au-dessus du bord haut de la fenetre et son
+#      corps encore a l'ecran : un `th` declare `sticky` doit se tenir EXACTEMENT au `top` qu'il
+#      declare (4 px de tolerance, l'arrondi de peinture). S'il n'y est pas, c'est qu'il colle a
+#      une AUTRE boite de defilement que la fenetre — un ancetre a `overflow` non `visible`
+#      (TF-0900). CONSTAT : la cause est reelle, le geste correctif appartient a la page.
+# La mesure n'a besoin d'aucun jeton : elle compare le `top` RENDU au `top` DECLARE.
+# TF-1788 — une mire de connexion : un formulaire VISIBLE dans la page rendue qui ouvre une session.
+# TF-2433 (retour Produit-82 20261110a, RT-21) — UNE MIRE SE RECONNAIT A SON ACTION, pas a la seule
+# presence d'un champ mot de passe : l'ecran connecte de changement de mot de passe (actuel,
+# nouveau, confirmation) en porte trois et etait pris pour une mire, donc non juge comme ecran
+# connecte. Pour chaque champ mot de passe visible, le formulaire qui le porte (a defaut la page)
+# se juge ainsi :
+#   · CHANGEMENT, donc pas une mire : un champ autocomplete="new-password", ou deux champs mot de
+#     passe visibles (confirmation), ou une action dont le chemin nomme le mot de passe sans nommer
+#     la connexion ;
+#   · CONNEXION, donc une mire : une action dont le chemin nomme la connexion, ou un bouton
+#     « Se connecter », ou un champ autocomplete="current-password", ou un identifiant (champ
+#     username / e-mail) a cote d'un seul mot de passe ;
+#   · sinon : aucun indice d'ouverture de session, l'ecran se juge comme un ecran connecte.
+# Sans attribut `action`, le formulaire part vers l'adresse de la page : c'est elle qui se lit.
+# TF-2677 (factory-site, 15/11/2026) — LES DISPENSES `data-colonne-ok` SE LISENT, ET SE DISENT. Une
+# dispense posee sur <main> eteignait la regle L2 « conteneur de lecture cale a gauche » pour toute la page
+# (`closest`), avec un motif ecrit par l'agent et aucune decision humaine : l'humain a vu le defaut sur une
+# capture. La dispense ne vaut plus que sur le conteneur brideur lui-meme ; posee sur <main>, <body>, <html> ou
+# [role=main] aussi large que son parent (ou sur tout ancetre du conteneur brideur, pour L2), elle ne dispense rien. Chaque dispense
+# rencontree est publiee au non_juge avec son motif — un verdict qui s'appuie sur une dispense la nomme.
+DISPENSES_JS = r"""() => [...document.querySelectorAll('[data-colonne-ok]')].map((el) => {
+  const id = el.id ? '#' + el.id : '';
+  const cl = typeof el.className === 'string' && el.className.trim()
+    ? '.' + el.className.trim().split(/\s+/).slice(0, 2).join('.') : '';
+  let ignoree = false;
+  if (el.matches('main, body, html, [role=main]')) {
+    const p = el.parentElement;
+    const rn = el.getBoundingClientRect(), rp = p ? p.getBoundingClientRect() : null;
+    ignoree = !(rp && rp.width > 0 && rn.width / rp.width < __L2C_MIN_RATIO__);
+  }
+  return { what: el.tagName.toLowerCase() + id + cl,
+           motif: (el.getAttribute('data-colonne-ok') || '').trim(),
+           sur_ancetre_de_page: ignoree };
+})"""
+
+MIRE_JS = r"""() => {
+  const vu = (el) => {
+    const s = getComputedStyle(el), r = el.getBoundingClientRect();
+    return s.display !== 'none' && s.visibility !== 'hidden' && r.width > 1 && r.height > 1;
+  };
+  const CONNEXION = /connexion|connecter|identif|login|log-?in|sign-?in|session|auth|connect/i;
+  const CHANGEMENT = /mot-?de-?passe|motdepasse|password|passwd|mdp|pwd|reset|renouvel|changer|change|modifier|update/i;
+  const BOUTON = /se connecter|connexion|s.identifier|login|log ?in|sign ?in/i;
+  const chemin = (brut) => {
+    if (!brut && !/^https?:$/.test(location.protocol)) return '';
+    try { return new URL(brut || '', location.href).pathname; } catch (e) { return brut || ''; }
+  };
+  const champs = [...document.querySelectorAll('input[type="password"]')].filter(vu);
+  const portees = new Set(champs.map((el) => el.closest('form') || document.body));
+  for (const portee of portees) {
+    const mdp = champs.filter((el) => portee.contains(el));
+    const action = chemin(portee.getAttribute && portee.getAttribute('action'));
+    const parle_connexion = CONNEXION.test(action);
+    if (mdp.some((el) => /new-password/i.test(el.getAttribute('autocomplete') || ''))) continue;
+    if (mdp.length >= 2) continue;
+    if (CHANGEMENT.test(action) && !parle_connexion) continue;
+    const boutons = [...portee.querySelectorAll('button, input[type="submit"], input[type="button"]')]
+      .filter(vu).map((b) => (b.value || b.textContent || '').trim());
+    const identifiant = [...portee.querySelectorAll('input')].some((el) => {
+      const t = (el.getAttribute('type') || 'text').toLowerCase();
+      if (t === 'password' || !vu(el)) return false;
+      return /username/i.test(el.getAttribute('autocomplete') || '') || t === 'email'
+        || /^(id|login|user|username|identifiant|email|mail)$/i.test(el.getAttribute('name') || el.id || '');
+    });
+    if (parle_connexion || boutons.some((b) => BOUTON.test(b)) || identifiant
+        || /current-password/i.test(mdp[0].getAttribute('autocomplete') || '')) return true;
+  }
+  return false;
+}"""
+
+MESURE_ENTETE_JS = r"""
+() => {
+  const poses = [], decolles = [], masques = [], brides = [];
+  const yInitial = window.scrollY;
+  const etiquette = (t, i) => {
+    const cap = t.querySelector('caption');
+    const txt = ((cap && cap.textContent) || t.id || '').trim().replace(/\s+/g, ' ').slice(0, 40);
+    return txt ? `table ${i} « ${txt} »` : `table ${i}`;
+  };
+  __ROGNE_PAR_ANCETRE__
+  const visibleBoite = (el) => {
+    const s = getComputedStyle(el);
+    if (s.display === 'none' || s.visibility === 'hidden') return false;
+    const r = el.getBoundingClientRect();
+    return r.width > 1 && r.height > 1 && !rogneParAncetre(el);
+  };
+  const tables = [...document.querySelectorAll('table')].filter(
+    (t) => t.tHead && t.tHead.rows.length && t.tBodies.length && visibleBoite(t));
+
+  // ---- a. AU REPOS : un en-tete ne recouvre AUCUNE ligne du corps -----------------------
+  window.scrollTo(0, 0);
+  tables.forEach((t, i) => {
+    const ths = [...t.tHead.rows[0].cells].filter(visibleBoite);
+    const lignes = [...t.tBodies[0].rows].filter(visibleBoite);
+    if (!ths.length || !lignes.length) return;
+    for (const th of ths) {
+      const a = th.getBoundingClientRect();
+      const manges = lignes.filter((tr) => {
+        const b = tr.getBoundingClientRect();
+        return Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 2;
+      });
+      if (!manges.length) continue;
+      const cs = getComputedStyle(th);
+      poses.push({
+        what: `${etiquette(t, i + 1)} — en-tete « ${(th.textContent || '').trim().slice(0, 24)} »`,
+        detail: `AU REPOS, l'en-tete recouvre ${manges.length} ligne(s) du corps `
+          + `(bord haut ${Math.round(a.top)} px, premiere ligne recouverte a `
+          + `${Math.round(manges[0].getBoundingClientRect().top)} px). `
+          + `position: ${cs.position}, top: ${cs.top}. Un \`top\` applique a un element NON `
+          + `collant est un decalage PERMANENT : l'en-tete mange ses propres lignes a chaque `
+          + `instant. Cause la plus frequente : un script qui pose \`style.position\` en ligne `
+          + `sur le \`<th>\` et ecrase le \`sticky\` de la feuille (TF-0899, check_html L29)` });
+      break;   // une cause par tableau : huit `th` decales pareil font UN defaut, pas huit
+    }
+  });
+
+  // ---- b. APRES DEFILEMENT : un en-tete collant se tient a son `top` DECLARE ------------
+  tables.forEach((t, i) => {
+    const ths = [...t.tHead.rows[0].cells].filter(visibleBoite);
+    if (!ths.length) return;
+    const th = ths[0];
+    const cs = getComputedStyle(th);
+    if (cs.position !== 'sticky') return;          // rien a attendre d'un en-tete non collant
+    const attendu = parseFloat(cs.top);
+    if (!isFinite(attendu)) return;                // `top: auto` : aucun engagement declare
+    // 400 px au-dessus du bord haut, MAIS jamais au point de sortir le tableau : un `sticky` est
+    // borne par son bloc conteneur, et un en-tete pousse dehors par la FIN de son propre tableau
+    // n'est pas un defaut, c'est le comportement prescrit. Mesure du 08/09 : sur un tableau de
+    // 515 px, un defilement de 400 laissait 115 px de corps et l'en-tete rendait 77 px pour 104
+    // declares — un faux constat sur la fixture VERTE. La borne se lit sur la hauteur du tableau.
+    const recul = Math.min(400, Math.max(0, t.offsetHeight - 250));
+    window.scrollTo(0, t.getBoundingClientRect().top + window.scrollY + recul);
+    const rt = t.getBoundingClientRect();
+    const hTh = th.getBoundingClientRect().height;
+    // Le tableau doit encore etre a l'ecran : un en-tete d'un tableau parti n'a rien a tenir.
+    if (!(rt.bottom > 0 && rt.top < window.innerHeight)) return;
+    // ET le `sticky` doit avoir eu a S'ENGAGER : tant que le tableau est plus bas que le `top`
+    // declare, l'en-tete est a sa place naturelle et il n'y a RIEN a mesurer. Sans cette
+    // condition, toute page trop courte pour defiler jusque-la rendait un faux constat.
+    if (rt.top >= attendu - 1) return;
+    // ET il doit rester de la place SOUS le seuil : sinon l'en-tete est repousse par la fin de
+    // son tableau, ce que la specification prescrit.
+    if (rt.bottom < attendu + hTh + 20) return;
+    const rendu = th.getBoundingClientRect().top;
+    if (Math.abs(rendu - attendu) <= 4) return;
+    decolles.push({
+      what: `${etiquette(t, i + 1)} — en-tete collant`,
+      detail: `APRES DEFILEMENT (tableau amene ${Math.round(recul)} px au-dessus du bord haut, `
+        + `corps encore a l'ecran), l'en-tete est a ${Math.round(rendu)} px alors qu'il declare `
+        + `top: ${cs.top}. Un \`sticky\` se compte depuis sa BOITE DE DEFILEMENT : s'il n'est `
+        + `pas la ou il le dit, un ancetre porte un \`overflow\` autre que \`visible\` et lui `
+        + `sert de boite (TF-0900 — le conteneur de tableau du socle ne defile plus qu'en `
+        + `dessous de 900 px). Verifier les ancetres du tableau` });
+  });
+
+  // ---- c. L'EMPILEMENT DES COLLANTS : `--hh` est un TOKEN, pas une mesure (TF-0929) -----
+  //
+  // LE FAIT, ET C'EST LA TROISIEME INSTANCE DE LA CLASSE EN DEUX JOURS (TF-0899, TF-0900,
+  // celle-ci). Le socle decale le thead collant de `var(--hh)`, une CONSTANTE de 64 px. Des que
+  // l'en-tete passe sur deux lignes, ou qu'une bande de sommaire colle SOUS lui, ce qui colle
+  // au-dessus du thead est plus haut que le token — et le thead se range exactement a son `top`
+  // declare, DERRIERE eux. Capture humaine a ~1 370 px : deux `th` coupes ; mesure Playwright a
+  // la meme largeur : `--hh` 104, bas de l'en-tete 107, bas de la bande de sommaire collante
+  // 219, `th` colle a 104 — 115 px MASQUES. A 1 600 px, aucun defaut : le defaut depend de la
+  // largeur, donc d'une mesure, et aucun token ne peut le porter.
+  //
+  // POURQUOI PERSONNE NE LE VOYAIT. `L29` de check_html verifie que `top: var(--hh)` existe et
+  // que `--hh` est declare — jamais la HAUTEUR REELLE de ce qui colle au-dessus. La branche (b)
+  // ci-dessus verifie que le `th` se tient a son `top` DECLARE : ici il s'y tient
+  // parfaitement, et c'est precisement le probleme. Le defaut vit entre le token et le rendu.
+  //
+  // LA MESURE : le `th` colle doit se poser au BAS du dernier collant qui le surplombe, a 4 px
+  // pres. Un collant qui le surplombe est un element `sticky` ou `fixed`, visible, qui recouvre
+  // horizontalement le `th` et dont le bas depasse le haut du `th`.
+  tables.forEach((t, i) => {
+    if (!t.tHead || !t.tHead.rows.length) return;
+    const ths = [...t.tHead.rows[0].cells].filter(visibleBoite);
+    if (!ths.length) return;
+    const th = ths[0];
+    const cs = getComputedStyle(th);
+    if (cs.position !== 'sticky') return;
+    const attendu = parseFloat(cs.top);
+    if (!isFinite(attendu)) return;
+    // TF-0968 / TF-1060 (08/09, 11/09) — le recul place le tableau en position de LECTURE, pas de
+    // sortie d'ecran. `min(400, hauteur - 250)` laissait TOUJOURS 250 px de tableau : l'en-tete,
+    // bride par la fin de son bloc conteneur a 250 - hauteur du th, ne pouvait plus atteindre un
+    // `top` de 219 px, et rendait 9 a 11 px « masques » sur tout tableau de ~291 a ~660 px — les
+    // trois plus courts d'une page, jamais les autres. Un tiers de la hauteur, borne pareil.
+    const recul = Math.min(400, Math.max(0, Math.min(t.offsetHeight - 250, t.offsetHeight / 3)));
+    window.scrollTo(0, t.getBoundingClientRect().top + window.scrollY + recul);
+    const rt = t.getBoundingClientRect();
+    if (!(rt.bottom > 0 && rt.top < window.innerHeight)) return;
+    if (rt.top >= attendu - 1) return;              // le `sticky` ne s'est pas engage
+    const rth = th.getBoundingClientRect();
+    // TF-0973 (08/09) — DEUX SIGNATURES, DEUX MESSAGES, et la sonde n'est pas desarmee. Quand le
+    // bas du tableau moins la hauteur du `th` tombe sous le `top` declare, l'en-tete est tire vers
+    // le haut par la fin de son propre tableau : c'est la specification CSS, INFORMATIF. Sauf si
+    // le tableau n'a AUCUNE ligne de donnees ni etat vide declare : c'est la signature du tableau
+    // vide annonce a 276 lignes, que seule V15 avait vu — BLOQUANT.
+    if (rt.bottom - rth.height < attendu - 1) {
+      const lignes = [...t.tBodies].flatMap((b) => [...b.rows]).filter(visibleBoite);
+      const donnees = lignes.filter((tr) => !tr.hasAttribute('data-tf-empty'));
+      if (!donnees.length && lignes.length === donnees.length) {
+        masques.push({
+          what: `${etiquette(t, i + 1)} — tableau VIDE sous un en-tete collant`,
+          detail: `le tableau ne porte AUCUNE ligne de donnees visible, et aucun etat vide declare `
+            + `(tr[data-tf-empty]) : son en-tete, bride par la fin d'un tableau de `
+            + `${Math.round(t.offsetHeight)} px, disparait sous les collants. Un tableau vide par `
+            + `construction se cherche en amont — un filtre qui a reduit la population source, un `
+            + `titre qui annonce des lignes qu'il ne porte pas (TF-0973)` });
+      } else {
+        brides.push({
+          what: `${etiquette(t, i + 1)} — en-tete bride par la fin de son tableau`,
+          detail: `informatif : a ce defilement, le bas du tableau (${Math.round(rt.bottom)} px) `
+            + `moins l'en-tete (${Math.round(rth.height)} px) tombe sous le \`top\` declare `
+            + `(${cs.top}) — le \`sticky\` est tire vers le haut par la fin de son bloc conteneur, `
+            + `comportement prescrit par CSS. Rien a corriger ; aucun token n'y changerait rien` });
+      }
+      return;
+    }
+    // Les collants qui SURPLOMBENT ce `th` : `sticky` ou `fixed`, visibles, en recouvrement
+    // horizontal, et dont le bas mord sur le haut du `th`. Le `th` lui-meme et ses ancetres de
+    // tableau sont exclus — un `thead` ne se masque pas lui-meme.
+    // Reperage LOCAL : `label` vit dans l'autre bloc de mesure, et une sonde qui LEVE rend la
+    // famille NON JUGEE — un silence qui se lit comme un vert (mesure du 08/09 sur la fixture
+    // rouge : « V15 non jugee (Error) », zero constat, et la paire ne prouvait rien).
+    const nomDe = (el) => el.tagName.toLowerCase()
+      + (el.id ? '#' + el.id : '')
+      + (el.className && typeof el.className === 'string' && el.className.trim()
+         ? '.' + el.className.trim().split(/\s+/).join('.') : '');
+    let bas = 0, coupable = null;
+    for (const el of document.body.querySelectorAll('*')) {
+      if (el === th || el.contains(th) || th.contains(el)) continue;
+      if (el.closest('table') === t) continue;
+      const c = getComputedStyle(el);
+      if (c.position !== 'sticky' && c.position !== 'fixed') continue;
+      if (!visibleBoite(el)) continue;
+      const r = el.getBoundingClientRect();
+      if (r.right <= rth.left + 1 || r.left >= rth.right - 1) continue;   // pas au-dessus de lui
+      if (r.top > rth.top) continue;                                      // il est SOUS le `th`
+      if (r.bottom <= rth.top + 1) continue;                              // il ne le mord pas
+      if (r.bottom > bas) { bas = r.bottom; coupable = el; }
+    }
+    if (!coupable) return;
+    const masque = Math.round(bas - rth.top);
+    if (masque <= 4) return;
+    masques.push({
+      what: `${etiquette(t, i + 1)} — en-tete masque par l'empilement des collants`,
+      detail: `APRES DEFILEMENT, l'en-tete pouvait atteindre son \`top\` et il est RECOUVERT par un `
+        + `collant : il se pose a ${Math.round(rth.top)} px, son `
+        + `\`top\` declare (${cs.top}), mais ${nomDe(coupable)} colle au-dessus de lui descend `
+        + `jusqu'a ${Math.round(bas)} px : ${masque} px de l'en-tete sont MASQUES. Le decalage `
+        + `d'un collant est une MESURE, pas un token : un en-tete qui passe sur deux lignes ou `
+        + `une bande de sommaire collante changent la hauteur de ce qui colle au-dessus, et `
+        + `aucune constante ne peut la suivre — le defaut apparait a une largeur et pas a une `
+        + `autre. Poser les hauteurs au chargement, au redimensionnement et aux polices `
+        + `chargees (poserHauteurs() du gabarit) ; le token reste le repli` });
+  });
+
+  window.scrollTo(0, yInitial);
+  return { poses, decolles, masques, brides };
+}
+"""
+# TF-2176 : la definition partagee de « rogne par un ancetre » se pose dans le script de V15.
+MESURE_ENTETE_JS = MESURE_ENTETE_JS.replace("__ROGNE_PAR_ANCETRE__", ROGNE_PAR_ANCETRE_JS)
+
+
+# ---------------------------------------------------------------------------
+# V18 — CE QUE LE 4K MONTRE ET QUE 1920 TAISAIT (TF-1066, 12/09/2026).
+#
+# LA REGLE AMONT. E5 du pilot, decision humaine du 12/09/2026 : une page de bureau se CONCOIT a
+# 1920 px et se VERIFIE jusqu'a 3840. Jusqu'ici la grille s'arretait a 1920, donc la borne de ce
+# que les produits prouvaient s'y arretait aussi : une page PASS a 1920 pouvait etirer sa prose
+# sur 2 880 px ou laisser la moitie de l'ecran vide a 3840 sans qu'aucun controle ne le dise.
+#
+# DEUX DEFAUTS, ET ILS SONT SYMETRIQUES. Aux tres grandes largeurs, une page se trompe dans un
+# sens ou dans l'autre :
+#   a. la PROSE prend toute la place qu'on lui donne — mesure du 12/09 sur la sonde : 342
+#      caracteres par ligne a 3840 px pour un conteneur non bride ; l'oeil perd la ligne suivante ;
+#   b. les DONNEES n'en prennent aucune — un tableau qui reste a sa largeur de contenu pendant
+#      que son conteneur en offre le double (L26 : une page de donnees est pleine largeur).
+# Les familles existantes ne voient ni l'un ni l'autre : L2 et ses variantes comparent un bloc a
+# ce que son CONTENEUR lui offre (une prose qui remplit un conteneur large rend 100 %), et
+# `conteneur_bride_donnees` compare le conteneur a la FENETRE (il peut etre plein pendant que le
+# tableau dedans est etrique). Ce qui manque est la mesure de LECTURE, en caracteres par ligne.
+#
+# LA MESURE, ET POURQUOI PAS UNE DIVISION PAR LA TAILLE DE POLICE. `largeur / (0,5 x font-size)`
+# est une approximation qui depend de la fonte reellement servie, donc du poste. Un `Range` sur le
+# contenu du paragraphe rend une boite PAR LIGNE reellement peinte (`getClientRects`) : le nombre
+# de lignes est un FAIT du rendu, et `caracteres / lignes` la mesure de lecture effective. Elle est
+# CONSERVATRICE — la derniere ligne est partielle, donc le compte sous-estime la capacite reelle.
+#
+# LE SEUIL, ET LE CONFLIT QU'IL REVELAIT — TRANCHE, PAS MASQUE (decision humaine du 15/09/2026,
+# "13a"). Le seuil pose le 12/09 etait 100 caracteres par ligne. Or le conteneur de lecture que le
+# socle PRESCRIT (`.chap.lire`, 1 080 px, regle E4) mesure 134 caracteres par ligne en 16 px (sonde
+# du 12/09, valeur identique a 1920, 2560 et 3840) : condamner la forme qu'un gabarit prescrit met
+# le gabarit en defaut, jamais l'auteur. L'etude d'opportunite « lots de travaux et style —
+# 20260914a » du pilot (TF-1069, section 5 « Verdict ») arbitre entre les deux options mesurees —
+# resserrer `.chap.lire` sous 100, ou porter le plafond a
+# 135 — et retient la seconde : « option la moins destructrice pour l'existant, la mesure montrant
+# 134 cpl a 1 080 px, sous le nouveau plafond ». La decision du 15/09 (13a) suit ce verdict : le
+# plafond passe a 135, `.chap.lire` est GARDE a 1 080 px sans y toucher. Consequence mesuree : le
+# token du socle (134 cpl) tient desormais SOUS le plafond et rentre directement dans les proses
+# jugees — l'exemption de conteneur de lecture declare (`.lire`, `[data-mesure-lecture]`, ci-dessous)
+# reste au code pour la forme plus large qu'un chapitre pourrait encore adopter, mais elle ne
+# s'applique plus au token `.chap.lire` lui-meme. Ce qui reste bloque est la prose qu'AUCUN
+# conteneur ne tient au-dela de 135 : exactement le defaut que E5 decrit.
+V18_MIN_VIEWPORT = 2560
+V18_MAX_CPL = 135
+V18_MIN_CHARS = 160            # sous ce compte, une ligne unique ne mesure aucune capacite
+V18_TABLE_MIN_RATIO = 0.85     # L26 — un tableau principal sous ce ratio laisse l'ecran vide
+V18_TABLE_MIN_LIGNES = 8       # un tableau principal, pas un encart de trois valeurs
+V18_TABLE_MIN_COLONNES = 4
+
+MESURE_LARGE_JS = r"""
+() => {
+  const MAX_CPL = __V18_MAX_CPL__, MIN_CHARS = __V18_MIN_CHARS__;
+  const TABLE_MIN = __V18_TABLE_MIN__, TABLE_LIGNES = __V18_TABLE_LIGNES__,
+        TABLE_COLONNES = __V18_TABLE_COLONNES__;
+  const proses = [], tableaux = [], notes = [];
+  // Reperage LOCAL : ce bloc s'evalue seul, il n'herite d'aucune aide de la passe principale.
+  const nomDe = (el) => el.tagName.toLowerCase()
+    + (el.id ? '#' + el.id : '')
+    + (el.className && typeof el.className === 'string' && el.className.trim()
+       ? '.' + el.className.trim().split(/\s+/).join('.') : '');
+  const visibleBoite = (el) => {
+    const s = getComputedStyle(el);
+    if (s.display === 'none' || s.visibility === 'hidden' || s.opacity === '0') return false;
+    const r = el.getBoundingClientRect();
+    return r.width > 1 && r.height > 1;
+  };
+  const largeurOfferte = (el) => {
+    const par = el.parentElement;
+    if (!par) return 0;
+    const cs = getComputedStyle(par);
+    return par.clientWidth - parseFloat(cs.paddingLeft || 0) - parseFloat(cs.paddingRight || 0);
+  };
+
+  // ---- a. LA PROSE : caracteres par ligne, mesures sur les boites reellement peintes -------
+  const pageDonnees = !!document.querySelector(
+    '[data-page="donnees"], [data-page="donn\u00e9es"], [data-page="data"], [data-page="console"], '
+    + '[data-restitution="registre"], [data-restitution="suivi"]');
+  const vusP = new Set();
+  for (const el of document.querySelectorAll('p, li, dd, blockquote, .prose, .chapo, .va')) {
+    if (proses.length + notes.length >= 12) break;
+    if (el.closest('table, nav, pre, code, figcaption, .tf-panel')) continue;
+    if (!visibleBoite(el)) continue;
+    const texte = (el.textContent || '').replace(/\s+/g, ' ').trim();
+    if (texte.length < MIN_CHARS) continue;
+    const r = document.createRange();
+    r.selectNodeContents(el);
+    const rects = [...r.getClientRects()].filter((x) => x.width > 1 && x.height > 1);
+    if (!rects.length) continue;
+    const lignes = new Set(rects.map((x) => Math.round(x.top))).size || 1;
+    const cpl = Math.round(texte.length / lignes);
+    if (cpl <= MAX_CPL) continue;
+    const cle = nomDe(el) + '|' + cpl;
+    if (vusP.has(cle)) continue;
+    vusP.add(cle);
+    const tenu = el.closest('.lire, [data-mesure-lecture]');
+    const largeur = Math.round(el.getBoundingClientRect().width);
+    const socle = `${cpl} caracteres par ligne mesures (${texte.length} caracteres sur ${lignes} `
+      + `ligne(s) peintes, bloc de ${largeur}px dans une fenetre de ${window.innerWidth}px ; `
+      + `plafond ${MAX_CPL})`;
+    if (tenu) {
+      notes.push({ what: nomDe(el), detail: `V18 — ${socle}. Ce paragraphe est TENU par un `
+        + `conteneur de lecture declare (${nomDe(tenu)}) : il n'est pas compte en defaut. La `
+        + `mesure est publiee pour que l'ecart entre le token du socle et le plafond de E5 `
+        + `s'arbitre sur un chiffre` });
+    } else if (pageDonnees) {
+      // TF-1622 (RA-3, 13/10/2026) — retour humain : « pourquoi ce n'est pas affiche sur toute
+      // la largeur et sur une moitie de colonne uniquement ? ». Sur une page de DONNEES, la prose
+      // occupe la pleine largeur PAR DEFAUT ; la colonne de lecture (.chap.lire,
+      // data-mesure-lecture) est une OPTION DECLAREE. Cette branche poussait vers la bride que le
+      // lecteur refuse : la mesure est publiee, jamais comptee en defaut.
+      notes.push({ what: nomDe(el), detail: `V18 — ${socle}. Page de DONNEES : prose pleine `
+        + `largeur par defaut (TF-1622), non comptee en defaut ; une colonne de lecture se `
+        + `DECLARE (.chap.lire, data-mesure-lecture) si l'auteur la veut` });
+    } else {
+      proses.push({ what: nomDe(el), detail: `${socle} — au-dela de ${MAX_CPL} caracteres, l'oeil `
+        + `perd le debut de la ligne suivante. La mesure de lecture se pose sur le CONTENEUR `
+        + `(.chap.lire, regle E4), jamais sur le paragraphe : envelopper ce passage dans un `
+        + `chapitre de lecture, ou le declarer par data-mesure-lecture s'il est assume` });
+    }
+  }
+
+  // ---- b. LES DONNEES : le tableau principal contre la largeur qu'on lui offre -------------
+  const tables = [...document.querySelectorAll('table')].filter(visibleBoite);
+  const dominante = tables.map((t) => {
+    const corps = [...t.tBodies].reduce((n, b) => n + b.rows.length, 0);
+    const colonnes = t.rows.length ? t.rows[0].cells.length : 0;
+    const r = t.getBoundingClientRect();
+    return { t, corps, colonnes, aire: r.width * r.height };
+  }).sort((a, b) => b.aire - a.aire)[0];
+  if (dominante && (pageDonnees
+      || (dominante.corps >= TABLE_LIGNES && dominante.colonnes >= TABLE_COLONNES))) {
+    const t = dominante.t;
+    const offerte = largeurOfferte(t);
+    const w = t.getBoundingClientRect().width;
+    if (offerte > 0 && w > 0) {
+      const ratio = w / offerte;
+      if (ratio < TABLE_MIN) {
+        const cs = getComputedStyle(t);
+        tableaux.push({ what: nomDe(t), detail:
+          `tableau principal a ${Math.round(w)}px pour ${Math.round(offerte)}px offerts par son `
+          + `conteneur (${Math.round(ratio * 100)} %, plancher ${Math.round(TABLE_MIN * 100)} %) `
+          + `dans une fenetre de ${window.innerWidth}px — width calcule ${cs.width}, max-width `
+          + `${cs.maxWidth}. Une page de DONNEES prend toute la largeur offerte (L26) : au 4K la `
+          + `place existe, et la moitie de l'ecran reste vide. Poser width: 100% sur le tableau, `
+          + `ou retirer le plafond de son conteneur ; les colonnes se DEFINISSENT (L27 (colonne)) plutot `
+          + `que de se laisser etirer` });
+      }
+    }
+  }
+
+  return { proses, tableaux, notes };
+}
+"""
+
+
+# TF-0365 (lot Produit-10 20260818a, 18/08) — une page TRES HAUTE rendait l'outil muet.
+# Fait mesure : un livrable CONFORME de 271 Ko et 45 tableaux atteint 151 615 px de haut a
+# 390 px de large (135 272 a 768, 43 409 a 1280) — les tableaux passent en cartes sous 768, ce
+# que le socle prescrit lui-meme. `Page.screenshot` portait un delai FIXE de 30 s sans option,
+# `--scale` n'acceptait qu'un entier, et aucun repli n'existait : l'outil terminait sur une
+# trace Playwright brute, pas sur un verdict. Un livrable conforme devenait non jugeable passe
+# une certaine longueur, sans que rien ne le dise.
+#
+# Le point qui rend le correctif simple, et qu'il fallait voir : les mesures V1/V2/V4/V3/V7 et
+# L2 sont prises par `page.evaluate(js)` AVANT la capture, dans le DOM. Une capture qui echoue
+# ne coute donc RIEN de ce qui est bloquant — elle coute l'inspection humaine de V5
+# (croisements) et V6 (images), qui se fait a l'oeil sur le PNG. La reponse n'est pas de reussir
+# la capture a tout prix : c'est de NOMMER ce qu'on perd quand elle echoue.
+# TF-0493 (23/08) — LA MATRICE D'ETATS. Deux defauts trouves par un client sur un seul
+# livrable, tous deux reproductibles en deux clics, tous deux invisibles au rendu par defaut :
+#   (1) le panneau de filtre CREE un ascenseur horizontal a l'ouverture ;
+#   (2) le bouton « Aucun » DETRUIT l'affichage — le tableau se reduit a quelques pixels, sans
+#       un mot pour le lecteur.
+# `--etats-ouverts` existait et avait ete utilise. Il ouvre les details et le premier panneau,
+# et ne produit AUCUN etat d'echec : filtre sans resultat, recherche sans correspondance, liste
+# vide. Or C'EST LA QUE LES COMPOSANTS CASSENT, precisement parce que personne ne les regarde.
+#
+# Chaque etat dit s'il a pu s'APPLIQUER. Un etat qui ne trouve pas son declencheur n'est pas
+# vert : il est declare NON JOUE, avec son motif. Un composant absent est une reponse ; un etat
+# muet serait un mensonge.
+#
+# Les selecteurs sont ceux du socle (references/composant-filtres-tableau.md) : `.tf-btn`
+# ouvre un panneau, `.tf-none` decoche tout, `.tf-search` filtre la liste de valeurs.
+#
+# TF-1341 (23/09/2026) — « TOUT DEPLIE » N'OUVRAIT PAS LES LIGNES DU COMPOSANT 10.
+# LE FAIT MESURE : `render_page.py <vue> --widths 1280 --matrice-etats` rendait PASS et
+# `"tout-deplie": {"applique": true, "motif": "0 <details> ouvert(s), premier panneau deplie"}`
+# alors que la vue portait 11 lignes `tr[data-detail]` restees FERMEES. L'etat ouvrait les
+# `<details>` et le premier panneau, jamais les lignes depliables de `table-detail.js` (regle
+# L17) : ce qu'une ligne fermee cache n'etait mesure par aucun etat, et l'etat se disait joue.
+# `--etats-ouverts` portait le meme trou dans sa propre copie du script. Trois corrections :
+#   1. les lignes s'ouvrent par LEUR bouton (`button[aria-controls]` dont la cible porte
+#      `data-detail`), comme un lecteur — seules les fermees : un clic sur une ouverte la ferme ;
+#   2. le motif dit combien de lignes ont ete ouvertes, sur combien ;
+#   3. chaque ouverture se CONSTATE apres coup au lieu d'etre deduite du clic : un etat qui
+#      n'ouvre rien de ce qu'il nomme est NON JOUE, et un declencheur de panneau qui ne deplie
+#      rien ne vaut plus « premier panneau deplie ».
+# Le panneau s'ouvre en DERNIER : un clic hors de son tableau le referme (`table-filters.js`).
+# Un seul script sert l'etat de la matrice ET `--etats-ouverts` : deux copies avaient le trou.
+TOUT_DEPLIER_JS = """() => {
+    const d = [...document.querySelectorAll('details')];
+    d.forEach((x) => { x.open = true; });
+    const details = d.filter((x) => x.open).length;
+    const cible = (b) => document.getElementById(b.getAttribute('aria-controls') || '');
+    const vue = (el) => !el.hidden && getComputedStyle(el).display !== 'none';
+    const lignes = [...document.querySelectorAll('tr[data-detail]')];
+    [...document.querySelectorAll('button[aria-controls]')]
+      .filter((x) => { const c = cible(x); return c && c.hasAttribute('data-detail'); })
+      .forEach((x) => { if (x.getAttribute('aria-expanded') !== 'true') x.click(); });
+    const ouvertes = lignes.filter(vue).length;
+    const b = document.querySelector('.tf-btn, .dd-btn');
+    let panneau = false;
+    if (b) {
+      b.click();
+      const p = cible(b);
+      panneau = b.getAttribute('aria-expanded') === 'true' || (!!p && vue(p))
+        || [...document.querySelectorAll('.tf-panel')].some(vue);
+    }
+    const lignes_detail = { ouvertes, total: lignes.length };
+    const dit = [`${details} <details> ouvert(s)`];
+    if (b) dit.push(panneau ? 'premier panneau deplie' : 'premier declencheur de panneau actionne SANS effet');
+    if (lignes.length) dit.push(`${ouvertes}/${lignes.length} ligne(s) de detail (tr[data-detail]) ouverte(s)`
+      + (ouvertes < lignes.length ? ` — ${lignes.length - ouvertes} restee(s) FERMEE(S), aucun bouton ne les ouvre` : ''));
+    if (!details && !panneau && !ouvertes) {
+      return { applique: false, lignes_detail, motif: (d.length || b || lignes.length)
+        ? `l etat n ouvre rien de ce qu il nomme : ${dit.join(', ')}`
+        : 'aucun <details>, ni panneau de filtre, ni ligne de detail (tr[data-detail]) dans la page' };
+    }
+    return { applique: true, lignes_detail, motif: dit.join(', ') };
+}"""
+
+# TF-1618 (RA-1, 13/10/2026) — LE PREMIER .tf-btn DU DOCUMENT PEUT DORMIR DANS UN ONGLET MASQUE.
+# LE FAIT : sur une page a onglets, l'etat « filtre-sans-resultat » actionnait le declencheur d'un
+# tableau range dans un panneau d'onglet masque ; son message d'etat vide existait (« Aucune ligne
+# ne correspond aux filtres », « 0 ligne sur 8 ») mais restait invisible, et l'etat etait declare
+# MUET. Servie avec l'ancre de l'onglet, la meme page passait. Les etats de filtre ne retiennent
+# donc que les declencheurs VISIBLES ; si tous sont masques, ils ouvrent d'abord l'onglet qui porte
+# le premier (l'element qui le controle : aria-controls ou lien #id), comme un lecteur, et le disent.
+DECLENCHEURS_FILTRE_JS = """
+        const vu = (el) => !!el && el.getClientRects().length > 0 && getComputedStyle(el).visibility !== 'hidden';
+        const reveler = (el) => {
+          for (let p = el.parentElement; p; p = p.parentElement) {
+            if (!p.id || vu(p)) continue;
+            const id = (window.CSS && CSS.escape) ? CSS.escape(p.id) : p.id;
+            const t = document.querySelector('[aria-controls="' + id + '"], a[href="#' + id + '"]');
+            if (t) { t.click(); return vu(el); }
+          }
+          return false;
+        };
+        const tous = [...document.querySelectorAll('.tf-btn')];
+        let b = tous.filter(vu), revele = '';
+        if (!b.length && tous.length && reveler(tous[0])) {
+          b = tous.filter(vu);
+          revele = ' (onglet du tableau ouvert d abord : ses declencheurs etaient masques)';
+        }
+        const absent = (motif) => ({ applique: false, motif: tous.length
+          ? `${tous.length} declencheur(s) .tf-btn, tous MASQUES, et aucun onglet ne les revele` : motif });
+"""
+
+ETATS_MATRICE = [
+    ("tout-deplie", TOUT_DEPLIER_JS),
+    ("filtre-premiere-colonne", """() => {""" + DECLENCHEURS_FILTRE_JS + """
+        if (!b.length) return absent('aucun declencheur de filtre (.tf-btn) — page sans tableau filtrable');
+        b[0].click();
+        return { applique: true, motif: 'panneau de la PREMIERE colonne ouvert' + revele };
+    }"""),
+    ("filtre-derniere-colonne", """() => {""" + DECLENCHEURS_FILTRE_JS + """
+        if (!b.length) return absent('aucun declencheur de filtre (.tf-btn)');
+        if (b.length < 2) return { applique: false, motif: 'une seule colonne filtrable — meme etat que la premiere, non rejoue' };
+        b[b.length - 1].click();
+        return { applique: true, motif: `panneau de la DERNIERE colonne ouvert (${b.length} colonnes filtrables) — un panneau ne deborde pas du meme cote a droite qu a gauche` + revele };
+    }"""),
+    ("filtre-sans-resultat", r"""() => {""" + DECLENCHEURS_FILTRE_JS + r"""
+        if (!b.length) return absent('aucun declencheur de filtre (.tf-btn)');
+        b = b[0];
+        b.click();
+        const hote = b.closest('th') || b.parentElement;
+        const panneau = (hote && hote.querySelector('.tf-panel:not([hidden])'))
+          || document.querySelector('.tf-panel:not([hidden])') || document;
+        const aucun = panneau.querySelector('.tf-none')
+          || [...panneau.querySelectorAll('button, label')].find((e) => /^\s*aucun/i.test(e.textContent || ''));
+        if (!aucun) return { applique: false, motif: 'panneau ouvert, mais aucune bascule « Aucun » (.tf-none) a actionner' };
+        aucun.click();
+        return { applique: true, motif: 'toutes les valeurs decochees — le tableau ne doit plus porter AUCUNE ligne, et le dire' + revele };
+    }"""),
+    ("recherche-sans-correspondance", """() => {
+        const champ = document.querySelector('.tf-search, input[type=search]');
+        if (!champ) return { applique: false, motif: 'aucun champ de recherche (.tf-search, input[type=search])' };
+        champ.focus();
+        champ.value = 'zzzqqqxwv';
+        champ.dispatchEvent(new Event('input', { bubbles: true }));
+        champ.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'v' }));
+        return { applique: true, motif: 'recherche sur une chaine improbable — zero correspondance attendue, annoncee' };
+    }"""),
+]
+
+# Ce que V1/V2/V4 ne verront JAMAIS, et qui est pourtant le defaut le plus grave des deux
+# trouves par le client : « le bouton Aucun DETRUIT l'affichage — le tableau se reduit a
+# quelques pixels, SANS UN MOT ». Aucune famille de mesure ne parle de ce silence : la page est
+# geometriquement irreprochable, elle ne deborde pas, elle ne se chevauche pas, elle ne dit
+# simplement plus rien. C'est la loi transverse n° 3 appliquee aux etats vides : l'oubli
+# n'existe pas — un etat vide se DECLARE, il ne se devine pas.
+#
+# Le socle prescrit deja la forme du message (`.tf-count` en zone vivante, classe `zero`,
+# `.tf-vide-msg`) : ce controle ne fait qu'exiger qu'elle soit la, VISIBLE et PORTEUSE DE TEXTE.
+# Le piege a eviter : le panneau de filtre contient lui-meme un bouton « Aucun ». Le compter
+# comme message rendrait la regle verte sur le defaut exact qu'elle traque.
+VERIF_ETATS = {
+    "filtre-sans-resultat": """() => {
+        const lignes = [...document.querySelectorAll('tbody tr')].filter((r) =>
+          getComputedStyle(r).display !== 'none' && !r.hasAttribute('data-tf-hidden')
+          && r.getBoundingClientRect().height > 1);
+        const visible = (el) => {
+          const s = getComputedStyle(el);
+          if (s.display === 'none' || s.visibility === 'hidden' || parseFloat(s.opacity) === 0) return false;
+          const r = el.getBoundingClientRect();
+          return r.width > 1 && r.height > 1;
+        };
+        const dit = [...document.querySelectorAll('.tf-vide, .tf-vide-msg, .tf-count, [aria-live], .zero, .empty')]
+          .filter((el) => !el.closest('.tf-panel, .tf-btn'))
+          .some((el) => visible(el) && (el.textContent || '').trim().length > 2);
+        return { lignes: lignes.length, dit };
+    }""",
+    "recherche-sans-correspondance": """() => {
+        const opts = [...document.querySelectorAll('.tf-opt, .tf-opts label')].filter((el) =>
+          getComputedStyle(el).display !== 'none' && el.getBoundingClientRect().height > 1);
+        const visible = (el) => {
+          const s = getComputedStyle(el);
+          if (s.display === 'none' || s.visibility === 'hidden') return false;
+          const r = el.getBoundingClientRect();
+          return r.width > 1 && r.height > 1;
+        };
+        const dit = [...document.querySelectorAll('.tf-vide, .tf-vide-msg, .tf-count, [aria-live], .zero, .empty')]
+          .some((el) => visible(el) && (el.textContent || '').trim().length > 2);
+        return { lignes: opts.length, dit };
+    }""",
+}
+
+# ---------------------------------------------------------------------------
+# TF-1093 (20/09/2026) — LES FILTRES CROISES, PAR PAIRES.
+#
+# CE QUE LA MATRICE DE TF-0493 NE VOIT PAS. Ses cinq etats sont UNITAIRES : un panneau ouvert,
+# une colonne decochee, une recherche sans correspondance. Aucun ne pose DEUX filtres a la fois.
+# Or le croisement est l'usage normal d'un tableau filtrable, et c'est la que l'intersection
+# devient vide : chaque facette prise seule laisse des lignes, leur intersection n'en laisse
+# aucune, et une page qui n'annonce le vide que lorsqu'une facette est entierement decochee
+# reste MUETTE sur ce croisement-la. La loi n 3 (un etat vide se declare) y est violee sans
+# qu'aucun etat unitaire puisse le montrer.
+#
+# LA BORNE EST DECLAREE ET AFFICHEE. Le produit cartesien complet de n colonnes est
+# inatteignable ; on s'arrete aux PAIRES, et le rapport dit toujours « N paires jouees sur M
+# possibles ». Une borne tue n'est pas une borne, c'est un mensonge par omission : le verdict
+# doit se lire avec sa couverture.
+# ---------------------------------------------------------------------------
+# TF-1093 (20/09/2026) — LA MESURE SE DONNE PRETE, JAMAIS EN GABARIT.
+#
+# LE FAIT MESURE, le 20/09 en branchant les croisements chez forge-tests. `MEASURE_JS` est un
+# GABARIT : il porte des jetons `__ALIGN_TOL__`, `__L2_MIN_VIEWPORT__`… que `run()` remplacait
+# chez lui, en une expression privee. Un consommateur qui lit `MEASURE_JS` depuis le module —
+# c'est ce que fait le pan `contraste`/`plancher` de forge-tests, par import de chemin, pour ne
+# PAS recopier la formule — recoit donc le gabarit, et son evaluation leve :
+#   Page.evaluate: ReferenceError: __ALIGN_TOL__ is not defined
+# Mesure jouee sur une page servie : le gabarit brut LEVE, la version preparee mesure.
+#
+# La constante reste exportee telle quelle (personne ne casse), et la PREPARATION devient une
+# fonction publique. Un consommateur a desormais une porte qui rend une mesure jouable ; c'est
+# la meme discipline que `--familles` (TF-0513) : ce qu'un autre depot doit lire, le socle le
+# PUBLIE au lieu de le laisser deviner.
+def mesure_js() -> str:
+    """`MEASURE_JS` avec ses seuils POSES — la seule forme evaluable dans un navigateur."""
+    return (MEASURE_JS
+            .replace("__ECHEANCE_OVERLAP__", _phrase_echeance("overlap_en_bloc"))
+            .replace("__OVERLAP_MIN_RATIO__", str(OVERLAP_MIN_RATIO))
+            .replace("__ALIGN_TOL__", str(ALIGN_TOLERANCE_PX))
+            .replace("__V7_MAX__", str(V7_MAX_DETAILS))
+            .replace("__L2_MIN_RATIO__", str(L2_MIN_RATIO))
+            .replace("__L2C_MIN_RATIO__", str(L2C_MIN_RATIO))
+            .replace("__L2_MIN_VIEWPORT__", str(L2_MIN_VIEWPORT))
+            .replace("__L2_MIN_CHARS__", str(L2_MIN_CHARS))
+            .replace("__L2F_MIN_RATIO__", str(L2_FRERES_MIN_RATIO))
+            .replace("__L2F_MIN_LARGEUR__", str(L2_FRERES_MIN_LARGEUR))
+            .replace("__L2_COL_MAX__", str(L2_COL_MAX))
+            .replace("__L2_ETIQUETTE_MAX__", str(L2_ETIQUETTE_MAX))
+            .replace("__DONNEES_PROSE_MIN__", str(DONNEES_PROSE_MIN_RATIO))
+            .replace("__ROGNAGE_MIN_VIEWPORT__", str(ROGNAGE_DONNEES_MIN_VIEWPORT))
+            .replace("__DONNEES_CONTENEUR_MIN_VIEWPORT__", str(ROGNAGE_DONNEES_MIN_VIEWPORT))
+            .replace("__DONNEES_CONTENEUR_MIN__", str(DONNEES_CONTENEUR_MIN_RATIO))
+            .replace("__CONTENU_MIN__", str(CONTENU_MIN_RATIO))
+            .replace("__V24_MIN_CPL__", str(V24_MIN_CPL))
+            .replace("__V24_MIN_LIGNES__", str(V24_MIN_LIGNES))
+            .replace("__SOMMAIRE_MIN_CHAP__", str(SOMMAIRE_MIN_CHAPITRES))
+            .replace("__SOMMAIRE_MIN_ECRANS__", str(SOMMAIRE_MIN_ECRANS))
+            .replace("__ROGNE_PAR_ANCETRE__", ROGNE_PAR_ANCETRE_JS))
+
+
+def mesure_large_js() -> str:
+    """`MESURE_LARGE_JS` (V18) avec ses seuils POSES. Meme raison, meme porte."""
+    return (MESURE_LARGE_JS
+            .replace("__V18_MAX_CPL__", str(V18_MAX_CPL))
+            .replace("__V18_MIN_CHARS__", str(V18_MIN_CHARS))
+            .replace("__V18_TABLE_MIN__", str(V18_TABLE_MIN_RATIO))
+            .replace("__V18_TABLE_LIGNES__", str(V18_TABLE_MIN_LIGNES))
+            .replace("__V18_TABLE_COLONNES__", str(V18_TABLE_MIN_COLONNES)))
+
+
+PAIRES_MAX_DEFAUT = 24
+
+# L'inventaire OUVRE puis REFERME chaque panneau : plusieurs composants ne peuplent leurs
+# valeurs qu'a la premiere ouverture, et un inventaire qui laisserait un panneau ouvert
+# changerait l'etat qu'il pretend seulement decrire.
+INVENTAIRE_FACETTES_JS = """() => {
+  const bts = [...document.querySelectorAll('.tf-btn')];
+  const cols = [];
+  bts.forEach((b, i) => {
+    b.click();
+    const hote = b.closest('th') || b.parentElement || document;
+    const p = hote.querySelector('.tf-panel');
+    const opts = p ? [...p.querySelectorAll('.tf-opt')] : [];
+    const valeurs = opts.map((o, k) => {
+      const lab = o.closest('label');
+      const txt = ((lab ? lab.textContent : o.value) || '').replace(/\\s+/g, ' ').trim();
+      return (txt || o.value || ('valeur ' + (k + 1))).slice(0, 24);
+    });
+    const th = b.closest('th');
+    let libelle = '';
+    if (th) {
+      const clone = th.cloneNode(true);
+      clone.querySelectorAll('.tf-btn, .tf-panel').forEach((x) => x.remove());
+      libelle = (clone.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 24);
+    }
+    cols.push({ index: i, libelle: libelle || ('colonne ' + (i + 1)), valeurs });
+    b.click();
+  });
+  return cols;
+}"""
+
+# Poser un filtre, c'est ne laisser qu'UNE valeur cochee. Le panneau est REFERME apres coup :
+# ce qu'on juge ici est le TABLEAU sous deux filtres, pas la geometrie d'un panneau ouvert —
+# celle-la est deja jugee par les etats « filtre-premiere/derniere-colonne ».
+APPLIQUER_PAIRE_JS = """(a) => {
+  const bts = [...document.querySelectorAll('.tf-btn')];
+  const poser = (ci, vi) => {
+    const b = bts[ci];
+    if (!b) return 'colonne ' + (ci + 1) + ' absente de la page';
+    b.click();
+    const hote = b.closest('th') || b.parentElement || document;
+    const p = hote.querySelector('.tf-panel');
+    if (!p) return 'aucun panneau (.tf-panel) pour la colonne ' + (ci + 1);
+    const opts = [...p.querySelectorAll('.tf-opt')];
+    if (!opts.length) return 'aucune valeur (.tf-opt) dans la colonne ' + (ci + 1);
+    if (vi >= opts.length) return 'valeur ' + (vi + 1) + ' absente de la colonne ' + (ci + 1);
+    opts.forEach((o, k) => {
+      const veut = (k === vi);
+      if (o.checked !== veut) {
+        o.checked = veut;
+        o.dispatchEvent(new Event('change', { bubbles: true }));
+        o.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+    });
+    b.click();
+    return '';
+  };
+  const e1 = poser(a.i, a.vi); if (e1) return { applique: false, motif: e1 };
+  const e2 = poser(a.j, a.vj); if (e2) return { applique: false, motif: e2 };
+  return { applique: true, motif: '' };
+}"""
+
+# La sonde d'etat vide est CELLE des etats unitaires, a l'identique : un croisement juge avec
+# un autre bareme que « filtre-sans-resultat » ne serait pas comparable a lui.
+VERIF_PAIRE_JS = VERIF_ETATS["filtre-sans-resultat"]
+
+
+def _combinaisons_par_paires(colonnes: list[dict], plafond: int) -> tuple[list[dict], int]:
+    """Les croisements (colonne A = valeur a) x (colonne B = valeur b), servis en TOUR DE ROLE.
+
+    Le tour de role n'est pas cosmetique. A plat, le plafond serait depense entierement sur la
+    PREMIERE paire de colonnes et les suivantes ne seraient jamais touchees — une couverture
+    qui s'annonce « 24 paires jouees » en n'ayant regarde qu'un seul couple de colonnes serait
+    pire que pas de couverture du tout. Chaque paire de colonnes recoit donc son premier
+    croisement avant qu'aucune n'en recoive un deuxieme.
+    """
+    files: list[list[dict]] = []
+    for a in range(len(colonnes)):
+        for b in range(a + 1, len(colonnes)):
+            ca, cb = colonnes[a], colonnes[b]
+            file: list[dict] = []
+            for va, eta in enumerate(ca["valeurs"]):
+                for vb, etb in enumerate(cb["valeurs"]):
+                    file.append({
+                        "i": ca["index"], "vi": va, "j": cb["index"], "vj": vb,
+                        "nom": f'{ca["libelle"]}={eta} x {cb["libelle"]}={etb}',
+                    })
+            if file:
+                files.append(file)
+    possibles = sum(len(f) for f in files)
+    retenues: list[dict] = []
+    rang = 0
+    while len(retenues) < plafond and any(rang < len(f) for f in files):
+        for f in files:
+            if rang < len(f):
+                retenues.append(f[rang])
+                if len(retenues) >= plafond:
+                    break
+        rang += 1
+    return retenues, possibles
+
+
+def jouer_paires(page, url: str, js: str, plafond: int, capture_timeout: int,
+                 png_dir: Path, stem: str, width: int) -> dict:
+    """Joue les croisements par paires sur la page deja ouverte, et rend ce qu'il a couvert.
+
+    Chaque croisement REPART d'une page neuve, comme les etats de TF-0493 : un croisement qui
+    heriterait du precedent ne serait plus le croisement qu'il pretend etre.
+    """
+    page.goto(url)
+    page.wait_for_load_state("networkidle")
+    page.wait_for_timeout(200)
+    resultat: dict = {"jouees": 0, "possibles": 0, "plafond": plafond, "colonnes": 0,
+                      "combinaisons": {}, "bloquants": 0, "motif": ""}
+    try:
+        colonnes = page.evaluate(INVENTAIRE_FACETTES_JS)
+    except Exception as erreur:  # noqa: BLE001 — une panne se declare, elle n'arrete rien
+        resultat["motif"] = (f"inventaire des facettes impossible ({type(erreur).__name__}) : "
+                             "aucun croisement n'a pu etre enumere")
+        return resultat
+    colonnes = [c for c in (colonnes or []) if c.get("valeurs")]
+    resultat["colonnes"] = len(colonnes)
+    if len(colonnes) < 2:
+        resultat["motif"] = (f"{len(colonnes)} colonne(s) a facette trouvee(s) — il en faut DEUX "
+                             "pour croiser. Page sans tableau a filtres croises")
+        return resultat
+    retenues, possibles = _combinaisons_par_paires(colonnes, plafond)
+    resultat["possibles"] = possibles
+    resultat["jouees"] = len(retenues)
+    for rang, combo in enumerate(retenues, start=1):
+        page.goto(url)
+        page.wait_for_load_state("networkidle")
+        page.wait_for_timeout(150)
+        try:
+            applique = page.evaluate(APPLIQUER_PAIRE_JS, combo)
+        except Exception as erreur:  # noqa: BLE001
+            applique = {"applique": False,
+                        "motif": f"le declencheur a leve {type(erreur).__name__}"}
+        if not applique.get("applique"):
+            resultat["combinaisons"][combo["nom"]] = {"applique": False,
+                                                      "motif": applique.get("motif", "")}
+            continue
+        page.wait_for_timeout(200)
+        iss = page.evaluate(js)
+        try:
+            vu = page.evaluate(VERIF_PAIRE_JS)
+        except Exception:  # noqa: BLE001
+            vu = None
+        if vu and vu.get("lignes") == 0 and not vu.get("dit"):
+            iss.setdefault("etat_muet", []).append({
+                "what": f"croisement « {combo['nom']} »",
+                "detail": "l'intersection de DEUX filtres ne laisse plus aucune ligne, et pas "
+                          "un mot pour le dire. Chaque filtre pris SEUL laisse des lignes : "
+                          "aucun etat unitaire ne montre ce vide. Le socle prescrit la forme du "
+                          "message : .tf-count en zone vivante (aria-live) avec la classe zero, "
+                          "ou .tf-vide-msg — et il doit se calculer sur les lignes RESTANTES, "
+                          "pas sur le nombre de valeurs cochees d'une seule facette. "
+                          "Loi n 3 : un etat vide se declare",
+            })
+        png = png_dir / f"{stem}-w{width}-paire{rang:02d}.png"
+        cap = {"faite": True, "motif": ""}
+        try:
+            page.screenshot(path=str(png), full_page=True, timeout=capture_timeout)
+        except Exception as erreur:  # noqa: BLE001
+            cap = {"faite": False,
+                   "motif": f"capture impossible : {type(erreur).__name__} — les familles du "
+                            "DOM restent jugees"}
+        bloq = compter_bloquants(iss)
+        resultat["bloquants"] += bloq
+        resultat["combinaisons"][combo["nom"]] = {
+            "applique": True, "png": str(png) if cap["faite"] else None,
+            "capture": cap, "issues": iss, "blocking": bloq,
+        }
+    return resultat
+
+
+# ---------------------------------------------------------------------------
+# LES FAMILLES DE CONSTATS, ET LEUR POIDS — SOURCE UNIQUE (23/08/2026, choix humain).
+#
+# POURQUOI CETTE TABLE EXISTE. Le poids d'une famille était écrit à TROIS endroits dans ce fichier
+# (la liste d'affichage, le compteur de bloquants, la liste de la matrice d'états) et une
+# quatrième fois chez chaque consommateur. Mesure du 23/08 : trois familles nées après la table de
+# forge-design n'y figuraient pas, et DEUX d'entre elles — bloquantes ici — y arrivaient en simple
+# avertissement. Le constat était là, visible, et ne pesait plus rien. Une double vérité ne se
+# corrige pas : elle se supprime.
+#
+# `--familles` publie cette table : un consommateur la LIT au lieu d'en tenir une copie.
+# `v1_tronque` n'y figure pas — ce n'est pas une famille de constats mais une BORNE déclarée.
+FAMILLES = [
+    ("v1_overflow", "V1 débordement horizontal", "bloquant"),
+    ("v2_contrast", "V2 contraste", "bloquant"),
+    ("v4_overlap", "V4 chevauchement de blocs", "bloquant"),
+    ("l2_width", "L2 largeur de texte bridée", "bloquant"),
+    ("l2_gouttiere", "L2 gouttière d'étiquettes", "bloquant"),
+    ("l2_conteneur", "L2 conteneur de lecture calé à gauche", "bloquant"),
+    ("l2_filet", "L2 texte écrasé en filet", "bloquant"),
+    ("etat_muet", "État vide MUET (loi n° 3)", "bloquant"),
+    # TF-0551 (24/08) : une fiche livree avait perdu deux sections et son pied de page sous un
+    # `overflow:hidden`, avec DEUX oracles verts. Bloquant sans hesitation : c'est la seule
+    # famille dont le defaut ne se voit ni a l'ecran ni a l'impression.
+    # TF-0633 (25/08, lot Produit-02) : un logo blanc devenu bleu fonce, servi sur un
+    # bandeau bleu fonce. Bloquant au meme titre que V2 : c'est le meme defaut — un contenu
+    # invisible — sur un objet que V2 ne sait pas voir, faute de `color` a mesurer.
+    ("v9_actif_invisible", "V9 actif visuel indiscernable de son fond", "bloquant"),
+    # TF-1859 (RA-14, lot Produit-79 20261017c) : un graphique en canvas aux series presque blanches
+    # (jetons de serie absents) rendait PASS aux 7 largeurs, clair et sombre. Meme defaut que V9 —
+    # un contenu invisible — sur un objet hors du DOM. Bloquant au meme seuil que V9 : a 1,2:1 il n'y
+    # a plus de jugement a rendre. Mesure de bruit : references/zero-defaut-visuel.md, § V22.
+    ("v22_canvas_indiscernable", "V22 marques d'un canvas indiscernables de leur fond", "bloquant"),
+    ("contenu_rogne", "Contenu ROGNE par un debordement masque", "bloquant"),
+    # Lot Produit-02 du 02/09 — quatre familles nees de retours humains directs sur un livrable
+    # servi, chacune sur un angle mort DECLARE des familles existantes :
+    #   · TF-0773 « textbox pas alignes » — V3 juge des series de blocs, pas des controles ;
+    #   · TF-0771 « les pages doivent profiter de toute la largeur » — V1 se tait des qu'un
+    #     conteneur defile, et la revue avait classe le rognage « acceptable » SANS mesure ;
+    #   · TF-0778 prose bridee — L2 ne regarde que six selecteurs, un `.chapo` n'en est aucun ;
+    #   · TF-0772 sommaire — la moitie mesurable de L25.
+    ("controles_desalignes", "Controles d'une meme rangee desalignes", "bloquant"),
+    ("rognage_donnees", "Tableau ROGNE dans un conteneur defilant (page de donnees)", "bloquant"),
+    ("prose_etroite", "Bloc de texte etrique sur une page de donnees", "bloquant"),
+    # TF-0930 (lot Produit-10 20260908b) : le CONTENEUR, la ou `prose_etroite` juge le bloc et
+    # `rognage_donnees` le tableau. Une page de donnees bridee a 1 260 px dans une fenetre de
+    # 1 370 rend PASS aux deux — le bloc remplit bien son conteneur, le tableau ne deborde pas
+    # de la boite qu'on lui a donnee. Bloquant : c'est le troisieme angle de la meme regle.
+    ("conteneur_bride_donnees", "Conteneur bride sur une page de donnees", "bloquant"),
+    ("sommaire_perdu", "Sommaire perdu au defilement", "bloquant"),
+    # TF-1909 (RA-17, lot Produit-79 20261018b) : le CONTENU contre la FENETRE. Un rapport dont tous
+    # les chapitres portaient `.chap.lire` a passe check_html et render_page aux sept largeurs, puis
+    # a ete refuse : 28 % d'une fenetre de 3 840 px, la ou E4 exige 75 a 100 %. Bloquant : c'est la
+    # regle E4 elle-meme, ecrite au socle depuis le 13/08 et qu'aucune mesure ne jouait.
+    ("contenu_etroit", "V23 contenu principal sous 75 % de la fenetre (regle E4)", "bloquant"),
+    # TF-1917 (RT-134, lot Produit-02 20261018d) : la borne BASSE de la mesure de lecture. Une demande
+    # « textes trop verticaux » a ete servie par quatre colonnes de ~30 caracteres par ligne, tous
+    # controles verts : V18 ne borne que le maximum (135). AVERTISSEMENT et non bloquant : regle neuve
+    # dont le bruit sur le parc n'est pas nul par construction (une colonne etroite est parfois voulue),
+    # mesure dans references/zero-defaut-visuel.md, § V24. Une echeance (echeances.json) peut la durcir.
+    ("prose_verticale", "V24 prose de plus de 3 lignes sous 45 caracteres par ligne", "avertissement"),
+    # TF-1966 (RT-15, lot Produit-84 20261019e) : l'EQUILIBRE des colonnes. Une colonne a 41 % de la
+    # largeur du tableau, remplie a 10 %, pendant qu'une colonne etroite enroule son texte : rangee de
+    # 607 px au lieu de 347, tous controles verts. AVERTISSEMENT (regle neuve, D-70 (b)) : une repartition
+    # de colonnes imposee est parfois voulue (data-colonnes-ok). Mesure : references/zero-defaut-visuel.md.
+    ("colonnes_desequilibrees", "V25 colonne large et vide face a une colonne etranglee", "avertissement"),
+    # TF-1963 (RT-12, lot Produit-84 20261019d) : un panneau DEPLIE (filtre, menu, dialogue) au fond
+    # transparent, ou recouvert, rendait `--etats-ouverts` PASS : le texte de la page passait a travers le
+    # panneau. Bloquant : c'est un contenu illisible au moment ou le lecteur l'ouvre (meme famille que V2).
+    ("panneau_deplie", "V26 panneau deplie au fond transparent ou recouvert", "bloquant"),
+    # TF-1965 (RT-14, lot Produit-84 20261019d) : le repli en cartes masquait le thead et, avec lui, les
+    # declencheurs de filtre de colonne (5 boutons en 0 x 0 a 390 px) : une affordance qui n'existe plus
+    # sans que rien ne le dise (loi n 1). Bloquant ; ecart voulu : data-filtres-remplaces="<raison>".
+    ("filtres_masques_repli", "V27 filtres de colonne masques par le repli en cartes", "bloquant"),
+    # TF-2679 (factory-site, 15/11/2026) : une piste de grille reservee sans contenu, une marge animee
+    # vide, un bandeau a une seule figure — aucune famille ne jugeait ce que le lecteur voit : la moitie de la
+    # page vide a droite. Bloquant du 16/11 au 23/11/2026 (decision du 16/11 : 9 pages sur 10 rouges au controle
+    # du produit, 84 mesures vertes), AVERTISSEMENT depuis la decision D-234 (a) du porteur du 23/11/2026
+    # (TF-2691) : la mesure sur les pages livrees accuse 22 pages sur 117 (references/zero-defaut-visuel.md),
+    # la seule capture lue ne montre aucun defaut, et V25 a pris ce chemin. Seule la severite change : les seuils
+    # et le detail du constat sont ceux d'avant, et une echeance (echeances.json) peut encore la durcir.
+    ("equilibre_droite", "V28 encre desequilibree : plus du quart du cadre vide a droite", "avertissement"),
+    # TF-1146 (16/09, lot Produit-64 20260916a) : l exemption V4 posee EN BLOC. Avertissement et
+    # non bloquant — 1 716 occurrences mesurees dans le parc le 16/09, les rendre bloquantes
+    # d un coup rougirait tout ce qui existe. Mais le silence, lui, s arrete : un libelle de
+    # fleche imprime dans la boite voisine a traverse DEUX livraisons sous cette exemption.
+    ("overlap_en_bloc", "V4 exemption posee EN BLOC (data-overlap-ok sans paire declaree)",
+     "avertissement"),
+    # TF-0910 (lot Produit-10 20260908a) : cinq teintes d'etat pastel du socle, toutes autour de
+    # L* 93-97. Chaque badge tenait 4,5:1 contre son fond, donc V2 rendait PASS sur chacun ; le
+    # defaut vit ENTRE deux badges — une distance, pas un ratio. Retour humain sur le livrable
+    # servi : « les bulles des statuts ne sont pas suffisamment differentes pour etre
+    # differenciees ». Bloquant : un etat qu'on ne distingue pas n'est pas un etat.
+    ("etats_indiscernables", "V16 etats indiscernables entre eux", "bloquant"),
+    # TF-0901 (lot Produit-10 20260907e) : huit en-tetes de tableau poses sur leurs propres
+    # lignes, trois oracles PASS, et l'humain seul detecteur a la premiere ouverture. Un `top`
+    # applique a un element NON collant mange ses lignes a chaque instant : bloquant.
+    ("entete_pose_sur_lignes", "V15 en-tete de tableau pose sur ses lignes", "bloquant"),
+    # TF-0901, seconde branche : l'en-tete COLLE, mais pas a la fenetre — un ancetre a
+    # `overflow` non `visible` lui sert de boite (TF-0900). Constat et non bloquant : la cause
+    # est nommee, le geste correctif appartient a la page qui a choisi ce conteneur.
+    ("entete_ne_colle_pas", "V15 en-tete collant hors de son `top` declare", "avertissement"),
+    # TF-0929 (lot Produit-10 20260908b) : la TROISIEME branche, et la troisieme instance de la
+    # classe en deux jours. L'en-tete se tient EXACTEMENT a son `top` declare — les deux branches
+    # ci-dessus rendent PASS — et il est quand meme illisible, parce que `--hh` est un TOKEN et
+    # que ce qui colle au-dessus est plus haut que lui. Mesure a 1 370 px : 115 px masques ; a
+    # 1 600 px, aucun defaut. Bloquant : un en-tete de colonne coupe rend le tableau indechiffrable.
+    ("entete_masque_par_collants", "V15 en-tete masque par l'empilement des collants", "bloquant"),
+    # TF-0973 (08/09) : la SECONDE signature, separee de la premiere dans son texte — l'en-tete
+    # tire vers le haut par la fin de son propre tableau. Comportement prescrit par CSS : une
+    # information, jamais un bloquant. Une regle qui melange ses deux causes s'apprend a ignorer.
+    ("entete_bride_par_tableau", "V15 en-tete bride par la fin de son tableau (informatif)", "info"),
+    # TF-1066 (12/09/2026, règle E5 du pilot) — V18, et elle ne se joue qu'au-delà de 2560 px :
+    # les deux défauts qu'elle mesure n'EXISTENT pas à 1920. La prose non tenue s'étire (342
+    # caractères par ligne mesurés à 3840 sur la sonde du 12/09) ; le tableau principal d'une
+    # page de données reste à sa largeur de contenu pendant que l'écran en offre le double.
+    ("v18_prose_etiree", "V18 mesure de lecture au-dela de 135 caracteres par ligne", "bloquant"),
+    ("v18_tableau_etrique", "V18 tableau principal sous 85 % de la largeur offerte", "bloquant"),
+    ("l2_freres", "L2 alignement entre frères empilés", "avertissement"),
+    ("v3_align", "V3 alignement d'une série", "avertissement"),
+    ("v7_spacing", "V7 rythme d'espacement", "avertissement"),
+    # TF-1350 (24/09/2026, lot Produit-64 20260924a, RD-21) : un mot coupe en son milieu passait
+    # les trois scripts du socle — L19 statique ne vise que `overflow-wrap:anywhere` et
+    # `break-all`, jamais `break-word` (légitime sur la prose), et le contrôle de RENDU que
+    # `lisibilite.md` §L19 annonçait n'existait pas. Bloquant au même titre que V13 (bloc de texte
+    # étriqué) : un mot illisible EST le premier défaut qu'un lecteur voit.
+    # TF-1350 — V19 entre en AVERTISSEMENT : regle neuve dont le bruit sur les pages existantes
+    # n'est pas nul (12/10/2026, mesurer_bruit.py a 1 440 px : 0 page sur 79 du pilot et des
+    # forges, 8 pages sur 385 du parc complet, 76 constats). Une echeance (references/
+    # echeances.json, cle `mot_coupe`) peut la durcir, jamais l'adoucir.
+    ("mot_coupe", "V19 mot coupé sur deux lignes sans trait d'union", "avertissement"),
+    # TF-1417 — un decor peint sur l'ANCETRE du texte rend son contraste non mesurable.
+    # AVERTISSEMENT : regle neuve dont le bruit sur les pages existantes n'est pas nul (12/10/2026,
+    # mesurer_bruit.py a 1 440 px : 0 page sur 79 du pilot et des forges, 6 pages sur 385 du parc
+    # complet, 31 constats) ; la regle d'auteur l'interdit (composants.md, Note d'usage).
+    ("decor_sur_ancetre", "Décor peint sur l'ancêtre du texte (contraste aveuglé)", "avertissement"),
+    # TF-1623 (RA-4, 13/10/2026) : regle neuve, en avertissement (D-70 (b)).
+    ("entete_desaligne", "En-tete de colonne desaligne de ses valeurs", "avertissement"),
+    # TF-1307 (17/10/2026, decision D-9 option (b)) : reecriture NEUVE de la regle perdue avant
+    # publication (ex-V19 de septembre, dont le numero est pris par `mot_coupe`). Avertissement :
+    # regle neuve, bruit mesure (mesurer_bruit.py) dans references/zero-defaut-visuel.md.
+    ("largeurs_melangees", "V21 largeurs de contenu melangees entre blocs freres", "avertissement"),
+    ("unmeasured", "Non mesurable — à vérifier à l'œil", "info"),
+]
+# UNE ÉCHÉANCE DÉPASSÉE DURCIT LA FAMILLE, elle ne l'adoucit jamais : la table déclare la
+# sévérité d'AVANT la date, la donnée dit quand elle devient bloquante. Le sens unique est
+# délibéré — une donnée qui pourrait ADOUCIR un contrôle serait une porte de sortie, et la
+# première urgence venue s'en servirait.
+def _familles_apres_echeances():
+    sorties = []
+    for cle, libelle, sev in FAMILLES:
+        depassee, _limite, _jours = _echeance_depassee(cle)
+        sorties.append((cle, libelle, "bloquant" if depassee and sev == "avertissement" else sev))
+    return sorties
+
+
+FAMILLES_EFFECTIVES = _familles_apres_echeances()
+BLOQUANTES = [c for c, _l, sev in FAMILLES_EFFECTIVES if sev == "bloquant"]
+AVERTIES = [c for c, _l, sev in FAMILLES_EFFECTIVES if sev == "avertissement"]
+LIBELLE = {c: l for c, l, _sev in FAMILLES}
+SEVERITE = {c: sev for c, _l, sev in FAMILLES_EFFECTIVES}
+
+CAPTURE_TIMEOUT_DEFAUT = 30_000
+
+# TF-1139 (lot Produit-64 20260915a, 15/09/2026) — LE SEUIL AU-DELÀ DUQUEL UNE PAGE N'EST PLUS
+# JUGEABLE VISUELLEMENT, ET IL N'ÉTAIT PUBLIÉ NULLE PART.
+#
+# LE FAIT, MESURÉ. Page de référence de 15 228 mots. Hauteurs relevées par l'oracle lui-même :
+# 54 793 px à 2560 px de large, 62 127 px à 1280, 98 079 px à 768, 123 822 px à 390. Quatre
+# exécutions successives, échelles 0,4 / 0,35 / 0,3 / 0,25 / 0,2 / 0,12, délais de 45 s à 300 s :
+# AUCUNE n'a produit d'image, et DEUX ont tourné plus de trente minutes avant d'être arrêtées.
+# L'oracle se comportait honnêtement — familles du DOM jugées, V5/V6 déclarées non jugées avec
+# leur motif. Le défaut est ailleurs : un auteur ne savait pas, AVANT d'écrire, à partir de
+# quelle hauteur son livrable cesserait d'être jugeable, ni que le temps de le découvrir se
+# comptait en dizaines de minutes par tentative.
+#
+# OÙ LE SEUIL EST POSÉ, ET SUR QUELLES MESURES. Sous le plus bas ÉCHEC mesuré (54 793 px, le
+# 15/09) et au-dessus du plus haut SUCCÈS mesuré (22 740 px CSS — la capture 780 × 45 480 de
+# TF-1131, à 390 px et échelle 2). Entre 22 740 et 50 000, aucune mesure : la tentative a donc
+# bien lieu, et c'est délibéré — un seuil posé trop bas retirerait la capture à des pages qui
+# l'obtiennent. `--hauteur-max` déplace la borne quand un auteur veut tenter quand même ; la
+# valeur employée est publiée à chaque exécution, seuil par défaut ou seuil forcé.
+CAPTURE_HAUTEUR_MAX = 50_000  # px CSS de scrollHeight, au-delà : constat nommé, aucune tentative
+
+
+class _SautDeCapture(Exception):
+    """Sortie propre du bloc de capture quand la page est au-delà du seuil (TF-1139)."""
+
+FAMILLES_SANS_IMAGE = "V1 debordement, V2 contraste, V4 chevauchement, V3, V7, L2"
+FAMILLES_AVEC_IMAGE = "V5 croisements, V6 images et V28 equilibre horizontal (aux largeurs de bureau)"
+
+
+# ---- V9 · la mesure des ACTIFS VISUELS, au pixel et dans leur contexte (TF-0633) -------------
+#
+# POURQUOI AU PIXEL, ET PAS PAR LES STYLES. Un actif visuel n'a pas de `color` : il a des pixels.
+# Un SVG referencé par `<img src>` n'est meme pas dans le DOM de la page, et le lire au canvas
+# salirait le contexte sur une page `file://`. La capture de l'element est donc la SEULE lecture
+# qui voit ce qui est SERVI plutot que ce qui est DECLARE — et c'est exactement la verification
+# qui manquait le 25/08 : « le correctif a capture le bandeau et le defaut a saute aux yeux ».
+#
+# LE SEUIL, ET POURQUOI IL EST BAS. WCAG 2.2 SC 1.4.11 demande 3:1 pour un objet graphique
+# porteur de sens. Ce controle ne juge PAS a 3:1, et c'est delibere : distinguer un actif porteur
+# de sens d'un decor demande un jugement, et une sonde qui accuserait tout aplat decoratif se
+# ferait eteindre — c'est la lecon de N-33 et celle du resserrage de S26. Il juge l'INDISCERNABLE :
+# aucun pixel de l'actif n'atteint 1,2 de contraste contre le fond peint derriere lui. A ce niveau
+# il n'y a plus de jugement a rendre, l'actif n'est pas la. Le cas fondateur mesurait 1,0.
+# Ce qui vit entre 1,2 et 3,0 est DECLARE non juge plutot que tu.
+_V9_SEUIL = 1.2
+_V9_MAX_PIXELS = 40_000        # au-dela, l'actif est reechantillonne : la couleur ne change pas
+
+# TF-1087 (preuve de couverture P-1 du 14/09/2026, decision D-4 (a)) — LE MEILLEUR PIXEL SAUVAIT
+# UN ACTIF A 90 % INVISIBLE.
+#
+# LE FAIT MESURE. Livrable E-06 du banc des defauts echappes : la variante BLANCHE d un logo avait
+# recu le contenu de la variante COULEUR. Pose sur un bandeau de sa propre couleur dominante,
+# 90 % de sa surface disparait — et V9 rendait PASS, parce que `max()` retient le MEILLEUR pixel et
+# que l accent minoritaire (la seconde couleur de marque) atteignait 2,16:1, au-dessus du seuil de
+# 1,2. Le temoin monocolore, lui, echouait : la regle marchait sur le cas ou l actif n a qu une
+# couleur, et sur celui-la seulement.
+#
+# POURQUOI LA CORRECTION ECRITE LE 14/09 A ETE RETIREE, ET LA MESURE QUI L EXPLIQUE. Le geste
+# propose etait « juger la couleur dominante, ou un contraste pondere par la part de surface ».
+# Mesure faite ici le 17/09/2026, capture Playwright a 1280 px, sur les quatre actifs :
+#
+#   actif                                    meilleur  part dominante  pondere  part >= 1,2
+#   logo monocolore sur son fond (temoin)      1,00        99,4 %        1,00      0,0 %
+#   logo bicolore 90/10 sur son fond           2,16        90,0 %        1,12     10,0 %
+#   logo blanc sur bandeau sombre (temoin)    10,85        73,5 %        3,09     25,7 %
+#   dessin au trait du gabarit multi-bandes    9,12        86,7 %        1,02      3,2 %
+#
+# Le dessin au trait CONFORME a une part dominante de 86,7 % a 1,0:1 et une part contrastee de
+# 3,2 % — soit MOINS que le logo defectueux sur les DEUX grandeurs de surface. Aucun seuil de
+# dominance ni de surface ne peut donc separer les deux : c est mecaniquement impossible, et c est
+# ce qui a fait retirer la premiere ecriture. Un dessin au trait est fait de fond et de traits.
+#
+# CE QUI LES SEPARE, ET C EST LA SEULE GRANDEUR QUI LE FAIT : le NIVEAU de contraste de ce qui
+# depasse. Les traits du schema atteignent 9,12:1, l accent du logo 2,16:1 — a peine plus que rien.
+# La regle ajoutee dit donc : un actif dont la surface DOMINANTE est indiscernable, et dont RIEN
+# n atteint le seuil WCAG 2.2 SC 1.4.11 de 3:1, n est pas sauve par son accent — cet accent est
+# lui-meme a la limite du visible.
+#
+# CE N EST PAS UN ASSOUPLISSEMENT ET CE N EST PAS UN ELARGISSEMENT AVEUGLE. La regle historique
+# (aucun pixel a 1,2) est INCHANGEE : elle continue de bloquer seule. La clause neuve n ajoute de
+# constat que dans la bande [1,2 ; 3,0[ ET quand la surface dominante est sous 1,2. Un aplat
+# decoratif franchement contraste, un pictogramme, un dessin au trait lisible n y entrent pas.
+_V9_PART_DOMINANTE = 0.70      # au-dela, la surface dominante EST l'actif pour le lecteur
+_V9_SEUIL_WCAG = 3.0           # WCAG 2.2 SC 1.4.11 — objet graphique porteur de sens
+
+
+def _v9_luminance(c) -> float:
+    def f(v):
+        v /= 255.0
+        return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
+    return 0.2126 * f(c[0]) + 0.7152 * f(c[1]) + 0.0722 * f(c[2])
+
+
+def _v9_ratio(c1, c2) -> float:
+    a, b = sorted((_v9_luminance(c1), _v9_luminance(c2)), reverse=True)
+    return (a + 0.05) / (b + 0.05)
+
+
+# TF-1143 (lot Produit-64 20260916a, retour RD-3, 16/09/2026) — LE FACTEUR D ECHELLE, DOCUMENTE
+# COMME UNE AIDE A LA CAPTURE, RENDAIT UN VERDICT BLOQUANT SUR UNE PAGE CONFORME.
+#
+# LE FAIT. Meme fichier, meme largeur de fenetre : `--widths 390 --scale 1` rend PASS,
+# `--widths 390 --scale 0.5` rend FAIL avec un bloquant V9 « actif visuel indiscernable de son
+# fond », meilleur contraste 1,10:1 (mesure rapportee par le lot ; la contre-mesure Playwright a
+# l echelle native du meme SVG donnait 18,1:1). La page n avait pas change : a echelle reduite le
+# rasteriseur noie une police de 13 px rendue a moins de deux pixels, et il ne reste que du
+# quasi-blanc a mesurer.
+#
+# CONTRE-MESURE FAITE ICI, sur la fixture `v9-texte-fin-a-echelle-reduite.html`, meme page, meme
+# largeur de 1280 px, capture de l actif par Playwright et calcul du meilleur contraste :
+#   echelle 2   -> 630 x 42 px, 26 460 pixels opaques, meilleur contraste 17,85:1
+#   echelle 1   -> 315 x 21 px,  6 615 pixels opaques, meilleur contraste 17,85:1
+#   echelle 0,5 -> 158 x 11 px,  1 738 pixels opaques, meilleur contraste 10,85:1
+#   echelle 0,4 -> 126 x  8 px,  1 008 pixels opaques, meilleur contraste  6,39:1
+#   echelle 0,25 ->  79 x  5 px,   395 pixels opaques, meilleur contraste  3,66:1
+# Le contraste mesure perd un facteur CINQ sans qu un pixel de la page ait bouge : ce que V9 lit
+# sous l echelle 1 est une propriete de la rasterisation, pas du livrable.
+#
+# CE QUE COUTAIT LE SILENCE. Le premier reflexe devant un bloquant V9 est de changer la charte du
+# livrable — foncer le remplissage des boites de schema jusqu a passer le seuil. Ce geste aurait
+# degrade huit schemas pour satisfaire un artefact.
+#
+# LA DECISION, ET ELLE N ASSOUPLIT RIEN. A l echelle 1 et au-dessus — dont l echelle 2 par
+# defaut — V9 est inchangee, seuil compris. SOUS l echelle 1, elle ne rend plus de BLOQUANT : le
+# constat part au non juge avec sa raison, exactement comme le socle le fait deja pour une
+# capture impossible ou un actif entierement transparent. Un verdict qu on sait etre un artefact
+# n est pas un verdict — le taire aurait ete l assouplissement, le declarer ne l est pas.
+V9_ECHELLE_MIN_BLOQUANTE = 1.0
+
+# TF-1192 (lot Produit-64 20260917a, retour RD-12, 17/09/2026) — LA SONDE MESURAIT CE QU UN
+# ELEMENT COLLANT PEINT PAR-DESSUS L ACTIF DANS SA PROPRE CAPTURE.
+#
+# LE FAIT MESURE. `render_page.py --etats-ouverts` rendait FAIL a 3840 et 2560 px sur le premier
+# schema d un guide — « V9 actif INDISCERNABLE de son fond, meilleur contraste 1.00:1 sur 39494
+# pixels opaques » — et PASS aux cinq autres largeurs. Le schema n etait pas blanc : boites
+# teintees a 1,25:1 contre le blanc, traits et textes contrastes, et une capture de l element seul
+# montrait ses cinq boites. Le mecanisme : `--etats-ouverts` remplit le champ de recherche, le
+# composant de recherche fait defiler la page jusqu au premier resultat, et le bandeau
+# `position: sticky` se retrouve peint A LA HAUTEUR du schema. `el.screenshot()` capture la REGION
+# de l ecran ou vit l element : elle capture donc le bandeau. Aux autres largeurs le premier
+# resultat tombait ailleurs — le verdict dependait de la position d un resultat de recherche, pas
+# de l actif juge.
+#
+# CE QUI EST CORRIGE, ET CE QUI NE L EST PAS. L invariant que V9 protege est « l actif se distingue
+# de son fond quand un lecteur le regarde ». Un bandeau collant est un choix de navigation que le
+# socle admet, et aucun lecteur ne voit le schema sous le bandeau : la mesure etait vraie sur
+# l image et fausse sur la page. Les elements `position: sticky | fixed` qui ne sont ni un ancetre
+# ni un descendant de l actif sont donc RENDUS INVISIBLES le temps de la capture, puis restaures a
+# l identique. `visibility: hidden` et pas `display: none` : la boite garde sa place, donc aucune
+# mise en page ne bouge entre le recensement des cibles et leur mesure.
+#
+# CE QUI N EST PAS TOUCHE — et c est la porte qui empeche de rouvrir TF-0633 : un actif POSE DANS
+# un bandeau collant (le logo du cas fondateur, blanc devenu bleu fonce sur son fond sombre) garde
+# son bandeau, puisque celui-ci est son ancetre. Le fond qu il faut lui opposer est bien celui-la.
+_V9_JS_RECENSER_COLLES = """() => {
+  window.__v9Colles = [...document.querySelectorAll('*')].filter((el) => {
+    const p = getComputedStyle(el).position;
+    return p === 'sticky' || p === 'fixed';
+  });
+  return window.__v9Colles.length;
+}"""
+
+#   TF-1356 — prend desormais la CIBLE directement (un `ElementHandle`, que Playwright
+#   deserialise en element DOM quand il est passe en argument) plutot qu'un `data-v9`
+#   a resoudre par selecteur : la capture d'UN SEUL element (V9) ET la capture PAR SECTION
+#   (TF-0422) appellent ainsi exactement la MEME fonction, aucune n'est dupliquee.
+_V9_JS_MASQUER_COLLES = """(cible) => {
+  window.__v9Masques = [];
+  if (!cible) return 0;
+  for (const el of (window.__v9Colles || [])) {
+    if (el === cible || el.contains(cible) || cible.contains(el)) continue;
+    window.__v9Masques.push([el, el.style.visibility]);
+    el.style.visibility = 'hidden';
+  }
+  return window.__v9Masques.length;
+}"""
+
+_V9_JS_RESTAURER_COLLES = """() => {
+  for (const [el, v] of (window.__v9Masques || [])) el.style.visibility = v;
+  window.__v9Masques = [];
+}"""
+
+# TF-1356 — CE QUI A ETE NEUTRALISE SE NOMME dans la sortie : un identifiant lisible
+# (balise, id, premiere classe), lu AVANT la restauration, pour qu'un auteur sache quel
+# bandeau collant a ete ecarte de sa capture de section plutot que de le deviner.
+_V9_JS_NOMMER_COLLES = """() => {
+  return (window.__v9Masques || []).map(([el]) => {
+    const id = el.id ? '#' + el.id : '';
+    const cls = (el.className && typeof el.className === 'string' && el.className.trim())
+      ? '.' + el.className.trim().split(/\\s+/)[0] : '';
+    return el.tagName.toLowerCase() + id + cls;
+  });
+}"""
+
+
+# TF-2679 (factory-site, run forge-site-20261114a, 15/11/2026) — L'ÉQUILIBRE HORIZONTAL DE L'ENCRE.
+# LE FAIT. Une marge animee restee vide sur 60 % de la hauteur d'une page, un bandeau a deux colonnes dont la
+# seconde piste, reservee, ne porte qu'une figure : aucune famille ne le jugeait. L2 compare un conteneur a son
+# parent ; debordement, contraste et chevauchement jugent des elements PRESENTS ; une piste de grille reservee
+# sans contenu n'est aucun element. Le controle ecrit au produit (colonnes_vides.py) rendait 9 pages sur 10
+# rouges avant correction et 84 mesures vertes apres.
+# LA MESURE. Sur la capture pleine page, par TRANCHES de 40 px CSS : l'encre visible (les pixels qui s'ecartent
+# du fond dominant de la tranche) donne le bord gauche et le bord droit de ce que le lecteur voit. Une tranche est
+# DESEQUILIBREE quand plus de 25 % du cadre est vide a droite ET que ce vide depasse de plus de 15 points celui
+# de gauche. Un defaut est une suite de tranches desequilibrees de plus de 600 px de haut. Une tranche sans encre
+# ne compte pas et interrompt la suite. Un element COLLANT compte sur la hauteur de son PARENT (la capture le
+# peint une fois, en haut ; le lecteur le voit alors que le parent defile). Une colonne etroite DECLAREE
+# (data-colonne-ok valide) n'est pas jugee ici : son rectangle est retire de l'encre.
+# Seuils poses par la decision du 16/11/2026 (TF-2679), non calibres ici sur le parc : mesurer_bruit.py les
+# mesurera sur les pages livrees.
+EQ_BANDE_PX = 40
+EQ_VIDE_DROITE_MAX = 0.25
+EQ_ECART_MIN = 0.15
+EQ_HAUTEUR_MIN = 600
+EQ_ENCRE_SEUIL = 24            # ecart de canal (0-255) au fond dominant de la tranche : sous lui, ce n'est pas de l'encre
+EQ_MIN_VIEWPORT = L2_MIN_VIEWPORT
+
+EQ_JS = r"""() => {
+  const y0 = window.scrollY;
+  const page = (el) => { const r = el.getBoundingClientRect();
+    return { left: r.left, right: r.right, top: r.top + y0, bottom: r.bottom + y0 }; };
+  const collants = [], dispenses = [];
+  for (const el of document.body.querySelectorAll('*')) {
+    const cs = getComputedStyle(el);
+    if (cs.position === 'sticky' && el.parentElement) {
+      const r = page(el), p = page(el.parentElement);
+      if (r.right > r.left) collants.push({ left: r.left, right: r.right, top: p.top, bottom: p.bottom });
+    }
+    if (el.hasAttribute('data-colonne-ok')) {
+      const r = page(el);
+      if (r.right > r.left) dispenses.push(r);
+    }
+  }
+  return { collants, dispenses };
+}"""
+
+
+def mesurer_equilibre(page, png: Path, largeur: int, hauteur_css: float, issues: dict) -> str | None:
+    """TF-2679 — l'equilibre horizontal de l'encre par tranches de 40 px, sur la capture pleine page.
+    Alimente `issues["equilibre_droite"]` ; rend un motif de non-jugement (ou None quand la mesure est jouee)."""
+    try:
+        from PIL import Image
+        import numpy as np
+    except ImportError:
+        return "Pillow ou numpy absent : l'equilibre horizontal de l'encre n'est pas mesure"
+    try:
+        sonde = page.evaluate(EQ_JS)
+        im = Image.open(png).convert("RGB")
+    except Exception as erreur:  # noqa: BLE001 — une sonde ou une image illisible se declare, jamais un vert
+        return f"mesure d'equilibre impossible ({type(erreur).__name__})"
+    sx = im.width / largeur
+    sy = im.height / hauteur_css
+    nb = int(hauteur_css // EQ_BANDE_PX) + (1 if hauteur_css % EQ_BANDE_PX else 0)
+    gauche: list[float | None] = []
+    droite: list[float | None] = []
+    for b in range(nb):
+        h0, h1 = b * EQ_BANDE_PX, min((b + 1) * EQ_BANDE_PX, hauteur_css)
+        r0, r1 = int(h0 * sy), max(int(h1 * sy), int(h0 * sy) + 1)
+        bande = np.asarray(im.crop((0, r0, im.width, r1)), dtype=np.int32)
+        empaquete = (bande[:, :, 0] << 16) | (bande[:, :, 1] << 8) | bande[:, :, 2]
+        valeurs, comptes = np.unique(empaquete, return_counts=True)
+        fond = int(valeurs[int(np.argmax(comptes))])
+        fr, fg, fb = (fond >> 16) & 255, (fond >> 8) & 255, fond & 255
+        ecart = np.maximum(np.maximum(np.abs(bande[:, :, 0] - fr), np.abs(bande[:, :, 1] - fg)),
+                           np.abs(bande[:, :, 2] - fb))
+        encre = (ecart > EQ_ENCRE_SEUIL).any(axis=0)
+        for r in sonde["dispenses"]:
+            if r["bottom"] > h0 and r["top"] < h1:
+                encre[max(int(r["left"] * sx), 0):max(int(r["right"] * sx) + 1, 0)] = False
+        colonnes = np.flatnonzero(encre)
+        if colonnes.size == 0:
+            gauche.append(None)
+            droite.append(None)
+            continue
+        g, d = colonnes[0] / sx, (colonnes[-1] + 1) / sx
+        for c in sonde["collants"]:
+            if c["bottom"] > h0 and c["top"] < h1:
+                g, d = min(g, c["left"]), max(d, c["right"])
+        gauche.append(max(g, 0.0) / largeur)
+        droite.append(max(largeur - d, 0.0) / largeur)
+    suite: list[int] = []
+
+    def clore():
+        if len(suite) * EQ_BANDE_PX > EQ_HAUTEUR_MIN:
+            vd = max(droite[i] for i in suite)
+            vg = min(gauche[i] for i in suite)
+            issues["equilibre_droite"].append({
+                "what": f"page, de {suite[0] * EQ_BANDE_PX} a {(suite[-1] + 1) * EQ_BANDE_PX} px",
+                "detail": f"{len(suite) * EQ_BANDE_PX} px de haut dont l'encre laisse jusqu'a {round(vd * 100)} % du cadre "
+                          f"vide a droite contre {round(vg * 100)} % a gauche (plus de {round(EQ_VIDE_DROITE_MAX * 100)} % a "
+                          f"droite et plus de {round(EQ_ECART_MIN * 100)} points d'ecart, par tranches de {EQ_BANDE_PX} px, sur "
+                          f"plus de {EQ_HAUTEUR_MIN} px) — une piste de grille reservee sans contenu, une marge animee ou un "
+                          "bandeau a une seule figure laissent le lecteur devant une moitie de page vide. Sorties qui PASSENT : "
+                          "centrer la colonne (le blanc se repartit), porter un contenu utile dans la piste de droite, "
+                          "retirer la piste reservee, ou declarer une colonne etroite voulue par data-colonne-ok sur son "
+                          "conteneur (TF-2679)"})
+        suite.clear()
+    for i, (g, d) in enumerate(zip(gauche, droite)):
+        if g is not None and d is not None and d > EQ_VIDE_DROITE_MAX and d - g > EQ_ECART_MIN:
+            suite.append(i)
+        else:
+            clore()
+    clore()
+    return None
+
+
+def mesurer_actifs_visuels(page, issues: dict, timeout_ms: int, echelle: float = 1.0) -> None:
+    """Juge chaque actif visuel contre le fond REELLEMENT peint derriere lui.
+
+    Ne leve jamais : tout ce qui empeche la mesure est DECLARE au non_juge. Le silence d'une
+    sonde n'est pas un verdict (TF-0582), et une sonde qui plante emporterait avec elle les
+    familles deja mesurees.
+    """
+    cibles = issues.pop("v9_cibles", None) or []
+    issues.setdefault("v9_actif_invisible", [])
+    if not cibles:
+        return
+    try:
+        import io as _io
+        from PIL import Image
+    except ImportError:
+        issues["unmeasured"].append({
+            "what": f"{len(cibles)} actif(s) visuel(s)",
+            "detail": "V9 non jugee : Pillow absent de l'environnement. `pip install pillow`",
+        })
+        return
+    # TF-1192 — le recensement des elements collants ou fixes se fait UNE FOIS pour la page : le
+    # masquage, lui, est propre a chaque actif, puisque le bandeau qui porte un logo ne se masque
+    # pas quand c'est ce logo qu'on mesure. Une panne ici ne prive de rien : la mesure reprend son
+    # comportement d'avant, et le fait est declare.
+    try:
+        page.evaluate(_V9_JS_RECENSER_COLLES)
+    except Exception as erreur:          # noqa: BLE001 — toute panne se declare, aucune n'arrete
+        issues["unmeasured"].append({
+            "what": f"{len(cibles)} actif(s) visuel(s)",
+            "detail": f"V9 — recensement des elements collants impossible ({type(erreur).__name__}) : "
+                      "un actif recouvert par un bandeau collant peut etre juge sur ce bandeau",
+        })
+    for c in cibles:
+        if c.get("nonMesurable"):
+            issues["unmeasured"].append({"what": c["what"], "detail": f"V9 — {c['nonMesurable']}"})
+            continue
+        bg = c.get("bg") or {}
+        fond = (bg.get("r", 255), bg.get("g", 255), bg.get("b", 255))
+        el = page.query_selector(f'[data-v9="{c["n"]}"]')
+        if el is None:
+            issues["unmeasured"].append({"what": c["what"], "detail": "V9 — element introuvable a la capture"})
+            continue
+        try:
+            try:
+                page.evaluate(_V9_JS_MASQUER_COLLES, el)
+            except Exception:            # noqa: BLE001 — le masquage est un mieux, jamais un du
+                pass
+            brut = el.screenshot(timeout=timeout_ms)
+            im = Image.open(_io.BytesIO(brut)).convert("RGBA")
+        except Exception as erreur:      # noqa: BLE001 — toute panne se declare, aucune n'arrete
+            issues["unmeasured"].append({
+                "what": c["what"],
+                "detail": f"V9 — capture impossible ({type(erreur).__name__}) : contraste de l'actif non juge",
+            })
+            continue
+        finally:
+            # La page est RENDUE A SON ETAT : les familles mesurees apres V9 (capture pleine page
+            # comprise) ne doivent rien voir de ce masquage.
+            try:
+                page.evaluate(_V9_JS_RESTAURER_COLLES)
+            except Exception:            # noqa: BLE001
+                pass
+        if im.width * im.height > _V9_MAX_PIXELS:
+            cote = max(1, int((_V9_MAX_PIXELS / max(1, im.width * im.height)) ** 0.5 * min(im.width, im.height)))
+            im = im.resize((max(1, im.width * cote // max(1, min(im.width, im.height))),
+                            max(1, im.height * cote // max(1, min(im.width, im.height)))))
+        couleurs = im.getcolors(maxcolors=1 << 20) or []
+        # Les pixels TRANSPARENTS laissent voir le fond : ils ne sont pas l'actif, et les compter
+        # ferait passer pour « contrastant » un logo invisible pose sur un fond clair.
+        opaques = [(n, px) for n, px in couleurs if px[3] >= 250]
+        if not opaques:
+            issues["unmeasured"].append({"what": c["what"], "detail": "V9 — actif entierement transparent : rien a mesurer"})
+            continue
+        total = sum(n for n, _ in opaques)
+        meilleur = max(_v9_ratio(px[:3], fond) for _, px in opaques)
+        # TF-1087 — la surface DOMINANTE, qui etait deja calculee et ne servait qu'a rediger le
+        # message, entre maintenant dans le jugement : elle dit ce que le lecteur voit vraiment.
+        domine_n, domine = max(opaques)
+        part_dominante = domine_n / total
+        ratio_dominante = _v9_ratio(domine[:3], fond)
+        sauve_par_un_accent = (part_dominante >= _V9_PART_DOMINANTE
+                               and ratio_dominante < _V9_SEUIL
+                               and meilleur < _V9_SEUIL_WCAG)
+        if meilleur < _V9_SEUIL or sauve_par_un_accent:
+            if echelle < V9_ECHELLE_MIN_BLOQUANTE:
+                # TF-1143 — la capture a ete REDUITE : ce qui est mesure ici est la rasterisation,
+                # pas le livrable. Le constat se DIT, il ne bloque pas.
+                issues["unmeasured"].append({
+                    "what": c["what"],
+                    "detail": (
+                        f"V9 NON JUGEE a l echelle {echelle:g} : capture REDUITE "
+                        f"({im.width}x{im.height} px, {total} pixels opaques), meilleur contraste "
+                        f"mesure {meilleur:.2f}:1 — sous le seuil {_V9_SEUIL}, mais la reduction "
+                        "seule suffit a l expliquer. Contre-mesure du socle sur un libelle de "
+                        "13 px inchange : 17,85:1 a l echelle 1, 6,39:1 a 0,4. Rejouer a "
+                        "`--scale 1` avant de toucher a la charte du livrable — foncer un aplat "
+                        "pour passer un artefact de rasterisation degrade la page pour rien"),
+                })
+                continue
+            contexte = (
+                f"contre un fond rgb({fond[0]:.0f}, {fond[1]:.0f}, {fond[2]:.0f}). "
+                f"Un actif visuel se valide dans le contexte OU IL EST SERVI, pas sur son fichier : "
+                f"un logo blanc devenu sombre est juste sur son fichier et absent du bandeau (TF-0633)")
+            if meilleur < _V9_SEUIL:
+                detail = (
+                    f"actif INDISCERNABLE de son fond — meilleur contraste {meilleur:.2f}:1 sur "
+                    f"{total} pixels opaques, {contexte[:-1]}. "
+                    f"Couleur dominante de l'actif : rgb({domine[0]}, {domine[1]}, {domine[2]})")
+            else:
+                # TF-1087 — l'actif depasse le seuil quelque part, et nulle part assez.
+                detail = (
+                    f"actif SAUVE PAR UN ACCENT MINORITAIRE — {part_dominante:.0%} de sa surface "
+                    f"opaque ({total} pixels) est a {ratio_dominante:.2f}:1, donc invisible, et son "
+                    f"meilleur contraste plafonne a {meilleur:.2f}:1, sous le seuil WCAG 2.2 "
+                    f"SC 1.4.11 de {_V9_SEUIL_WCAG:g}:1. Couleur dominante : "
+                    f"rgb({domine[0]}, {domine[1]}, {domine[2]}), {contexte} "
+                    "Verifier la VARIANTE servie avant de retoucher la charte : le cas fondateur "
+                    "est un fichier de variante blanche portant le contenu de la variante couleur")
+            issues["v9_actif_invisible"].append({"what": c["what"], "detail": detail})
+
+
+# ---- V22 · les MARQUES d'un <canvas>, au pixel (TF-1859, RA-14) ------------------------------
+#
+# CE QUI EST MESURE. Pour chaque <canvas> visible d'au moins 48 px de cote : une capture de
+# l'ELEMENT (ce que le lecteur voit, fond de page compris sous un canvas transparent), repetee
+# jusqu'a deux captures identiques (un graphique anime se pose en une seconde), puis :
+#   · le FOND est la couleur la plus frequente de la capture ;
+#   · une MARQUE EN APLAT est une couleur dont au moins 40 pixels ont leur voisinage de portee 2
+#     (cinq pixels en ligne, cinq en colonne) tout de la meme couleur : une barre, une aire, une
+#     pastille de legende — pas un trait de grille, pas un glyphe, pas un contour ;
+#   · le canvas est INDISCERNABLE si le meilleur contraste d'un aplat contre le fond est sous le
+#     seuil de V9 (1,2:1). Un seul aplat contraste suffit a ecarter le constat : la mesure accuse un
+#     graphique dont AUCUNE marque ne se voit, pas une serie parmi d'autres.
+# CE QUI N'EST PAS MESURE (publie au non_juge a chaque execution) : le texte, les traits fins et les
+# courbes (aucun aplat), la legende dessinee dans le canvas, une serie invisible a cote d'une serie
+# visible, le contraste entre deux series.
+_V22_SEUIL = _V9_SEUIL
+_V22_MAX_PIXELS = 400_000      # au-dela, reechantillonnage au plus proche voisin : les couleurs restent exactes
+_V22_COEUR_MIN = 40            # pixels « au coeur » d'une couleur pour qu'elle compte comme un aplat
+_V22_ESSAIS = 8                # captures successives pour attendre un graphique anime
+_V22_PAUSE_MS = 350
+
+
+def _aplats_d_un_canvas(im):
+    """(fond, aplats, total) d'une capture RGB. `aplats` : [(couleur, pixels_au_coeur)], du plus etendu."""
+    from collections import Counter
+    from PIL import Image
+    w, h = im.size
+    if w * h > _V22_MAX_PIXELS:
+        k = (_V22_MAX_PIXELS / (w * h)) ** 0.5
+        im = im.resize((max(1, int(w * k)), max(1, int(h * k))), getattr(Image, "Resampling", Image).NEAREST)
+        w, h = im.size
+    data = list(im.getdata())
+    fond = Counter(data).most_common(1)[0][0]
+    coeur = Counter()
+    w2 = 2 * w
+    for y in range(2, h - 2):
+        base = y * w
+        for i in range(base + 2, base + w - 2):
+            p = data[i]
+            if p == fond:
+                continue
+            if (data[i - 1] == p and data[i + 1] == p and data[i - 2] == p and data[i + 2] == p
+                    and data[i - w] == p and data[i + w] == p and data[i - w2] == p and data[i + w2] == p):
+                coeur[p] += 1
+    aplats = sorted(((p, n) for p, n in coeur.items() if n >= _V22_COEUR_MIN), key=lambda a: -a[1])
+    return fond, aplats, w * h
+
+
+def mesurer_canvas(page, issues: dict, timeout_ms: int) -> dict:
+    """Juge les aplats de chaque <canvas> contre leur fond. Ne leve jamais : tout ce qui empeche la
+    mesure est DECLARE (issues["unmeasured"]) et compte dans le bilan rendu.
+
+    Bilan : {"vus", "mesures", "indiscernables", "non_mesures": [raison, ...]}."""
+    cibles = issues.pop("canvas_cibles", None) or []
+    issues.setdefault("v22_canvas_indiscernable", [])
+    bilan = {"vus": len(cibles), "mesures": 0, "indiscernables": 0, "non_mesures": []}
+    if not cibles:
+        return bilan
+
+    def non_mesure(c, raison):
+        bilan["non_mesures"].append(raison)
+        issues["unmeasured"].append({"what": c["what"], "detail": f"V22 — {raison}"})
+
+    try:
+        import io as _io
+        from PIL import Image
+    except ImportError:
+        for c in cibles:
+            non_mesure(c, "canvas non mesure : Pillow absent de l'environnement (`pip install pillow`)")
+        return bilan
+    for c in cibles:
+        el = page.query_selector(f'[data-v22="{c["n"]}"]')
+        if el is None:
+            non_mesure(c, "canvas introuvable a la capture")
+            continue
+        try:
+            precedente, stable = None, False
+            for _ in range(_V22_ESSAIS):
+                brut = el.screenshot(timeout=timeout_ms)
+                if brut == precedente:
+                    stable = True
+                    break
+                precedente = brut
+                page.wait_for_timeout(_V22_PAUSE_MS)
+            if not stable:
+                non_mesure(c, f"canvas encore anime apres {_V22_ESSAIS} captures a {_V22_PAUSE_MS} ms : "
+                              "ses marques ne sont pas jugees, ne pas lire ce silence comme un vert")
+                continue
+            fond, aplats, total = _aplats_d_un_canvas(Image.open(_io.BytesIO(brut)).convert("RGB"))
+        except Exception as erreur:      # noqa: BLE001 — toute panne se declare, aucune n'arrete
+            non_mesure(c, f"capture ou analyse impossible ({type(erreur).__name__}) : marques non jugees")
+            continue
+        if not aplats:
+            non_mesure(c, "canvas sans aplat de couleur (courbes, traits, texte ou canvas vide) : "
+                          "aucune marque a comparer a son fond, le canvas n'est pas jugé")
+            continue
+        bilan["mesures"] += 1
+        rangs = sorted(((_v9_ratio(p, fond), p, n) for p, n in aplats), reverse=True)
+        meilleur = rangs[0][0]
+        if meilleur < _V22_SEUIL:
+            bilan["indiscernables"] += 1
+            dits = ", ".join(f"rgb({p[0]}, {p[1]}, {p[2]}) a {r:.2f}:1" for r, p, _n in rangs[:4])
+            issues["v22_canvas_indiscernable"].append({"what": c["what"], "detail": (
+                f"marques INDISCERNABLES de leur fond — {len(aplats)} aplat(s) de couleur, le meilleur "
+                f"contraste mesure est {meilleur:.2f}:1 contre le fond rgb({fond[0]}, {fond[1]}, {fond[2]}), "
+                f"sous le seuil {_V22_SEUIL}:1 ({dits}). Un graphique dont aucune serie ne se voit est "
+                "un graphique absent : verifier que les couleurs de serie existent (jetons --cat-N "
+                "poses dans :root et lus a la creation du graphique, theme sombre compris) avant de "
+                "retoucher le dessin. Le texte et la legende du canvas ne sont pas juges ici")})
+    return bilan
+
+
+def compter_bloquants(issues: dict) -> int:
+    """Les CAUSES bloquantes d'un jeu de mesures.
+
+    TF-0382 — `blocking` comptait les LIGNES d'une liste plafonnee, donc la severite etait
+    plafonnee avec elle. Il compte les CAUSES reelles : le total exact quand l'inventaire a ete
+    tronque, la longueur de la liste sinon. Ce n'est pas un assouplissement — le compte MONTE des
+    qu'il y a plus de causes que de lignes.
+    TF-0493 — extrait en fonction pour etre applique a l'identique aux etats de la matrice : un
+    etat juge avec un autre bareme que l'etat au repos ne serait pas comparable a lui.
+    `l2_freres` (TF-0491) n'y figure pas : c'est un avertissement, et il le reste ici.
+    """
+    # DÉRIVÉ de la table unique : ajouter une famille bloquante ne demande plus de penser à ce
+    # compteur, et en oublier une ici n'est plus possible.
+    total = issues.get("v1_tronque", {}).get("total") or len(issues.get("v1_overflow", []))
+    for cle in BLOQUANTES:
+        if cle == "v1_overflow":
+            continue                      # déjà compté ci-dessus, borne comprise
+        total += len(issues.get(cle, []) or [])
+    return total
+
+
+# TF-1282 — un panneau d'onglet masque ne l'est pas toujours par l'attribut `hidden` (deja
+# traite) : le cas courant est une regle CSS, sur l'element lui-meme ou un de ses ANCETRES
+# (`.vue[data-vue="b"] { display: none }`, un panneau replie en `visibility: hidden`…).
+# L'element et toute la chaine de ses ancetres masques sont donc forces REELEMENT visibles
+# (`!important`, pour passer devant la regle qui les masque) le temps de la capture, puis
+# restaures a l'identique — exactement ce que l'aide de l'outil promettait sans le faire.
+_SECTION_JS_RENDRE_VISIBLE = """(cible) => {
+  window.__sectionRestaure = [];
+  let el = cible;
+  while (el) {
+    const cs = getComputedStyle(el);
+    const etat = {display: el.style.display, visibility: el.style.visibility, hidden: el.hidden};
+    let touche = false;
+    if (cs.display === 'none') { el.style.setProperty('display', 'block', 'important'); touche = true; }
+    if (cs.visibility === 'hidden') { el.style.setProperty('visibility', 'visible', 'important'); touche = true; }
+    if (el.hidden) { el.hidden = false; touche = true; }
+    if (touche) window.__sectionRestaure.push([el, etat]);
+    el = el.parentElement;
+  }
+  return window.__sectionRestaure.length;
+}"""
+
+_SECTION_JS_RESTAURER_VISIBLE = """() => {
+  for (const [el, etat] of (window.__sectionRestaure || [])) {
+    el.style.display = etat.display;
+    el.style.visibility = etat.visibility;
+    el.hidden = etat.hidden;
+  }
+  window.__sectionRestaure = [];
+}"""
+
+
+# TF-2299 (lot Produit-81 du 09/11/2026, RA-04, decision R-58 du 09/11) — UNE PAGE A SCENES SE JOUE
+# SCENE PAR SCENE. Une animation de sept ou huit scenes declare ses etats par des elements
+# `[data-scene]` dont un seul se voit a la fois ; le lecteur change de scene au clavier (fleche
+# droite) ou par un sommaire (`[data-aller]`). L'oracle ne rendait que l'etat initial : sur cinq
+# animations, 32 scenes sur 37 n'ont JAMAIS ete rendues ni mesurees, et une planche de captures
+# ecrite a la main y a trouve deux defauts que tous les juges avaient laisses passer (une etape
+# orpheline, des adresses coupees au milieu du domaine). Le corps de la page porte lui aussi
+# `data-scene` (la scene COURANTE) : ce n'est pas une scene, d'ou l'exclusion de html et body.
+# Chaque scene repart d'une page NEUVE (aucune scene n'herite de l'etat de la precedente), est
+# atteinte par le geste d'un lecteur, puis mesuree et capturee a l'etat REPOSE. Une scene qu'aucun
+# geste n'atteint est declaree NON JOUEE, jamais verte.
+SCENES_SELECTEUR = "[data-scene]:not(html):not(body)"
+SCENES_GESTES = "fleche droite, puis sommaire [data-aller]"
+
+_SCENES_JS_ETAT = """(sel) => Array.from(document.querySelectorAll(sel)).map((el) => {
+  const r = el.getBoundingClientRect();
+  let vu = el.checkVisibility ? el.checkVisibility({checkVisibilityCSS: true}) : r.width > 0;
+  return {id: el.getAttribute('data-scene'), visible: vu && r.width > 0 && r.height > 0};
+})"""
+
+# Les animations d'entree d'une scene (delais compris) sont menees a leur terme : la mesure porte
+# sur la scene REPOSEE, pas sur une image intermediaire. Une animation infinie refuse, et reste.
+_SCENES_JS_REPOSER = """() => { let n = 0;
+  for (const a of document.getAnimations()) { try { a.finish(); n++; } catch (e) {} }
+  return n; }"""
+
+
+def _atteindre_scene(page, k: int) -> tuple[str, str]:
+    """Amene la scene `k` a l'ecran par les gestes d'un lecteur. Rend (geste, motif d'echec)."""
+    etat = page.evaluate(_SCENES_JS_ETAT, SCENES_SELECTEUR)
+    if etat[k]["visible"]:
+        return "etat initial", ""
+    signature = [e["visible"] for e in etat]
+    appuis = 0
+    for _ in range(len(etat)):
+        page.keyboard.press("ArrowRight")
+        appuis += 1
+        page.wait_for_timeout(120)
+        etat = page.evaluate(_SCENES_JS_ETAT, SCENES_SELECTEUR)
+        if etat[k]["visible"]:
+            return f"fleche droite x{appuis}", ""
+        nouvelle = [e["visible"] for e in etat]
+        if nouvelle == signature:
+            break                      # le geste ne change plus rien : inutile d'insister
+        signature = nouvelle
+    identifiant = etat[k]["id"]
+    clic = "aucun [data-aller] ne porte cet identifiant"
+    cible = page.query_selector(f'[data-aller="{identifiant}"]') if identifiant is not None else None
+    if cible:
+        try:
+            cible.click(timeout=2000)
+            page.wait_for_timeout(120)
+            if page.evaluate(_SCENES_JS_ETAT, SCENES_SELECTEUR)[k]["visible"]:
+                return "sommaire [data-aller]", ""
+            clic = "le clic sur [data-aller] ne l'affiche pas"
+        except Exception as erreur:  # noqa: BLE001 — un clic impossible se dit, il ne leve pas
+            clic = f"clic sur [data-aller] impossible ({type(erreur).__name__})"
+    return "", (f"aucun geste de lecteur ne l'affiche : {appuis} appui(s) sur la fleche droite "
+                f"sans effet sur cette scene, {clic}")
+
+
+def jouer_scenes(page, url: str, js: str, js_large: str, width: int, png_dir: Path, stem: str,
+                 capture_timeout: int, scale: float, hauteur_max: int) -> dict | None:
+    """Joue chaque scene declaree a CETTE largeur, une page neuve par scene. None si la page ne
+    declare aucune scene. Ne leve jamais : tout ce qui empeche la mesure se declare."""
+    try:
+        declarees = page.evaluate(_SCENES_JS_ETAT, SCENES_SELECTEUR)
+    except Exception:  # noqa: BLE001
+        return None
+    if not declarees:
+        return None
+    scenes: dict = {}
+    bloquants = 0
+    for k, decl in enumerate(declarees):
+        nom = str(decl["id"]) if decl["id"] not in (None, "") else str(k)
+        cle = nom if nom not in scenes else f"{nom}#{k}"
+        page.goto(url)
+        page.wait_for_load_state("networkidle")
+        page.evaluate("document.fonts && document.fonts.ready")
+        page.wait_for_timeout(250)
+        try:
+            geste, motif = _atteindre_scene(page, k)
+        except Exception as erreur:  # noqa: BLE001
+            geste, motif = "", f"le lecteur a leve {type(erreur).__name__} pendant le geste"
+        if not geste:
+            scenes[cle] = {"applique": False, "index": k, "motif": motif}
+            continue
+        try:
+            page.evaluate(_SCENES_JS_REPOSER)
+        except Exception:  # noqa: BLE001
+            pass
+        page.wait_for_timeout(150)
+        issues = page.evaluate(js)
+        issues["v18_prose_etiree"] = []
+        issues["v18_tableau_etrique"] = []
+        if width >= V18_MIN_VIEWPORT:
+            try:
+                v18 = page.evaluate(js_large)
+                issues["v18_prose_etiree"] = v18.get("proses") or []
+                issues["v18_tableau_etrique"] = v18.get("tableaux") or []
+                issues["unmeasured"].extend(v18.get("notes") or [])
+            except Exception as erreur:  # noqa: BLE001
+                issues["unmeasured"].append({
+                    "what": f"V18 scene {nom}",
+                    "detail": f"V18 non jugee ({type(erreur).__name__}) a {width} px"})
+        mesurer_actifs_visuels(page, issues, capture_timeout, scale)
+        canvas = mesurer_canvas(page, issues, capture_timeout)
+        png = png_dir / f"{stem}-w{width}-scene{k + 1:02d}.png"
+        hauteur = int(page.evaluate("() => document.documentElement.scrollHeight"))
+        capture: dict = {"faite": True, "motif": "", "hauteur_css": hauteur}
+        if hauteur > hauteur_max:
+            capture = {"faite": False, "hauteur_css": hauteur,
+                       "motif": f"scene trop haute pour etre capturee : {hauteur} px, seuil "
+                                f"{hauteur_max} px (--hauteur-max)"}
+        else:
+            try:
+                page.screenshot(path=str(png), full_page=True, timeout=capture_timeout)
+            except Exception as erreur:  # noqa: BLE001
+                capture = {"faite": False, "hauteur_css": hauteur,
+                           "motif": f"capture impossible : {type(erreur).__name__} — les "
+                                    "familles du DOM restent jugees"}
+        bloquant = compter_bloquants(issues)
+        bloquants += bloquant
+        scenes[cle] = {"applique": True, "index": k, "geste": geste, "issues": issues,
+                       "blocking": bloquant, "capture": capture,
+                       "png": str(png) if capture["faite"] else None,
+                       "canvas_vus": canvas["vus"]}
+    return {"declarees": len(declarees), "scenes": scenes, "bloquants": bloquants}
+
+
+def run(html_path, widths: list[int], selector: str, scale: float, as_json: bool,
+        out_dir: Path | None = None, etats_ouverts: bool = False,
+        capture_timeout: int = CAPTURE_TIMEOUT_DEFAUT, sections: str | None = None,
+        matrice_etats: bool = False, matrice_toutes_largeurs: bool = False,
+        hauteur_max: int = CAPTURE_HAUTEUR_MAX, matrice_paires: bool = False,
+        paires_max: int = PAIRES_MAX_DEFAUT, origine_distante: bool = False,
+        etat_session: Path | None = None, theme: str | None = None) -> int:
+    # TF-1093 — un chemin, une URL servie ou une Cible deja construite entrent tous ici. Le
+    # mode fichier reste le defaut : sans URL, `cibler` rend exactement l'ancien comportement.
+    cible = html_path if isinstance(html_path, Cible) else cibler(html_path, origine_distante)
+    # TF-1674 — session authentifiee et theme : verifies AVANT tout lancement de navigateur.
+    theme = ALIAS_THEME.get(theme, theme)
+    etat_session = verifier_etat_session(cible, etat_session)
+    contexte = options_contexte(etat_session, theme)
+    ensure_browser_path()
+    ensure_local_fonts()
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        sys.exit("ERREUR : playwright non installé.\n  pip install playwright && playwright install chromium")
+
+    js = mesure_js()
+    js_large = mesure_large_js()
+
+    png_dir = _dossier_captures(cible, out_dir)
+    png_dir.mkdir(parents=True, exist_ok=True)
+
+    report: dict = {"file": cible.url if cible.servie else str(cible.chemin),
+                    "url": cible.url, "servie": cible.servie, "origine": cible.origine,
+                    "png_dir": str(png_dir),
+                    "breakpoints": {}, "verdict": None, "non_juge": []}
+    blocking_total = 0
+    captures_manquees: list[int] = []
+    theme_non_rendu: list[str] = []      # TF-1718 : largeurs ou la page a reecrit le theme demande
+    theme_tenu: list[str] = []           # TF-1775 : largeurs ou la page a reecrit data-theme, contree
+    mires_vues: list[int] = []           # TF-1788 : largeurs ou une mire de connexion est rendue
+    dispenses_vues: dict[tuple, int] = {}  # TF-2677 : dispenses data-colonne-ok rencontrees, par (cible, motif, ancetre)
+    canvas_par_largeur: dict[int, dict] = {}   # TF-1859 : bilan de la mesure des canvas, par largeur
+    scenes_par_largeur: dict[int, dict] = {}   # TF-2299 : scenes declarees jouees, par largeur
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        for width in widths:
+            page = browser.new_page(viewport={"width": width, "height": 900},
+                                    device_scale_factor=scale, **contexte)
+            if theme is not None:
+                # TF-1674 — `data-theme` pose AVANT les scripts de la page, a chaque chargement
+                # (matrices comprises) : une bascule par attribut se juge comme une bascule par
+                # prefers-color-scheme. Un script de la page peut le reecrire : c'est declare.
+                # Au moment du script d'initialisation, <html> n'existe pas encore : il se pose
+                # des que l'analyseur l'insere, avant tout script de la page.
+                # TF-1718 (lot Produit-83 20261014a, RA-2) — LE CHOIX STOCKE DU SOCLE AUSSI. Le
+                # gabarit du socle (RV-9, clair par defaut) relit `factory-theme` dans le stockage
+                # local et REECRIT data-theme a « light » : le rendu « sombre » restait clair, sur un
+                # PASS. Le choix du lecteur est donc pose comme si le bouton avait ete presse.
+                page.add_init_script(
+                    "(function (v) { try { localStorage.setItem('factory-theme', v); } catch (e) {} })(%s)"
+                    % json.dumps(SCHEMAS_PLAYWRIGHT[theme]))
+                # TF-1775 (lot Produit-83 du 15/10/2026) — ET LE THEME TIENT. Une page qui relit SA
+                # propre cle (autre que `factory-theme`) reecrivait data-theme apres la premiere
+                # pose, et l'observateur s'etait deconnecte : le sombre n'etait que declare non
+                # rendu. Un second observateur, actif tant que la page vit, remet la valeur
+                # demandee a CHAQUE reecriture et compte les reecritures contrees
+                # (`window.__rpThemeContre`). Il ne vit que dans le navigateur de l'oracle, jamais
+                # dans le livrable (meme patron que injecterThemeSombre de factory-forge-design).
+                page.add_init_script(
+                    "(function (v) { window.__rpThemeContre = 0;"
+                    " function garder(h) { new MutationObserver(function () {"
+                    " if (h.getAttribute('data-theme') !== v) { window.__rpThemeContre++;"
+                    " h.setAttribute('data-theme', v); } }).observe(h, {attributes: true,"
+                    " attributeFilter: ['data-theme']}); }"
+                    " function poser() { var h = document.documentElement;"
+                    " if (h) { h.setAttribute('data-theme', v); garder(h); return true; } return false; }"
+                    " if (!poser()) { new MutationObserver(function (m, o) {"
+                    " if (poser()) o.disconnect(); }).observe(document, {childList: true}); }"
+                    " })(%s)" % json.dumps(SCHEMAS_PLAYWRIGHT[theme]))
+            page.goto(cible.url)
+            page.wait_for_load_state("networkidle")
+            page.evaluate("document.fonts && document.fonts.ready")
+            page.wait_for_timeout(250)
+
+            # TF-0176 (13/08) : --etats-ouverts — l'oracle ne jugeait que l'état FERMÉ ;
+            # panneaux de filtres et détails repliés échappaient à V1/V2/V4 et aux captures
+            # (un panneau non stylé, illisible, est sorti « tous oracles verts »). Le flag
+            # ouvre tout <details>, le premier panneau de filtre/dropdown, et remplit le
+            # premier champ de recherche — puis mesure et capture CET état.
+            # TF-1341 — le MÊME script que l'état « tout-deplie » : les lignes `tr[data-detail]`
+            # s'ouvrent aussi, ce qui a été ouvert se compte, et un flag qui n'ouvre rien est
+            # déclaré NON JOUÉ au lieu de mesurer en silence la page fermée.
+            etat_ouvert = None
+            if etats_ouverts:
+                try:
+                    etat_ouvert = page.evaluate(TOUT_DEPLIER_JS)
+                except Exception as erreur:  # noqa: BLE001
+                    etat_ouvert = {"applique": False,
+                                   "motif": f"le declencheur a leve {type(erreur).__name__}"}
+                champ = page.query_selector("input[type='search'], .tf-search")
+                if champ:
+                    champ.fill("a")
+                    etat_ouvert["applique"] = True
+                    etat_ouvert["motif"] = etat_ouvert.get("motif", "") + ", premier champ de recherche rempli"
+                if not etat_ouvert.get("applique"):
+                    report["non_juge"].append(
+                        f"etats ouverts NON JOUES a {width} px : {etat_ouvert.get('motif', '')}")
+                page.wait_for_timeout(250)
+
+            issues = page.evaluate(js)
+            # TF-2677 — les dispenses data-colonne-ok de la page se relevent a chaque largeur (une page
+            # peut en poser selon la largeur) et se disent au non_juge ; une panne n'arrete rien.
+            try:
+                for d in page.evaluate(DISPENSES_JS.replace("__L2C_MIN_RATIO__", str(L2C_MIN_RATIO))):
+                    cle = (d["what"], d["motif"], bool(d["sur_ancetre_de_page"]))
+                    dispenses_vues[cle] = dispenses_vues.get(cle, 0) + 1
+            except Exception:  # noqa: BLE001 — une sonde qui leve ne decide de rien
+                pass
+            # TF-1788 (lot Produit-83 20261015b, RA-4) — UNE MIRE DE CONNEXION SE RECONNAIT. Sans
+            # --etat-session, une application derriere connexion se rend en mire, et le verdict
+            # portait sur la mire sans le dire : la consigne de l'etape ne nommait pas l'option.
+            # Un formulaire VISIBLE qui ouvre une session (MIRE_JS, TF-2433) suffit a la reconnaitre ; elle se dit a la largeur
+            # (non mesurable) et au non_juge, avec le geste qui juge l'application connectee.
+            try:
+                mire = page.evaluate(MIRE_JS)
+            except Exception:  # noqa: BLE001 — une sonde qui leve ne decide de rien
+                mire = False
+            if mire:
+                mires_vues.append(width)
+                issues["unmeasured"].append({
+                    "what": "mire de connexion (formulaire qui ouvre une session)",
+                    "detail": "seule la mire est jugee a cette largeur, pas l'application qu'elle "
+                              "garde : rejouer avec --etat-session <etat de session> (TF-1788)"})
+            # TF-1718 — LE THEME DEMANDE EST-IL CELUI QUI EST RENDU ? Un script de la page peut
+            # reecrire data-theme apres le script d'initialisation ; un rendu « sombre » reste
+            # alors clair, et ses mesures parlent du clair. L'ecart se dit a la largeur et au
+            # non_juge, jamais en silence.
+            if theme is not None:
+                effectif = page.evaluate("() => document.documentElement.getAttribute('data-theme')")
+                contre = page.evaluate("() => window.__rpThemeContre || 0")
+                if contre:
+                    theme_tenu.append(f"{width} px : {contre} reecriture(s)")
+                if effectif != SCHEMAS_PLAYWRIGHT[theme]:
+                    theme_non_rendu.append(f"{width} px : data-theme=\"{effectif}\"")
+                    issues["unmeasured"].append({
+                        "what": f"theme {theme} demande (--theme)",
+                        "detail": f"la page a reecrit data-theme en « {effectif} » apres le script "
+                                  f"d'initialisation : les mesures de cette largeur portent sur ce "
+                                  f"theme-la, pas sur le theme {theme} (TF-1718)"})
+            # TF-0901 — V15 se mesure APRES DEFILEMENT, donc apres la passe principale et avant
+            # la capture (qui remet la page en haut). Ne leve jamais : une page sans tableau rend
+            # une liste vide, et une panne se declare au non_juge plutot que d'emporter le reste.
+            try:
+                v15 = page.evaluate(MESURE_ENTETE_JS)
+                issues["entete_pose_sur_lignes"] = v15.get("poses") or []
+                issues["entete_ne_colle_pas"] = v15.get("decolles") or []
+                issues["entete_masque_par_collants"] = v15.get("masques") or []
+                issues["entete_bride_par_tableau"] = v15.get("brides") or []
+            except Exception as erreur:  # noqa: BLE001 — toute panne se declare, aucune n'arrete
+                issues["entete_pose_sur_lignes"] = []
+                issues["entete_ne_colle_pas"] = []
+                issues["entete_masque_par_collants"] = []
+                issues["entete_bride_par_tableau"] = []
+                issues["unmeasured"].append({
+                    "what": "V15 en-tetes de tableau",
+                    "detail": f"V15 non jugee ({type(erreur).__name__}) : la mesure apres "
+                              "defilement n'a pas pu etre jouee. Ne pas lire ce silence comme un vert",
+                })
+            # TF-1066 — V18 ne se joue qu'aux GRANDES largeurs : les deux defauts qu'elle mesure
+            # n'existent pas en deca (une prose bornee par le viewport ne s'etire pas, un tableau
+            # a l'etroit dans 1 280 px n'a pas de place a prendre). Les cles sont posees a toute
+            # largeur — vides quand la mesure n'est pas jouee — pour qu'un consommateur ne
+            # distingue jamais « pas de defaut » de « cle absente ».
+            issues["v18_prose_etiree"] = []
+            issues["v18_tableau_etrique"] = []
+            if width >= V18_MIN_VIEWPORT:
+                try:
+                    v18 = page.evaluate(js_large)
+                    issues["v18_prose_etiree"] = v18.get("proses") or []
+                    issues["v18_tableau_etrique"] = v18.get("tableaux") or []
+                    issues["unmeasured"].extend(v18.get("notes") or [])
+                except Exception as erreur:  # noqa: BLE001 — toute panne se declare, aucune n'arrete
+                    issues["unmeasured"].append({
+                        "what": "V18 mesure de lecture et tableau principal",
+                        "detail": f"V18 non jugee ({type(erreur).__name__}) a {width} px : ne pas "
+                                  "lire ce silence comme un vert",
+                    })
+            # TF-1143 — V9 doit savoir a quelle echelle elle regarde : sous l echelle 1, ce
+            # qu elle lit est la rasterisation et non le livrable.
+            mesurer_actifs_visuels(page, issues, capture_timeout, scale)
+            # TF-1859 — les aplats d'un <canvas> : le bilan de CETTE largeur nourrit le non_juge.
+            canvas_par_largeur[width] = mesurer_canvas(page, issues, capture_timeout)
+            png = png_dir / f"{cible.stem}-w{width}.png"
+            target = page.query_selector(selector) if selector != "body" else None
+            # TF-1139 — LA HAUTEUR SE MESURE AVANT D'ESSAYER. Elle est publiée dans tous les cas :
+            # un auteur doit pouvoir lire la marge qui lui reste avant de perdre le jugement
+            # visuel, et non la découvrir en deux tentatives de plus de trente minutes.
+            hauteur_css = int(page.evaluate("() => document.documentElement.scrollHeight"))
+            capture: dict = {"faite": True, "motif": "", "hauteur_css": hauteur_css,
+                             "hauteur_max": hauteur_max}
+            if hauteur_css > hauteur_max:
+                capture = {
+                    "faite": False, "hauteur_px": hauteur_css, "hauteur_css": hauteur_css,
+                    "hauteur_max": hauteur_max, "trop_haute": True,
+                    "motif": (f"page trop haute pour etre jugee visuellement a {width} px : "
+                              f"{hauteur_css} px de haut, seuil {hauteur_max} px. AUCUNE "
+                              "tentative de capture n est faite — sur le cas fondateur, quatre "
+                              "executions et six echelles (0,4 a 0,12) n ont produit aucune "
+                              "image, dont deux arretees a la main apres plus de trente minutes. "
+                              f"Les familles lues dans le DOM restent JUGEES ({FAMILLES_SANS_IMAGE}) ; "
+                              f"{FAMILLES_AVEC_IMAGE} ne sont PAS jugees faute d image. REMEDE : "
+                              "DECOUPER la page (un document par chapitre ou par vue) — c est le "
+                              "geste, pas un reglage d echelle. `--hauteur-max` deplace la borne "
+                              "pour tenter quand meme, et le seuil employe est publie"),
+                }
+                captures_manquees.append(width)
+            try:
+                if capture.get("trop_haute"):
+                    raise _SautDeCapture       # aucune tentative : le constat est déjà rendu
+                if target:
+                    target.screenshot(path=str(png), timeout=capture_timeout)
+                else:
+                    page.screenshot(path=str(png), full_page=True, timeout=capture_timeout)
+                    # TF-1131 : au-delà de 4:1, des tuiles d'un écran, produites d'office.
+                    capture.update(produire_tuiles(page, png_dir, cible.stem, width,
+                                                   capture_timeout))
+            except _SautDeCapture:
+                pass                         # TF-1139 : `capture` porte déjà son motif nommé
+            except Exception as erreur:  # noqa: BLE001 — toute panne, pas seulement le delai
+                hauteur = page.evaluate("() => document.documentElement.scrollHeight")
+                capture = {
+                    "faite": False,
+                    "hauteur_px": hauteur,
+                    "motif": (f"capture impossible a {width} px : {type(erreur).__name__} — "
+                              f"page haute de {hauteur} px, delai {capture_timeout} ms. Les "
+                              f"familles lues dans le DOM restent JUGEES ({FAMILLES_SANS_IMAGE}) ; "
+                              f"{FAMILLES_AVEC_IMAGE} ne sont PAS jugees faute d image. "
+                              "Augmenter --timeout, reduire --scale, ou assumer l ecart declare"),
+                }
+                captures_manquees.append(width)
+
+            # TF-2679 — V28 : l'equilibre horizontal de l'encre se mesure sur la capture pleine page, aux
+            # largeurs de bureau ; sans image (capture manquee, element cible), la famille est NON JUGEE et
+            # le dit (FAMILLES_AVEC_IMAGE), jamais verte en silence.
+            if width >= EQ_MIN_VIEWPORT and not target and capture.get("faite"):
+                motif_eq = mesurer_equilibre(page, png, width, capture["hauteur_css"], issues)
+                if motif_eq:
+                    issues["unmeasured"].append({"what": "V28 equilibre horizontal de l'encre",
+                                                 "detail": f"{motif_eq} : ne pas lire ce silence comme un vert"})
+
+            # TF-0422 / TF-1282 : une capture PAR SECTION — un panneau masque est rendu VRAIMENT
+            # visible (l'element et ses ancetres masques) le temps de sa capture, puis remis dans
+            # son etat. ISOLEE du `try` de la capture de PAGE : avant, le meme `except` rattrapait
+            # l'echec d'une section ET celui de la page, et ecrasait une capture de page deja
+            # reussie. L'echec d'une section se declare desormais a part, sans toucher `capture`.
+            if sections and capture.get("faite"):
+                sections_echouees: list = []
+                sections_neutralises: dict = {}
+                try:
+                    handles = page.query_selector_all(sections)
+                except Exception as erreur_sel:  # noqa: BLE001
+                    handles = []
+                    sections_echouees.append(
+                        {"motif": f"selecteur de sections invalide : {type(erreur_sel).__name__}"})
+                # TF-1356 — le recensement des elements collants/fixes se fait UNE FOIS pour la
+                # page (meme mecanisme que V9, TF-1192) : le masquage, lui, est propre a chaque
+                # section, puisque le bandeau qui porte lui-meme une section ne se masque pas.
+                if handles:
+                    try:
+                        page.evaluate(_V9_JS_RECENSER_COLLES)
+                    except Exception:  # noqa: BLE001 — un recensement rate n'arrete rien
+                        pass
+                for i, handle in enumerate(handles, start=1):
+                    try:
+                        page.evaluate(_V9_JS_MASQUER_COLLES, handle)
+                    except Exception:  # noqa: BLE001 — la neutralisation est un mieux, jamais un du
+                        pass
+                    try:
+                        noms = page.evaluate(_V9_JS_NOMMER_COLLES)
+                        if noms:
+                            sections_neutralises[i] = noms
+                    except Exception:  # noqa: BLE001
+                        pass
+                    try:
+                        handle.evaluate(_SECTION_JS_RENDRE_VISIBLE)
+                        boite = handle.evaluate(
+                            "el => { const r = el.getBoundingClientRect(); "
+                            "return {w: r.width, h: r.height}; }")
+                        if boite["w"] <= 0 or boite["h"] <= 0:
+                            sections_echouees.append({
+                                "index": i,
+                                "motif": (
+                                    f"section {i} NON PEINTE : boite {boite['w']:.0f}x"
+                                    f"{boite['h']:.0f} px apres mise en visibilite forcee de "
+                                    "l'element et de ses ancetres — un ancetre garde une regle "
+                                    "non couverte (ex. position hors ecran, largeur nulle). "
+                                    "Ce n'est PAS un delai depasse : augmenter --timeout n'y "
+                                    "changerait rien"),
+                            })
+                            continue
+                        handle.screenshot(
+                            path=str(png_dir / f"{cible.stem}-w{width}-section{i:02d}.png"),
+                            timeout=capture_timeout)
+                    except Exception as erreur_section:  # noqa: BLE001
+                        sections_echouees.append({
+                            "index": i,
+                            "motif": (f"section {i} capture impossible : "
+                                      f"{type(erreur_section).__name__} apres mise en visibilite "
+                                      "forcee de l'element et de ses ancetres masques"),
+                        })
+                    finally:
+                        try:
+                            handle.evaluate(_SECTION_JS_RESTAURER_VISIBLE)
+                        except Exception:  # noqa: BLE001
+                            pass
+                        # La page est RENDUE A SON ETAT entre deux sections (meme geste que V9).
+                        try:
+                            page.evaluate(_V9_JS_RESTAURER_COLLES)
+                        except Exception:  # noqa: BLE001
+                            pass
+                capture["sections"] = len(handles)
+                if sections_echouees:
+                    capture["sections_echouees"] = sections_echouees
+                if sections_neutralises:
+                    capture["sections_collants_neutralises"] = sections_neutralises
+            # TF-0382 — `blocking` comptait les LIGNES d'une liste plafonnee, donc la severite
+            # etait plafonnee avec elle. Il compte desormais les CAUSES reelles : le total exact
+            # quand l inventaire a ete tronque, la longueur de la liste sinon. Ce n est pas un
+            # assouplissement — le compte MONTE des qu il y a plus de causes que de lignes.
+            blocking = compter_bloquants(issues)
+            blocking_total += blocking
+            report["breakpoints"][width] = {
+                "png": str(png) if capture["faite"] else None,
+                "capture": capture, "issues": issues, "blocking": blocking,
+            }
+            if etat_ouvert is not None:  # TF-1341 — ce que --etats-ouverts a ouvert, compté
+                report["breakpoints"][width]["etats_ouverts"] = etat_ouvert
+
+            # ---- TF-0493 · la matrice d'etats -------------------------------------------
+            # Chaque etat REPART d'une page neuve : un etat qui heriterait du precedent ne
+            # serait plus l'etat qu'il pretend etre. Cout assume, et c'est pour cela que la
+            # matrice ne se joue par defaut qu'a la largeur la plus grande — celle ou les
+            # panneaux ont le plus de place et debordent quand meme.
+            if matrice_etats and (matrice_toutes_largeurs or width == max(widths)):
+                etats: dict = {}
+                for nom, action in ETATS_MATRICE:
+                    page.goto(cible.url)
+                    page.wait_for_load_state("networkidle")
+                    page.wait_for_timeout(150)
+                    try:
+                        applique = page.evaluate(action)
+                    except Exception as erreur:  # noqa: BLE001
+                        applique = {"applique": False,
+                                    "motif": f"le declencheur a leve {type(erreur).__name__}"}
+                    # TF-1341 — les lignes de detail ouvertes par l'etat, comptees, joue ou non.
+                    compte = {"lignes_detail": applique["lignes_detail"]} if "lignes_detail" in applique else {}
+                    if not applique.get("applique"):
+                        etats[nom] = {"applique": False, "motif": applique.get("motif", ""), **compte}
+                        report["non_juge"].append(
+                            f"etat « {nom} » NON JOUE a {width} px : {applique.get('motif', '')}")
+                        continue
+                    page.wait_for_timeout(250)
+                    iss_e = page.evaluate(js)
+                    png_e = png_dir / f"{cible.stem}-w{width}-etat-{nom}.png"
+                    cap_e = {"faite": True, "motif": ""}
+                    try:
+                        page.screenshot(path=str(png_e), full_page=True, timeout=capture_timeout)
+                    except Exception as erreur:  # noqa: BLE001
+                        cap_e = {"faite": False,
+                                 "motif": f"capture impossible : {type(erreur).__name__} — "
+                                          f"les familles du DOM restent jugees"}
+                    # UN ETAT VIDE SE DIT. Verification propre a l'etat, la ou une famille
+                    # generale n'a rien a mesurer : la geometrie est saine, c'est le SILENCE
+                    # qui est le defaut.
+                    verif = VERIF_ETATS.get(nom)
+                    if verif:
+                        try:
+                            vu = page.evaluate(verif)
+                        except Exception:  # noqa: BLE001
+                            vu = None
+                        if vu and vu.get("lignes") == 0 and not vu.get("dit"):
+                            iss_e.setdefault("etat_muet", []).append({
+                                "what": f"état « {nom} »",
+                                "detail": "plus AUCUNE ligne visible, et pas un mot pour le "
+                                          "dire — le lecteur voit un tableau réduit à quelques "
+                                          "pixels et ne sait pas si l'outil a filtré ou cassé. "
+                                          "Le socle prescrit la forme du message : .tf-count "
+                                          "en zone vivante (aria-live) avec la classe zero, ou "
+                                          ".tf-vide-msg. Loi n° 3 : un état vide se déclare"})
+                    bloq_e = compter_bloquants(iss_e)
+                    blocking_total += bloq_e
+                    etats[nom] = {"applique": True, "motif": applique.get("motif", ""),
+                                  "png": str(png_e) if cap_e["faite"] else None,
+                                  "capture": cap_e, "issues": iss_e, "blocking": bloq_e, **compte}
+                report["breakpoints"][width]["etats"] = etats
+
+            # ---- TF-1093 · les filtres CROISES, par paires ------------------------------
+            # Meme borne de largeur que la matrice : a la plus grande largeur demandee, sauf
+            # `--matrice-toutes-largeurs`. Chaque croisement repart d'une page neuve.
+            if matrice_paires and (matrice_toutes_largeurs or width == max(widths)):
+                paires = jouer_paires(page, cible.url, js, paires_max, capture_timeout,
+                                      png_dir, cible.stem, width)
+                blocking_total += paires["bloquants"]
+                report["breakpoints"][width]["paires"] = paires
+                if paires["motif"]:
+                    report["non_juge"].append(
+                        f"FILTRES CROISES NON JOUES a {width} px : {paires['motif']}")
+                else:
+                    reste = paires["possibles"] - paires["jouees"]
+                    ligne = (f"FILTRES CROISES : {paires['jouees']} paire(s) jouee(s) sur "
+                             f"{paires['possibles']} possible(s) a {width} px, sur "
+                             f"{paires['colonnes']} colonne(s) a facette (plafond "
+                             f"{paires['plafond']}, `--paires-max`). Enumeration par PAIRES : "
+                             "les croisements de trois facettes et plus ne sont pas juges")
+                    if reste:
+                        ligne += (f". {reste} croisement(s) NON JOUE(S) — ne pas lire ce verdict "
+                                  "comme une couverture complete des croisements")
+                    report["non_juge"].append(ligne)
+            elif matrice_etats and width == max(widths):
+                report["non_juge"].append(
+                    "FILTRES CROISES NON JOUES : la matrice d'etats ne pose qu'UN filtre a la "
+                    "fois. Une intersection vide que chaque facette prise seule ne montre pas "
+                    "reste invisible ici — `--matrice-paires` l'enumere (TF-1093)")
+            # TF-2299 — chaque scene declaree (`[data-scene]`) se joue a cette largeur, sur page
+            # neuve, apres tout le reste : la page n'a plus besoin de son etat initial.
+            jeu_scenes = jouer_scenes(page, cible.url, js, js_large, width, png_dir, cible.stem,
+                                      capture_timeout, scale, hauteur_max)
+            if jeu_scenes is not None:
+                blocking_total += jeu_scenes["bloquants"]
+                scenes_par_largeur[width] = jeu_scenes
+                report["breakpoints"][width]["scenes"] = jeu_scenes
+            page.close()
+        browser.close()
+
+    report["verdict"] = "PASS" if blocking_total == 0 else "FAIL"
+
+    # TF-1093 — CE QUI A ETE OUVERT SE DIT. Un verdict pris sur `file://` et un verdict pris sur
+    # une instance servie ne portent pas sur la meme page : l'un ne voit pas les actifs en chemin
+    # absolu ni ce qui depend de `location.protocol`, l'autre ne vaut que pour l'instance jugee.
+    if cible.servie:
+        report["non_juge"].append(
+            f"INSTANCE SERVIE : page jugee telle qu'elle est SERVIE par {cible.origine}. Ce "
+            "verdict ne vaut que pour CETTE instance et cet instant — un contenu servi change "
+            "sans que le fichier bouge. La page distante, si elle l'est, est une DONNEE TIERCE : "
+            "lue, jamais authentifiee, aucun secret saisi")
+        if etat_session is not None:
+            report["non_juge"].append(
+                f"SESSION AUTHENTIFIEE (TF-1674) : etat de session charge depuis {etat_session} "
+                "(contenu jamais lu ni publie par l'oracle). Le verdict porte sur l'application "
+                "telle que la voit CETTE session : un ecran reserve a un autre role, et l'ecran de "
+                "connexion lui-meme, ne sont pas juges ici")
+    else:
+        report["non_juge"].append(
+            "OUVERTE EN `file://` : les actifs references en chemin ABSOLU (`/…`) ne resolvent "
+            "pas ici et disparaissent sans bruit, et tout comportement garde par "
+            "`location.protocol` ne s'execute pas. Ne pas lire ce PASS comme un verdict sur le "
+            "livrable SERVI : le rejouer sur une instance servie (TF-1093)")
+
+    # TF-2677 — LES DISPENSES SE DISENT, avec leur motif. Une dispense posee sur <main>, <body>, <html> ou
+    # [role=main] ne dispense rien : elle est nommee comme telle, jamais lue comme une decision.
+    if dispenses_vues:
+        lignes = []
+        for (cible_d, motif, ancetre), _n in sorted(dispenses_vues.items()):
+            lignes.append(
+                f"{cible_d} (motif : « {motif} »)" if motif else f"{cible_d} (SANS MOTIF)")
+            if ancetre:
+                lignes[-1] += (" — posee sur <main>, <body> ou <html> aussi large que son parent : "
+                               "IGNOREE, elle ne dispense rien")
+        report["non_juge"].append(
+            f"DISPENSES data-colonne-ok ({len(lignes)}) : {' ; '.join(lignes)}. Une dispense ne vaut que "
+            "sur le conteneur brideur lui-meme (TF-2677) ; le motif est celui que la page ecrit, aucune "
+            "decision humaine ne l'a validee : chez un produit, une dispense de mise en page se consigne "
+            "comme decision humaine")
+
+    # TF-1788 — LA MIRE SE DIT, avec le geste qui juge l'application connectee.
+    if mires_vues:
+        largeurs = ", ".join(f"{w} px" for w in mires_vues)
+        if cible.servie and etat_session is None:
+            geste = ("l'application qu'elle garde n'est PAS jugee. La juger connectee : enregistrer "
+                     "l'etat de session par le script de connexion du produit (Playwright "
+                     "`context.storage_state(path=...)`) puis rejouer avec --etat-session <fichier>")
+        elif cible.servie:
+            geste = ("l'etat de session charge ne passe pas la mire (session expiree, ou d'une autre "
+                     "origine) : l'application n'est PAS jugee. Regenerer l'etat de session puis "
+                     "rejouer avec --etat-session <fichier>")
+        else:
+            geste = ("si cette page est l'ecran de connexion d'une application, l'application "
+                     "connectee se juge sur l'INSTANCE SERVIE (URL locale) avec --etat-session "
+                     "<fichier> — refusee sur un fichier")
+        report["non_juge"].append(
+            f"MIRE DE CONNEXION RENDUE ({largeurs}) : un formulaire qui ouvre une session (TF-2433 : "
+            f"l'ecran de changement de mot de passe n'en est pas un), le verdict porte "
+            f"sur la mire ; {geste} (TF-1788)")
+
+    # TF-1674 — LE THEME RENDU SE DIT. Sans --theme, le navigateur rend le schema clair : une page
+    # qui porte un theme sombre (prefers-color-scheme: dark) n'a vu juger que sa moitie claire.
+    report["theme"] = theme or "clair (defaut du navigateur)"
+    report["non_juge"].append(
+        f"THEME RENDU : {THEMES_RENDU.get(theme, 'clair')} uniquement (prefers-color-scheme"
+        + (f", et data-theme=\"{SCHEMAS_PLAYWRIGHT[theme]}\" pose sur <html> avant les scripts de "
+           "la page, qu'un script de la page peut reecrire" if theme else "") + "). "
+        "L'autre schema de couleurs n'est ni rendu ni mesure ici : le rejouer avec "
+        f"--theme {'clair' if theme == 'sombre' else 'sombre'} si la page en porte un (TF-1674)")
+    # TF-2364, TF-2365 — render_page juge l'ECRAN. La page IMPRIMEE se mesure ailleurs, et la ligne le dit : sans elle,
+    # un PASS ici se lisait comme « imprime clair » et « pied dans la feuille » (25 et 28/09/2026, deux livrables verts).
+    report["non_juge"].append(
+        "IMPRESSION : la page IMPRIMEE n'est pas mesuree ici (render_page juge l'ecran). `check_impression.py` imprime "
+        "la page, la compare apres un passage en theme sombre (G1 « impression toujours claire », TF-2364) et mesure la "
+        "marge basse du dernier bloc de chaque page d'une feuille a @page de taille fixe (TF-2365) : a jouer sur toute "
+        "page qui s'imprime, d'office sur une page a @page fixe")
+    if theme_tenu:
+        report["non_juge"].append(
+            f"THEME TENU CONTRE LA PAGE : --theme {theme} demande, la page a reecrit data-theme "
+            f"({' ; '.join(theme_tenu)}) et l'oracle l'a remis a chaque fois (TF-1775). Le theme "
+            f"{theme} est celui qui est mesure ; le livrable, lui, ne l'affiche que si son propre "
+            "choix (bouton, cle de stockage) y mene")
+    if theme_non_rendu:
+        report["non_juge"].append(
+            f"THEME DEMANDE NON RENDU : --theme {theme} demande, mais la page a reecrit data-theme "
+            f"apres le script d'initialisation ({' ; '.join(theme_non_rendu)}). Le theme {theme} "
+            "n'a PAS ete mesure a ces largeurs, malgre le verdict (TF-1718)")
+
+    # TF-1370 — SEUL L'ETAT INITIAL EST JUGE PAR DEFAUT, ET CE RAPPORT LE DIT. --etats-ouverts
+    # et les matrices (--matrice-etats, --matrice-paires) rejouent chacun des etats DECLARES et
+    # le disent deja a leur maniere (etats_ouverts, non_juge des matrices) ; mais une vue
+    # atteinte par une AUTRE interaction — un onglet, une etape, un clic qu'aucun de ces
+    # mecanismes ne declenche — reste, elle, NI RENDUE NI MESUREE, meme sur un verdict PASS.
+    # Mesure Produit-68 du 24/09/2026 : sept vues annoncees, six jamais rendues, PASS quand meme
+    # aux sept largeurs. Rejouer les mesures sur des vues DECLAREES par un auteur reste une
+    # fonctionnalite A CONSTRUIRE SEPAREMENT (fiche de decision TF-1370 du 02/10/2026) — cette
+    # ligne ne fait que nommer la borne, elle ne l'ecarte pas.
+    etats_couverts = []
+    if etats_ouverts:
+        etats_couverts.append("l'etat « tout-deplie » (--etats-ouverts)")
+    if matrice_etats:
+        etats_couverts.append("les etats de la matrice (--matrice-etats)")
+    if matrice_paires:
+        etats_couverts.append("les paires de filtres croises (--matrice-paires)")
+    # TF-2299 — les scenes declarees se jouent d'office, sans drapeau : elles se comptent ici.
+    scenes_declarees = max((j["declarees"] for j in scenes_par_largeur.values()), default=0)
+    scenes_non_jouees: dict[tuple, list[int]] = {}
+    scenes_jouees = 0
+    for largeur_s, jeu_s in scenes_par_largeur.items():
+        for nom_s, s in jeu_s["scenes"].items():
+            if s["applique"]:
+                scenes_jouees += 1
+            else:
+                scenes_non_jouees.setdefault((nom_s, s["motif"]), []).append(largeur_s)
+    if scenes_par_largeur:
+        etats_couverts.append(f"chacune des {scenes_declarees} scene(s) declaree(s) "
+                              f"({SCENES_SELECTEUR}, joue d'office)")
+    if etats_couverts:
+        report["non_juge"].append(
+            "ETAT DE LA PAGE : seul l'etat INITIAL est rendu et mesure PAR DEFAUT ; cette "
+            f"execution rejoue EN PLUS {', '.join(etats_couverts)} — des etats DECLARES, pas la "
+            "totalite des vues possibles. Une vue atteinte par une AUTRE interaction (un onglet, "
+            "une etape, un clic que rien ici ne declenche) reste NI RENDUE NI MESUREE, meme sur "
+            "un verdict PASS (TF-1370)")
+    else:
+        report["non_juge"].append(
+            "ETAT DE LA PAGE : seul l'etat INITIAL (tel que la page se charge) est rendu et "
+            "mesure ici — aucune interaction n'est rejouee sur cette execution (--etats-ouverts, "
+            "--matrice-etats, --matrice-paires rejouent des etats DECLARES, aucun n'est actif). "
+            "Une page a plusieurs vues (onglets, etapes, accordeons) dont le changement depend "
+            "d'un script garde ses AUTRES vues NI RENDUES NI MESUREES, meme sur un verdict PASS "
+            f"(TF-1370). Aucune scene n'est declaree par {SCENES_SELECTEUR} sur cette page : "
+            "les scenes ainsi declarees se jouent d'office (TF-2299), une animation pilotee "
+            "autrement n'est pas reconnue")
+
+    if scenes_par_largeur:
+        attendues = scenes_declarees * len(scenes_par_largeur)
+        report["non_juge"].append(
+            f"SCENES (TF-2299) : {scenes_declarees} scene(s) declaree(s) par {SCENES_SELECTEUR} "
+            "(html et body exclus : le corps porte la scene COURANTE, ce n'est pas une scene), "
+            f"{scenes_jouees} scene(s)-largeur jouee(s) sur {attendues}. Chaque scene repart d'une "
+            f"page neuve et est atteinte par un geste de lecteur ({SCENES_GESTES}), puis mesuree "
+            "comme la page (V1 a V4, V9, V18, canvas) et capturee a l'etat REPOSE : les animations "
+            "d'entree sont menees a leur terme d'office. PAS mesure : les images INTERMEDIAIRES "
+            "d'une animation (delais et mouvements d'entree), le minuteur du lecteur (lecture "
+            "automatique, enchainement des scenes dans le temps), les etats « pause » et « fin », "
+            "un etat ouvert A L'INTERIEUR d'une scene (details, filtres : --etats-ouverts ne s'y "
+            "applique pas), un geste autre que ceux-ci (bouton « suivante », molette, toucher), une "
+            "scene que la page ne declare pas par [data-scene]")
+        for (nom_s, motif_s), largeurs_s in scenes_non_jouees.items():
+            report["non_juge"].append(
+                f"SCENE NON JOUEE : « {nom_s} » a {', '.join(str(w) + ' px' for w in largeurs_s)} — "
+                f"{motif_s}. Cette scene n'est NI RENDUE NI MESUREE : ne pas lire le verdict comme "
+                "un vert qui la couvre (TF-2299)")
+
+    # TF-0365 — ce qui n a pas pu etre mesure se DIT, dans la sortie machine autant qu au
+    # terminal. Un PASS qui tairait l absence des images serait plus faible que celui d hier en
+    # ayant l air identique : c est exactement le silence que cet item ferme.
+    report["captures_manquees"] = captures_manquees
+    if captures_manquees:
+        largeurs = ", ".join(f"{w} px" for w in captures_manquees)
+        report["non_juge"].append(
+            f"{FAMILLES_AVEC_IMAGE} : NON JUGEES a {largeurs} — capture impossible, aucune image "
+            f"a inspecter. Les familles du DOM ({FAMILLES_SANS_IMAGE}) sont jugees et comptent "
+            "dans le verdict")
+        if len(captures_manquees) == len(widths):
+            report["non_juge"].append(
+                "AUCUNE largeur n a produit d image : le verdict ne porte que sur les mesures du "
+                "DOM. Il est valide pour ce qu il dit, et muet sur le rendu — ne pas le lire "
+                "comme une inspection visuelle faite")
+    else:
+        report["non_juge"].append(f"{FAMILLES_AVEC_IMAGE} : a inspecter sur les PNG produits")
+
+    # TF-1139 — LE SEUIL SE PUBLIE, ET LA HAUTEUR MESUREE AVEC LUI. Un auteur doit savoir AVANT
+    # d ecrire a partir de quelle hauteur son livrable cesse d etre jugeable visuellement ; le
+    # decouvrir coutait quatre executions, six echelles et deux arrets manuels apres plus de
+    # trente minutes. La ligne sort a chaque execution, que le seuil soit atteint ou non.
+    report["hauteur_max"] = hauteur_max
+    hauteurs = {w: (d.get("capture") or {}).get("hauteur_css")
+                for w, d in report["breakpoints"].items()}
+    releve = ", ".join(f"{h} px a {w} px" for w, h in hauteurs.items() if h is not None)
+    trop_hautes = [w for w, d in report["breakpoints"].items()
+                   if (d.get("capture") or {}).get("trop_haute")]
+    if trop_hautes:
+        report["non_juge"].append(
+            f"HAUTEUR : seuil de jugement visuel {hauteur_max} px CSS — DEPASSE a "
+            f"{', '.join(str(w) + ' px' for w in trop_hautes)} ({releve}). Aucune capture n a ete "
+            "TENTEE a ces largeurs : sur le cas fondateur, quatre executions et six echelles "
+            "(0,4 a 0,12) n ont produit aucune image, deux arretees a la main apres plus de "
+            "trente minutes. Le remede est de DECOUPER la page, pas de baisser l echelle "
+            "(zero-defaut-visuel.md, « Seuil de hauteur »)")
+    else:
+        report["non_juge"].append(
+            f"HAUTEUR : seuil de jugement visuel {hauteur_max} px CSS, non atteint ({releve}). "
+            "Au-dela, aucune capture n est tentee et le constat est rendu immediatement — le "
+            "remede est de decouper la page. `--hauteur-max` deplace la borne")
+
+    # V9 dit ou elle s'arrete. WCAG 2.2 SC 1.4.11 demande 3:1 pour un objet graphique PORTEUR DE
+    # SENS ; distinguer le porteur de sens du decor demande un jugement, et une sonde qui
+    # accuserait tout aplat decoratif se ferait eteindre. V9 ne juge donc que l'INDISCERNABLE.
+    # V18 dit OU elle a regarde. Une grille jouee sans largeur >= 2560 ne prouve rien du 4K, et
+    # un verdict vert lu comme « la page tient au 4K » serait faux (regle E5 du pilot).
+    larges = [w for w in widths if w >= V18_MIN_VIEWPORT]
+    if larges:
+        report["non_juge"].append(
+            f"V18 : jugee a {', '.join(str(w) + ' px' for w in larges)}. Plafond {V18_MAX_CPL} "
+            "caracteres par ligne (decision humaine du 15/09/2026, 13a, TF-1069) : le token du "
+            "socle `.chap.lire` (1 080 px, E4) mesure 134 caracteres par ligne en 16 px, sous ce "
+            "plafond, et rentre desormais directement dans les proses jugees. Un paragraphe TENU "
+            "par un conteneur de lecture declare (.lire, [data-mesure-lecture]) reste, lui, "
+            f"jamais bloque meme au-dela de {V18_MAX_CPL} caracteres : sa mesure est publiee en "
+            "non mesurable pour un chapitre plus large que le token du socle")
+    else:
+        report["non_juge"].append(
+            f"V18 NON JOUEE : aucune largeur >= {V18_MIN_VIEWPORT} px dans cette grille. La prose "
+            "etiree et le tableau principal etrique du 4K ne sont pas juges — ne pas lire ce "
+            "silence comme une page verifiee jusqu a 3840 px (regle E5)")
+
+    # TF-1143 — UNE ECHELLE REDUITE SE DECLARE, ET LE VERDICT AVEC. Sous l echelle 1, ce que V9
+    # lit est la rasterisation ; elle ne rend donc plus de bloquant, et ce choix se publie —
+    # sans quoi un PASS obtenu a `--scale 0.4` se lirait comme un PASS obtenu a l echelle native.
+    if scale < V9_ECHELLE_MIN_BLOQUANTE:
+        report["non_juge"].append(
+            f"ECHELLE {scale:g} : la capture est REDUITE, et V9 ne rend AUCUN bloquant sous "
+            f"l echelle {V9_ECHELLE_MIN_BLOQUANTE:g} — ses constats partent au non juge avec leur "
+            "raison. Contre-mesure du socle sur un libelle de 13 px inchange, meme page et meme "
+            "largeur : 17,85:1 a l echelle 1, 10,85:1 a 0,5, 6,39:1 a 0,4, 3,66:1 a 0,25 ; le "
+            "contraste mesure perd un facteur cinq sans qu un pixel de la page ait bouge. Ne pas "
+            "lire ce PASS comme un contraste d actif verifie : rejouer a `--scale 1`")
+
+    report["non_juge"].append(
+        "V9 : un actif visuel dont le contraste vit ENTRE 1,2 et 3,0 contre son fond n'est PAS "
+        "juge — sous 1,2 il est indiscernable et c'est un bloquant, au-dela de 3,0 il tient le "
+        "seuil WCAG 1.4.11 ; entre les deux, savoir si l'actif porte du sens ou decore est un "
+        "jugement humain. Ne pas lire ce silence comme un vert")
+
+    # TF-1192 — ce que la mesure fait a la page se DIT : un lecteur du rapport doit savoir que le
+    # contexte mesure n'est pas exactement la capture pleine page livree a cote.
+    report["non_juge"].append(
+        "V9 : les elements `position: sticky | fixed` qui ne sont ni un ancetre ni un descendant "
+        "de l'actif sont rendus invisibles LE TEMPS de sa capture, puis restaures — un bandeau "
+        "collant peint a la hauteur d'un schema dans la capture n'est pas le fond de ce schema, "
+        "et aucun lecteur ne le voit ainsi (TF-1192). L'actif POSE DANS un bandeau collant garde "
+        "le sien : c'est bien son fond. Ce qu'un element collant masque a l'ECRAN reste, lui, "
+        "un jugement humain")
+
+    # TF-1859 (RA-14, lot Produit-79 20261017c) — LE CANVAS EST DECLARE HORS MESURE, a chaque
+    # execution, PASS compris (contrat quality-oracles § 3 : un verdict sans perimetre n'est pas
+    # complet). Le cas fondateur : un graphique ECharts aux series presque blanches, PASS aux 7
+    # largeurs, et aucune ligne de la sortie ne disait qu'un canvas n'est pas dans le DOM.
+    vus = sum(b["vus"] for b in canvas_par_largeur.values())
+    if vus:
+        mesures = sum(b["mesures"] for b in canvas_par_largeur.values())
+        indiscernables = sum(b["indiscernables"] for b in canvas_par_largeur.values())
+        raisons = sorted({r for b in canvas_par_largeur.values() for r in b["non_mesures"]})
+        etat_canvas = (
+            f"CETTE EXECUTION : {vus} canvas rencontre(s) en tout (somme des {len(canvas_par_largeur)} "
+            f"largeur(s)), {mesures} dont les aplats ont ete mesures, {indiscernables} indiscernable(s) "
+            "de leur fond (V22)"
+            + (f", {vus - mesures} NON mesure(s) : {' ; '.join(raisons)}" if vus > mesures else ""))
+    else:
+        etat_canvas = "CETTE EXECUTION : aucun <canvas> d'au moins 48 px rencontre dans la page"
+    report["non_juge"].append(
+        "CANVAS : le contenu d'un <canvas> (Apache ECharts, Chart.js, dessin 2D) n'est PAS dans le DOM — "
+        "V1 a V4, le contraste des textes (V2) et la legende dessinee dedans ne le voient pas, et un PASS "
+        "ne dit rien de ce qui s'y peint. Seule est mesuree, au pixel sur une capture de l'element, la "
+        "distance entre les APLATS de couleur d'un canvas et son fond (V22, seuil 1,2:1, bloquant). Ne "
+        "sont PAS jugees : une serie invisible a cote d'une serie visible, le texte, les traits fins et "
+        "les courbes (aucun aplat), la legende, le contraste entre deux series, l'etat d'un graphique "
+        f"qui change apres le chargement. {etat_canvas} (TF-1859)")
+
+    # TF-1173 (lot Produit-64 20260916b, RD-9) — le renvoi aux quatre oracles de
+    # `factory-forge-design` sort ici aussi : un producteur qui ne joue QUE le rendu croirait sa
+    # chaine complete. La phrase a une seule source, `check_html.py`, pour qu'un renvoi ne derive
+    # pas de l'autre. Source introuvable : le manque est DIT, jamais tu.
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from check_html import renvoi_forge_design as _renvoi_design
+        report["non_juge"].append(_renvoi_design())
+    except Exception as exc:  # pragma: no cover - defense, jamais un silence
+        report["non_juge"].append(
+            "LES ORACLES DE `factory-forge-design` NE SONT PAS NOMMES ICI : leur renvoi vit dans "
+            f"check_html.py et n a pas pu etre lu ({exc}). Les jouer quand meme : "
+            "`node <racine factory-forge-design>/oracles/run-oracles-design.mjs <page.html>`")
+
+    if as_json:
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+    else:
+        for width, data in report["breakpoints"].items():
+            iss = data["issues"]
+            # TF-0897 (lot Produit-10 20260907c) — UNE CAPTURE QUI ECHOUE N'EST PAS UNE PANNE DE
+            # L'OUTIL. La branche d'echec etait ecrite, mesuree et rendue au JSON (`capture.faite`
+            # a False, `png` a None, largeur portee a `captures_manquees`), et la sortie TEXTE la
+            # traversait quand meme en `Path(None)` : TypeError, exit 1, traceback dans le journal
+            # R-32, AUCUN verdict pour la largeur concernee — alors que toutes les familles lues
+            # dans le DOM etaient deja mesurees. Mesure du 07/09 : page de 188 Ko (~13 500 px de
+            # haut) a 768 px et echelle 2, reproduit deux fois ; le meme appel en echelle 1 rendait
+            # PASS. Ce qui n'a pas pu etre capture se DIT, et le reste du verdict se rend.
+            nom_png = Path(data["png"]).name if data.get("png") else "capture NON FAITE"
+            print(f"\n===== {width}px — {nom_png} =====")
+            cap = data.get("capture") or {}
+            if cap.get("tuiles"):
+                reste = cap.get("tuiles_non_produites")
+                print(f"  [capture] pleine page à {cap['ratio']}:1 — ILLISIBLE une fois réduite "
+                      f"(au-delà de {TUILES_RATIO:g}:1) : {len(cap['tuiles'])} tuile(s) d'un écran "
+                      f"produite(s) pour la revue de lecture, {cap['tuiles'][0]} … {cap['tuiles'][-1]}"
+                      + (f" ; {reste} écran(s) au-delà de la borne NON capturé(s)" if reste else ""))
+            if not data.get("png"):
+                print(f"  [capture] {data['capture'].get('motif', 'capture impossible')}")
+            # TF-1282 — l'echec d'une section se lit a part : il ne doit pas se deduire en
+            # silence de l'absence de PNG de section, alors que la capture de page a reussi.
+            for ech in cap.get("sections_echouees") or []:
+                print(f"  [section] {ech.get('motif', '')}")
+            # TF-1356 — ce qui a ete neutralise pour une section se nomme : un bandeau collant
+            # ecarte de la capture n'est pas un fait tu, au meme titre que pour un actif V9.
+            for idx, noms in (cap.get("sections_collants_neutralises") or {}).items():
+                print(f"  [section {idx}] collant(s) neutralise(s) le temps de la capture : "
+                      f"{', '.join(noms)}")
+            # TF-1341 — ce que --etats-ouverts a ouvert se lit, et un flag qui n'a rien ouvert aussi.
+            eo = data.get("etats_ouverts")
+            if eo:
+                print(f"  [états ouverts] {eo.get('motif', '')}" + ("" if eo.get("applique") else " — NON JOUÉS"))
+            for key, title, sev in FAMILLES:
+                kind = {"bloquant": "BLOQUANT", "avertissement": "avertissement"}.get(sev, "à vérifier visuellement")
+                for item in iss.get(key, []) or []:
+                    print(f"  [{kind}] {title} : {item['what']} — {item['detail']}")
+            if iss.get("v1_tronque"):
+                print(f"  [BORNE] V1 : {iss['v1_tronque']['motif']}")
+            if data["blocking"] == 0 and not any(iss[k] for k in ("l2_freres", "v3_align", "v7_spacing", "largeurs_melangees", "unmeasured")):
+                print("  aucun défaut mesuré")
+            # TF-0493 — la matrice d'etats, etat par etat. Un etat NON JOUE se lit ici aussi :
+            # « aucun défaut » sur un etat qui ne s'est jamais applique serait le pire des verdicts.
+            for nom, e in (data.get("etats") or {}).items():
+                if not e.get("applique"):
+                    print(f"  — état « {nom} » NON JOUÉ : {e.get('motif', '')}")
+                    continue
+                print(f"  — état « {nom} » ({e.get('motif', '')}) : "
+                      f"{e['blocking']} bloquant(s)")
+                for key, title, sev in FAMILLES:
+                    kind = {"bloquant": "BLOQUANT", "avertissement": "avertissement"}.get(sev, "info")
+                    for item in e["issues"].get(key, []) or []:
+                        print(f"      [{kind}] {title} : {item['what']} — {item['detail']}")
+            # TF-1093 — la COUVERTURE des croisements s'imprime avant leurs constats : un
+            # lecteur doit savoir sur quelle part du possible le verdict porte.
+            paires = data.get("paires")
+            if paires:
+                if paires.get("motif"):
+                    print(f"  — filtres croisés NON JOUÉS : {paires['motif']}")
+                else:
+                    print(f"  — filtres croisés : {paires['jouees']} paire(s) jouée(s) sur "
+                          f"{paires['possibles']} possible(s) (plafond {paires['plafond']}), "
+                          f"{paires['bloquants']} bloquant(s)")
+                for nom, c in (paires.get("combinaisons") or {}).items():
+                    if not c.get("applique"):
+                        print(f"      croisement « {nom} » NON JOUÉ : {c.get('motif', '')}")
+                        continue
+                    for key, title, sev in FAMILLES:
+                        kind = {"bloquant": "BLOQUANT", "avertissement": "avertissement"}.get(sev, "info")
+                        for item in c["issues"].get(key, []) or []:
+                            print(f"      [{kind}] {title} : {item['what']} — {item['detail']}")
+            # TF-2299 — chaque scene declaree, scene par scene : une scene NON JOUEE se lit ici
+            # aussi, « aucun defaut » sur une scene jamais rendue serait le pire des verdicts.
+            jeu = data.get("scenes")
+            if jeu:
+                print(f"  — scènes déclarées : {jeu['declarees']}, "
+                      f"{sum(1 for s in jeu['scenes'].values() if s.get('applique'))} jouée(s), "
+                      f"{jeu['bloquants']} bloquant(s)")
+                for nom, s in jeu["scenes"].items():
+                    if not s.get("applique"):
+                        print(f"      scène « {nom} » NON JOUÉE : {s.get('motif', '')}")
+                        continue
+                    print(f"      scène « {nom} » ({s['geste']}) : {s['blocking']} bloquant(s)"
+                          + ("" if s.get("png") else f" — capture NON FAITE : {s['capture']['motif']}"))
+                    for key, title, sev in FAMILLES:
+                        kind = {"bloquant": "BLOQUANT", "avertissement": "avertissement"}.get(sev, "info")
+                        for item in s["issues"].get(key, []) or []:
+                            print(f"          [{kind}] {title} : {item['what']} — {item['detail']}")
+        print(f"\nVerdict : {report['verdict']}")
+        for note in report["non_juge"]:
+            print(f"  non jugé — {note}")
+        print(f"PNG : {png_dir}")
+    return 0 if report["verdict"] == "PASS" else 1
+
+
+# TF-1131 (lot Produit-64 20260913a, 15/09/2026) — UNE CAPTURE QU'ON NE PEUT PAS LIRE N'EST PAS
+# UNE PIÈCE DE REVUE. La capture pleine page d'un livrable mesurait 3840 × 19012 px à 1920 et
+# 780 × 45480 à 390 : ramenées à l'écran du relecteur, 404 × 2000 et 34 × 2000 — un corps de 16 px
+# y tient sur moins de deux pixels. La revue de lecture s'est déclarée faite, cinq défauts sont
+# passés. Au-delà d'un rapport hauteur/largeur de 4:1, le script produit D'OFFICE des tuiles d'UN
+# ÉCRAN (la hauteur de la fenêtre de rendu, ce qu'un lecteur voit à la fois), numérotées, et le dit
+# dans sa sortie. La capture pleine page reste produite, marquée illisible à l'échelle.
+TUILES_RATIO = 4.0            # au-delà, la capture pleine page n'est plus lisible une fois réduite
+TUILES_HAUTEUR_CSS = 900      # hauteur de la fenêtre de rendu : une tuile = un écran
+TUILES_MAX = 60               # borne déclarée : au-delà, la sortie dit combien manquent
+
+def produire_tuiles(page, png_dir: Path, stem: str, width: int, timeout_ms: int) -> dict:
+    """TF-1131 — rapport de la capture pleine page, et ses tuiles d'un écran s'il dépasse 4:1."""
+    hauteur = int(page.evaluate("() => document.documentElement.scrollHeight"))
+    ratio = hauteur / max(1, width)
+    info: dict = {"hauteur_css": hauteur, "ratio": round(ratio, 2)}
+    if ratio <= TUILES_RATIO:
+        return info
+    n = -(-hauteur // TUILES_HAUTEUR_CSS)
+    tuiles = []
+    for i in range(min(n, TUILES_MAX)):
+        y = i * TUILES_HAUTEUR_CSS
+        nom = png_dir / f"{stem}-w{width}-ecran{i + 1:02d}.png"
+        page.screenshot(path=str(nom), full_page=True, timeout=timeout_ms,
+                        clip={"x": 0, "y": y, "width": width,
+                              "height": min(TUILES_HAUTEUR_CSS, hauteur - y)})
+        tuiles.append(nom.name)
+    info["tuiles"] = tuiles
+    if n > TUILES_MAX:
+        info["tuiles_non_produites"] = n - TUILES_MAX
+    return info
+
+
+# TF-0230 (lot Produit-10, 14/08) — reconstat sur TF-0058, archivé « corrigé » et ne l'étant
+# qu'à moitié. Le correctif d'origine avait déplacé les PNG d'un cran, dans un sous-dossier
+# `.oracles/` du dossier audité. Or le MOTIF de l'item était « 12 PNG dans le dossier même que
+# le client reçoit » : auditer un livrable de `output\` y déposait toujours 25 Mo de captures,
+# qu'il a fallu déplacer à la main. Un sous-dossier d'un dossier livré reste dans ce qui est
+# livré. Corriger « à moitié » puis archiver, c'est fermer un item sans fermer le défaut — et
+# le registre ment ensuite sur son propre reste-à-faire.
+#
+# Règle : les captures ne tombent JAMAIS dans un arbre de livraison. Elles sont un artefact
+# d'atelier (V5/V6 s'inspectent à l'œil, puis on n'en fait plus rien) ; leur place par défaut
+# est hors du projet, et leur chemin est imprimé pour qu'on les retrouve. `--out` reste le
+# moyen de les garder — c'est ce que fait un run qui veut les journaliser.
+DOSSIERS_LIVRAISON = {"output", "old", "livrables", "dist", "public"}
+
+
+# ---------------------------------------------------------------------------
+# TF-1093 (20/09/2026) — LA CIBLE : UN FICHIER, OU UNE INSTANCE SERVIE.
+#
+# LE FAIT. Restes archivés de TF-0480 et TF-0493 : les contrôles visuels et d'interaction
+# n'étaient JAMAIS joués sur une instance servie. Tout ce que cet oracle mesure, il le
+# mesurait sur `file://`. Or `file://` n'est pas le contexte de livraison : un actif référencé
+# en chemin ABSOLU (`/tokens.css`) n'y résout pas et disparaît sans bruit, un script gardé par
+# `location.protocol` ne s'exécute pas, et la page rendue est une page qui n'existe nulle part
+# ailleurs que sur le poste de l'auditeur. Un verdict vert obtenu là ne dit rien de ce que le
+# lecteur reçoit.
+#
+# CE QU'EST UNE INSTANCE SERVIE ICI : une URL `http(s)://` donnée à la place d'un chemin.
+# Par défaut, SEULES les origines locales sont acceptées (`localhost`, `127.0.0.1`, `::1`) —
+# une page distante est une DONNÉE TIERCE : on la lit, on ne s'y authentifie pas, on n'y saisit
+# aucun secret, et l'ouvrir exige un drapeau explicite (`--origine-distante`) pour qu'aucune
+# chaîne automatisée n'aille toucher un site de production par accident.
+#
+# LE MODE FICHIER RESTE LE DÉFAUT et son comportement ne bouge pas : sans URL, rien de ce
+# bloc ne s'active.
+SCHEMES_SERVIS = ("http", "https")
+HOTES_LOCAUX = {"localhost", "127.0.0.1", "::1"}
+
+
+class Cible(NamedTuple):
+    """Ce que l'oracle va ouvrir, d'où qu'il vienne. `url` est la seule porte du navigateur."""
+    url: str                    # ce qui est passé à `page.goto` — `file://…` ou `http://…`
+    stem: str                   # racine du nom des PNG (jamais un chemin, jamais une URL brute)
+    servie: bool                # True = instance servie par un serveur HTTP
+    chemin: Path | None         # le fichier, quand il y en a un (None si servie)
+    origine: str                # `file://` ou `http(s)://hôte:port` — publié au rapport
+
+
+def cibler(entree, origine_distante: bool = False) -> Cible:
+    """Un chemin de fichier ou une URL servie, ramenés à une Cible unique.
+
+    Sous Windows, `C:\\dossier\\page.html` s'analyse en schéma « c » : seuls `http` et `https`
+    basculent en mode servi, tout le reste est un chemin. Une origine non locale sans drapeau
+    ARRÊTE l'outil au lieu d'ouvrir la page : le défaut sûr est de ne pas aller sur le réseau.
+    """
+    brut = str(entree)
+    decoupe = urlsplit(brut)
+    if decoupe.scheme in SCHEMES_SERVIS:
+        hote = (decoupe.hostname or "").lower()
+        if hote not in HOTES_LOCAUX and not origine_distante:
+            sys.exit(
+                f"ERREUR : origine NON LOCALE refusee ({decoupe.scheme}://{decoupe.netloc}). "
+                f"Le mode servi n'accepte par defaut que {', '.join(sorted(HOTES_LOCAUX))} — "
+                "servir la page en local est le geste attendu (`python -m http.server` dans son "
+                "dossier). Pour juger une origine distante malgre tout : `--origine-distante`, "
+                "et la page reste une DONNEE TIERCE — lecture seule, aucune authentification, "
+                "aucune saisie de secret, aucune action qui ecrit")
+        segment = decoupe.path.rstrip("/").rsplit("/", 1)[-1]
+        brute = Path(segment).stem or hote or "instance"
+        stem = "".join(c if (c.isalnum() or c in "._-") else "_" for c in brute) or "instance"
+        return Cible(brut, stem, True, None, f"{decoupe.scheme}://{decoupe.netloc}")
+    chemin = Path(brut)
+    return Cible(chemin.resolve().as_uri(), chemin.stem, False, chemin, "file://")
+
+
+# TF-1674 (lot Produit-80 20261012b, RD-1) — UNE APPLICATION DERRIERE UNE CONNEXION SE JUGE
+# CONNECTEE. Juger l'instantane sans script d'une application OIDC produisait des faux constats
+# (V1, « Tableau ROGNE », L2 sur la racine) et rendait --matrice-etats injouable : chaque etat
+# rechargeait la page et retombait sur l'ecran de connexion. L'oracle ne se connecte JAMAIS
+# lui-meme et ne lit aucun secret : il charge l'ETAT DE SESSION que le script de connexion du
+# produit a enregistre (`context.storage_state(path=...)` de Playwright), et toutes les pages
+# qu'il ouvre — matrices comprises — partagent ce contexte. Bornes : une instance SERVIE et
+# LOCALE seulement (une origine distante reste une donnee tierce, jamais authentifiee) ; le
+# fichier est passe tel quel au navigateur, son contenu n'est ni lu ni publie.
+THEMES_RENDU = {"clair": "clair (light)", "sombre": "sombre (dark)"}
+SCHEMAS_PLAYWRIGHT = {"clair": "light", "sombre": "dark"}
+ALIAS_THEME = {"light": "clair", "dark": "sombre"}
+
+
+def verifier_etat_session(cible: Cible, etat_session) -> Path | None:
+    """L'etat de session n'est accepte que pour une instance servie en local, et doit exister."""
+    if etat_session is None:
+        return None
+    chemin = Path(etat_session)
+    if not cible.servie:
+        sys.exit("ERREUR : --etat-session n'a de sens que sur une INSTANCE SERVIE (url "
+                 "http://localhost:…) — un fichier ouvert en file:// n'a pas de session")
+    hote = (urlsplit(cible.url).hostname or "").lower()
+    if hote not in HOTES_LOCAUX:
+        sys.exit(f"ERREUR : --etat-session refuse sur une origine NON LOCALE ({cible.origine}). "
+                 "Une page distante est une DONNEE TIERCE : lue, jamais authentifiee. Servir "
+                 "l'application en local et rejouer")
+    if not chemin.is_file():
+        sys.exit(f"ERREUR : etat de session introuvable : {chemin} — l'enregistrer par le script "
+                 "de connexion du produit (Playwright : context.storage_state(path=...))")
+    return chemin
+
+
+def options_contexte(etat_session: Path | None, theme: str | None) -> dict:
+    """Les options du contexte de navigateur : session chargee, schema de couleurs."""
+    options = {}
+    if etat_session is not None:
+        options["storage_state"] = str(etat_session)
+    if theme is not None:
+        options["color_scheme"] = SCHEMAS_PLAYWRIGHT[theme]
+    return options
+
+
+def _dossier_captures(cible: Cible, out_dir: Path | None) -> Path:
+    """Où déposer les PNG. `--out` explicite fait foi ; sinon, jamais un arbre de livraison."""
+    if out_dir is not None:
+        return out_dir
+    # Une instance servie n'a PAS de dossier d'accueil : ses captures sont un artefact
+    # d'atelier, elles vont dans un temporaire nommé dont le chemin est imprimé.
+    if cible.servie:
+        import tempfile
+        return Path(tempfile.gettempdir()) / "factory-render" / cible.stem
+    resolu = cible.chemin.resolve()
+    parents = {p.name.lower() for p in resolu.parents}
+    if parents & DOSSIERS_LIVRAISON:
+        import tempfile
+        return Path(tempfile.gettempdir()) / "factory-render" / resolu.stem
+    return resolu.parent / ".oracles"
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description="Rendu + mesures : V1/V2/V4 et L2-largeur bloquants, V3/V7 avertissements")
+    # Optionnel : `--familles` publie la table des poids et ne rend aucune page. Sans ce
+    # nargs, argparse refusait la commande avant meme d'atteindre le drapeau.
+    # TF-1093 — le positionnel n'est plus force en `Path` : il accepte AUSSI une URL
+    # `http(s)://` d'instance servie. La conversion se fait dans `cibler`, seule porte.
+    ap.add_argument("html", nargs="?",
+                    help="chemin du fichier HTML, OU url http(s) d'une INSTANCE SERVIE "
+                         "(localhost / 127.0.0.1 par defaut ; toute autre origine exige "
+                         "--origine-distante)")
+    ap.add_argument("--widths", default=",".join(map(str, DEFAULT_WIDTHS)),
+                    help="largeurs de viewport, séparées par des virgules")
+    ap.add_argument("--selector", default="body", help="ex. .diagram-wrap pour un schéma")
+    # TF-0365 — `--scale` en FLOTTANT : `--scale 0.4` sortait « invalid int value », alors que
+    # réduire l'échelle est le premier levier sur une page très haute (moins de pixels à
+    # encoder). Un entier n'était pas une contrainte de Playwright, c'était un type trop étroit.
+    ap.add_argument("--scale", type=float, default=2.0,
+                    help="facteur d'échelle du rendu ; accepte un flottant (0.4 sur une page "
+                         "très haute — moins de pixels à encoder, capture qui aboutit). "
+                         "ATTENTION (TF-1143) : sous l'échelle 1 la capture est RÉDUITE et V9 "
+                         "n'y rend plus de bloquant — ce qu'elle lirait serait la rastérisation, "
+                         "pas le livrable (contraste mesuré d'un libellé de 13 px inchangé : "
+                         "17,85:1 à l'échelle 1, 6,39:1 à 0,4). Le choix est publié au non jugé")
+    ap.add_argument("--timeout", type=int, default=CAPTURE_TIMEOUT_DEFAUT, dest="capture_timeout",
+                    help=f"délai de capture en ms (défaut {CAPTURE_TIMEOUT_DEFAUT}). Une capture "
+                         "qui échoue n'interrompt plus l'outil : les familles lues dans le DOM "
+                         "restent jugées, V5/V6 sont déclarées NON JUGÉES")
+    # TF-1139 — le seuil de jugement visuel est une DONNEE, pas une constante cachee : il se lit
+    # dans la sortie a chaque execution, et il se deplace quand un auteur veut tenter quand meme.
+    ap.add_argument("--hauteur-max", type=int, default=CAPTURE_HAUTEUR_MAX, dest="hauteur_max",
+                    help=f"hauteur CSS au-dela de laquelle AUCUNE capture n'est tentee (defaut "
+                         f"{CAPTURE_HAUTEUR_MAX} px). Le constat est rendu immediatement, nomme "
+                         "et chiffre, au lieu d'expirer apres des dizaines de minutes ; le remede "
+                         "est de DECOUPER la page, pas de baisser --scale")
+    ap.add_argument("--output", choices=["text", "json"], default="text")
+    ap.add_argument("--out", type=Path, default=None, dest="out_dir",
+                    help="dossier des PNG (défaut : <dossier du HTML>/.oracles/, ou un dossier "
+                         "temporaire si la page vit dans un arbre de LIVRAISON — "
+                         "output/, old/, dist/… : un livrable ne reçoit jamais de captures)")
+    ap.add_argument("--etats-ouverts", action="store_true", dest="etats_ouverts",
+                    help="TF-0176 : ouvre details + lignes de détail tr[data-detail] (TF-1341) + "
+                         "premier panneau de filtre + remplit la première recherche AVANT "
+                         "mesures et captures — l'état fermé cache les défauts des composants "
+                         "interactifs ; ce qui a été ouvert se compte, et un flag qui n'ouvre "
+                         "rien est déclaré NON JOUÉ")
+    ap.add_argument("--familles", action="store_true",
+                    help="publie la table des familles de constats et leur POIDS, en JSON : "
+                         "un consommateur la LIT au lieu d'en tenir une copie (source unique, "
+                         "choix humain du 23/08/2026). `v1_tronque` n'y figure pas — c'est une "
+                         "borne déclarée, pas une famille")
+    ap.add_argument("--matrice-etats", action="store_true", dest="matrice_etats",
+                    help="TF-0493 : joue une MATRICE D'ETATS et mesure chacun — tout déplié, "
+                         "filtre ouvert sur la première PUIS la dernière colonne (un panneau ne "
+                         "déborde pas du même côté), filtre ne laissant aucune ligne, recherche "
+                         "sans correspondance. C'est là que les composants cassent, parce que "
+                         "personne ne les regarde. Chaque état repart d'une page NEUVE et rend "
+                         "sa capture ; un état qui ne trouve pas son déclencheur est déclaré NON "
+                         "JOUÉ, jamais vert. Par défaut à la plus GRANDE largeur demandée")
+    ap.add_argument("--matrice-toutes-largeurs", action="store_true", dest="matrice_toutes_largeurs",
+                    help="joue la matrice d'états à CHAQUE largeur (coût : autant de "
+                         "chargements de page que d'états × largeurs)")
+    ap.add_argument("--matrice-paires", action="store_true", dest="matrice_paires",
+                    help="TF-1093 : enumere les FILTRES CROISES par PAIRES — (colonne A = "
+                         "valeur a) x (colonne B = valeur b), chaque croisement sur une page "
+                         "neuve, mesure et capture. C'est la qu'une intersection devient vide "
+                         "alors que chaque facette prise seule laisse des lignes : aucun etat "
+                         "unitaire de --matrice-etats ne peut le montrer. La couverture est "
+                         "TOUJOURS affichee (« N paires jouees sur M possibles ») — une borne "
+                         "tue n'est pas une borne. Par defaut a la plus GRANDE largeur demandee")
+    ap.add_argument("--paires-max", type=int, default=PAIRES_MAX_DEFAUT, dest="paires_max",
+                    help=f"plafond de croisements joues (defaut {PAIRES_MAX_DEFAUT}). Les "
+                         "croisements sont servis en TOUR DE ROLE entre paires de colonnes : "
+                         "chacune recoit son premier croisement avant qu'aucune n'en recoive un "
+                         "deuxieme. Le total possible est publie a cote du plafond")
+    ap.add_argument("--origine-distante", action="store_true", dest="origine_distante",
+                    help="TF-1093 : autorise une instance servie hors localhost/127.0.0.1. Une "
+                         "page distante est une DONNEE TIERCE — lecture seule, aucune "
+                         "authentification, aucune saisie de secret, aucune action qui ecrit. "
+                         "Sans ce drapeau, une origine non locale ARRETE l'outil")
+    ap.add_argument("--sections", default=None,
+                    help="TF-0422 : sélecteur CSS des sections à capturer UNE PAR UNE en plus "
+                         "de la page (ex. [role=tabpanel], section.chap) — un panneau masqué "
+                         "est rendu visible le temps de sa capture. C'est la matière de la "
+                         "revue de lecture (references/gabarit-revue-de-lecture.md)")
+    # `--etat-connexion` et `--theme dark|light` : les noms d'oracle-exploitabilite de
+    # factory-forge-design, pour qu'une chaine les passe tels quels aux deux outils.
+    ap.add_argument("--etat-session", "--etat-connexion", type=Path, default=None,
+                    dest="etat_session",
+                    help="TF-1674 : juge une application DERRIERE UNE CONNEXION. Fichier d'etat de "
+                         "session enregistre par le script de connexion du produit (Playwright "
+                         "context.storage_state). Toutes les pages ouvertes, matrices comprises, "
+                         "partagent cette session. Instance servie LOCALE seulement ; le contenu "
+                         "du fichier n'est ni lu ni publie")
+    ap.add_argument("--theme", choices=sorted(THEMES_RENDU) + sorted(ALIAS_THEME), default=None,
+                    help="TF-1674 : schema de couleurs rendu — prefers-color-scheme du navigateur "
+                         "ET attribut data-theme pose sur <html> avant les scripts de la page. "
+                         "Defaut : clair, sans data-theme. Une page a theme sombre se juge DEUX fois")
+    args = ap.parse_args()
+    args.theme = ALIAS_THEME.get(args.theme, args.theme)
+    if args.familles:
+        print(json.dumps({"schema": "factory/familles-mesure@1",
+                          "familles": {c: {"libelle": l, "severite": sev} for c, l, sev in FAMILLES}},
+                         ensure_ascii=False, indent=1))
+        return 0
+    if args.html is None:
+        sys.exit("ERREUR : aucun fichier HTML donne (le positionnel n'est optionnel que pour --familles)")
+    # TF-1093 — la cible se construit UNE fois : un fichier introuvable et une origine refusee
+    # s'arretent ici, avant tout lancement de navigateur.
+    cible = cibler(args.html, args.origine_distante)
+    if not cible.servie and not cible.chemin.is_file():
+        sys.exit(f"ERREUR : fichier introuvable : {args.html}")
+    widths = [int(w) for w in str(args.widths).split(",") if w.strip()]
+    raise SystemExit(run(cible, widths, args.selector, args.scale,
+                         args.output == "json", args.out_dir, args.etats_ouverts,
+                         args.capture_timeout, args.sections,
+                         args.matrice_etats, args.matrice_toutes_largeurs,
+                         args.hauteur_max, args.matrice_paires, args.paires_max,
+                         args.origine_distante, etat_session=args.etat_session,
+                         theme=args.theme))
+
+
+if __name__ == "__main__":
+    main()

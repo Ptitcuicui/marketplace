@@ -1,0 +1,1884 @@
+# Lisibilité — règles L1 à L39
+
+Une page peut être **exacte, chartée, accessible et illisible**. La charte règle la forme,
+`zero-defaut-visuel.md` règle le rendu ; ce document règle ce que le lecteur peut
+effectivement *lire, comprendre et utiliser*.
+
+Origine : dix défauts relevés par un lecteur humain sur un livrable réel le 09/08/2026 —
+textes coupés en plein milieu, scores sans barème, tableaux non filtrables, sommaire muet,
+liens sans destination annoncée, chapitres de données sans mode d'emploi. Aucun de ces
+défauts n'était détecté par les oracles en place : tous étaient au vert.
+
+Second apport, même jour : une **revue de lecture naïve** sur le livrable corrigé, qui a
+rendu « oui, mais ». Elle a produit L11 (`null` affiché 22 fois), L3(c) (la colonne qui
+classe les actions n'exposait pas sa formule — « je dois vous croire sur parole ») et L3(d)
+(empreinte de grille et jetons de régime affichés nus). Enseignement à retenir : **le
+premier tour de règles ne trouve que ce qu'il sait chercher.** Ce sont des lecteurs, pas des
+règles, qui trouvent les règles suivantes.
+
+## Deux régimes, jamais confondus
+
+Chaque règle de ce document relève d'un seul des deux régimes ci-dessous, et le tableau dit qui
+juge dans chacun.
+
+| Régime | Qui juge | Ce qu'il couvre |
+|---|---|---|
+| **Contrôle mécanique** | `scripts/check_html.py` | Ce qui se décide sans lire : présence, longueur, résolution d'ancre, seuil de lignes, valeur d'attribut. |
+| **Revue de lecture** | un humain, ou l'orchestrateur d'un run | Ce qui suppose de comprendre : clarté du propos, pertinence, justesse du chapeau, qualité de l'exemple. |
+
+**Règle absolue** : ce qui relève de la revue n'est jamais maquillé en contrôle. Un contrôle
+qui prétendrait juger « la synthèse est-elle claire ? » rendrait un vert sans valeur et
+éteindrait la vigilance. Chaque règle ci-dessous déclare explicitement ce qui est mécanisé
+et ce qui ne l'est pas.
+
+---
+
+## L1 — Zéro texte tronqué
+
+**Règle.** Aucun texte de la page ne se termine par une coupure. Un `…` en fin de segment
+précédé d'un mot est une amputation : le lecteur voit qu'on lui cache la suite et n'a aucun
+moyen de l'obtenir.
+
+**Ce qui est autorisé.** Une ellipse *volontaire* — abréviation d'une énumération, citation
+tronquée en connaissance de cause — portée par un élément marqué `data-ellipse-ok`. Le
+marquage est la déclaration d'intention : sans lui, c'est un défaut.
+
+**Le bon dispositif** n'est pas de couper mais de **stratifier** : une ligne courte visible,
+le texte **intégral** dans le détail déplié (cf. L9). Couper le niveau 1 ET le niveau 2 est
+le pire des cas — la page paraît courte et ne contient plus rien.
+
+**Deuxième forme, plus sournoise : la ponctuation orpheline.** Un producteur insère un
+élément **au milieu d'une phrase** — le nom d'un nœud, un badge, une valeur — cet élément est
+stylé en bloc, et la ponctuation qui suivait se retrouve **seule en tête de ligne** :
+
+```
+Le blocage principal —
+Optimisation / Pages À Fusionner (nœud 74)
+. La fusion à opérer n'est pas un nettoyage marginal…
+```
+
+Le point est orphelin, la phrase est coupée en deux, et aucun contrôle de troncature ne le
+voit : rien n'est tronqué, tout est là — mal assemblé. Le remède n'est pas typographique : il
+faut **rendre la phrase entière** et articuler l'élément proprement (une phrase pour le
+titre, une phrase pour le propos), pas déplacer un point.
+
+**Contrôle mécanique.** `L1` — (a) tout `…` ou `...` terminant un nœud de texte, précédé d'un
+caractère de mot, hors élément `data-ellipse-ok`, hors valeur d'attribut (les `placeholder`
+de champ ne sont pas du contenu) ; (b) tout nœud de texte commençant par `. , ; : ! ?` quand
+l'élément qui le précède est **de niveau bloc** selon le CSS de la page. Un élément inline
+suivi d'une virgule est légitime, un élément en bloc ne l'est jamais.
+
+**Ce que « de niveau bloc selon le CSS de la page » veut dire, et ce qu'il ne veut pas
+(TF-1144, 16/09/2026).** L1 évalue les sélecteurs qu'il sait lire — balise, classe, identifiant
+et **sélecteurs d'attribut** (`[hidden]`, `[role="tabpanel"]`, `[data-x^="v"]`…) — chaîne
+d'ancêtres comprise. Ce qui reste hors de portée (pseudo-classe, `*`, forme d'attribut non
+reconnue) garde une voie permissive, mais **un compound sans le moindre point d'ancrage
+vérifiable ne retient plus aucun élément** — il en retenait *tous*.
+
+Le fait payé : L16 refuse une page à onglets tant que la feuille ne porte pas la règle qu'il
+nomme lui-même, `[role="tabpanel"][hidden] { display: block }` sous `@media print`. La règle a
+été posée **mot pour mot**, et le contrôle suivant a rendu **six échecs bloquants L1** sur de la
+prose intacte : le compound ne portait ni balise ni classe ni identifiant, la voie permissive
+renvoyait vrai pour tout élément, et chaque `<a>`, `<strong>` et `<code>` devenait un bloc. Le
+contournement subi — préfixer le sélecteur d'une classe — n'était écrit nulle part, et n'a pas
+à l'être : c'est l'oracle qui doit évaluer ce qu'il sait lire. **Mesure avant / après** sur
+`l16-regle-impression-prescrite.html` : **3 échecs bloquants L1 → 0**, et les six fixtures rouges
+de L1 mordent toujours. Contre-épreuve à double sens : `l1-attribut-retenu-rouge.html` (le
+porteur porte l'attribut, L1 mord) et `l1-attribut-ecarte-vert.html` (il ne le porte pas).
+
+**Revue de lecture.** Qu'un texte non tronqué soit pour autant compréhensible.
+
+## L2 — Largeur de lecture pleine
+
+**Règle.** La page occupe la largeur qu'on lui donne — et le **texte** occupe la largeur que
+la page lui donne. Un livrable dense affiché dans 1 080 px sur un écran 1 920 abandonne 44 %
+de la surface ; ses tableaux se replient, ses synthèses s'étranglent.
+
+**La mesure de lecture est portée par le CONTENEUR, jamais par le paragraphe.** C'est la
+correction d'une doctrine antérieure qui disait l'inverse (« deux largeurs : le conteneur
+relatif, la prose bornée en `ch` ») et qui a produit exactement le défaut qu'elle prétendait
+éviter : conteneur à 1 245 px, paragraphes bridés à 75 `ch` soit 606 px, **une moitié droite
+vide** sur toute la synthèse et toutes les fiches de constat. Le contrôle statique passait au
+vert, puisqu'il lisait le CSS du conteneur.
+
+Si les lignes doivent être courtes, **rétrécir la colonne** — une grille, un `<div>` de
+mesure — et laisser le texte la remplir. Ne jamais laisser un paragraphe flotter dans une
+boîte deux fois plus large que lui.
+
+**Quelle que soit la propriété (TF-0421, lot Produit-05 20260820a).** `width: min(75ch, 100%)`
+contournait la mesure (qui ne regardait que `max-width`) et produisait exactement le défaut :
+texte à 40 % d'un écran de 1 800 px, livré vert, refusé par le client. `render_page.py` L2
+retire `max-width` **et** `width` le temps d'une mesure : toute bride du texte en deçà de
+85 % de la place offerte échoue. La bonne forme est nommée et portée par le boilerplate :
+`section.chap.lire` (conteneur de lecture ~1 080 px) et `section.chap.duo` (grille 7/5 texte +
+encart utile) — composants.md §11.
+
+**Troisième forme : la gouttière d'étiquettes.** Une grille `étiquette | contenu` dont la
+colonne d'étiquettes prend 22 % de la largeur utile. Chaque colonne remplit sa case — la
+mesure de largeur ci-dessus rend 1,00 — et pourtant le lecteur voit un tiers de page vide et
+un contenu tassé à droite. **L'angle mort est la grille elle-même** : on mesurait le bloc de
+texte, pas la répartition qui le contraint.
+
+Doctrine : **une étiquette de champ s'écrit en tête de ligne**, pas dans une colonne —
+« **Question d'audit** — … ». Si une colonne d'étiquettes est vraiment voulue, elle ne
+dépasse jamais **15 à 20 %** de la largeur utile.
+
+**Contrôle mécanique — trois niveaux.**
+- `L2` **statique** (`check_html.py`) : aucun `max-width` en pixels durs inférieur à 1 100 px
+  sur `body`, `main`, `.wrap`, `.container` ou `.page`.
+- `L2` **au rendu** (`render_page.py`, bloquant) : pour tout bloc de texte d'au moins
+  120 caractères, hors tableau et hors navigation, la largeur rendue rapportée à la largeur
+  **réellement disponible** doit être ≥ **0,85** aux viewports de bureau (≥ 1 100 px). La
+  mesure est exacte, pas heuristique : on retire `max-width` le temps d'une mesure et on
+  compare. Une colonne légitimement étroite ne bouge pas ; un paragraphe bridé se révèle.
+- `L2` **gouttière** (`render_page.py`, bloquant) : dans une grille CSS à **deux pistes**
+  dont la seconde porte ≥ 120 caractères et la première une étiquette de ≤ 60 caractères, la
+  première piste ne dépasse pas **20 %** de la largeur. Le seuil est à 20 % et non 25 %
+  parce que le défaut constaté mesurait **22 %** : un seuil posé au-dessus du défaut qui l'a
+  motivé ne prouve rien. Deux colonnes de contenu (cartes, barèmes) portent deux textes
+  longs et sortent du périmètre.
+  **Les mises en page `intitulé | contenu` en `<table>` y entrent aussi** (TF-0694,
+  27/08/2026) : la règle décrivait exactement ce défaut, au seuil exact, et rendait PASS
+  dessus — son implémentation commençait par `if (cs.display !== 'grid') continue` et
+  assumait l'exclusion (« un vrai tableau de données n'est pas une grille CSS »). Or *une
+  mise en page en `<table>` n'est pas un tableau de données : c'est la même intention avec
+  l'autre outil*. La règle n'avait pas échoué, **elle n'avait pas été appelée**, et rien ne
+  le disait — mesuré sur une fiche à 32 % : verdict PASS et zéro constat sur les treize
+  familles, après deux fiches livrées et trois régénérations. On mesure alors la largeur
+  **rendue** de la première colonne (un `<table>` n'a pas de piste déclarée), avec les
+  **mêmes** garde-fous : première cellule courte, seconde longue, et la majorité des lignes
+  à deux cellules de ce type (au moins deux). Le seuil de 20 % **ne bouge pas** — le lot en
+  apporte une confirmation indépendante. Un vrai tableau de données à deux colonnes de
+  valeurs comparables reste PASS, et une fixture verte le prouve à chaque recette.
+
+**Les trois sorties qui passent (TF-1799, lot Produit-83 20261015b, RA-5).** Brider le paragraphe
+échoue à « bride par max-width » ; brider un conteneur **calé à gauche** échoue à « conteneur de
+lecture calé à gauche » ; et aucun des deux messages ne nommait `data-page="donnees"`. Ils nomment
+désormais les trois sorties, et chacune est jouée au banc et passe : (1) document de lecture — la
+bride sur le conteneur **centré** (`.chap.lire`, `margin-inline: auto`), fixture `l2r-chap-lire.html` ;
+(2) écran d'application ou page de données — `data-page="donnees"` sur sa racine, la prose prend la
+largeur (L26), fixture `l2-remede-page-application.html` ; (3) colonne étroite voulue — la bride sur le
+conteneur, déclarée par `data-colonne-ok`, fixture `l2-remede-colonne-declaree.html`.
+
+**La dispense `data-colonne-ok` ne vaut que sur le conteneur brideur lui-même (TF-2677,
+16/11/2026).** `closest('[data-colonne-ok]')` la laissait remonter : posée sur `<main>`, avec un
+motif que l'agent avait écrit, elle éteignait L2 « conteneur calé à gauche » pour toute la page, et
+l'humain a vu la moitié vide à droite sur une capture (v2 de `factory-site`, 14/11/2026).
+Elle ne vaut plus que sur le conteneur qui brise la largeur ; posée sur `<main>`, `<body>`, `<html>`
+ou `[role=main]` aussi larges que leur parent, ou sur tout ancêtre du brideur, elle ne dispense
+rien (fixture rouge `l2c-dispense-sur-main.html`). `render_page.py` liste chaque dispense et son motif
+au `non_juge` du verdict, `SANS MOTIF` quand la page n'en écrit pas ; une dispense de mise en page
+chez un produit se consigne comme décision humaine, jamais comme un motif d'agent.
+
+**Largeur de contenu entre chapitres — V21 (TF-1307, 17/10/2026).** L2 juge un bloc contre son
+conteneur et L2-frères un bloc de texte contre son frère empilé ; aucun des deux ne voit une page
+dont chaque chapitre est conforme seul mais dont les chapitres n'ont pas la même largeur (un
+chapitre en pleine largeur, le suivant bridé par `.chap.lire`). `render_page.py` (famille
+`largeurs_melangees`, avertissement) compare la largeur **rendue** des blocs de contenu frères
+(`section`, `article`, `.chap`, `[role=region]`) d'un même parent en flux vertical ; plus d'une
+largeur distincte (écart > max(8 px, 1,5 %)) donne un constat. Remède : égaliser vers `.chap.lire`
+sur une page de lecture, vers la pleine largeur sur une page de données ; écart voulu déclaré par
+`data-largeur-exception="<raison>"`. Fixtures : `v21-largeurs-melangees.html` (rouge),
+`v21-largeurs-homogenes.html`, `v21-exception-declaree.html`, `v21-sections-en-grille.html`
+(vertes). Mesure, bruit et numérotation : `zero-defaut-visuel.md`, ligne V21.
+
+**Revue de lecture.** Que les blocs qui doivent occuper la pleine largeur (synthèse, verdict,
+blocage principal) l'occupent réellement — et que la mesure de lecture retenue serve le
+propos plutôt que l'habitude.
+
+## L3 — Toute valeur porte sa légende
+
+**Règle.** Aucun score, badge, pastille ou valeur mise en avant n'apparaît sans que le
+lecteur puisse savoir **ce qu'il signifie**. « Maturité 1/5 » sans barème n'informe pas : il
+faut dire ce que valent 1, 2, 3, 4 et 5.
+
+**Deux catégories, deux exigences.**
+
+**(a) Les scores** — classe `sc` / `score` / `note` / `jauge`, ou texte de la forme `N/M`.
+Exigence : **`aria-describedby` résolvant vers un élément de la page d'au moins
+20 caractères** — le barème. Un `title` ne suffit pas pour un score, et ce n'est pas une
+formalité : un tooltip ne survit pas à l'export WeasyPrint, ne s'atteint pas au doigt sur
+mobile, et n'a jamais la place d'énoncer cinq crans. Le barème doit **exister dans le
+document**. C'est la mécanisation de « 1/5 sans barème = défaut ».
+
+**Une date « JJ/MM » n'est pas une note** (TF-1904, retour d'un produit du 18/10/2026). Un rapport
+portait des dates de semaine (`12/10`, `19/10`) en cellule : seize échecs bloquants, lus comme des
+notes « 12 sur 10 », levés par une légende de colonne qui n'apprenait rien. Deux preuves
+exemptent, jamais la forme seule (`5/10` est aussi une note) : un **`<time datetime="AAAA-MM-JJ">`**
+sur la valeur (ou autour, ou dedans) — la page dit que c'est une date ; **ou** un JJ/MM plausible
+(jour 1-31, mois 1-12) sous un **en-tête de colonne qui nomme une date** (date, semaine, jour,
+période, échéance, début, fin, livraison ; « du » et « au » seulement en en-tête entier) et qui ne
+nomme pas une note (note, score, sur, indice, taux, rang, niveau). Une valeur déclarée score par
+sa classe (`sc`, `score`, `note`, `jauge`) reste un score.
+
+**(b) Les autres valeurs mises en avant** — `kpi`, `badge`, `pastille`, `pv`, `chip-val`, `stat`.
+Exigence : **`aria-describedby` vers une légende visible de la page — le porteur recommandé**,
+parce qu'elle survit au PDF, s'atteint au doigt et ne se recopie pas ; **ou** une légende visible
+(`<small>`, `.legende`, `.kpi-d`) d'au moins 12 caractères ; **ou**, à défaut, `aria-label` ou
+`title` non vide. Le `title` est la voie la plus courte, et c'est pour cela qu'il n'est plus nommé
+en premier (RT-118, Produit-02, 03/10/2026) : une session a posé « Statut de S1 » sur des
+pastilles pour passer L3. Une infobulle porte un **complément**, jamais une redite — voir (e bis).
+
+Un `title=""` vide est **pire** que pas de tooltip : il annonce une explication et n'en
+donne aucune. C'est un échec, pas un avertissement.
+
+**Les classes RÉSERVÉES, et le message qui les nomme** (TF-1962, RT-11 du lot Produit-84 20261019c). L3 se
+déclenche sur un NOM DE CLASSE : une page de données dont les cellules portaient `class="pv"` — une classe
+de MISE EN PAGE (petite valeur, alignée à droite) — a produit 95 échecs « valeur sans légende », et l'auteur
+a dû lire le code de l'oracle pour apprendre que `pv` y est réservé. Un contrôle qui échoue sur un
+marqueur réservé le nomme. Les classes réservées, lues dans `check_html.py` :
+
+| Déclenche | Classes réservées | Exigence |
+|---|---|---|
+| une **valeur** mise en avant (b) | `badge`, `chip-val`, `kpi`, `pastille`, `pv`, `stat` | légende (aria-describedby, légende visible, aria-label ou title) |
+| un **score** (a) | `jauge`, `sc`, `score` ; `note` seulement avec un texte « n/m » ; et la FORME « n/m » d'un `td`, `span`, `b`, `strong`, `em` | barème lié (aria-describedby) |
+
+Chaque message d'échec de L3 dit « Déclenché par la classe réservée « … » » avec cette liste, et la sortie :
+une classe de mise en page se RENOMME (une classe hors de la liste n'est pas jugée), une vraie valeur se
+légende. Fixtures `l3-classe-reservee-pv.html` (rouge : 3 échecs nommant « pv ») et
+`l3-classe-non-reservee.html` (verte : la même page, classe `chiffre`).
+
+**(c) Les colonnes calculées.** Un en-tête de tableau nommé `Score`, `Note`, `Indice`,
+`Priorité`, `Pondération`, `Classement`, `Criticité` ou `Sévérité` annonce une valeur
+**calculée** — et c'est en général celle qui **ordonne le tableau**. Sans sa formule, on
+demande au lecteur de croire sur parole la seule colonne qui décide de tout l'ordre.
+Exigence : `aria-describedby` sur le `<th>`, vers un élément qui **publie le calcul** —
+formule, amplitude, et seuil de décision s'il y en a un. Le barème d'un score calculé, c'est
+son mode de calcul, pas la description de ses crans.
+
+Corollaire de nommage : si une colonne s'appelle `Note` mais contient une remarque en prose,
+c'est le **libellé** qu'il faut corriger, pas le contrôle. Un lecteur commet exactement la
+même erreur que la règle.
+
+**(d) Les valeurs opaques.** Une empreinte (`3d0af44aae9a`) et un jeton codé
+(`ia-assistee-validation-humaine`, `manuel-strict`) sont écrits pour une machine. Affichés
+nus, ils demandent au lecteur de deviner ce qu'ils désignent — et il ne devine pas.
+Exigence : `title` / `aria-label` d'au moins 12 caractères, `aria-describedby` résolu, ou
+légende visible. Échappatoire pour un identifiant volontairement brut : `data-opaque-ok`. Le
+contenu d'un `<code>` est hors périmètre — il annonce déjà qu'il s'adresse à la machine.
+
+**(e) La légende TAUTOLOGIQUE** (TF-0928, 08/09/2026). Une infobulle qui **recopie sa cellule**
+passe (a)-(d) sans rien apprendre : elle existe, elle dépasse 20 caractères, elle s'atteint.
+Mesure sur un livrable servi : `title="table et champ du rapport … : Base_Tenancy_Schedule.unit_key"`
+sur la cellule `Base_Tenancy_Schedule.unit_key`, **900 cellules** ainsi légendées et conformes.
+Retour humain : « les tooltips doivent expliquer le champ, pas recopier la cellule ».
+
+Exigence : le `title` / `aria-label` d'une cellule, **son libellé de colonne et sa ponctuation
+retirés**, ne doit pas égaler le texte de la cellule. Le partage du travail est celui du
+dictionnaire de colonnes (L27 (colonne)) : *le `th` porte la définition du CHAMP, l'infobulle de cellule
+porte l'explication de la VALEUR* — d'où elle vient, ce qu'elle mesure, ce qu'elle vaut. Un
+générateur qui dispose d'un catalogue commenté lit ses commentaires plutôt que de recomposer
+l'en-tête. Répétition **voulue** (graphie normalisée, transcription) → `data-legende-ok`,
+déclaré sur la cellule ou sur sa colonne : c'est le geste complet, pas la moitié.
+
+**(e bis) L'infobulle REDONDANTE hors tableau** (RT-118, Produit-02, D-55 (a) du 03/10/2026). (e)
+ne jugeait que les cellules. Sur une page servie, une étape d'entonnoir affichait « 54 visites
+engagées » et son infobulle répétait « 54 visites engagées » ; les `<title>` des barres SVG
+répétaient le montant écrit au-dessus. Retour humain, troisième occurrence : « des tooltips qui
+affichent ce qu'on a par ailleurs sur la page, ça n'a pas d'intérêt ; les tooltips doivent fournir
+des informations complémentaires ».
+
+Exigence : le `<title>` enfant d'un élément SVG, et le `title` / `data-tip` / `data-definition` de
+tout élément hors cellule, une fois casse, ponctuation et espaces retirés, ne doivent pas **égaler**
+le texte visible de leur cible, d'un de ses frères directs, de leur parent pris en entier, ni du
+`<text>` déclaré étiquette de la marque (`data-etiquette-de`, `aria-labelledby`). N'est pas compté
+comme visible : le texte réservé au lecteur d'écran (`.sr`, `.visually-hidden`, toute classe que la
+feuille masque), le texte d'un élément d'icône. Un texte **tronqué** (ellipse, line-clamp) garde son
+`title` : il montre ce que la boîte cache. `aria-label` n'est pas jugé ici — c'est un nom
+accessible, pas une infobulle, et WCAG 2.5.3 lui demande justement de contenir le libellé visible.
+Répétition voulue → `data-legende-ok`.
+
+Mesure de bruit avant de poser la règle : 3 267 pages de 29 dépôts produits, 142 éléments sur 23
+pages de 2 dépôts, **tous de vrais défauts** (glose dont le `title` répète la définition écrite à
+côté, tuile d'indicateur dont le `title` recopie la tuile, champ dont le `title` recopie son aide
+visible) : **bloquant**. La variante « l'infobulle est **contenue** dans un texte voisin sans rien
+ajouter » a été mesurée aussi — 527 constats sur 56 pages de 5 dépôts, avec des faux positifs
+avérés (un bouton de fermeture sans texte dont le panneau voisin contient un autre « Fermer ») :
+elle **n'est pas posée**.
+
+**(e ter) L'infobulle qui recopie un texte affiché AILLEURS** (TF-1609, Produit-64 RT-32,
+12/10/2026). Une page verte aux quatre familles d'oracles portait 135 infobulles redondantes : des
+liens de code dont le `title` était le `dd` de l'entrée de glossaire visée, des pastilles de statut
+dont le `title` était leur définition, déjà publiée dans la légende d'un autre chapitre. (e bis) ne
+regardait que le voisinage immédiat. Exigence, au même seuil d'égalité : le `title` / `data-tip`
+d'un `a[href^="#"]` ne doit pas égaler le texte de l'élément visé, d'un de ses blocs, ni du `dd`
+qui suit une cible `dt` ; le `title` d'un élément ne doit pas égaler la définition qu'une légende de
+la page donne à un autre élément de mêmes balise, classes et texte, ni le `dd` d'un `dt` qui porte
+son texte. **Avertissement** : mesuré le 12/10 sur 1 979 pages de dépôts produits, 351 éléments sur
+10 pages, dont 53 liens de sommaire dont le `title` montre le chapeau de la section visée, un
+aperçu discutable ; le bruit n'étant pas démontré nul, la règle n'est pas bloquante. La paraphrase
+(« Appliquer avant de fusionner » sur une cellule qui dit « l'application précède la fusion ») n'est
+pas mesurable : elle passe à la revue de lecture.
+
+**(e quater) L'infobulle qui recopie SA carte ou SA ligne** (TF-1763, Produit-64 RT-68, 15/10/2026,
+quatrième retour humain). Sur une page, 27 titres SVG de groupe sur 54 recopiaient leur carte
+(`<title>C1 — texte</title>`, carte « C1 · N2 » puis le même texte coupé sur trois `<text>`) et 12
+infobulles de code sur 58 recopiaient leur ligne de tableau : (e bis) compare à l'égalité, le
+préfixe de code et l'étiquette suffisaient à passer. Exigence : le `<title>` d'un groupe SVG (ou d'une
+forme d'un groupe), et le `title` / `data-tip` d'un élément placé dans une ligne de tableau, se
+jugent **ligne par ligne**, préfixe de code retiré (« C1 — », « RA-41 : ») ; une ligne de moins de six
+signes utiles est une étiquette et n'est pas jugée. Si toutes les lignes jugées se lisent déjà dans le
+texte visible du groupe ou de la ligne, l'infobulle n'apprend rien. Une ligne neuve suffit à passer :
+qui, quand, ce qui en dépend. Le voisinage est étroit à dessein, c'est la condition que la mesure du
+03/10 posait pour rouvrir l'inclusion. **Avertissement** (règle neuve) : mesuré le 15/10/2026 sur
+les mêmes 2 007 pages que L38, 11 pages de 6 dépôts, toutes des infobulles de ligne ou de carte
+qui redisent leur texte ; aucune inspection exhaustive, donc pas de passage en bloquant. Au périmètre de non-mesure :
+l'inclusion dans un texte plus large (le parent, la section) et la paraphrase. Fixtures
+`l3-infobulle-recopie-sa-carte.html` (rouge) et `l3-infobulle-complete-sa-carte.html` (verte).
+**Un title de groupe porte** ce que la carte n'affiche pas ; son code en tête est permis.
+
+**(f) L'objet d'un système source CITÉ mais jamais joint** (TF-0934, 08/09/2026). Le lendemain
+de (e), le même livrable portait des colonnes « Source héritée » nommant les objets d'un
+entrepôt cité et non joint — `LOC.FAI_LOT_MOIS`, `DIM_BATIMENT`. Aucun catalogue ne les
+commente : le générateur a fait retomber l'infobulle sur la **définition de la colonne**, la
+même phrase sur toute la colonne, qui se lit « pas d'explication ». Ni (e) — l'infobulle ne
+recopie pas la cellule, elle recopie l'en-tête — ni L27 (colonne) — la colonne *a* sa définition — ne le
+voient : le trou est entre les deux.
+
+Exigence : **toute page qui nomme les objets d'un système source déclare un dictionnaire de ces
+objets** — lu dans le catalogue si le système est joint, **écrit et sourcé** sinon (grain,
+famille, volume, schéma). Une cellule dont le texte est un identifiant technique d'objet et dont
+l'infobulle **égale la définition de sa colonne** est un constat « objet non expliqué ». Une fois
+le dictionnaire en place, on le déclare par `data-dictionnaire-objets` (page, table ou ligne) et
+les infobulles en dérivent, plutôt que de rendre la redite obligatoire. La prose libre, qui ne
+nomme aucun objet, n'a besoin d'aucune infobulle.
+
+**(g) Une infobulle est une LISTE, pas un paragraphe** (TF-0935, 08/09/2026). Le socle ne
+connaissait que l'attribut `title` natif, et **aucune règle ne jugeait sa lisibilité**. Mesure sur
+le livrable servi : **3 153** cellules à `title`, **2 527** en portant plusieurs objets, la plus
+longue **sept objets en 700 caractères** d'un seul bloc — conforme à (a)-(f), illisible. Retour
+humain : « formatte tous les tooltips, puces et sous-puces ».
+
+Exigence : une légende **sans structure** (aucun saut de ligne) qui dépasse **200 caractères**,
+ou qui enchaîne **plus de deux objets** séparés par `;` ou `·`, est un défaut. Le `title`
+s'écrit alors *une ligne par objet, une sous-précision par ligne indentée* :
+
+```
+Fait mensuel des lots
+  grain : un lot par mois
+  volume : 1,4 million de lignes
+Dimension des bâtiments
+  grain : un bâtiment
+```
+
+Le composant du socle — `assets/infobulle.js` + `assets/infobulle.css`, composant 13 de
+`composants.md` — **lit ce `title`** et le rend en puces : une seule source de vérité, aucun
+balisage double (1,25 Mo chez le produit au lieu de 2,06 par la voie qui dupliquait le contenu).
+Il retire le `title` natif pendant l'affichage pour que les deux infobulles ne se superposent pas,
+et le **restitue** à la fermeture — un `title` perdu est un contenu perdu à l'impression et pour
+les technologies d'assistance. Bloc **voulu** → `data-legende-ok`.
+
+**Contrôle mécanique.** `L3` — les huit exigences ci-dessus, plus l'échec explicite sur
+légende vide et sur `aria-describedby` pointant dans le vide.
+
+**Revue de lecture.** Que le barème soit juste, que ses crans soient discriminants, et que
+la formule publiée soit bien celle qui a servi.
+
+## L4 — Une liste longue se filtre, se trie, se cherche
+
+**Règle.** Dès **8 lignes**, une table ou une liste de données n'est plus lue : elle est
+parcourue. Elle doit offrir au minimum **filtre**, **tri** et **recherche**.
+
+Le seuil et le périmètre exact (colonne catégorielle, exemption motivée) sont ceux du
+composant : voir [composant-filtres-tableau.md](composant-filtres-tableau.md).
+
+**Exemption.** `data-filterable="off"` **et** `data-filterable-reason="…"`. Sans motif, échec.
+
+**Contrôle mécanique.** `L4` — toute `<table>` de ≥ 8 lignes de `<tbody>` sans
+`data-filterable`, ou exemptée sans motif.
+
+**Revue de lecture.** Que les colonnes filtrables soient celles qu'on veut réellement
+filtrer, et que le tri par défaut serve la question posée.
+
+## L5 — Le surlignage de recherche ne casse ni les mots ni le flux
+
+**Règle.** Le surlignage d'une occurrence est **inline et transparent au flux**. Chercher
+`clic` dans « clics » doit surligner `clic` **sans détacher** le `s` : pas de `padding`
+horizontal, pas de `margin`, pas de passage en `inline-block`, pas de changement de police.
+
+**Cause typique — et elle n'est pas où on la cherche.** Le surligneur découpe un nœud de
+texte en `texte + <mark> + texte`. C'est correct. Ce qui casse le mot, c'est le CSS :
+
+1. **Un padding horizontal** sur le `<mark>` — 1 px suffit à créer une césure visible.
+2. **Une collision de nom de classe**, bien plus grave et invisible à la relecture du CSS.
+   Constaté en production : le conteneur du champ de recherche portait `class="find"` et
+   était stylé `display:flex; flex-direction:column`. Le surligneur produisait
+   `<mark class="find">`. La règle `.find { display:flex }` s'appliquait donc **aussi au
+   surlignage**, qui devenait une boîte de bloc : « clics » se rendait « clic », puis « s »
+   à la ligne suivante — la partie non surlignée éjectée 600 px plus loin. La règle
+   `mark.find` existait bien, avec une spécificité supérieure, mais **ne déclarait pas
+   `display`** : elle ne pouvait donc pas gagner sur une propriété qu'elle n'écrivait pas.
+   Depuis, l'asset du socle ne peut plus produire cette collision : il surligne en
+   `<mark class="find-hit">`, classe disjointe de tout nom que prendra le conteneur
+   (cf. [composant-recherche.md](composant-recherche.md)). Le contrôle L5 reste inchangé —
+   un livrable qui recode son surligneur peut toujours retomber dans le piège.
+
+Le troisième piège est la **réécriture d'`innerHTML`** pour nettoyer les surlignages : elle
+détruit les écouteurs des filtres et du tri. Nettoyer en remplaçant chaque `<mark>` par son
+texte, puis `normalize()`.
+
+**Contrôle mécanique.** `L5` — aucune règle CSS **visant un `<mark>` de la page**, que ce
+soit par son élément (`mark`, `mark.find`) **ou par une classe que ce `<mark>` porte**
+(`.find`), ne déclare de `padding` horizontal non nul, de `margin` non nul, ni de `display`
+autre que `inline`. C'est le second volet qui attrape la collision : un contrôle limité aux
+sélecteurs contenant `mark` serait passé au vert sur le défaut réel.
+
+**Revue de lecture.** Que le contraste du surlignage reste conforme (couvert par V2) et que
+le compteur d'occurrences soit juste.
+
+## L6 — Un sommaire qui annonce, avec des ancres qui résolvent
+
+**Règle.** Chaque entrée du sommaire : un numéro, un titre, **une ligne d'annonce** qui dit
+ce que le chapitre apporte, et une ancre qui **existe réellement** dans le document.
+
+Un sommaire réduit à des titres nus oblige à ouvrir chaque chapitre pour savoir s'il
+intéresse : il coûte plus qu'il ne rapporte.
+
+**Convention de marquage.** Le sommaire est un `<nav>` portant `class="toc"` ou
+`aria-label="Sommaire"`. Chaque entrée est un `<a href="#id">` contenant un élément de
+classe `toc-d` (l'annonce), de **12 caractères au moins**.
+
+**Contrôle mécanique.** `L6` — (a) toute ancre `#id` du sommaire dont l'`id` n'existe pas ;
+(b) toute entrée sans élément `.toc-d` d'au moins 12 caractères.
+
+**Plusieurs navigations sur une même page : laquelle porte quoi (TF-1145, 16/09/2026).** Le
+destinataire humain demande, mot pour mot : « Les textes dans le menu ne sont pas nécessaires,
+cela laissera plus d'espace entre les titres ». Le menu passe en titres seuls, et L6 refuse
+aussitôt **onze fois**. Le sommaire jugé était **le premier** `<nav>` du document — et
+`render_page.py` faisait le même choix, avec le même sélecteur, pour sa famille `sommaire_perdu`,
+à laquelle il demande l'inverse : tenir dans la fenêtre aux 60 % de la page.
+
+**Les deux exigences ne tiennent pas ensemble sur un document long.** Une barre collante peut
+rester visible, mais onze annonces de douze caractères y tiennent la place que le lecteur a
+demandé de rendre ; un sommaire **en cartes**, où l'annonce se lit, ne peut pas être collant —
+c'est une grille. La page livrée portait **trois** navigations, et chaque oracle n'en regardait
+qu'une, en rendant son verdict comme si elle était seule. Mesure du repli réel, prise au
+navigateur : la barre à onze entrées est `position: sticky`, haut 0 / bas 194 px, et reste dans
+la fenêtre **après 20 000 px de défilement**, script actif comme script coupé.
+
+**Ce qui est jugé maintenant.** Les deux contrôles collectent **tous** les navs candidats. L6
+juge les ancres de **chacun** — une ancre morte est un défaut sur n'importe quelle navigation, et
+ce contrôle-là s'élargit — et n'exige les annonces que du sommaire **qui les porte** ; une page
+qui n'en porte nulle part échoue comme avant. `sommaire_perdu` passe dès qu'**une** des
+navigations reste atteignable. Une page qui offre les deux passe les deux, et un avertissement
+dit laquelle porte quoi. **Mesure avant / après** : 3 échecs L6 → 0 sur la fixture qui offre les
+deux, 3 → 3 sur celle qui n'annonce nulle part ; côté rendu, 1 bloquant → 0 quand une barre
+permanente existe, 1 → 1 quand aucune ne tient.
+
+**Revue de lecture.** Que l'annonce dise le contenu et non le titre reformulé.
+
+## L7 — Chaque chapitre ouvre par ce qu'il apprend
+
+**Règle.** Un chapitre commence par une phrase qui répond à « **ce que ce chapitre vous
+apprend** » — pas par un tableau, pas par une liste, pas par un titre de niveau 3.
+
+**Périmètre mécanique.** Les sections **cibles du sommaire** : ce sont les chapitres, par
+définition. Une page sans sommaire n'est pas concernée par le contrôle.
+
+**Convention de marquage.** Un élément de classe `ch-apprend` (ou `ch-st`) en tête de
+section, d'au moins 40 caractères.
+
+**Contrôle mécanique.** `L7` — toute section cible du sommaire sans chapeau d'ouverture
+d'au moins 40 caractères.
+
+**Un chapeau est une phrase ÉCRITE, jamais générée (TF-0423, lot Produit-05 20260820a).** Douze
+chapeaux identiques au mot près, posés par un script qui optimisait l'oracle, ont passé L7 sur
+un livrable refusé par le client. Trois formes mécaniques de ce défaut échouent désormais :
+chapeau **identique** dans deux chapitres ; chapeau tiré du **lexique de remplissage** (« ce
+chapitre apporte/présente les éléments annoncés par son titre ») ; chapeau de plus de 60 mots
+(un paragraphe reclassé). Corriger en **écrivant** — jamais en reformulant pour passer.
+
+**Revue de lecture.** Que le chapeau annonce le bon apport — un chapeau générique
+(« ce chapitre présente les données ») passe le contrôle et rate la règle.
+
+## L8 — Tout lien interne annonce sa destination
+
+**Règle.** Un lien interne (`href="#…"`) dit **où il mène**. « ici », « voir », « détail »,
+« → » ne sont pas des destinations. Le lecteur doit pouvoir décider de cliquer sans cliquer.
+
+**Deux formes acceptées.** Un libellé visible d'au moins **8 caractères** nommant la cible ;
+ou un libellé court accompagné d'un `title` / `aria-label` d'au moins 12 caractères qui la
+nomme. **La sortie la plus simple se dit en premier (TF-0434)** : un libellé qui est un
+**identifiant du document** (H5, E2, 1.5, ADR 0022 : une décision d'architecture numérotée) n'est pas muet pour son lecteur — il est
+elliptique pour un lecteur d'écran ; il reste court et prend un `title` de 12 caractères.
+L'allonger nuirait à la lecture.
+
+**Contrôle mécanique.** `L8` — tout `<a href="#…">` hors sommaire dont le texte visible fait
+moins de 8 caractères et qui ne porte ni `title` ni `aria-label` d'au moins 12 caractères.
+**Un `title` qui recopie la cible ne compte pas (TF-1609, 12/10/2026)** : égal au texte de
+l'élément visé, ou au `dd` d'une cible `dt`, il n'apprend rien au lecteur qui suit le lien — 73
+liens de code sur 73 d'une page le faisaient pour satisfaire L8. Sont acceptés un `aria-label`, ou
+un `title` qui DIFFÈRE du texte de la cible ; le message le dit. Mesuré sur 1 979 pages de dépôts
+produits : 0 constat neuf.
+Les ancres vides (`href="#"`) sont un échec inconditionnel.
+
+**Revue de lecture.** Que le libellé corresponde au titre réel de la cible.
+
+## L9 — Listes d'actions : ligne lisible, détail complet
+
+**Règle.** Une action se présente sur **une ligne lisible** (l'énoncé, pas son début) et son
+détail se déplie **intégralement**. Jamais de libellé coupé au niveau 1 sans le texte entier
+au niveau 2 (c'est L1 appliqué aux listes).
+
+**Le dispositif.** `<details>` en place, sans insérer de `<tr>` supplémentaire — une ligne
+de tableau injectée casse l'itération des composants de filtre et de tri.
+
+**Un dépliant annonce ce qu'il ouvre ET à quoi ça sert.** « Détails », « plus d'infos »,
+« voir plus » ne disent ni l'un ni l'autre. Pire : un libellé qui décrit son *contenu* sans
+dire son *usage* — « question d'audit, critère et preuves » — se lit comme une table des
+matières, et le lecteur qui l'ouvre juge inutile ce qu'il y trouve. Le libellé porte le
+**verbe du lecteur** : « vérifier ce constat — question d'audit, critère, preuves ».
+
+Corollaire : ce qui identifie l'élément (numéro, référence) **remonte dans le `<summary>`**
+plutôt que d'occuper une ligne à lui seul.
+
+**Un dépliant coûte un clic et une décision.** Sous ~200 caractères cachés, le contenu tient
+à l'écran : le replier fabrique un obstacle, et le lecteur qui l'ouvre se sent trompé —
+« à qui sert ce bouton ? ». Le `<details>` ne se justifie que pour du contenu long ; en
+dessous, on affiche en place, en pied de bloc et en style discret. Échappatoire motivée :
+`data-repli-ok`.
+
+**Contrôle mécanique.** `L9` — tout `<details>` au corps vide (rien hors le `<summary>`) ;
+tout `<details>` cachant moins de 200 caractères utiles hors `data-repli-ok` ;
+tout `<summary>` de moins de 3 caractères ; et tout `<summary>` d'au plus trois mots pleins
+dont **aucun ne désigne** (mots-outils ignorés, liste de mots creux dans le script). « Voir
+plus » échoue, « Afficher la dette » passe — « dette » désigne. Ce qui n'est pas mécanisable,
+c'est qu'un libellé qui désigne dise aussi un **usage** : cela reste à la revue de lecture.
+Le complément de L9 (« le niveau 2 contient le texte intégral ») est couvert par L1.
+
+**Revue de lecture.** Que la ligne de niveau 1 soit une phrase autonome et non un fragment
+grammatical.
+
+## L10 — Les chapitres de données ont un mode d'emploi
+
+**Règle.** Un chapitre dont le corps est une table de données porte, avant la table, un
+**chapeau d'usage** (à quoi sert cette table, comment s'en servir) et **un exemple de
+lecture** (« la ligne X se lit : … »).
+
+Sans cela le lecteur reçoit un vidage de données filtrable — exact, inutilisable.
+
+**Convention de marquage.** L'exemple de lecture est un élément de classe `exemple-lecture`
+(ou `data-exemple-lecture`), d'au moins 30 caractères, situé dans la section.
+
+**Contrôle mécanique.** `L10` — toute section cible du sommaire contenant une table de
+≥ 8 lignes et dépourvue d'élément `.exemple-lecture` d'au moins 30 caractères.
+
+**Revue de lecture.** Que l'exemple porte sur une ligne réellement présente et qu'il
+apprenne à lire une colonne non évidente.
+
+## L11 — Aucun littéral de langage dans le texte visible
+
+**Règle.** `null`, `None`, `undefined`, `NaN`, `nil`, `[object Object]`, `{{variable}}`,
+`${expr}` : aucun de ces jetons n'appartient à la langue du lecteur. Quand l'un apparaît,
+une valeur non renseignée a traversé le producteur **sans être traitée**. Le lecteur reçoit
+l'aveu d'un trou, formulé dans un langage qui n'est pas le sien — et il ne peut pas savoir si
+la donnée est absente, nulle, ou perdue en route.
+
+**Le bon dispositif.** Le producteur normalise à la source : une valeur absente fait
+disparaître son champ, ou devient une **absence déclarée** en français (« non renseigné »,
+« hors périmètre — motif : … »). Jamais le littéral du langage. C'est ce que L11 sépare : ce
+n'est pas un défaut de mise en forme, c'est un défaut de traitement.
+
+**Piège fréquent.** Un front-matter ou un JSON portant `champ: null`, lu comme du texte,
+produit la **chaîne** `"null"` — non vide, donc vraie, donc rendue. Un test `if valeur:` ne
+l'attrape pas ; il faut normaliser explicitement.
+
+**Exemptions.** Le contenu de `<code>`, `<pre>`, `<kbd>`, `<samp>` — on y documente du code —
+et tout élément marqué `data-litteral-ok` : une page qui parle *de* `null` a le droit de
+l'écrire. Sur une page `lang="en…"`, `None` suivi d'un mot en minuscule ouvre une phrase
+anglaise (« None of the restaurants… ») et n'est pas jugé (TF-1590) ; `None` seul dans une
+valeur reste un littéral.
+
+**Contrôle mécanique.** `L11` — occurrence de l'un de ces littéraux, délimitée par des
+frontières de mot, dans un nœud de texte visible hors exemptions.
+
+**Revue de lecture.** Qu'une absence déclarée en français dise aussi **pourquoi** la valeur
+manque et **ce qu'il faudrait fournir** pour la lever.
+
+
+## L12 (données) — Une énumération de données n'est pas une phrase
+
+**Règle.** Au-delà de trois éléments, une énumération `clé — valeur` enchaînée par des
+points-virgules cesse d'être de la prose : c'est un tableau qu'on refuse d'assumer.
+
+```
+Informations — pages 7, étendue en mots 386–567 ; Inclus — pages 7, étendue en mots
+341–354 ; Options — pages 7, étendue en mots 259–283 ; Tarifs — pages 7, étendue en
+mots 328–340 ; Réservation — pages 7, étendue en mots 475–478 ; Gîtes — pages 2…
+```
+
+Le lecteur ne peut ni comparer, ni trier, ni repérer la valeur aberrante. Et il ne sait pas
+ce qu'il devrait en conclure — verdict du lecteur qui l'a signalé : « on ne sait ni à quoi ça
+correspond, ni ce qui est bien ou pas bien, ni pourquoi ».
+
+**Le bon dispositif.** Un tableau ou une liste, **surmontés d'une ligne qui dit ce qu'il faut
+y voir**. Le tableau donne les faits ; la ligne donne la lecture. Sans elle, on a déplacé le
+problème sans le résoudre.
+
+**Contrôle mécanique.** `L12` — trois segments ou plus de forme `clé — valeur`, séparés par
+des points-virgules, dans un même nœud de texte.
+
+**Revue de lecture.** Que la ligne de lecture dise quelque chose qui ne se déduit pas de la
+simple observation du tableau.
+
+---
+
+## Ce qui n'est PAS mécanisable — revue de lecture
+
+À traiter par l'orchestrateur du run, jamais par un contrôle automatique :
+
+| Objet | Question posée à la revue |
+|---|---|
+| Clarté du propos | La synthèse permet-elle de décider sans lire le reste ? |
+| Pertinence du blocage principal | Le blocage affiché est-il le plus grave, ou le premier dans l'ordre de la grille ? |
+| Justesse des chapeaux | Le chapeau apprend-il quelque chose, ou paraphrase-t-il le titre ? |
+| Qualité des exemples de lecture | L'exemple lève-t-il l'ambiguïté d'une colonne, ou décrit-il l'évidence ? |
+| Fil narratif | Une lecture linéaire des chapitres tient-elle debout ? |
+| Usage d'un dépliant | Le libellé dit-il ce que le lecteur y GAGNE, ou seulement ce qu'il contient ? |
+| Ligne de lecture d'un tableau | Dit-elle ce qu'il faut y voir, ou paraphrase-t-elle les colonnes ? |
+| Langue du lecteur | Le constat est-il écrit comme le lecteur le reformulerait, ou comme l'auteur l'a mesuré ? |
+| Fidélité des libellés de lien | Le libellé nomme-t-il la cible ou un synonyme approximatif ? |
+| Barème | Les crans sont-ils discriminants et vérifiables ? |
+| Apport d'une infobulle | Apprend-elle quelque chose que la page n'écrit pas, ou paraphrase-t-elle un texte affiché ailleurs (TF-1609) ? |
+
+**Trace attendue — OBLIGATOIRE (TF-0422, lot Produit-05 20260820a)** : la revue de lecture se
+consigne dans `REVUE.md` à côté du livrable, au gabarit
+[gabarit-revue-de-lecture.md](gabarit-revue-de-lecture.md) — captures lues (1920, 1280, 768,
+390 et une par section via `render_page.py --sections`), une ligne par constat (largeur ·
+section · constat · suite · preuve), ou la mention « aucun constat » datée. Un run qui
+déclare « lisibilité OK » sans `REVUE.md` n'a pas fait de revue : une page verte à tous les
+oracles a été refusée par son client à l'ouverture — les oracles mesurent des propriétés
+locales, personne ne regardait la page comme un lecteur.
+
+## L13 — Une page à listes s'offre une recherche et des KPI vivants
+
+**Règle.** Une page qui montre au moins une table de ≥ 8 lignes **se parcourt** : elle doit
+porter d'elle-même un champ de recherche statique (`input[type=search]`) — une recherche
+injectée au runtime par un composant ne compte pas, la page doit l'offrir sans dépendance.
+Les KPI posés au-dessus d'une telle liste sont des affordances de filtre.
+
+**Contrôle mécanique.** `L13` — échec sur l'absence de champ de recherche ; **avertissement**
+(pas échec) sur les KPI non cliquables, la distinction consultation / livrable interactif
+restant à trancher.
+
+**Dire qu'un KPI compte des éléments hors page** (TF-0229) : `data-kpi-hors-page="<motif>"`,
+ou une légende `.kpi-d` / `.kpi-hint` **non vide**. Le message de la règle promettait cette
+porte depuis le début (« un KPI d'éléments hors page le dit ») alors qu'aucun moyen de le dire
+n'existait : six indicateurs qui nommaient chacun leur chapitre étaient signalés quand même.
+Une règle dont le message décrit une échappatoire inexistante apprend au lecteur que les
+messages du socle ne sont pas fiables — c'est plus coûteux que la règle elle-même.
+
+**L'exemption du conteneur vaut pour ses tuiles** (TF-1905, retour d'un produit du 18/10/2026) :
+`data-kpi-hors-page="<motif>"` posé sur la rangée (ou sur tout ancêtre) exempte les tuiles qu'elle
+contient — un rapport avait dû le répéter sur chacune de ses quatre tuiles. Même logique que le
+barème de groupe de L3 (TF-0231) : un motif posé une fois, au niveau où il est vrai, vaut pour tout
+ce qu'il contient. Le motif reste exigé non vide à tous les niveaux : un attribut vide ne déclare rien.
+
+## L14 — La plomberie ne s'affiche pas
+
+**Règle.** Une convention de balisage interne n'a **rien à faire dans le texte rendu**. Le
+défaut fondateur (14/08, rapport Produit-10) : un livrable **diffusé** portait 71 occurrences de
+marqueurs `[c:ec-sources]` en clair dans ses phrases — « `85 [c:ec-sources] sources Veltis` »,
+« `258 [c:ec-claims] lignes de tableau` ». Il était PASS à `check_html.py`, PASS à
+`render_page.py` sur cinq largeurs, PASS à 24 contrôles d'interactions maison. **Aucun oracle
+ne lisait le texte rendu.** C'est l'humain qui l'a vu, au premier coup d'œil, capture à
+l'appui.
+
+Deux niveaux, et la distinction porte une décision :
+
+- **échec** — ce qui n'a jamais de raison d'être lu : marqueur crocheté à préfixe court
+  (`[c:…]`, `[ref:…]`), substitution `printf` (`%s`, `%(nom)s`), « lorem ipsum » ;
+- **avertissement** — `TODO` / `FIXME` / `XXX` / `HACK` : une page peut légitimement **parler
+  de tâches** (le registre TODO du pilot en est une). En faire un échec forcerait une
+  exemption sur une page honnête, et une exemption de routine ne se lit plus.
+
+**Deux sorties légitimes, et ce ne sont pas des échappatoires.**
+
+1. **Citer dans du code.** Un jeton placé dans `<code>`, `<pre>`, `<kbd>` ou `<samp>` — ou
+   dans l'un de leurs descendants — est une **mention**, pas une fuite. C'est la distinction
+   que `oracle-restituer` de forge-data a tranchée le 14/08 (vérifiée sur 213 chiffres) ;
+   elle vaut ici à l'identique, et elle est typographiquement juste avant d'être commode.
+2. **S'exempter avec un motif** : `data-motif-ok="<raison>"`, sur le nœud ou un ancêtre. Sans
+   raison, l'attribut ne compte pas — même convention que `data-filterable-reason`.
+
+**Corriger l'émetteur, pas la page.** Le registre TODO du pilot citait les marqueurs pour
+*décrire* ce défaut et se retrouvait accusé de le commettre. La correction n'a pas été
+d'exempter la page — une exemption globale aurait couvert une vraie fuite le jour venu — mais
+d'apprendre au générateur à rendre un jeton technique en `<code>`, ce qu'il faisait déjà pour
+les littéraux de L11.
+
+**Revue de lecture.** Qu'un motif exempté le soit pour une raison qui tient à la page, et non
+parce qu'on n'a pas voulu corriger l'émetteur.
+
+## L15 — Un glyphe en `content:` CSS existe dans la pile de repli (avertissement)
+
+**Règle.** Un caractère posé par `content:` s'affiche avec les polices du lecteur, pas les
+vôtres. Un chevron écrit `"\25B6"` passait tous les oracles et sortait en **tofu** sur mobile
+(TF-0435, lot Produit-05 20260820b) : la pile de repli mono n'a pas ce caractère ; seul l'œil
+humain l'a vu sur les captures.
+
+**Contrôle mécanique.** `L15` — tout caractère hors Latin-1 et hors liste blanche (chevrons
+simples `› ‹`, guillemets, tirets, puces, flèches, coches) employé en `content:` est
+**signalé**, jamais un échec : « vérifiez ce glyphe sur un poste sans vos polices ». Préférer
+`›`, `•`, `–`, `→`, ou une icône SVG dessinée. Le socle emploie `›` (U+203A) partout.
+
+### L15 bis — et le SOCLE ne propage pas un glyphe qu'il interdit (TF-0490, 22/08/2026)
+
+**Le même défaut, deux fois, et c'est ce qui le rend intéressant.** Le lot du 20/08 avait
+signalé un chevron absent des piles de repli déclarées ; tout le socle est passé à `›` (U+203A).
+Le 22/08, il revient : un producteur reprend le composant `details`/`summary`, recopie les
+triangles de l'exemple (U+25B8, U+25BE), et hérite du risque.
+
+**La cause n'est pas le producteur.** `L15` juge les glyphes en `content:` CSS d'une page
+PRODUITE ; personne ne jugeait ceux que le socle offre à la copie. **Un exemple est une
+prescription silencieuse : ce qu'il montre sera repris.**
+
+**Contrôle.** Il ne vit pas dans `check_html.py` — il ne juge pas une page, il juge le socle
+lui-même : `self_test.py`, contrôle « glyphes du socle ». Il relit les BLOCS DE CODE des
+références et les FIXTURES, et échoue sur tout glyphe hors liste blanche.
+
+**La borne est délibérée** : la PROSE des références n'est pas jugée. Les marqueurs de gravité
+de `bonnes-pratiques.md` sont la LÉGENDE du document, pas un exemple — personne ne les recopie
+dans un livrable, et les interdire dégraderait la référence sans rien gagner. Le premier jet du
+contrôle lisait la ligne entière dès qu'elle portait du code, et condamnait donc « - 🔴 Ouvrir
+par `<!DOCTYPE html>` » : un contrôle qui déborde de son domaine se fait désactiver.
+
+**La liste blanche s'est élargie du même geste** : `œ Œ æ Æ` y entrent. Ce ne sont pas des
+ornements mais des lettres du français, et les exclure faisait signaler « cœur » et « œuvre ».
+
+## L16 — Des onglets accessibles, et tous imprimés
+
+**Règle.** Un rapport à onglets se lit au clavier, s'ouvre au bon onglet depuis un lien, et
+s'imprime en entier. Composant : `assets/tabs.js` (composants.md §9, TF-0425).
+
+**Contrôle mécanique.** `L16` — tout `role="tab"` vise par `aria-controls` un `role="tabpanel"`
+existant ; tout panneau porte `aria-labelledby` vers son onglet ; des panneaux `hidden` sans
+règle `@media print` qui les réaffiche échouent.
+
+**Revue de lecture.** `render_page.py --sections "[role=tabpanel]"` : une capture par onglet,
+lue comme un lecteur qui n'en verrait qu'un.
+
+## L17 — Une ligne de tableau dépliable se déplie, se vise et s'imprime
+
+**Règle.** Le détail à la demande vit dans le tableau (`tr[data-detail]`), s'ouvre par un
+bouton, se déplie à l'impression, et suit sa ligne mère au filtrage. Composant :
+`assets/table-detail.js` (composants.md §10, TF-0432).
+
+**Contrôle mécanique.** `L17` — toute ligne `tr[data-detail]` a un `id`, un `<button
+aria-controls>` qui la vise, une cellule dont le `colspan` couvre toutes les colonnes, et une
+règle `@media print` qui la déplie.
+
+**Revue de lecture.** Que le détail dise plus que la ligne — sinon c'est un dépliant qui cache
+trop peu (L9).
+
+## L18 (jeton) — Un identifiant porte son SENS, là où on le lit
+
+*Retour DIRECT du client, en cours de session, le 22/08/2026* : **« je ne sais pas ce qu'est
+E2 »**. Sa consigne tient en une phrase — **garder les codes, ils servent la traçabilité, mais
+les accompagner de leur sens à chaque emploi**.
+
+Cette référence couvrait deux cas VOISINS et laissait celui-ci entre les deux : **L3** exige
+qu'une *valeur* mise en avant porte sa légende, **L14** interdit que la *plomberie* interne
+s'affiche. Un identifiant qui appartient légitimement au vocabulaire du livrable — `E2`, `C1`,
+`H3`, `Q-M8`, `ADR 0009` — n'est ni l'un ni l'autre : c'est un **renvoi muet**.
+
+**Le plus instructif, et c'est ce qui a rendu la règle écrivable sans rien inventer** : le
+rapport HTML du même projet **faisait déjà la chose correctement** — chaque renvoi portait une
+infobulle « Question ouverte H3 : … » et un lien vers sa définition. La bonne pratique existait
+dans le produit ; comme elle n'était écrite nulle part, **elle s'arrêtait à la frontière du
+HTML** et ne passait ni dans les livrables Markdown ni dans la restitution. Quatre documents et
+une restitution entière ont employé une trentaine de codes sans glose, jusqu'à l'interruption.
+
+**Contrôle mécanique.** `L18 (jeton)` — la **première** occurrence de chaque jeton dans la page doit
+RÉSOUDRE : un `title` non vide, un `aria-label`, un `aria-describedby` qui pointe une cible
+existante, un lien interne vers une ancre présente, ou `data-code-glose="<raison>"`. Les
+occurrences suivantes ne sont pas exigées — imposer la glose à chaque ligne produirait du bruit,
+et le client demandait à comprendre, pas à relire.
+
+**Trois bornes, toutes déclarées.** Le motif des jetons est **fermé** — `[ECH]\d+`,
+`Q-[A-Z]+\d*`, `RA-\d+`, `RD-\d+`, `ADR \d{4}` — parce que `E2` est un renvoi quand `A4` est un
+format de papier, et que seule une liste les sépare ; `TF-nnnn` en est **volontairement absent**,
+un identifiant de notre registre relevant de L14 et pas d'ici. Le `<head>` n'est pas jugé : un
+`<title>` qui cite un code décrit la page, il ne renvoie à rien. Et **un titre portant un `id`
+EST la définition** du jeton : elle ne se renvoie pas à elle-même.
+
+**Un code de règle en lettres PUIS chiffres, sans espace** (TF-1969, RT-18 du lot Produit-84 20261019e). Une
+page citait 22 codes `ADR0501`, `OSP0901`, `GDE0202-R05` dans sa prose et ses cellules sans une infobulle :
+le motif ne connaissait que `ADR 0009` AVEC espace, et L3 (d) ne lit que des feuilles de texte en minuscules.
+La consigne humaine avait été répétée quatre fois chez un autre produit. La forme reconnue : deux à cinq
+majuscules, trois à cinq chiffres, un suffixe `-R05` facultatif. Les préfixes de NORMES et de FORMATS (ISO, IEC,
+RFC, SHA, TLS, SQL, AES, HTTP, UTF, WCAG, CVE, NIST…) en sont exclus : `ISO27001` ou `SHA256` ne sont pas des
+codes du livrable. Le remède est celui de L18 (jeton) : `title`, `aria-label`, `aria-describedby` vers une définition,
+lien interne vers son ancre, ou `data-code-glose="<raison>"`. Fixtures `l18-code-regle-nu.html` (rouge : un
+avertissement nommant les trois codes, les trois normes citées dans la même page ne sont pas accusées) et
+`l18-code-regle-glose.html` (verte). **Avertissement et non échec.** Bruit mesuré le 29/10/2026, ancienne et nouvelle
+version jouées sur 2 405 pages HTML de `C:\dev` (hors fixtures ; 94 pages de plus de 1,5 Mo ignorées) : 397 pages
+nouvellement accusées (16,5 %), dont **310 de vrais codes de règle cités nus** (279 `ADR…`, 21 `GDE…`, 10 `OSP…` : la
+plainte du produit tient sur le parc) et 87 qui n'en citent aucun — des valeurs d'exemple (`AB1234`, `ABC123`,
+`OWN0012`), un sentier de randonnée (`GR223`, 7 pages d'un même site en 7 langues), des noms de fichier joints
+(`WRD0000`, `ATT00759`), une référence de courriel (`DEV20418`), un algorithme (`HS256`, 4 pages : exclu depuis).
+Un échec bloquant sur 87 faux positifs obligerait à glosser un nom de sentier ; `data-code-glose` les déclare. Les
+formes historiques (`ADR 0009`, `RA-12`, `Q-M8`) restent des échecs.
+
+**Hors HTML, la glose doit être EN LIGNE** — point de revue de lecture, pas contrôle mécanique.
+C'est précisément ce que le retour jumeau (aucun contrôle de lisibilité sur un Markdown) rend
+impossible à attraper aujourd'hui.
+
+### L18 bis — Un SYSTÈME d'identifiants s'explique une fois, avant son premier tableau
+
+*Retour humain du 08/09/2026, sur une page où **L18 (jeton) était vert*** : **« à quoi servent les
+repères S1, S2, G5 ? ce n'est pas expliqué »**. Chaque jeton portait bien son infobulle, ligne à
+ligne. Et le lecteur ne savait toujours pas ce qu'**est** un repère de cette famille, combien il
+y en a, ni où ils vivent aussi (fichier de définition, chapitre des objets, listing). **Gloser
+chaque occurrence et expliquer le système sont deux gestes différents**, et L18 (jeton) ne connaissait
+que le premier — c'est pour cela que la page pouvait être verte et incomprise.
+
+**Règle.** Dès qu'un même préfixe d'identifiant est employé sur **plus de trois lignes de
+tableau**, la page porte une **légende du système** *avant* le premier tableau qui l'emploie.
+En dessous du seuil, une famille n'est pas un système : trois renvois se lisent un par un, et
+exiger une légende produirait le bruit que L18 (jeton) évite déjà en ne glosant que la première
+occurrence.
+
+**La légende se déclare, elle ne se devine pas** — même doctrine que `data-codes` pour L18 (jeton) et
+`data-legende-ok` pour L3 : `data-legende-codes="S,G"` sur le bloc qui explique le système
+(repère, objet, action, pourquoi). Un oracle qui reconnaîtrait une légende à sa *forme*
+accepterait n'importe quel tableau placé au bon endroit ; déclarer coûte un attribut et rend le
+contrat lisible par l'auteur comme par l'oracle.
+
+**La position compte, et c'est la borne de la règle** : une légende posée *après* le tableau
+explique ce que le lecteur a déjà renoncé à comprendre. Les trois fixtures tiennent ensemble —
+`l18bis-systeme-non-explique` (jetons tous glosés, L18 (jeton) vert, L18 bis rouge),
+`l18bis-systeme-explique` (légende avant), `l18bis-legende-apres-le-tableau` (même légende,
+placée après : rouge). Sans la troisième, une règle qui se contenterait de *trouver* la
+déclaration quelque part rendrait le même verdict sur les deux premières.
+
+**Bruit mesuré avant de poser la règle**, et sur les dépôts qui *consomment* le socle, pas
+seulement sur le sien : 357 pages HTML suivies de huit dépôts du parc — **zéro constat**. La
+règle ne juge que les familles connues du motif fermé ou déclarées par la page (`data-codes`).
+
+## L19 — La coupure de mot est réservée à ce qui en a besoin
+
+*Trois occurrences signalées par le client sur deux versions successives* : « Utilisabl/e »,
+« Plateform/e », « 231 occurrenc/es ». Cause unique : `overflow-wrap: anywhere` — **nécessaire**
+sur les identifiants techniques et les chemins, **ravageur** sur du texte courant en colonne
+étroite.
+
+Aucun contrôle ne le voyait, et c'est ce qui rend le cas intéressant : le texte n'est ni tronqué
+(L1), ni en débordement (V1), ni en contraste insuffisant (V2). Il est **simplement illisible**,
+et c'est la première chose que voit un lecteur.
+
+**Contrôle mécanique.** `L19` — `overflow-wrap: anywhere` ou `word-break: break-all` posé sur un
+sélecteur de PROSE (un élément de prose sans classe qui le restreigne, ou une classe dont le nom
+ne dit aucun usage technique) est un échec. Restent légitimes et non jugés : `code`, `pre`,
+`kbd`, `samp`, `a[href]`, et toute classe qui nomme son usage (`.chemin`, `.jeton`, `.uri`,
+`.sha`, `.mono`, `.identifiant`…). Exemption explicite : `data-coupure-ok="<raison>"`, posé
+sur chaque élément que le sélecteur habille ou sur un de ses ancêtres ; un seul élément habillé
+sans déclaration garde le constat (TF-1627).
+
+**Ce que L19 ne fait PAS, et c'est déclaré** : elle empêche la CAUSE, elle ne mesure pas l'EFFET —
+`overflow-wrap: break-word`, légitime sur la prose, n'entre pas dans son périmètre et peut quand
+même casser un mot. Détecter au rendu qu'un mot est effectivement tombé sur deux lignes sans
+césure demande un navigateur : **`V19` de `render_page.py` le fait depuis le 24/09/2026**
+(TF-1350, lot Produit-64 20260924a, RD-21 — zero-defaut-visuel.md). *Le fait qui l'a posé* : un
+mot en gras dans une cellule étroite, « Remediation », rendu « Remediatio » puis « n » sur la ligne
+suivante, sans trait d'union, à 1920 ET 1280 px — `check_html` PASS, `render_page` PASS,
+`run-oracles-design` PASS, les trois scripts du socle muets sur ce mot précis. `V19` mesure
+chaque mot par ses rectangles (`Range.getClientRects`) et retient ceux répartis sur deux lignes ;
+même exemption que ci-dessus, `data-coupure-ok`, et même portée non jugée (`code`, `pre`, `kbd`,
+`samp`, `a[href]`). Une feuille de style qui casse la prose reste refusée en amont par `L19`, ce
+qui suffit à empêcher le défaut d'ENTRER — `V19` voit ce qui entre quand même, par héritage ou par
+une forme de césure que `L19` ne vise pas.
+
+## L20 — « le contenu est là » ne veut pas dire « le contenu est lisible » (TF-0495, 22/08/2026)
+
+*Le fait.* Le client a demandé que les documents sources soient inclus dans le livrable
+autoportant. Ils l'ont été — en blocs de texte brut, dont un de **67 Ko contenant une trentaine
+de tableaux Markdown**. **Tous les oracles passaient** : le contenu est là, la page est
+conforme, rien ne déborde. Il a fallu que le client écrive « il faut pouvoir formater les MDs,
+sinon c'est illisible », **puis le redemande une seconde fois**, pour qu'un lecteur à deux vues
+soit produit.
+
+C'est la frontière entre **le contenu PRÉSENT** et **le contenu EXPLOITABLE**, et aucune règle
+ne la tenait. Le principe existait pourtant juste à côté : **L10** impose un mode d'emploi aux
+chapitres de données. Il ne couvrait pas le contenu **embarqué**.
+
+**Contrôle mécanique.** `L20` — au-delà de **4 Ko ou 80 lignes**, un `<pre>` offre une
+alternative de lecture (vue mise en forme, sommaire, repli par sections) **ou** déclare
+`data-brut-fait-foi="<raison>"`. Même logique que `data-filterable="off"` avec motif : **ce qui
+est délibéré se déclare, ce qui est subi se corrige.**
+
+L'alternative est reconnue par ce qui la **câble**, jamais par une intention : un contrôle
+portant `aria-controls` vers le bloc ou son conteneur, ou un sommaire d'au moins trois liens
+internes dans le même conteneur. *Une phrase qui promet une vue ne compte pas.*
+
+## Hors HTML — la porte du Markdown (TF-0518, 22/08/2026)
+
+*La mesure qui a ouvert cette porte.* Le registre compte 49 domaines. Sur un livrable réel de
+85 Ko et 297 entrées, le lanceur en jugeait **quatre**, et **aucun de lisibilité** : les règles
+L1-L22 vivent dans `check_html.py`, qui ne s'exécute que sur du HTML. Or le **Markdown est le
+format de livraison dominant** des runs d'architecture et de conseil — le projet concerné remet
+dix documents Markdown et un seul HTML. Conséquence directe : le défaut de L18 (jeton) (un identifiant
+sans son sens) s'est produit **dans les documents Markdown**, là où rien ne regardait, et c'est
+un humain qui l'a trouvé. Exactement comme le défaut fondateur de L14.
+
+`scripts/check_markdown.py` porte le **sous-ensemble indépendant du format de rendu**, sous des
+noms qui disent leur origine :
+
+| règle | ce qu'elle tient | transposée de |
+|---|---|---|
+| `M7` | un chapitre ouvre par ce qu'il apprend, pas par un tableau nu | L7 |
+| `M10` | au-delà de 12 lignes de tableau, une phrase dit COMMENT lire | L10 |
+| `M14` | aucune plomberie interne dans le texte | L14 |
+| `M18` | un identifiant porte son sens, **en ligne** | L18 (jeton) |
+
+**Hors HTML, la glose est forcément EN LIGNE** : il n'y a ni infobulle ni ancre à survoler. `M18`
+l'accepte entre parenthèses, après un tiret, ou après deux-points — les trois formes qu'un œil
+lit sans cliquer.
+
+**Ce qui reste dehors, et le dit.** Les règles qui dépendent du RENDU n'ont pas de sens sur un
+Markdown, dont la mise en page appartient au lecteur : L1, L2, L5, L15, L19. Et **L3** (une
+valeur porte sa légende) comme **L12** (une énumération n'est pas une phrase) restent une **revue
+de lecture** : reconnaître « une valeur mise en avant » dans du Markdown demande de lire, et les
+mécaniser produirait plus de bruit que de gain. Le partage mécanique / revue écrit plus haut
+s'applique tel quel — *il n'y avait pas de doctrine à inventer, seulement une porte à ouvrir*.
+
+### Style — délégué
+
+**Le style d'un texte a son oracle, et il n'est pas ici** (TF-1064, 12/09/2026). Ce que L3, L12 et
+la règle « un paragraphe qui ÉNUMÈRE est une liste écrite en prose » (`bonnes-pratiques.md` §3)
+laissaient à la revue de lecture est désormais jugé par `oracle-ecriture.mjs` du **pilot** —
+doctrine [`references/ECRITURE.md`](../../../../factory-pilot/references/ECRITURE.md), règles
+**E-1 à E-12**, règles exécutées **EC-1 à EC-6**.
+`python check_markdown.py <doc.md> --style` l'appelle et **fusionne** son verdict : FAIL de l'un =
+FAIL de l'ensemble ; oracle injoignable = dit en clair, jamais un vert silencieux.
+**Aucun motif n'est recopié** dans ce skill : les seuils vivent dans une DONNÉE datée et sourcée
+du pilot (`references/tics-redactionnels.json`, huit familles), recalibrable sans republier un
+oracle — une seconde implémentation dériverait de la première en silence (R3).
+
+**Une borne trouvée en jouant la règle**, qui vaut d'être dite : `M7` condamnait d'abord tout
+chapitre ouvrant sur des « données », listes à puces comprises. Elle faisait échouer **sept blocs
+sur neuf** d'une restitution au gabarit — une forme PRESCRITE, où un bloc qui ouvre par ses puces
+est exactement ce que la consigne demande. Elle ne juge donc que les **tableaux**. *Un contrôle
+qui condamne la forme qu'un gabarit prescrit met le gabarit en défaut, jamais l'auteur.*
+
+**Le balisage d'emphase n'est pas du texte** (TF-0720, 31/08/2026). Deuxième fois qu'il casse
+une adjacence, et c'est ce qui en fait une doctrine plutôt qu'un correctif. `**RD-23**
+*(renvoi de design 23 : …)*` était refusé comme identifiant muet : le contrôle prenait les
+quatre caractères suivant le jeton, y trouvait les deux astérisques de fermeture du gras, et
+l'adjacence tombait — alors que mettre un identifiant en gras est l'écriture la plus naturelle
+d'un tableau ou d'une énumération. Seconde manifestation, trouvée en corrigeant la première :
+le contrôle travaillait **ligne par ligne**, donc un jeton en fin de ligne dont la glose
+commence à la ligne suivante n'avait aucune suite à examiner. Et le lot du 22/08 avait déjà
+signalé la même cause sur un **autre oracle** : une cellule `**90**` n'était pas lue comme un
+nombre, et la re-somme sortait à 189 au lieu de 99.
+
+*Une seule cause, une seule parade.* `check_markdown.py` expose `neutraliser_emphase()`, sur le
+modèle du blanchiment des spans de code : les **marqueurs** (`**`, `__`, `*`, `_`) deviennent
+des espaces, le contenu reste, et **la longueur est rigoureusement préservée** — donc lignes et
+colonnes d'un message d'échec restent justes. La fenêtre de glose se prend ensuite sur le texte
+**reflué du paragraphe** (jusqu'à trois lignes), et non sur la ligne physique : *la coupure à
+95 colonnes est une commodité d'écriture, elle ne porte aucun sens*. `nombres_de()` offre la
+même lecture aux contrôles de chiffres. Bornes déclarées : une emphase ouverte sur une ligne et
+fermée sur la suivante n'est pas reconnue ; une puce `* premier` et un `nom_de_variable` ne
+sont pas de l'emphase, et les fixtures rouges de `self_test.py` le vérifient — *une
+neutralisation trop large mangerait le document au lieu de son balisage*.
+
+## L21 — Un composant DÉCLARÉ porte son style (TF-0521, 23/08/2026)
+
+*Le fait.* Deux squelettes de la bibliothèque portaient `<nav class="toc">` et des entrées
+correctement annotées. **L6 était satisfaite au sens mécanique**, `check_html` rendait PASS, et le
+rendu aussi — il n'y avait ni chevauchement ni troncature. Mais **aucune règle CSS ne visait
+`.toc`** : le sommaire se rendait en liste numérotée nue, ce qu'aucun livrable du parc ne fait. Le
+défaut n'a été vu qu'en comparant à un livrable RÉEL du même produit.
+
+**C'est une classe entière de défauts que ni l'un ni l'autre oracle ne peut voir.** Un oracle de
+MARQUAGE trouve la classe et s'arrête là ; un oracle de RENDU ne voit rien tant que rien ne
+déborde. Entre les deux, *un composant peut être annoncé et n'exister pas*.
+
+**Contrôle mécanique.** `L21` — toute classe de composant de la charte présente dans le marquage
+est visée par au moins une règle CSS de la page. Liste **fermée** : `toc`, `toc-t`, `toc-d`,
+`ch-apprend`, `table-hote`, `repli-cartes`, `diagram-wrap`. Un nom hors liste n'est pas jugé —
+inventer des composants pour avoir quelque chose à exiger serait pire que ne rien exiger.
+
+**Ce que la règle a trouvé en entrant** : huit fixtures du socle déclaraient `.toc` ou
+`.ch-apprend` sans les styler. Ce n'était pas un faux positif — c'était **le même défaut**, dans
+les fixtures. Elles ont été complétées plutôt que la règle affaiblie : *une fixture qui ne
+ressemble pas à une vraie page mesure autre chose que ce qu'on croit.*
+
+## L22 — Une promesse écrite en commentaire est TENUE (TF-0532, 23/08/2026)
+
+*Le fait, et il a coûté quatre défauts bloquants.* Un schéma d'une page livrée portait ce
+commentaire : `<!-- un <title> par forme, pour l'infobulle au survol -->`. Le diagramme entier avait
+UN titre ; **aucun de ses nœuds n'en avait**. L'infobulle promise n'existait pas, et les nœuds sans
+titre se chevauchaient — **quatre chevauchements V4, tous bloquants**. Le commentaire, lui, a
+traversé quatre versions et trois relectures sans être contredit : *il se lisait comme une preuve*.
+
+**C'est la loi n° 1 appliquée à la prose.** « Toute affordance est câblée ou n'existe pas » vaut pour
+un bouton ; un commentaire qui annonce un élément est une affordance de LECTURE — il dispense le
+relecteur de vérifier. Une promesse de commentaire non tenue est donc pire qu'un silence : elle
+consomme l'attention qui aurait trouvé le défaut.
+
+**Contrôle mécanique.** `L22` — un commentaire HTML qui annonce un élément portable (`<title>`,
+`<figcaption>`, `<caption>`, `<summary>`, `<legend>`, `<label>`) le fait exister dans son bloc. Deux
+formes jugées : l'annonce simple (l'élément existe quelque part dans le bloc englobant) et
+l'annonce **quantifiée** — « un `<title>` par forme », « une `<caption>` par tableau » — où **CHAQUE
+porteur** est vérifié, un par un.
+
+**Ce que la règle a appris en se trompant, et c'est le cœur de l'affaire.** Le premier jet comptait
+des TOTAUX : « 6 formes, 3 titres, défaut ». Il se trompait *dans les deux sens* — il accusait les
+gabarits du socle, où chaque nœud portait bien son titre à l'intérieur de son groupe, et il laissait
+passer la fixture rouge, où le titre du diagramme entier suffisait au total. *Un contrôle qui se
+trompe dans les deux sens ne mesure pas ce qu'il prétend mesurer* : il compte, là où la promesse
+parle de chacun. Le porteur d'un schéma est le **groupe** (`<g>`), comme la doctrine du socle le dit
+depuis TF-0424 — un groupe titré est UN nœud, ses primitives n'en sont pas.
+
+**Négations et échappatoire.** Un commentaire qui dit ne PAS poser l'élément (« aucun title : le
+libellé est déjà dans la forme ») ne promet rien et n'est pas jugé. Le choix assumé se déclare par
+`promesse-ok`.
+
+**La même loi côté CODE.** Un commentaire de code qui nomme une classe ou un attribut promet
+exactement de la même façon — et le pilot le vérifie par `oracle-promesses`, sur les fichiers qui
+ont **signé** (`promesses-verifiees` en tête). Cette adhésion n'est pas de la timidité : le balayage
+sans signature rendait **un constat vrai sur huit**, et un contrôle bruyant s'apprend à être ignoré.
+Il a trouvé sa première vraie promesse chez `source-reader.js` du socle lui-même — `data-src-format`
+était documenté dans son exemple d'usage et **lu par personne** ; il est désormais lu.
+
+## L23 — L'attribut `hidden` reste SOUVERAIN face au CSS (TF-0733, 31/08/2026)
+
+*Le fait, mesuré chez un produit dont seize oracles étaient au vert.* Un panneau modal masqué par
+l'attribut `hidden` était aussi stylé par un `display: flex` explicite. La règle de la page l'emporte
+sur le `display: none` que l'attribut tient de la feuille de l'agent utilisateur : le panneau restait
+là, **transparent**, et couvrait l'écran entier en interceptant chaque clic, bouton de connexion
+compris. Invisible en capture (transparent), invisible à la lecture (le code est correct), trouvé
+seulement par `document.elementFromPoint` sur le centre du bouton.
+
+**Le geste sûr.** Une page qui emploie l'attribut `hidden` porte la garde du boilerplate, qui rend à
+l'attribut sa souveraineté sur tout `display` posé par une classe :
+
+```css
+[hidden] { display: none !important; }
+```
+
+**Contrôle mécanique.** `L23` — une page qui porte au moins un élément `hidden` sans règle
+`[hidden] { display: none !important }` dans sa feuille échoue, et le message compte les éléments
+concernés. Une page sans `hidden` n'a rien à garder : l'exiger partout ferait crier sur tout
+l'existant pour un mécanisme qu'il n'emploie pas. Fixtures à double sens : rouge
+`l23-voile-sans-garde.html` (1 échec L23), verte `l23-garde-posee.html` (0), qui ne diffèrent que
+par la garde.
+
+**Ce que la règle ne juge pas.** Le recouvrement ACCIDENTEL, deux éléments visibles superposés dont
+l'un intercepte les clics de l'autre, ne se voit qu'au rendu : c'est la moitié exécutable de
+TF-0733, qui relève de `render_page.py` (mesure `elementFromPoint`).
+
+## L24 — Un badge de statut ENGAGEANT est résolvant (TF-0719, 31/08/2026)
+
+*Le fait, payé par un client.* Le socle fournit un vocabulaire de statut juste — `acte`,
+`propose`, `hypothese`, `information` — et les livrables en publient la légende : « acté =
+décision en vigueur ». Un `<span class="badge acte">`, de titre « Décision prise le 22 août 2026
+par la direction… » et de libellé « décidé le 22 août 2026 », a été posé sur une décision **qui
+n'a jamais été prise**, dont la source n'est pas un ADR — sur **cinq emplacements** d'un livrable
+diffusé. Et il est **passé** : L3 exige qu'un badge porte une légende, et elle était là. *Le
+vocabulaire était bon, la discipline absente.* Corrigé seulement après intervention du client.
+
+*Pourquoi celui-là.* Un badge de statut est une **affirmation de rang**, et la plus visible de la
+page : c'est le seul élément qu'un dirigeant lit avant le texte. Il coûtait trois mots à écrire et
+n'engageait à rien. Même doctrine que les renvois d'identifiant : **ce qui affirme se résout**.
+
+**Règle.** Un élément qui cumule une classe de badge (`badge`, `pastille`, `statut`, `status`,
+`chip-val`, `etiquette-statut`) et un statut **engageant** (`acte`, `decide`, `tranche` et leurs
+variantes accentuées) porte la **trace** de sa décision. Trois formes acceptées :
+
+- l'élément **est** un `<a href>`, en contient un, ou est enveloppé par un — une ancre interne
+  doit **exister** et sa cible se **déclarer décision** ;
+- `aria-describedby` résout vers un élément de la page **qui se déclare décision** (≥ 20
+  caractères et un mot de trace : décision, ADR, arbitrage, délibération, tranché) ;
+- `data-decision` porte une référence non vide, quand la trace vit hors de la page.
+
+**Règle de dégradation, à sens unique.** Sans cible, le badge se dégrade en `propose`
+(« recommandation, non tranchée »), **jamais l'inverse**. *Dégrader coûte une nuance, promouvoir
+coûte un mensonge de rang.*
+
+**Contrôle mécanique.** `L24` — FAIL sur tout badge de statut engageant sans trace résolue.
+
+**Bornes déclarées.** La règle ne mord **que** sur la liste fermée des statuts engageants, et
+seulement combinée à une classe de badge : `.badge.propose`, `.badge.hypothese`,
+`.badge.information` n'affirment aucun rang et ne sont jamais jugés. L'**existence** d'une cible
+externe (`href` documentaire, `data-decision`) n'est pas vérifiée — la page ne peut pas ouvrir un
+ADR du dépôt ; seule la **déclaration** est jugée, et cette limite est écrite plutôt que devinée.
+Une description **résolue** n'est pas une trace : la fixture rouge porte exprès un badge dont
+l'`aria-describedby` pointe vers une note qui explique sans rien trancher.
+
+**À rapprocher** du retour jumeau sur `quality-oracles`, qui porte la même doctrine pour les
+livrables non-HTML : *une seule doctrine, deux portes*.
+
+**Revue de lecture.** Que la trace citée soit bien celle de la décision affirmée, et que la
+décision ait réellement été prise — un contrôle vérifie qu'une cible existe, jamais qu'elle dit
+vrai.
+
+## L25 — Au-delà de trois chapitres, un sommaire VISIBLE EN PERMANENCE (TF-0772, 02/09/2026)
+
+**Deux exclusions, payées le soir même sur les gabarits de la bibliothèque du pilot** : le `h2` qui titre le sommaire lui-même (à l'intérieur du `nav`) n'est pas un chapitre à lister — un sommaire qui devrait se citer est un faux positif ; et un `h2` marqué `data-toc="hors"` est un chapitre de SERVICE du gabarit (en-tête à renseigner, sections optionnelles, contrat de personnalisation) que le document rendu ne porte pas : le gabarit le déclare, il ne l'oublie pas.
+
+**Le fait payé.** Un livrable servi portait un onglet « Volumes » à cinq vues et un onglet
+« Stratégie » à six blocs sur **4 000 px** de haut. Aucune navigation intra-page, et **aucun
+oracle ne l'avait demandée** — L6 ne se déclenche que si un sommaire est *déjà* là, et se
+contente d'un avertissement quand il manque. Retour humain, mot pour mot : « fournis un menu sur
+la gauche pour les différents chapitres de chaque page ». *Un contrôle qui n'exige jamais rien ne
+fait pas exister ce qu'il décrit* — c'est la loi transverse n° 3 appliquée à la navigation : la
+surface implicite se propose d'office, elle ne s'oublie pas.
+
+**Règle.** Au-delà de **trois chapitres** de premier niveau **ou de deux écrans** de hauteur, la
+page porte un sommaire **visible en permanence** : latéral collant sur bureau, bande repliable
+sur mobile. Il liste **chaque** `h2` — un sommaire partiel est pire qu'aucun sommaire, le lecteur
+croit tenir le plan de la page.
+
+**Contrôle mécanique, en deux moitiés qui ne se remplacent pas.**
+- `L25` (`check_html.py`) — plus de trois `h2` sans `nav.toc` / `nav[aria-label="Sommaire"]`, ou
+  un sommaire qui n'atteint pas tous les chapitres. Le message nomme le **geste complet** : une
+  entrée `<a href="#id">` par chapitre **avec** son annonce `.toc-d` d'au moins 12 caractères
+  (L6), et la position collante.
+- `sommaire_perdu` (`render_page.py`, bloquant) — le sommaire existe, la page fait plus de deux
+  écrans, et il n'est **plus dans la fenêtre** aux 60 % de la page. Un sommaire qui défile avec
+  le texte ne navigue plus rien, et aucun contrôle statique ne peut le voir.
+
+**Une barre d'onglets est un sommaire (TF-1626, RA-6, 13/10/2026).** Retour humain : « Un menu
+vertical en plus des onglets n'a aucun intérêt, redondance ». L25 et L6 n'acceptaient qu'un `nav`
+de liens annotés : une page à onglets échouait L25, et la session avait ajouté un menu latéral pour
+passer — la règle fabriquait la redondance refusée. Un `role="tablist"` portant au moins deux
+`role="tab"` compte désormais : un chapitre est atteint quand son onglet contrôle le panneau qui le
+porte (`aria-controls`) ou vise son ancre ; `sommaire_perdu` juge la barre sur sa permanence au
+défilement, comme un `nav`. Un chapitre qu'aucun onglet n'atteint reste un sommaire incomplet
+(fixtures `l25-onglets-sans-menu.html`, verte, et `l25-onglets-chapitre-orphelin.html`, rouge).
+Mesure du parc (239 pages au socle, 13/10/2026) : la règle ne fait que relâcher — aucune page
+nouvellement accusée.
+
+**Le geste, une fois pour toutes** — il consomme le même token que le thead collant (L29) :
+
+```css
+.toc { position: sticky; top: var(--hh); }        /* --hh = hauteur de l'en-tête collant */
+@media screen and (max-width: 900px) { .toc { position: static; } }   /* bande repliable sur mobile */
+```
+
+**Une bande de sommaire qui défile n'est pas un débordement** (TF-1992, RA-2 du lot Produit-85 20261024a). Une bande
+d'ancres `overflow-x: auto` sous 900 px est la forme que cette règle prescrit ; V1 la comptait comme un débordement
+bloquant, et un produit l'a contournée par `flex-wrap`, c'est-à-dire en défaisant le geste. V1 exclut désormais un
+élément contenu par un conteneur défilant qui tient dans la fenêtre ET vit dans un sommaire déclaré (`nav.toc`,
+`aria-label` « Sommaire », `[role="tablist"]`) ; ce qui est exclu est **compté au non-mesure**, et la même bande hors
+sommaire reste accusée (fixtures `v1-bande-sommaire-defilante.html` et `v1-bande-defilante-hors-sommaire.html`).
+
+**Sommaire à DEUX NIVEAUX — la forme admise, en `<a>` (TF-0931 et TF-0933, 08/09/2026).** Deux
+retours humains sur le même menu en une journée : « certains sous-chapitres ne sont pas dans le
+menu de gauche », puis « mets les chapitres et sous-chapitres ensemble ». Aucune forme ne passait
+`L7`, et la seule sortie conforme remplaçait les liens de sous-chapitre par des **boutons** — une
+régression sémantique imposée par l'oracle. `L7` juge désormais les descendants **directs** et
+dédoublonne par **élément** ; la forme à écrire est celle-ci, et elle ne coûte aucun script :
+
+```html
+<nav class="toc" aria-label="Sommaire"><ol>
+  <li><a href="#champs"><span class="toc-t">1 Champs</span><span class="toc-d">les colonnes servies…</span></a>
+    <ol class="toc-sous">
+      <li><a href="#champs-mesures"><span class="toc-t">1.1 Mesures</span><span class="toc-d">les grandeurs calculées…</span></a></li>
+    </ol></li>
+</ol></nav>
+…
+<section id="champs"><h2>Champs</h2><p class="ch-apprend">…ce que CE chapitre apprend…</p>
+  <div id="champs-mesures"><h3>Mesures</h3><p class="ch-apprend">…ce que CE sous-chapitre apprend…</p></div>
+</section>
+```
+
+Deux conditions, et elles sont la règle et non un contournement : la cible d'une entrée de second
+niveau est un **bloc** (`<div id="…">` portant le `h3`), jamais le `h3` nu — un titre n'a pas de
+descendants, donc pas de chapeau ; et ce bloc porte **son propre** `.ch-apprend`, distinct de
+celui du parent. Un sous-chapitre qui recopie le chapeau de son parent échoue toujours `L7`
+(fixture `l7-sommaire-deux-niveaux-chapeau-repete.html`) : la correction change ce que la règle
+regarde, elle n'éteint rien.
+
+## L30 (chapitre) — Un chapitre dit ce qu'il CONTIENT, et glose son jargon (TF-0932, 08/09/2026)
+
+**Le fait payé.** Retour humain sur une page servie : « explique chaque chapitre, avec ce qu'il
+contient ou décrit, et si un terme technique est utilisé, comme DAX, explique-le en début de
+chapitre » ; puis « le chapitre Mapping doit expliquer sa différence avec le chapitre suivant ».
+**Treize chapitres réécrits en tête**, 44 termes glosés après coup. L7 portait déjà sur *ce que
+le chapitre APPREND* — la promesse ; personne n'exigeait *ce qu'il CONTIENT* — l'inventaire, qui
+est précisément ce qu'un lecteur entré par le sommaire vient chercher. Et le jargon n'était jugé
+**nulle part** en HTML, alors que le pilot tient `gabarits/JARGON-A-GLOSER.json` et S23 pour ses
+synthèses : même lecteur, même dette.
+
+**Règle, en deux moitiés.**
+1. Chaque cible du sommaire porte un `.contenu` d'au moins **40 caractères**, **avant** son
+   premier tableau ou sa première liste — placé après, ce n'est plus une entrée en matière. Il
+   dit ce que le chapitre porte **et ce qui le distingue du chapitre voisin**.
+2. Un terme du référentiel employé dans le texte d'un chapitre y porte sa glose : un `<dfn>` qui
+   le nomme, ou une entrée de glossaire (`.termes`, `.glossaire`) **dans CE chapitre**. Une fois
+   par chapitre où le terme sert, pas une fois pour la page : *un lecteur entré par le sommaire
+   n'a pas lu le chapitre précédent*.
+
+**Le référentiel est une DONNÉE** (loi transverse n° 4) : `references/jargon-a-gloser.json`, daté,
+sourcé, éditable — chaque terme qu'un lecteur a dû faire expliquer y entre. Le mettre en dur dans
+l'oracle obligerait à publier une version de l'oracle pour ajouter un mot.
+
+**Liste fermée, pas d'heuristique sur les sigles.** La question a déjà été arbitrée par le pilot,
+et l'arbitrage vaut ici mot pour mot : « tout sigle de 2 à 5 capitales doit être glosé » a un taux
+de faux positifs rédhibitoire — une page HTML porte des dizaines de PDF, CSS, KPI, ID, SQL qui ne
+sont pas du jargon, et un oracle qui crie sur l'évidence se fait désactiver dans la semaine. La
+liste n'attrape que ce qui a réellement coûté un aller-retour, et elle grossit par les retours.
+
+**Le geste, fourni par le gabarit** :
+
+```html
+<section id="mapping"><h2>Mapping</h2>
+  <p class="contenu">Ce chapitre contient …, et se distingue de … en ce qu'il ….</p>
+  <p class="termes">Termes employés — <dfn>DAX</dfn> : le langage de formules du rapport.</p>
+  <p class="ch-apprend">Vous repartez d'ici en sachant ….</p>
+```
+
+**Contrôle mécanique.** `L30 (chapitre)` (`check_html.py`, identifiant émis tel quel en tête de ses messages) — les deux moitiés, jugées **par cible du
+sommaire** et sur les descendants **directs** : ce qui vit sous un sous-chapitre lui-même ciblé
+appartient à ce sous-chapitre, jamais à son parent (même partage que L7 depuis TF-0931).
+
+## L26 — Une page de DONNÉES prend toute la largeur ; la colonne de lecture est pour la prose (TF-0771 + TF-0778, 02/09/2026)
+
+**Le fait payé, deux fois.** Une console de données a été livrée dans une colonne de lecture de
+**1 180 px** : à 1 440 px de fenêtre, ses tableaux mesuraient 1 301, 1 256 et 1 376 px pour
+1 136 disponibles. `render_page` **avait relevé** le débordement ; la revue l'a classé
+« acceptable » parce qu'un conteneur défilait — sans mesurer ce que le lecteur perdait. Retour
+humain : « les pages doivent profiter de toute la largeur de l'écran », et sur le chapô bridé à
+90ch : « répété des dizaines de fois sans être définitivement corrigé ».
+
+**La cause n'est pas un réglage, c'est une contradiction non arbitrée.** Le socle portait deux
+règles de largeur — mesure de lecture pour la prose (L2), pleine largeur pour le conteneur — sans
+dire laquelle s'applique ni où. Chaque auteur tranchait, et retranchait au livrable suivant.
+
+**Règle — l'arbitre est la page elle-même.** Une page de données se **déclare**
+(`data-page="donnees"` sur `<html>`, `<body>` ou le conteneur principal) et vaut alors :
+
+1. **pleine largeur adaptative** — aucune bride de lecture (`max-width` en `ch`, ou < 1 280 px)
+   sur un conteneur qui porte un **tableau**, et **aucun plafond de confort sur le conteneur
+   principal** : au-delà de 1 280 px de fenêtre, il occupe **≥ 96 %** de la largeur disponible
+   (TF-0930). Le token `--w` du socle reste la doctrine des pages de **prose** ; le gabarit en
+   exempte une page déclarée page de données (`[data-page="donnees"] .wrap { max-width: none }`).
+   Contrôle : famille `conteneur_bride_donnees` de `render_page.py` — L26 ne juge une bride que
+   sur un conteneur DE TABLEAU et ne sait pas résoudre `var(--w)`, la mesure du conteneur contre
+   la **fenêtre** est le troisième angle ;
+2. **un bloc de prose occupe la largeur de son conteneur**, ou deux lignes — sous **70 %**, c'est
+   un défaut. Un passage de lecture voulu se **déclare** (`data-mesure-lecture`, plus
+   `data-colonne-ok` s'il est calé à gauche) : c'est le geste complet, pas la moitié ;
+3. **un tableau rogné dans un conteneur défilant** au-delà de 1 280 px de fenêtre est
+   **bloquant**. Un conteneur `overflow-x: auto` rend un tableau *consultable*, il ne le rend pas
+   *lisible*, et sur un grand écran il n'a pas d'excuse : la place existe. Écart voulu →
+   `data-rognage-assume`, **déclaré**, jamais classé « acceptable » en revue.
+
+**Écran d'application à navigation latérale (TF-2776, Produit-12, D-235 (a) du porteur, 23/11/2026).** Sur un écran dont la navigation prend une piste à côté du contenu, brider la prose échouait à L2, la libérer échouait à V18 au-delà de 2 560 px, et la page de données comptait la navigation comme une bride du conteneur. La navigation **se déclare** — un `nav`, un `aside` ou un attribut `data-navigation` — et **sort de la mesure** de V17 (le conteneur se compare à la fenêtre moins la navigation placée à côté de lui) et de L2 (le texte d'une navigation déclarée n'est pas jugé ; sa piste n'est pas une colonne d'étiquettes ; le cadre d'un conteneur de lecture ne compte pas la navigation à côté). **Les règles et les seuils ne changent pas** : la sortie d'un tel écran reste `data-page="donnees"` (prose pleine largeur, V18 publie sa mesure sans bloquer). Une navigation en bandeau ne retire rien, et une colonne latérale qu'aucun nom ni attribut ne déclare est jugée comme avant.
+
+**Contrôles mécaniques.** `L26` (`check_html.py`, bride autour d'un tableau) ·
+`prose_etroite` et `rognage_donnees` (`render_page.py`, bloquants).
+
+**Corollaire d'écriture — l'étiquette de statut se pose SOUS le champ, jamais dans le libellé
+(TF-0773).** Sur le même livrable, quatre champs d'une même rangée tombaient sur deux hauteurs :
+deux libellés portaient leur statut (« hypothèse à confirmer par le comité du 15/09 ») et
+passaient sur deux lignes. Retour humain : « textbox pas alignés ». `render_page.py` mesure
+désormais l'alignement des **contrôles** d'une même rangée à **2 px près**
+(`controles_desalignes`, bloquant) — V3 juge des séries de blocs, L2 des largeurs de texte, et
+une rangée de formulaire n'est ni l'un ni l'autre.
+
+## L27 (colonne) — Sur une page de données, une colonne se DÉFINIT (TF-0777, 02/09/2026)
+
+**Le fait payé.** Aucun en-tête de la console livrée n'était défini, et l'infobulle du tri disait
+« Trier par ». Une hypothèse exprimée **en euros par an** était consommée par un calcul
+« séjours × valeur », c'est-à-dire **multipliée par un nombre d'occurrences** : personne ne
+pouvait le voir, et l'oracle Calculs rendait `SKIP` faute de savoir ce que la colonne mesurait.
+*Une unité qui n'est écrite nulle part se fait deviner, et une devinette ne se relit pas.*
+
+**Règle.** Sur une page de données, tout `<th>` porte sa définition : `data-definition` (ou
+`title`, ou un lien vers son entrée de glossaire), et cette définition dit **ce que la colonne
+mesure, dans quelle UNITÉ, et d'où elle vient**. La source unique est un **dictionnaire de
+colonnes** ([`dictionnaire-de-colonnes.md`](dictionnaire-de-colonnes.md)) : en-têtes, infobulles
+et glossaire en **dérivent**, au lieu d'être réécrits trois fois.
+
+**Contrôle mécanique.** `L27 (colonne)` — un `<th>` muet sur une page de données. La règle ne juge que les
+pages déclarées : exiger une définition sur le tableau à deux colonnes d'une note de synthèse
+ferait crier le contrôle là où il n'apprend rien.
+
+### L27 bis — un EN-TÊTE DE LIGNE se définit aussi (TF-1970, RT-19 du lot Produit-84 20261019e)
+
+Un comparatif nommait dix-neuf composants dans sa première colonne (`<th scope="row">`) sans une infobulle ;
+l'utilisateur a demandé qu'ils soient définis, et `check_html` rendait PASS : L27 (colonne) ne juge que les pages
+DÉCLARÉES de données, et un comparatif est le plus souvent une page de lecture. **Règle** : dans un tableau
+d'au moins trois lignes de corps et trois `<th>` de ligne (`scope="row"`, ou placé dans le corps), chacun porte
+`data-definition` (ou `title`, un `<abbr title>`, un lien vers son entrée de glossaire). **Avertissement**
+(règle neuve) ; sur une page de données, L27 (colonne) le juge déjà, bloquant. Écart voulu :
+`data-entetes-ok="<raison, 8 caractères au moins>"` sur le tableau. Fixtures `l27-entetes-de-ligne-muets.html`
+(rouge) et `l27-entetes-de-ligne-definis.html` (verte : trois porteurs). Bruit mesuré le 29/10/2026 sur 2 405 pages
+HTML de `C:\dev` hors fixtures : 34 pages nouvellement accusées (1,4 %), 91 avertissements — des comparatifs réels
+(`Déclenchement`, `Conformité du socle`) et des calendriers dont les lignes sont des jours de la semaine, où une
+définition n'apprend rien : d'où l'avertissement, et `data-entetes-ok` pour ces derniers.
+
+## L28 — Le temps s'affiche comme du temps (TF-0783, 02/09/2026)
+
+**Le fait payé.** Une vue de fenêtres rendait ses périodes **par libellé**, sans mois — le
+fichier de données lui-même n'en portait pas, « par principe ». Conséquence mécanique : le tri et
+la facette rangent la colonne par ordre **alphabétique**, et le lecteur lit « août 2025,
+avr. 2026, déc. 2025 ». Aucune frise ne peut sortir de là.
+
+**Règle.** Une colonne temporelle porte une **valeur d'ordre** sur chacune de ses cellules :
+`data-v` en ISO (`2025-08`, `2025-08-14`) ou une balise `<time datetime>`. Le libellé reste
+lisible par un humain, la valeur reste ordonnable par la machine — et une date ISO se compare
+**comme du texte**, ce qui *est* déjà son ordre chronologique.
+
+**Corollaire de forme.** Une vue de **fenêtres** (périodes d'ouverture, jalons, saisons) se rend
+en **frise mensuelle** plutôt qu'en liste : la dimension temporelle est un axe, pas une colonne
+de texte. Le schéma des données porte alors `mois_debut` / `mois_fin` et non un libellé unique.
+
+**Contrôle mécanique.** `L28` — plus de la moitié des cellules d'une colonne temporelle sans
+valeur d'ordre, sur une page de données. C'est le pendant de **G8** du composant de filtres
+([`composant-filtres-tableau.md`](composant-filtres-tableau.md)) : la même valeur sert au tri et
+à l'ordre de la facette.
+
+**Le mot de l'en-tête ne fait pas la colonne (TF-1677, 14/10/2026).** L28 accusait deux colonnes
+de **catégories** sur le seul mot « date » de leur en-tête : « Ce qui date l'entrée » (le mot est un
+verbe) et « Date du fichier lue dans » (des libellés de sources). Aucune cellule ne portait une date,
+et le produit a dû renommer ses en-têtes. Une colonne n'est désormais jugée temporelle que si **au
+moins une** de ses cellules porte du temps : une valeur d'ordre (`data-v`, `data-sort`, ISO,
+`<time>`) ou un libellé qui a l'air d'une date : mois ou jour en toutes lettres, mot de période
+(semaine, trimestre, semestre), abréviation de mois **précédée d'un quantième** (« 14 déc. »),
+année, date chiffrée **complète** (« 03/04/2026 »), jour relatif signé (J-7, M+3). Ne comptent pas
+seuls, parce qu'ils sont aussi des codes : un décimal ou une version (« 1.2 »), un code T1-T4,
+S1-S4 ou Q1-Q4 sans son année, une abréviation de trois lettres (« mar », « dec ») — relevé de la
+revue forge-design du 14/10/2026. Une vraie colonne de mois en libellés seuls reste rouge.
+Fixtures : `l28-entete-homonyme.html` et `l28-codes-non-temporels.html` (vertes),
+`l28-entete-homonyme-et-vraie-date.html` et `l28-abreviations-datees.html` (rouges).
+Bruit mesuré : 0 page accusée avant comme après sur 192 pages HTML du parc (14/10/2026), la règle
+ne jugeant que les pages déclarées `data-page="donnees"`.
+
+## L29 (collision) — En-tête collant contre thead collant : le socle tranche (TF-0754, 02/09/2026)
+
+**Le fait payé.** B1 (« header sticky », verdict *adapter*) et B6 (« tableau triable, thead
+sticky », verdict *adopter*) se superposent dès qu'une page longue porte un tableau : le thead se
+colle au bord haut **derrière** l'en-tête de document et devient illisible ; on lui donne un
+décalage, et il flotte au-dessus des premières lignes de son propre tableau. **Aucun des deux
+textes ne disait lequel cède**, ni ne fournissait le décalage. Coût mesuré : deux cycles de rendu
+pour découvrir la collision, puis un arbitrage **de socle pris par un produit** — ce qu'un
+produit ne devrait jamais avoir à trancher seul.
+
+**Arbitrage, écrit ici une fois pour toutes.** **B1 l'emporte** : l'en-tête de document garde le
+bord haut, c'est lui qui porte l'identité du livrable. **B6 reçoit son décalage sous forme de
+token** — `--hh`, la hauteur de l'en-tête, posée dans `:root` par le gabarit :
+
+```css
+:root { --hh: 64px; }                     /* hauteur de l'en-tête collant, posée par le gabarit */
+header.doc.colle { position: sticky; top: 0; z-index: 20; background: var(--bg); }
+thead.colle th   { position: sticky; top: var(--hh); z-index: 10; background: var(--surface); }
+```
+
+Le même token décale le sommaire collant (L25) : un seul repère, trois consommateurs.
+
+**Contrôle mécanique.** `L29` — un `thead`/`th` collant à `top: 0` alors qu'un en-tête est
+lui-même collant ; **et** `top: var(--hh)` consommé sans que `--hh` soit déclaré, car un décalage
+qui vaut 0 par défaut ramène exactement la collision qu'il devait éviter (loi transverse n° 1 :
+une affordance est câblée ou n'existe pas).
+
+### L29 quater — un décalage de collant est une MESURE, pas un token (TF-0929, 08/09/2026)
+
+**Troisième retour humain sur l'en-tête collant en deux jours** (TF-0899, TF-0900, celui-ci) —
+et c'est le token posé par L29 ci-dessus qui est en cause. `--hh` vaut **64 px**, une constante.
+Dès que l'en-tête passe **sur deux lignes**, ou qu'une **bande de sommaire colle sous lui**, ce
+qui surplombe le `thead` est plus haut que le token, et le `thead` se range **exactement à son
+`top` déclaré, derrière eux**. Capture humaine à ~1 370 px : les `th` « Rattachement » et
+« Ligne de mapping » coupés. Mesure Playwright à la même largeur : `--hh` 104, bas de l'en-tête
+107, bas de la bande de sommaire collante 219, `th` collé à 104 — **115 px masqués**. À 1 600 px,
+**aucun défaut** : le défaut dépend de la largeur, donc d'une mesure, et aucune constante ne peut
+la suivre.
+
+**Aucun contrôle ne pouvait le voir**, et c'est le point : `L29` vérifie que `top: var(--hh)`
+existe et que `--hh` est déclaré, jamais la hauteur RÉELLE de ce qui colle au-dessus ; la branche
+« en-tête hors de son `top` déclaré » de `V15` vérifie qu'il s'y tient — **il s'y tient
+parfaitement, et c'est exactement le problème**. Le défaut vit entre le token et le rendu.
+
+**Règle.** Les hauteurs de collage se **mesurent**, au chargement, au **redimensionnement** et
+aux **polices chargées** — une police de titre qui arrive après coup fait passer un en-tête de
+une à deux lignes. Le token de `:root` reste le **repli** : celui qui sert avant la première
+mesure, et si le script ne s'exécute pas. Deux valeurs, parce qu'il y a deux étages :
+
+- `--hh` — bas de l'**en-tête** collant ; ce qui colle directement sous lui l'emploie ;
+- `--hh-tab` — bas du **dernier** collant au-dessus d'un tableau (en-tête **+** bande de sommaire
+  collante s'il y en a une) ; c'est celui que le `thead` collant consomme.
+
+Le gabarit fournit `poserHauteurs()`, qui pose les deux ; `thead.colle th` consomme
+`top: var(--hh-tab, var(--hh))`.
+
+**Contrôle mécanique.** `entete_masque_par_collants` (`render_page.py`, **bloquant**) — après
+défilement, le `th` collant doit se poser au **bas du dernier collant qui le surplombe, à 4 px
+près**. Le message nomme l'élément coupable et le nombre de pixels masqués. Jugé **à chaque
+largeur**, puisque c'est la largeur qui décide du nombre de lignes de l'en-tête.
+
+### L29 bis — un `thead` collant ne vit pas dans un conteneur défilant (TF-0900, 07/09/2026)
+
+**Le fait payé.** Le socle se contredisait lui-même à vingt lignes d'écart : `.table-hote
+{ overflow-x: auto }` posé à toutes les largeurs, et `thead.colle th { top: var(--hh) }` juste
+en dessous. **Un ancêtre dont l'`overflow` n'est pas `visible` devient la boîte de défilement
+de tout `position: sticky` de son sous-arbre** : le `top` cesse alors de se compter depuis la
+fenêtre, et le thead se fige sous le haut de **son propre tableau**. Mesure du 07/09 sur quatre
+tableaux sans filtres : th à 404 px au repos pour 337 attendus (+67), **une ligne recouverte en
+permanence**, puis **-96 px** après 200 px de défilement — l'en-tête quittait l'écran avec son
+tableau. Le geste L29, correctement déclaré, était défait par une autre ligne du même gabarit,
+sur le cas d'usage **prescrit** (un tableau dans `.table-hote`). Quatre tableaux sur huit d'un
+livrable, cette seule cause.
+
+**Arbitrage, au socle.** Le conteneur défilant **ne vit que sous 900 px** :
+
+```css
+.table-hote { overflow-x: visible; }                     /* au-dessus de 900 px : ne défile pas */
+@media screen and (max-width: 900px) { .table-hote { overflow-x: auto; } }
+```
+
+Au-dessus de 900 px il ne servait à rien : la famille `rognage_donnees` de `render_page.py`
+refuse déjà qu'un tableau soit **coupé** dans un conteneur défilant sur une page de données, et
+V1 ne regarde pas si un ancêtre défile. Sous 900 px il reprend son rôle — c'est là que le repli
+en cartes masque le thead (`table.repli-cartes thead { display: none }`), donc plus aucun sticky
+à casser, et qu'un tableau non repliable a besoin d'être consultable à défaut d'être lisible.
+
+**Reste déclaré, à sens unique.** Un tableau sans `data-label` (donc non repliable) **et**
+porteur de `thead.colle` perd son collage sous 900 px : c'est la seule largeur où le socle
+préfère la consultation au collage. Au-dessus, le collage est garanti.
+
+**Corollaire.** Une page hôte n'a plus besoin du contournement `thead.colle th { position:
+sticky !important }` : elle peut le retirer.
+
+### L29 ter — un script ne pose pas `position` sur un `<th>` ciblé collant (TF-0901, 07/09/2026)
+
+Un style **en ligne** l'emporte sur la feuille. Un script qui fait `th.style.position =
+'relative'` — pour ancrer un panneau, une surcouche, une infobulle — écrase donc le `sticky`
+déclaré par `thead.colle th`, et le `top` reste : décalage **permanent**, en-tête posé sur ses
+propres lignes. C'est ce que faisait le composant de filtres du socle jusqu'à TF-0899, et **trois
+oracles rendaient PASS dessus** : L29 juge des déclarations de feuille, la mesure de
+chevauchement compare des frères tous décalés pareil, l'oracle de filtres juge le marquage.
+
+**Le geste sûr** : lire la position **calculée** et ne poser que sur un `static`. Un `<th>` déjà
+positionné — `sticky`, `relative`, `absolute`, `fixed` — ancre déjà un absolu.
+
+**Contrôle mécanique.** `L29` (**avertissement**) : la rencontre d'une feuille qui déclare un
+`<th>` collant et d'un script embarqué qui pose `style.position` **sans garde**. Une pose gardée
+n'est pas signalée — *un contrôle qui accuse ce qu'il prescrit se fait éteindre*. Fixtures
+`l29t-pose-nue.html` (1 avertissement) et `l29t-pose-gardee.html` (0), qui ne diffèrent que par
+la garde. Le cas se tranche au rendu : `render_page.py`, famille **V15**.
+
+**Ce qui le mesure.** Aucun contrôle statique ne peut le voir — la feuille **déclare** juste, et
+c'est le *référentiel* du `top` qui est faux. Il ne se lit qu'après défilement, dans un
+navigateur : `self_test.py` (`run_thead_colle`) amène le tableau 300 px au-dessus du bord haut
+de la fenêtre et exige que le th vaille `--hh` ± 4 px. Fixtures à double sens
+`l29-table-hote-socle.html` (104 px, collé) et `l29-table-hote-defilante.html` (**-196 px**,
+hors écran alors que son tableau est à l'écran) — elles ne diffèrent que par la ligne
+`.table-hote { overflow-x: … }`.
+
+## L30 (couverture) — Une page de couverture affiche son DÉNOMINATEUR (TF-0909, 08/09/2026)
+
+**Le fait payé.** Une page de mapping remise le 07/09 portait 47 lignes de correspondances, des
+cartes « chiffres clés » qui renvoyaient **hors page** (« voir le rapport Markdown »), aucun
+compteur de colonnes source (342) ni de mesures (160). Verdict des trois oracles : `check_html`
+36 règles **PASS**, `render_page` **PASS**, oracle de filtres **PASS**. La recette du même soir a
+trouvé **38 colonnes et 22 mesures orphelines** : le mapping était à 89 % de couverture et se
+présentait comme complet. Retour humain : « impossible de savoir » si c'est exhaustif,
+« manquants ? ». *47 lignes affichées ne disent rien tant qu'on ignore 47 sur combien.*
+
+**La règle.** Une page dont un tableau représente une **couverture** (mapping, correspondances,
+cartographie, traçabilité) :
+
+1. **déclare son dénominateur** — `data-population="N"` sur la `<table>`, N = nombre d'éléments
+   SOURCE. Il ne se déduit pas de la page : il vit dans le système d'origine ;
+2. **porte un tableau exhaustif au grain de l'élément source** — `N` lignes de corps, les
+   sans-correspondance **en tête**. Moins de lignes que la population = **bloquant** : ce n'est
+   pas une couverture, c'est un extrait, et il doit se déclarer comme tel ;
+3. **affiche le dénominateur AVANT le tableau** — un attribut que personne ne voit ne répond pas
+   à « sur combien ? ». Le nombre doit être lisible dans le texte qui précède ;
+4. **compte les éléments sans correspondance** — `data-couverture-manquants` sur l'élément qui
+   l'affiche. « Combien manquent ? » est la première question du lecteur.
+
+**Deux avertissements, pour que la règle morde une page qui ne déclare rien** — le cas fondateur
+ne portait aucun marquage, et c'est exactement ce qui l'a laissé passer :
+
+- une page dont le `<h1>` (à défaut le `<title>`) s'annonce comme une couverture et dont **aucun**
+  tableau ne déclare sa population ;
+- une **carte de chiffre clé** (`.kpi`, `.chiffre-cle`) dont le texte renvoie à un autre document
+  (« voir le rapport », « voir le fichier », « voir l'annexe ») — *un chiffre clé porte son
+  chiffre ; renvoyer ailleurs, c'est occuper la place de la réponse sans la donner*.
+
+**Contrôle mécanique.** `L30 (couverture)` dans `check_html.py` (identifiant émis tel quel en tête de ses messages). Fixtures à double sens :
+`l30-couverture-declaree.html` (0 constat), `l30-couverture-muette.html` (**3 bloquants** — 342
+déclarés pour 4 rendus, dénominateur jamais affiché, aucun compte de manquants) et
+`l30-mapping-non-declare.html` (**2 avertissements** — la forme du cas payé, qui ne déclarait
+rien). Bruit mesuré avant mise en bloquant : **0 constat** sur les documents HTML du skill.
+
+
+## L31 — Une hiérarchie longue rendue en tableau se PLIE
+
+*Retour du 08/09/2026, et il a coûté une citation de composant externe* : un livrable rendait
+deux hiérarchies (schéma > table > colonne) dans des tableaux. Les lignes portaient **déjà**
+`data-niveau` — la donnée de structure était là — et l'indentation était faite d'espaces
+insécables. Mesure à l'ouverture : **134 lignes visibles d'un coup** sur la première hiérarchie,
+**296** sur la seconde. Aucun pliage, aucun compte d'enfants sur la ligne parente. Le
+destinataire a dû citer un composant externe pour se faire comprendre. Après pliage : **16
+lignes sur 134**, 18 sur 296.
+
+**Règle.** Au-delà de **huit** lignes portant un niveau hiérarchique sur **au moins deux**
+niveaux, la table offre le pliage : `data-arbre` sur la table, `data-cle` et `data-parent` sur
+les lignes. Le seuil est celui de L4 pour le filtrage, et pour la même raison — au-delà, une
+liste ne se parcourt plus à l'œil. Un seul niveau n'est pas une hiérarchie : c'est une liste
+plate, et elle n'est pas concernée.
+
+**Le socle fournit le composant** — `assets/table-arbre.js` + `assets/table-arbre.css` : chevron
+par ligne parente (`aria-expanded`, libellé accessible, **compte d'enfants**), guides
+d'indentation dérivés de `data-niveau` (plus d'espaces insécables dans le texte, qui se
+copient-collent et mentent au lecteur d'écran), commandes *Tout déplier* / *Tout replier*, et
+compteur vivant du nombre de lignes visibles.
+
+**Il ne s'arroge pas `hidden`** : il masque par `data-arbre-cache` et passe par l'arbitrage
+partagé `FactoryRowVisibility` (L31 ↔ TF-0953). C'est ce qui permet à un filtre et à un pliage
+de coexister *sans se connaître* — avant, le pliage était écrasé au premier passage des filtres,
+et un produit avait dû poser un `MutationObserver` sur `hidden` puis déplier tout l'arbre à
+chaque changement de filtre.
+
+**Tout montrer volontairement se déclare** : `data-arbre="ouvert"` ouvre à l'arrivée, et se lit.
+
+**Bruit mesuré avant de poser la règle**, sur les dépôts qui consomment le socle : 362 pages
+HTML suivies de huit dépôts du parc — **zéro tableau touché**.
+
+## L32 / L33 — Un identifiant SVG référençable est unique, et se résout chez lui (TF-1147, 16/09/2026)
+
+**Le fait payé.** Un générateur a produit huit schémas SVG dans un même document. Chacun
+définissait sa pointe de flèche sous le même identifiant — `<defs><marker id="pointe">` et
+`<line marker-end="url(#pointe)">`. Dans un document unique, `url(#pointe)` résout vers le
+**premier** élément portant cet identifiant. Les onze vues du guide étant peintes une à la fois
+(`display: none` sur les dix autres), dès qu'une autre vue s'affiche le marqueur référencé vit
+dans un sous-arbre masqué et les flèches deviennent des traits nus. Mesure sur les captures :
+pointes présentes sur le schéma de la vue peinte au chargement, **absentes sur les sept autres**,
+sur un fichier que `check_html.py` et `render_page.py` déclaraient PASS.
+
+**Pourquoi rien ne pouvait le voir.** Le balisage est syntaxiquement correct et l'identifiant
+existe : toute lecture du fichier innocente. Rien ne déborde, rien ne se recouvre, rien ne manque
+de contraste : toute sonde de rendu innocente aussi. Le défaut n'apparaît qu'en **regardant** la
+capture de la vue concernée — c'est-à-dire pendant la revue de lecture, et seulement là.
+
+**Les deux règles**, de marquage pur, sans jugement à rendre :
+
+- **L32** — dans un document portant plusieurs `<svg>`, un identifiant porté par un élément
+  référençable (`marker`, `linearGradient`, `radialGradient`, `clipPath`, `filter`, `pattern`,
+  `mask`, `symbol`) est **unique**. Le geste : préfixer par le schéma — `pointe-vue1`.
+- **L33** — un `url(#id)` écrit dans un `<svg>` résout vers un élément du **même** `<svg>`. Un
+  identifiant qui ne résout nulle part est signalé au même titre : la référence est morte.
+
+**Le dépôt mutualisé se déclare** : `data-defs-partagees` sur le `<svg>` qui porte les
+définitions, et L33 admet qu'on y renvoie. Une exemption se déclare, elle ne se devine pas.
+
+**Bruit mesuré avant de poser les règles**, sur les dépôts qui consomment le socle : 467 pages
+HTML de onze dépôts du parc, dont les 208 du skill — **zéro fichier touché**.
+
+Fixtures : `l32-marqueur-svg-duplique.html` (rouge), `l32-marqueurs-svg-uniques.html` (verte),
+`l33-reference-hors-de-son-svg.html` (rouge), `l33-defs-partagees-declarees.html` (verte).
+
+## L34 — Un graphique ne trace pas UNE série quand sa donnée en porte plusieurs (RT-119, D-55 (a) du 03/10/2026)
+
+**Le fait.** Sur une page servie de Produit-02, la dépense par jour, par pays et par heure était
+tracée en barres d'une seule couleur, le détail par pays relégué à l'infobulle — alors que la
+demande disait « graphique argent, avec pays et montants » et que la donnée portait les pays.
+Retour humain : « pourquoi est-ce qu'on n'est pas passé à un histogramme avec plusieurs valeurs
+par colonne, avec différentes couleurs ? ». Cause : sans composant de graphique au socle, chaque
+page écrivait son SVG à la main, et la voie la plus simple est la série unique.
+
+**La convention.** Un graphique déclare sur son `<svg>` `data-series-source="N"` — le nombre de
+séries de la **donnée** — et chaque marque de série porte `data-serie="<nom>"`. Le composant
+barres empilées du socle (`composants.md`) la pose de lui-même.
+
+**La règle.** Si `N > 1` et que le graphique porte au plus **une** valeur distincte de
+`data-serie`, **avertissement** L34 : empiler ou grouper les séries, une couleur par série,
+légende visible. **Jamais bloquant** — un agrégat peut être voulu ; il se dit alors dans la
+légende, et `data-series-source` revient à 1. Un SVG qui ne déclare rien n'est pas jugé.
+
+**Bruit mesuré** le 03/10/2026 : 3 267 pages HTML de 29 dépôts produits, aucune ne porte encore la
+convention — zéro constat nouveau.
+
+Fixtures : `l34-serie-unique.html` (rouge, avertissement), `l34-series-tracees.html` (verte).
+
+## L12 (virgules) — Une énumération de quatre noms ou plus est une liste (TF-1621, RA-2, 13/10/2026)
+
+**Le fait.** Retour humain sur une fiche : « Pourquoi les éléments qui sont listés ne sont pas sous
+forme de liste ? » — huit domaines énumérés par des virgules dans un paragraphe. L12 ne voyait que
+les segments « clé — valeur » enchaînés par des points-virgules ; la page passait.
+
+**La règle.** Dans un `p`, `li` ou `dd` (hors zone citée), une phrase qui enchaîne **quatre
+éléments ou plus** séparés par des virgules — groupes nominaux de quatre mots au plus, le dernier
+lié par « et » ou « ou » — est signalée : une liste à puces (E-11). **Avertissement** (règle neuve).
+Bruit mesuré : 193 pages averties sur 239 pages au socle du parc (13/10/2026), 798 constats (six au plus par page), parenthèses énumératives comprises — la règle E-11 était appliquée nulle part, d'où l'avertissement ; une virgule décimale (« 9,7 ») n'est pas une virgule d'énumération.
+
+Fixtures : `l12-enumeration-virgules.html` (rouge), `l12-virgules-prose.html` (verte).
+
+## L12 (cellules) — Une cellule qui enchaîne des faits par des points-virgules est une liste (TF-1665, RT-33, 14/10/2026)
+
+**Le fait.** Sur un comparatif remis, 25 cellules de constat sur 52 enchaînaient deux faits ou plus
+par un point-virgule (« aucun contrôle ; et 9 commits servis en production ne sont jamais passés par
+env/dev ni env/uat »). Le porteur a demandé des puces. Les deux branches de L12 ne voyaient rien :
+l'une ne lit que des paires « clé — valeur », et seulement au-delà de trois ; l'autre ne lit que
+des virgules.
+
+**La règle.** Une cellule `<td>` dont le texte se coupe en **deux segments ou plus** sur le
+point-virgule, chacun d'au moins deux mots, est signalée : une liste à puces par fait dans la
+cellule (`<ul>`). Une cellule déjà structurée (liste, paragraphes, dépliant), une cellule citée
+(`data-cite`) et une cellule de code ne sont pas jugées ; « Paris ; Lyon » n'enchaîne pas deux
+faits. Le seuil de la prose courante ne bouge pas. **Avertissement**, une ligne par tableau.
+Bruit mesuré : 47 pages averties sur 192 pages HTML du parc (14/10/2026) — des colonnes de constats,
+de sources et de motifs écrites en phrases à points-virgules, d'où l'avertissement.
+
+Fixtures : `l12-cellule-points-virgules.html` (rouge), `l12-cellule-en-puces.html` (verte).
+
+### L12 (cellules, suite) — les virgules d'une cellule, et la colonne aux formes mêlées (TF-1967, RT-16, 19/10/2026)
+
+**Le fait.** Une cellule énumérait ses éléments par des virgules à côté de cellules en listes, et une colonne
+de trois ou quatre points s'écrivait en paragraphe : deux remarques de l'utilisateur, `check_html` PASS. La
+branche des cellules ne lisait que les points-virgules, celle des virgules que `p`, `li` et `dd`.
+
+**La règle.** Deux avertissements. **(a)** une cellule de texte seul qui énumère **quatre éléments ou plus** par
+des virgules (même grammaire que L12 des phrases) ; **(b)** une colonne dont une cellule au moins est une
+**liste** (`<ul>`/`<ol>` de deux éléments ou plus) et une autre énumère en prose — trois éléments par virgules,
+trois phrases courtes ou trois paragraphes : deux formes dans une même colonne. Une cellule citée
+(`data-cite`), de code ou déjà structurée n'est pas jugée en (a). Écart voulu : `data-forme-ok="<raison, 8
+caractères au moins>"` sur la cellule, le tableau ou un ancêtre. Fixtures `l12-cellule-formes-melees.html` (rouge :
+les deux avertissements) et `l12-cellule-formes-uniformes.html` (verte : les mêmes droits, chaque cellule en liste).
+Bruit mesuré le 29/10/2026 sur 2 405 pages HTML de `C:\dev` hors fixtures : 29 pages nouvellement accusées (1,2 %),
+1 274 pages averties par L12 avant et 1 303 après ; le gros des avertissements de L12 existait déjà (E-11 est appliquée
+nulle part), d'où l'avertissement.
+
+## L37 — Un écart dit son remède, ligne à ligne (TF-1664, RT-58, 14/10/2026)
+
+**Le fait.** Un comparatif portait deux colonnes de statut ; 21 lignes sur 26 étaient en « Écart » ou
+« Partiel », et aucune ne disait quoi faire : les remèdes vivaient dans un autre tableau, sans renvoi
+ligne à ligne. `check_html.py`, `render_page.py` et les oracles de `factory-forge-design` rendaient
+PASS ; le porteur l'a renvoyé : « pour chaque ligne de la comparaison, fournis les actions de
+remédiation ». L3 juge la légende des statuts, L10 l'exemple de lecture, L27 (colonne) la définition des
+colonnes : aucune règle ne reliait une valeur d'écart à un remède.
+
+**La règle.** Dans un tableau, une ligne dont une cellule porte un statut **défavorable** porte
+aussi son **action** : une cellule renseignée d'une colonne d'action (en-tête Action, Remédiation,
+Remède, Correctif, À faire, Prochaine étape, Plan d'action, Recommandation, Levée, Mesure
+corrective), ou un **lien interne** (`href="#…"`) vers l'action qui la lève, hors de la cellule de
+statut. Valeurs défavorables du socle (casse et accents ignorés, cellule de 40 caractères au plus) :
+Écart, En écart, Partiel, Non conforme, KO, FAIL, Échec, Non tenu. Une page en déclare d'autres par
+`data-statut-defavorable="Valeur A|Valeur B"` sur le tableau, ou marque une cellule par
+`data-statut-defavorable`. Une ligne tenue dit « aucune action » et pourquoi — c'est l'usage, la
+règle ne l'exige pas. **Bloquante** depuis TF-1688, une ligne par tableau. Entrée en
+avertissement (D-70 (b)) avec un bruit mesuré de 8 pages averties sur 192 pages HTML du parc
+(14/10/2026) : sept rapports d'audit dont les verdicts « Partiel » ou « Non conforme » ne portent
+pas leur action ligne à ligne — le cas même de RT-58 — et une étude d'opportunité (une ligne
+« partiel »). Tous de vrais cas : la décision humaine du 14/10/2026 l'a passée en échec. Remesure
+du même jour sur 215 pages déclarant `:root` sous `c:\dev\*\{output,docs,livrables,forge}` : les
+mêmes 8 pages en échec L37, 0 avertissement ; 2 d'entre elles passent de PASS à FAIL, les 6
+autres échouaient déjà sur d'autres règles.
+
+Fixtures : `l37-ecart-sans-remede.html` (rouge), `l37-ecart-avec-remede.html` (verte, colonne
+d'action), `l37-ecart-lien-vers-action.html` (verte, lien interne).
+
+## L35 — La typographie française tient aux coupures de ligne (TF-1384, RG-16, 13/10/2026)
+
+**Le fait.** Sur une présentation, des deux-points ouvraient une ligne, « (point » finissait une
+ligne et « 4) » ouvrait la suivante, un titre se coupait entre « chapitre » et « 4 » : deux remises
+remplacées le même jour pour la seule typographie. Aucune règle du socle ne parlait de l'espace
+insécable.
+
+**La règle.** Une espace **ordinaire** devant `:` `;` `!` `?`, à l'intérieur de `« »`, entre un nom
+et son numéro (« chapitre 4 ») ou entre un mois et son année (« septembre 2026 ») est un point de
+coupure que le navigateur peut prendre. Remède : `&nbsp;` (U+00A0) ; la fine insécable U+202F est acceptée par la règle mais n'est pas dans la liste blanche des glyphes du socle (TF-0490), donc à éviter.
+Page déclarée dans une autre langue : non jugée. **Avertissement**, un constat par page. La même
+table juge les decks (S8 d'`oracle-charte-pptx-semantique`). Bruit mesuré : 232 pages accusées sur 239 pages au socle du parc (13/10/2026) — l'espace insécable n'était tenue presque nulle part, d'où l'avertissement.
+
+Fixtures : `l35-typo-espaces-ordinaires.html` (rouge), `l35-typo-insecables.html` (verte).
+
+## L36 — Le contenu d'auteur n'est pas livré au lecteur (TF-1283, RD-15, 13/10/2026)
+
+**Le fait.** Le 15/09, un porteur demande de sortir d'un guide développeur l'état des arbitrages ;
+le 21/09, un chapitre neuf en réintroduit 13 emplacements (« ce qui n'est pas tranché », « séance à
+planifier », « proposée, pas arrêtée »…), dont un injecté par le générateur, et sept oracles rendent
+PASS : la classe `contenu-d-auteur-livre-au-lecteur` n'était jugée que sur les gabarits.
+
+**La règle.** Sur le texte **visible** de la page rendue, les marqueurs d'un sujet en cours de
+gouvernance (« en cours d'arbitrage », « pas / non tranché », « séance à planifier », « verdicts non
+versés », « non arrêté », « proposée, pas arrêtée », « candidat à l'élévation », « en cours de
+versement », « relevé, non décidé ») sont signalés. La règle juge l'**état** d'un sujet, jamais la
+**destination** d'une escalade : « se fait trancher par la Design Authority » est un geste du
+lecteur. Zone citée (`data-cite`) exclue. **Avertissement**. Bruit mesuré : 25 pages accusées sur 239 pages au socle du parc (13/10/2026), dont des onglets « Non tranché » de spécifications produit et des gabarits de compte rendu qui listent les points ouverts — cas où l'état est le sujet, d'où l'avertissement.
+
+Fixtures : `l36-contenu-auteur.html` (rouge), `l36-escalade-du-lecteur.html` (verte).
+
+## Style du texte visible — l'oracle d'écriture joue sur la page (TF-1624, RA-5, 13/10/2026)
+
+**Le fait.** Retour humain : « Le terme "Ce que" ne devait plus être utilisé » — 20 tournures dans
+le texte d'une page. EC-8 d'`oracle-ecriture` (pilot) ne jugeait que les `.md`.
+
+**La règle.** `check_html.py <page>` ramène le texte visible à un Markdown de lecture (titres,
+en-têtes de tableau, blocs ; code et zones citées exclus) et le fait juger par l'oracle d'écriture
+du pilot ; ses constats **bloquants** entrent en **avertissement**, suffixés « texte visible de la
+page ». Les numéros de ligne cités sont ceux du texte extrait. Pilot injoignable : dit, jamais tu.
+`--sans-style` s'en passe. Bruit mesuré : 192 pages averties sur 239 pages au socle du parc (13/10/2026), dont 120 portant EC-8 et 138 EC-9 ; 3 pages non jouées (délai de l'oracle dépassé), dites comme telles.
+
+Fixtures : `style-annonce-nominalisee.html` (rouge), `style-nomme.html` (verte).
+
+## Classes d'artefact — une page lue par une machine (TF-1589, RT-115, 13/10/2026)
+
+**Le fait.** Le 22/09/2026, cinq pages engendrées comme source pour l'assistant d'ingestion d'une
+plateforme tierce rendaient FAIL sur 9 occurrences de L7, avec 9 avertissements L30 (chapitre). Chaque
+paragraphe y est repris tel quel comme contenu du livret remis au voyageur. Les satisfaire aurait
+injecté 9 phrases de méta-discours dans ce livret. Les 33 autres règles étaient vertes et utiles.
+
+**La règle.** Une page dont le lecteur est une machine (source de données, page générée pour un
+autre outil) se déclare `source-machine`. Deux voies : `check_html.py page.html
+--classe=source-machine`, ou `<meta name="classe-artefact" content="source-machine">` dans la
+page. La ligne de commande prime sur la page ; sans l'une ni l'autre, la classe est `page-lue`.
+Sous `source-machine`, trois mesures écrites pour un humain qui parcourt la page ne sont pas
+jouées :
+- L7, le chapeau `.ch-apprend` de chaque chapitre ;
+- L25, le sommaire exigé au-delà de trois chapitres ;
+- la partie de L30 (chapitre) qui exige un `.contenu` par chapitre.
+
+Elles sont nommées au périmètre de non-mesure (`non_juge`) de chaque exécution. Tout le reste est
+jugé, dont la glose du jargon (L30 (chapitre)) et le dénominateur de couverture (L30 (couverture)) : une donnée lue par une
+machine dit encore « sur combien ». Une valeur de `classe-artefact` inconnue est signalée en
+avertissement, et la page est jugée en `page-lue`. Si un humain lit aussi la page, la classe est
+fausse : la retirer.
+
+Fixtures : `source-machine-livret.html` (rouge sans la classe, verte avec),
+`source-machine-declaree.html` (verte par sa balise `meta`), `source-machine-vrai-defaut.html`
+(rouge sur A2 et G1 malgré la classe).
+
+### Une page SERVIE avec ses fichiers : `page-servie` (TF-2543, 14/11/2026)
+
+**Le fait.** Le 14/11/2026, à l'étape 0 d'un run, l'accueil d'un produit web rendu par son serveur local échouait à
+six contrôles bloquants : `:root` absent (les jetons vivent dans une feuille liée), A4 titre sans indice, A2 favicon
+non embarqué, `@media print` absent, L21 (une classe stylée par une feuille liée que le script ne lisait pas), L25
+sommaire. Le produit consignait une dérogation à chaque run, et l'oracle de forme n'y jugeait plus rien. Trois de ces
+règles sont celles du livrable **autonome**, un fichier qui voyage seul ; une page servie reçoit son icône, ses jetons
+et sa feuille d'impression de fichiers que le serveur livre avec elle.
+
+**La règle.** Une page rendue par un serveur avec ses fichiers se déclare `page-servie` : `check_html.py page.html
+--classe=page-servie [--racine-servie <dossier>]`, ou `<meta name="classe-artefact" content="page-servie">`. Sous cette
+classe :
+- les **feuilles liées** (`<link rel="stylesheet" href="…">` locales, `.css`, 2 Mo au plus) sont **lues**, et leur CSS est
+  jugé comme s'il était en ligne : `:root`, L21, la police Syne, `--hh`… Un chemin relatif se résout depuis le dossier de
+  la page ; un chemin absolu (`/static/app.css`) par `--racine-servie`, le dossier que le serveur expose à la racine, et
+  reste non lu sans lui. Une adresse réseau n'est pas lue (A1 la juge toujours) ;
+- trois mesures du livrable autonome ne s'appliquent pas : A2 « favicon non embarqué » (un lien vers un fichier suffit ;
+  **un favicon reste exigé**), « `@media print` absent », et « `:root` absent » **quand une feuille liée n'a pas pu être
+  lue** (sinon `:root` reste exigé, sur le CSS lu : une feuille lue sans jetons laisse l'échec).
+
+Le verdict **dit** les mesures non applicables, les feuilles lues, et celles qui n'ont pas pu l'être (`non_juge`), à chaque
+exécution. Tout le reste est jugé, A4 et L25 compris : ce que le produit doit encore corriger ou déclarer n'est pas masqué.
+Si la page voyage seule, la classe est fausse : la retirer.
+
+Fixtures : `page-servie-accueil.html` et `page-servie-accueil.css` (le gabarit du socle, son `<style>` devenu feuille liée
+sans `@media print`, son favicon devenu un fichier : 3 échecs sous `page-lue`, PASS sous `page-servie`). Le banc rejoue aussi
+la police Syne dans la feuille, la feuille sans `:root`, la feuille introuvable, le chemin absolu et la déclaration par `meta`.
+
+## L38 — Un listing porte son détail, il ne le renvoie pas à un autre chapitre (TF-1742, RA-41, 15/10/2026)
+
+**Le fait.** Un mode opératoire listait neuf actions dans un tableau du chapitre 2 ; le chapitre 3
+reprenait chaque ligne et la complétait, et le détail du reste vivait dans quatre autres chapitres.
+`check_html.py` PASS (36 règles), `render_page.py` PASS en trois états, l'oracle de filtres PASS ; le
+destinataire : « le listing actuel affiche des informations, mais pas toutes les informations, et
+certaines autres sont reprises et / ou complétées dans les chapitres suivants ». La classe
+`page-html-liste-renvoi-sans-detail` existait depuis le 03/09 (TF-0757) : la connaissance était au
+référentiel, la mesure nulle part.
+
+**La règle.** Une ligne de corps de tableau qui renvoie, par une ancre interne (`href="#…"`), vers
+une section HORS du tableau dont le titre s'ouvre sur l'objet de la ligne (le texte de sa première
+cellule) et qui porte au moins **15 mots** que la ligne n'a pas, renvoie son détail ailleurs. Deux
+lignes au moins, vers deux cibles distinctes, font l'avertissement : une référence commune à toutes
+les lignes (une procédure de retour arrière) n'est pas le détail d'un objet. Une ligne en statut
+défavorable est écartée, son lien vers l'action est le remède de L37. Remède : porter le détail
+DANS la ligne (ligne dépliable, L9 et L17) et retirer la section qui le double. Listing de renvoi
+voulu : `data-renvoi-ok` sur le tableau. **Avertissement** (règle neuve, D-70 (b)). Bruit mesuré le
+15/10/2026 sur 2 007 pages HTML des dépôts produits de `c:\dev` (hors forges, pilot, `old/`,
+`node_modules`, worktrees), en lecture seule : 11 pages de 3 dépôts, 27 tableaux. Parmi elles, le
+mode opératoire de MEP du cas fondateur (une version antérieure) ; les autres sont des index de
+catalogue dont chaque ligne renvoie à sa fiche, la forme que le destinataire a refusée, mais qu'un
+index assumé peut déclarer. Le bruit n'est pas démontré nul : la règle reste un avertissement.
+
+**Hors mesure, publié au périmètre de non-mesure.** Un objet du sujet ABSENT du listing (les phases
+A′ et C du cas fondateur) et un complément écrit dans un autre chapitre sans lien depuis la ligne :
+ils restent à la revue de lecture.
+
+Fixtures : `l38-listing-detail-ailleurs.html` (rouge), `l38-listing-detail-dans-la-ligne.html`
+(verte, détail dans la ligne et une référence commune), et `l37-ecart-lien-vers-action.html` reste
+verte (le remède de L37 n'est pas accusé).
+
+## L39 — Une forme que le socle couvre ne se réalise pas à la main (TF-1857, RA-12, 18/10/2026)
+
+**Le fait.** Un tableau de bord de six graphiques SVG écrits à la main et d'une rangée de sept chiffres
+clés en `div.kpi` (Produit-79, lot 20261017c) : `composants.md` § 14 (tuiles d'indicateurs) et § 15
+(barres empilées) les déclarent obligatoires (🔴), aucun contrôle ne les exigeait. `check_html.py` PASS
+(47 règles), `oracle-filtres-tableau` PASS, `render_page.py` PASS aux 7 largeurs, `run-oracles-design`
+6 sur 7 ; l'exploitant a refusé la page. La classe `graphique-maison-hors-composant-du-socle` la porte.
+
+**La règle.** Deux formes, deux mesures structurelles, jamais un nom de fichier :
+
+- **Rangée de chiffres clés** : au moins trois frères d'un même parent qui portent une classe de chiffre
+  clé (`kpi`, `kpi-card`, `tuile`, `chiffre`, `indicateur`, `metric`…), dont trois au moins contiennent
+  un chiffre, et qui ne sont NI la structure du composant (un descendant `.tuile-valeur`, § 14) NI un
+  chiffre qui filtre une liste (`data-kpi-filtre`, § 8). Porter le nom de classe `tuile` ne suffit pas :
+  sur 11 pages de l'essai qui employaient cette classe, 8 n'avaient que `span.tv` et `span.tl` écrits à
+  la main.
+- **Graphique en barres** : un `<svg>` hors du composant (ni `.graphe-svg`, ni dans
+  `[data-graphe-empile]`) qui porte au moins quatre `<rect>` de même épaisseur (± 2), à pas régulier
+  (± 15 %), alignés sur une même arête et de trois longueurs distinctes au moins — barres verticales
+  alignées par le bas, horizontales par la gauche. Les `translate()` des groupes sont cumulés. La
+  régularité est ce qui distingue un graphique d'un schéma : sans elle, la mesure accusait 14 pages de
+  schémas de briques alignées.
+
+**Sortie déclarative.** `data-hors-composant="<raison>"`, **8 caractères au moins**, sur la rangée, le
+`<svg>` ou un ancêtre : l'écart voulu se dit. Un `="ok"` est refusé, sinon l'exemption se réduirait à
+l'ajout d'un attribut. Remède : employer le composant (`tuiles-indicateurs.js`, `barres-empilees.js`,
+`kpi-filter.js`).
+
+**Sévérité : avertissement (règle neuve).** Bruit mesuré le 18/10/2026 avec `check_html.py` sur les
+**176 pages HTML des `output\` du parc** (produits et pilot, hors fixtures, `.oracles` et copies de
+travail des worktrees), en lecture seule : **101 pages accusées sur 176 (57 %)**, dont **98 pour une
+rangée de chiffres (56 %, 162 rangées)** et **8 pour des barres (4,5 %, 19 `<svg>`)**, 5 pages cumulant
+les deux. Par âge : 18 pages sur 28 des pages courantes datées d'après le 03/10/2026 (naissance des
+composants), 25 sur 46 des courantes d'avant, 54 sur 78 des pages `old/` ; 4 sur 24 sans date. Les
+**fausses accusations relevées sont nulles** : les onze formes distinctes de rangée ont été lues sur
+leur texte (toutes des chiffres de tête), les huit pages de barres sur leurs légendes (toutes des
+graphiques de série) ; la page corrigée du cas fondateur (tuiles et filtres du socle) n'est pas
+accusée. Un taux de 57 % exclut le blocage : il rougirait la moitié du parc, dont des pages d'avant le
+composant (le § 1 de `composants.md` reste « lisible pour les pages existantes »). La mesure de barres
+a d'abord accusé 14 pages de schémas sans l'exigence de régularité (22 pages accusées, 8 vraies) :
+c'est le seuil qui porte la précision, et la fixture `l39-schema-de-boites.html` le garde.
+
+**Hors mesure, publié au périmètre de non-mesure.** Des barres en `<div>` ou en `<path>`, un
+graphique en `<canvas>` ou par bibliothèque (ECharts, Chart.js : 3 pages du parc, toutes du même
+produit), une courbe ou une aire (aucun composant du socle), un `<svg>` sous `scale` ou `rotate`, une
+rangée dont les blocs portent un autre nom de classe que la liste. 8 des 11 pages à classe `tuile`
+n'ont pas la structure du composant : elles sont accusées, les trois autres non.
+
+Fixtures : rouges `l39-rangee-maison.html`, `l39-tuiles-maison-nom-seul.html` (le nom sans la
+structure), `l39-rangee-exemption-muette.html`, `l39-barres-maison.html`,
+`l39-barres-dans-des-groupes.html` (rectangles sous `translate()`), `l39-barres-exemption-muette.html` ;
+vertes `l39-tuiles-du-socle.html` (le markup du § 14), `l39-rangee-exemption-motivee.html`,
+`l39-barres-composant.html` (la sortie du composant, dont la géométrie est celle d'une série de
+barres), `l39-barres-exemption-motivee.html`, `l39-schema-de-boites.html`, et l'exemple du socle
+`exemple-tuiles-et-barres-empilees.html` (le remède joué : zéro constat).
+
+## Lancer le contrôle
+
+```bash
+python scripts/check_html.py page.html                 # charte + a11y + print + L1-L39
+python scripts/check_html.py page.html --regles L      # lisibilité seule (L1-L39)
+python scripts/check_html.py page.html --output json
+python scripts/check_html.py page.html --classe=source-machine   # page lue par une machine (TF-1589)
+python scripts/check_html.py page.html --classe=page-servie      # page servie avec ses fichiers : feuilles liées lues (TF-2543)
+python scripts/render_page.py page.html                # V1-V14 + L2 mesuré au rendu
+python scripts/self_test.py                            # fixtures rouges et vertes du skill
+```
+
+Les fixtures de `fixtures/` prouvent que chaque règle **peut échouer** : une par défaut —
+texte coupé, largeur bridée, tooltip vide, barème absent, colonne calculée sans formule,
+valeur opaque, table non filtrable, surlignage à padding, collision de nom de classe,
+ancre morte, entrée de sommaire muette, chapitre sans chapeau, lien muet, détail vide,
+table sans mode d'emploi, littéral `null`, promesse de commentaire non tenue — plus une fixture verte qui les passe toutes.
+Une règle sans fixture rouge n'est pas un contrôle. **130 cas de lisibilité, 75 rouges** (comptés le 13/11/2026 dans les tables `CAS` et `CAS_AVERT` de `self_test.py`, que le banc compare à ce chiffre : un cas ajouté sans mettre le compte à jour rend le self-test rouge), auxquels s'ajoutent
+neuf fixtures mesurées au rendu (quatre `l2r-*`, cinq `l2g-*`), rejouées par `self_test.py` quand
+playwright est disponible.

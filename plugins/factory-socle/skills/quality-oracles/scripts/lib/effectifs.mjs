@@ -1,0 +1,272 @@
+// lib/effectifs — effectifs ANNONCÉS en prose, rapprochés du CARDINAL RÉEL de ce qu'ils annoncent.
+//
+// DÉFAUT PAYÉ (Produit-05, 31/08/2026) : l'oracle Calculs re-sommait correctement les colonnes,
+// mais ne rapprochait AUCUN effectif écrit en prose du nombre d'objets qu'il annonce. Le sommaire
+// annonçait « Sept écarts que la boucle n'a pas pu lever » au-dessus d'un tableau qui en portait
+// HUIT (E1 à E8) — décalage introduit avec E8, présent dans TROIS versions livrées, invisible aux
+// quatre portes, trouvé à la main. Le badge du même onglet disait « 8 écarts résiduels » : deux
+// comptes contradictoires dans le même écran.
+//
+// N1 — un effectif annoncé (chiffres OU lettres) suivi d'un nom dénombrable, en TÊTE d'une liste
+//      ou d'un tableau, est comparé au cardinal réel de cette ancre.
+// N2 — une fois le cardinal réel connu pour un nom, tout AUTRE effectif annoncé pour ce même nom
+//      dans le document et qui en diffère est signalé (cas du badge contradictoire).
+//      TF-2378 (10/11/2026) : seulement s'ils désignent le MÊME ENSEMBLE (voir `memeEnsemble`).
+//      Un plan accusé à tort : « la crédibilité baisse de 10 points » (unité d'un curseur) face à
+//      une liste de 5 points à trancher, « 20 questions de référence » face à 5 questions fermées.
+//
+// Périmètre volontairement étroit (bruit mesuré à 0 sur le parc du dépôt) : l'effectif doit être
+// ≥ 2, porté par un titre ou une ligne s'achevant par « : », et l'ancre doit suivre immédiatement.
+import { isTotalLabel, isGrandTotalLabel } from './num.mjs';
+
+// Exporté pour lib/coherence-fond.mjs (CF3) : une seule table des nombres en lettres.
+export const LETTRES = {
+  deux: 2, trois: 3, quatre: 4, cinq: 5, six: 6, sept: 7, huit: 8, neuf: 9, dix: 10,
+  onze: 11, douze: 12, treize: 13, quatorze: 14, quinze: 15, seize: 16,
+  'dix-sept': 17, 'dix-huit': 18, 'dix-neuf': 19, vingt: 20, 'vingt-et-un': 21,
+  'vingt-deux': 22, 'vingt-trois': 23, 'vingt-quatre': 24, 'vingt-cinq': 25, 'vingt-six': 26,
+  'vingt-sept': 27, 'vingt-huit': 28, 'vingt-neuf': 29, trente: 30, 'trente-et-un': 31,
+  'trente-deux': 32, 'trente-cinq': 35, quarante: 40, cinquante: 50, soixante: 60,
+  'quatre-vingts': 80, 'quatre-vingt': 80, cent: 100
+};
+// Noms dénombrables d'objets de document. Volontairement sans « ligne » ni « colonne » (bruit).
+export const NOMS_DENOMBRABLES = [
+  'écarts', 'questions', 'constats', 'lots', 'travaux', 'exigences', 'risques', 'hypothèses',
+  'chapitres', 'actions', 'décisions', 'critères', 'étapes', 'points', 'items', 'livrables',
+  'oracles', 'fiches', 'recommandations', 'scénarios', 'axes', 'conditions', 'contrôles',
+  'sections', 'annexes', 'indicateurs', 'jalons', 'options', 'principes', 'règles', 'tâches',
+  'onglets', 'capacités', 'portes', 'anomalies', 'defauts', 'défauts'
+];
+
+const mots = Object.keys(LETTRES).sort((a, b) => b.length - a.length).join('|');
+const noms = NOMS_DENOMBRABLES.slice().sort((a, b) => b.length - a.length).join('|');
+// « sept écarts », « 19 questions », « huit travaux de bascule » — un qualificatif toléré entre les deux.
+const RX_EFFECTIF = new RegExp(
+  `(?<![a-zA-ZÀ-ÿ0-9])(\\d{1,4}|${mots})(?![a-zA-ZÀ-ÿ])\\s+(?:(?:autres|premiers?|premières?|derniers?|dernières?|grands?|petits?|nouveaux|nouvelles?)\\s+)?(${noms})(?![a-zA-ZÀ-ÿ])`,
+  'gi');
+
+const valeur = t => (/^\d+$/.test(t) ? parseInt(t, 10) : LETTRES[t.toLowerCase()]);
+// TF-1573 : un nombre à zéro initial (« 05 Points », « 02 Actions ») numérote un chapitre de page HTML, il
+// ne compte rien. Le texte rendu, plus court, avait fait entrer ces titres dans la fenêtre d'une ancre.
+const NUMEROTATION = /^0\d/;
+const RX_PUCE = /^(\s*)(?:[-*+]|\d{1,3}[.)])\s+\S/;
+const RX_ID = /^[A-Z]{1,3}[-_]?\d{1,3}$/;
+
+// L'effectif doit OUVRIR le titre ou la ligne : « Sept écarts que la boucle… », « Trois
+// questions restées ouvertes : ». Sans cette borne, tout nombre cité au passage dans un titre
+// (« rubrique — 3 à 7 axes », « (les 3 critères binaires) ») était rapproché de la première
+// liste venue : 19 FAIL sur 469 documents du dépôt, tous faux. Après la borne : 0.
+const RX_ENTETE = /^[\s#>*_`+-]*(?:\d{1,3}[.)]\s*)?(?:\*\*)?(?:les|des|ces|ses|nos|leurs|voici)?\s*/i;
+// Garde-fou de fourchette : « 3 à 7 axes », « entre 3 et 7 axes » n'annoncent aucun effectif.
+const RX_FOURCHETTE = /(?:\d|\b(?:un|deux|trois|quatre|cinq|six|sept|huit|neuf|dix))\s*(?:à|-|et)\s*$/i;
+
+// ---- cardinal d'une ancre markdown ------------------------------------------------------------
+function ancreMarkdown(lines, start) {
+  let j = start, prose = 0;
+  while (j < lines.length && j < start + 7) {
+    const l = lines[j];
+    if (!l.trim()) { j++; continue; }
+    if (/^\s*\|.*\|\s*$/.test(l)) return tableauMd(lines, j);
+    if (RX_PUCE.test(l)) return listeMd(lines, j);
+    if (/^#{1,6}\s/.test(l)) return null;                       // autre titre : l'annonce n'a pas d'ancre
+    if (++prose > 2) return null;                               // trop de prose intercalée
+    j++;
+  }
+  return null;
+}
+
+function tableauMd(lines, j) {
+  const rows = [];
+  for (let k = j; k < lines.length && /^\s*\|.*\|\s*$/.test(lines[k]); k++) {
+    if (/^\s*\|[\s:|-]+\|\s*$/.test(lines[k])) continue;        // séparateur
+    rows.push(lines[k].trim().replace(/^\||\|$/g, '').split('|').map(c => c.trim()));
+  }
+  if (rows.length < 2) return null;
+  const data = rows.slice(1).filter(r => !isTotalLabel(r[0]) && !isGrandTotalLabel(r[0]) && r.some(c => c));
+  const ids = data.map(r => String(r[0] || '').replace(/[*_`]/g, '').trim()).filter(x => RX_ID.test(x));
+  return { type: 'tableau', ligne: j + 1, cardinal: ids.length === data.length && ids.length ? new Set(ids).size : data.length, detail: ids.length === data.length && ids.length ? 'identifiants distincts : ' + ids.join(', ') : data.length + ' ligne(s) de données' };
+}
+
+function listeMd(lines, j) {
+  const m0 = lines[j].match(RX_PUCE); const indent = m0[1].length;
+  let n = 0, k = j, vides = 0;
+  for (; k < lines.length; k++) {
+    const l = lines[k];
+    if (!l.trim()) { if (++vides > 1) break; continue; }
+    const m = l.match(RX_PUCE);
+    // Une puce MOINS indentée referme la sous-liste : sans cette borne, une annonce placée
+    // au-dessus d'une sous-liste comptait aussi les puces de la liste parente qui la suivent.
+    if (m) { if (m[1].length < indent) break; if (m[1].length === indent) { n++; vides = 0; } continue; }
+    if (/^\s{2,}\S/.test(l)) { vides = 0; continue; }            // continuation d'un item
+    break;
+  }
+  return n >= 2 ? { type: 'liste', ligne: j + 1, cardinal: n, detail: n + ' item(s) de premier niveau' } : null;
+}
+
+// ---- cardinal d'une ancre HTML ----------------------------------------------------------------
+// TF-1573 (03/10/2026, campagne D-55 (a)) — LA FENÊTRE EST BORNÉE PAR LE CONTENEUR, PAS PAR UN
+// NOMBRE DE CARACTÈRES. L'ancre était cherchée ET LUE dans les 2 000 caractères qui suivent le
+// titre : un tableau plus long que ce reste était compté TRONQUÉ (« trois constats » face à un
+// tableau de 3 lignes lu à 2), et sur le texte rendu, plus court, la fenêtre englobait des
+// tableaux voisins — 4 pages du parc en FAIL à tort. Désormais : l'ancre doit OUVRIR dans la
+// section du titre (ni autre titre, ni fin de section/article avant elle, et toujours dans les
+// 2 000 caractères qui le suivent), puis le tableau ou la liste se lit EN ENTIER jusqu'à sa
+// balise fermante, dans le texte complet.
+function ancreHtml(text, from) {
+  const zone = text.slice(from, from + 2000);
+  const mList = zone.search(/<(?:table|ul|ol)\b/i);
+  if (mList < 0) return null;
+  const avant = zone.slice(0, mList);
+  if (/<h[1-6]\b/i.test(avant)) return null;                     // un autre titre s'intercale
+  if (/<\/(?:section|article|main|aside|details)\s*>/i.test(avant)) return null;   // le conteneur du titre est clos
+  // Même borne que l'ancre Markdown (au plus deux blocs de prose intercalés) : sur le texte rendu, la
+  // fenêtre de 2 000 caractères porte plus de contenu que sur le source, et l'ancre doit rester IMMÉDIATE.
+  if ((avant.match(/<(?:p|div|blockquote|pre|figure|dl)\b/gi) || []).length > 2) return null;
+  const ligne = text.slice(0, from + mList).split('\n').length;
+  const reste = text.slice(from + mList);
+  if (/^<table\b/i.test(reste)) {
+    const fermee = reste.match(/^<table[\s\S]*?<\/table>/i);
+    if (!fermee) return null;                                    // tableau jamais refermé : non mesurable
+    const bloc = fermee[0];
+    const trs = [...bloc.matchAll(/<tr[\s\S]*?<\/tr>/gi)].map(m => m[0]);
+    const data = trs.filter(tr => !/<th\b/i.test(tr));
+    const prem = data.map(tr => { const c = tr.match(/<t[hd][^>]*>([\s\S]*?)<\/t[hd]>/i); return c ? c[1].replace(/<[^>]+>/g, '').trim() : ''; });
+    const utiles = prem.filter((x, i) => !isTotalLabel(x) && !isGrandTotalLabel(x)).length;
+    const ids = prem.filter(x => RX_ID.test(x));
+    if (utiles < 2) return null;
+    return { type: 'tableau', ligne, cardinal: ids.length === prem.length && ids.length ? new Set(ids).size : utiles, detail: ids.length === prem.length && ids.length ? 'identifiants distincts : ' + ids.join(', ') : utiles + ' ligne(s) de données' };
+  }
+  const fermee = reste.match(/^<(ul|ol)[\s\S]*?<\/\1>/i);
+  if (!fermee) return null;                                      // liste jamais refermée : non mesurable
+  const bloc = fermee[0];
+  const n = (bloc.match(/<li\b/gi) || []).length;
+  return n >= 2 ? { type: 'liste', ligne, cardinal: n, detail: n + ' item(s)' } : null;
+}
+
+// ---- TF-2378 : N2 ne confronte que le MÊME ENSEMBLE ------------------------------------------
+// LE FAIT (lot du produit marketing du 09/11/2026, seq 349, plan du 28/09/2026) : N2 confrontait tout
+// effectif d'un nom au cardinal mesuré pour ce nom. Le plan disait « points » des items d'une liste
+// (« Cinq points à trancher ») et de l'unité d'un curseur (« la crédibilité baisse de 10 points »), et
+// « questions » de 20 questions de référence comme de 5 questions fermées de démarrage : deux passes
+// FAIL, puis une phrase juste réécrite pour faire taire une collision de mot.
+// LA RÈGLE : une mention n'est confrontée à une annonce ancrée que si elles désignent le même ensemble.
+//   · Une mention en CONTEXTE DE MESURE n'est pas un compte : un mot de variation (baisse, hausse,
+//     gagne, perd, recule…) parmi les trois mots qui précèdent le nombre, ou une échelle (« sur 20
+//     points », « 7 points sur 10 »). Elle n'est jamais confrontée.
+//   · Le QUALIFICATIF d'une annonce : les mots pleins qui suivent le nom jusqu'à la première
+//     ponctuation (six mots au plus), plus le qualificatif placé avant le nom (« autres »,
+//     « nouveaux »…) ; mots repliés (accents, casse, pluriel, féminin), mots-outils retirés.
+//   · Une mention NUE (sans qualificatif) reprend l'ensemble annoncé : elle est confrontée.
+//   · Une mention QUALIFIÉE n'est confrontée qu'aux annonces dont le qualificatif partage au moins un
+//     mot avec le sien. Face à une annonce nue, ou sans mot commun, elle nomme une partie ou un autre
+//     ensemble, et N2 se tait.
+// LIMITE DÉCLARÉE (non_juge d'oracle-calculs) : deux qualifications sans mot commun d'un MÊME ensemble
+// (« écarts résiduels » pour « écarts que la boucle n'a pas pu lever ») ne sont pas confrontées.
+const MOTS_OUTILS_N2 = new Set(['le', 'la', 'les', 'l', 'un', 'une', 'des', 'de', 'du', 'd', 'au', 'aux', 'a', 'en', 'et', 'ou',
+  'par', 'pour', 'sur', 'sous', 'dans', 'avec', 'sans', 'avant', 'apres', 'entre', 'chez', 'vers', 'depuis', 'pendant', 'selon',
+  'contre', 'parmi', 'hors', 'que', 'qu', 'qui', 'dont', 'ne', 'n', 'pas', 'plus', 'moins', 'ce', 'cet', 'cette', 'ces', 'c',
+  'son', 'sa', 'ses', 'leur', 'leurs', 'notre', 'nos', 'votre', 'vos', 'il', 'elle', 'ils', 'elles', 'on', 'y', 'se', 's',
+  'est', 'sont', 'ont', 'ete', 'etre', 'tres', 'tout', 'tous', 'toute', 'toutes', 'aussi', 'encore', 'deja', 'ici', 'j', 'm', 't']);
+const replieN2 = w => w.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+const racineN2 = w => { let r = w; if (r.length > 3) r = r.replace(/[sx]$/, ''); if (r.length > 3) r = r.replace(/e$/, ''); return r; };
+const FIN_QUALIFICATIF = /[.,;:!?()«»"“”—–[\]|]/;
+const RX_VARIATION = /^(baiss|hauss|monte|montee|descend|gagn|perd|recul|progress|augment|diminu|chut|varie|variation|grimp|plong|cede)/;
+function qualificatif(apres, avantNom) {
+  const zone = apres.split(FIN_QUALIFICATIF)[0] || '';
+  const mots = [...String(avantNom || '').split(/\s+/), ...zone.split(/[\s'’]+/).filter(Boolean).slice(0, 6)];
+  const q = new Set();
+  for (const m of mots) {
+    const w = replieN2(m).replace(/[^a-z0-9-]/g, '');
+    if (!w || MOTS_OUTILS_N2.has(w) || /^\d+$/.test(w)) continue;
+    q.add(racineN2(w));
+  }
+  return q;
+}
+function contexteDeMesure(avant, apres) {
+  const precedents = avant.split(/[\s'’]+/).filter(Boolean).slice(-3).map(w => replieN2(w).replace(/[^a-z0-9-]/g, ''));
+  if (precedents.some(w => RX_VARIATION.test(w))) return true;
+  if (precedents.length && precedents[precedents.length - 1] === 'sur') return true;
+  return /^\s*sur\s+\d/.test(apres);
+}
+const memeEnsemble = (qAnnonce, qMention) => !qMention.size || (qAnnonce.size > 0 && [...qMention].some(w => qAnnonce.has(w)));
+// Le qualificatif et le contexte d'une occurrence de RX_EFFECTIF, lus dans le texte qui la porte.
+const portee = (texte, m) => {
+  const avant = texte.slice(Math.max(0, m.index - 120), m.index);
+  const apres = texte.slice(m.index + m[0].length, m.index + m[0].length + 240);
+  const avantNom = m[0].slice(m[1].length, m[0].length - m[2].length);
+  return { qualif: qualificatif(apres, avantNom), mesure: contexteDeMesure(avant, apres) };
+};
+
+// ---- API --------------------------------------------------------------------------------------
+// Retourne { findings, verifies, annonces } — findings au contrat commun (sev/msg/where).
+export function verifierEffectifs(text, ext, base) {
+  const findings = [], cardinaux = new Map(), annoncesToutes = [];
+  let verifies = 0, annonces = 0;
+  const html = ext === '.html' || ext === '.htm';
+
+  // Une annonce n'est ancrable que si l'effectif OUVRE le titre / la ligne (cf. RX_ENTETE).
+  const ouvre = (ligneTexte, idx) => idx === ligneTexte.match(RX_ENTETE)[0].length;
+  const fourchette = (ligneTexte, idx) => RX_FOURCHETTE.test(ligneTexte.slice(0, idx));
+
+  if (html) {
+    for (const h of text.matchAll(/<h[1-6][^>]*>([\s\S]*?)<\/h[1-6]>/gi)) {
+      const titre = h[1].replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ');
+      const ligne = text.slice(0, h.index).split('\n').length;
+      for (const m of titre.matchAll(RX_EFFECTIF)) {
+        if (fourchette(titre, m.index)) continue;
+        if (NUMEROTATION.test(m[1])) continue;                   // « 05 Points » : un numéro de chapitre, pas un compte
+        const ancrable = ouvre(titre, m.index);
+        annoncesToutes.push({ n: valeur(m[1]), nom: m[2].toLowerCase(), brut: m[0].trim(), ligne, ...portee(titre, m), ancre: ancrable ? () => ancreHtml(text, h.index + h[0].length) : () => null });
+      }
+    }
+    // Effectifs hors titres (badges, encarts) : jamais ancrés, servis à N2 seulement.
+    const plat = text.replace(/<h[1-6][^>]*>[\s\S]*?<\/h[1-6]>/gi, ' ').replace(/<[^>]+>/g, ' ');
+    for (const m of plat.matchAll(RX_EFFECTIF)) {
+      if (fourchette(plat, m.index)) continue;
+      if (NUMEROTATION.test(m[1])) continue;
+      annoncesToutes.push({ n: valeur(m[1]), nom: m[2].toLowerCase(), brut: m[0].trim(), ligne: 0, ...portee(plat, m), ancre: () => null });
+    }
+  } else {
+    const lines = text.split('\n');
+    let fence = false;
+    for (let i = 0; i < lines.length; i++) {
+      const l = lines[i];
+      if (/^\s*(```|~~~)/.test(l)) { fence = !fence; continue; }
+      if (fence) continue;
+      const enTete = /^#{1,6}\s/.test(l) || /:\s*$/.test(l);
+      for (const m of l.matchAll(RX_EFFECTIF)) {
+        if (fourchette(l, m.index)) continue;
+        const ancrable = enTete && ouvre(l, m.index);
+        annoncesToutes.push({
+          n: valeur(m[1]), nom: m[2].toLowerCase(), brut: m[0].trim(), ligne: i + 1, ...portee(l, m),
+          ancre: ancrable ? () => ancreMarkdown(lines, i + 1) : () => null
+        });
+      }
+    }
+  }
+
+  for (const a of annoncesToutes) {
+    if (!a.n || a.n < 2) continue;
+    const anc = a.ancre();
+    if (!anc) continue;
+    annonces++;
+    // TF-2378 : chaque annonce ancrée garde son qualificatif ; un nom peut ancrer plusieurs ensembles.
+    if (!cardinaux.has(a.nom)) cardinaux.set(a.nom, []);
+    cardinaux.get(a.nom).push({ cardinal: anc.cardinal, qualif: a.qualif });
+    if (anc.cardinal !== a.n) {
+      findings.push({ sev: 'bloquant', msg: `N1 — effectif annoncé « ${a.brut} » ≠ cardinal réel ${anc.cardinal} (${anc.type} ligne ${anc.ligne} : ${anc.detail})`, where: base + ':' + a.ligne });
+    } else verifies++;
+  }
+  // N2 — autres mentions du même nom dénombrable, une fois le cardinal réel mesuré, et du MÊME ENSEMBLE
+  // (TF-2378) : une unité de mesure n'est pas un compte, deux qualifications sans mot commun sont deux ensembles.
+  for (const a of annoncesToutes) {
+    if (!a.n || a.n < 2 || a.ancre()) continue;
+    const ancrees = cardinaux.get(a.nom);
+    if (!ancrees || a.mesure) continue;
+    const memes = ancrees.filter(x => memeEnsemble(x.qualif, a.qualif));
+    if (!memes.length || memes.some(x => x.cardinal === a.n)) continue;
+    const reel = memes[0].cardinal;
+    findings.push({ sev: 'bloquant', msg: `N2 — compte contradictoire dans le même document : « ${a.brut} » alors que le cardinal réel mesuré est ${reel}`, where: base + (a.ligne ? ':' + a.ligne : '') });
+  }
+  return { findings, verifies, annonces };
+}

@@ -1,0 +1,480 @@
+---
+name: factory-pptx
+description: >
+  Crée tout PowerPoint à la charte Factory (propales, plans de transformation, formations,
+  kickoffs, COPIL, restitutions). Ne porte AUCUNE valeur de marque : il charge les jetons du
+  support « diapositives » chez l'émetteur et en dérive polices, couleurs et cotes —
+  couverture et intercalaires sur le thème sombre, contenu sur le thème clair, filets, logo,
+  footer, pagination, nommage ; sans dossier de marque, il rend la main. Construit le slide
+  canonique "Vos interlocuteurs chez Factory" avec le deck.
+  Use when / déclencher dès que l'utilisateur demande de créer, mettre à jour, refondre,
+  charter, produire ou exporter un PowerPoint pour Factory ou pour un client de Factory,
+  quel que soit son nom (pseudonymisé : Client-A, Client-F…), ou parle de propale, deck, slides,
+  présentation en contexte Factory. Ne pas déclencher pour rédiger ou chiffrer une
+  proposition commerciale (→ factory-propale), pour l'auditer avant envoi
+  (→ factory-propale-review), ni pour un livrable hors charte Factory (→ systeme-de-marque).
+metadata:
+  version: "2.10.0"
+---
+
+# Factory PowerPoint Skill
+
+Encode les **règles de composition** des livrables PPTX Factory (charte v2) et **consomme** les
+**valeurs** de marque là où elles vivent : chez l'émetteur.
+
+> **Journal du 2026-11-16 — v2.10.0 (TF-2599, décision R-58 du 16/11/2026).** Un masque de couverture ou d'intercalaire
+> ne porte pas d'espace réservé de titre quand le titre se pose en zone libre : l'espace réservé laissé vide fait afficher
+> « Cliquez pour ajouter un titre » à l'ouverture (25 cas sur cinq supports, 12/11/2026). La règle est écrite à l'étape 6, et
+> la règle PH1 d'`oracle-pptx` refuse tout espace réservé vide sur une diapositive. Self-test : contrôle C22.
+>
+> **Journal du 2026-11-12 — v2.9.0 (TF-2401, décision R-58 du 12/11/2026).** La règle des intercalaires
+> dit ce que S1 juge : deux formes admises, toutes les parties ont leur intercalaire, ou aucune (sommaire du
+> gabarit B de `factory-propale`) ; le deck mixte reste refusé. La phrase « un intercalaire par partie, sans
+> exception » est retirée de ce fichier et de `references/charte.md` § 6. Self-test : contrôle C21.
+>
+> **Journal du 2026-11-10 — v2.8.0 (campagne FA3, décisions R-58 du 10/11/2026 sur les retours du 09/11).**
+> Neuf sujets, chacun avec son contrôle au self-test (C12 à C20) : TF-2326 le prérequis pptxgenjs se vérifie
+> (`verifier-prerequis.mjs`) ; TF-2355 la sortie de `lire-marque.mjs` est documentée telle qu'elle est ;
+> TF-2354 les polices du poste sont vérifiées et le texte du PDF est lu pour les mots doublés ; TF-2328 les espaces
+> insécables se posent sur le fichier ; TF-2368 langue, en-tête de tableau et formes décoratives ;
+> TF-2371 le style de tableau tranché entre dans la charte ; TF-2374 une grille par famille de pages sœurs, pas de
+> barre latérale ; TF-2377 un SVG se rend avec ses dégradés ou se refuse ; TF-2379 le cadrage est exigé avant de
+> générer.
+>
+> **Journal du 2026-10-01 — v2.7.0 (TF-1502, décision humaine D-37 (a)).** L'export par
+> PowerPoint entre dans le skill (étape 7). Un produit le réécrivait en 9 scripts maison :
+> 8 appelaient `Quit()` sur l'instance que l'utilisateur avait ouverte, et aucun ne contrôlait
+> les polices embarquées, sorties fausses sur 5 versions d'un deck. `scripts/exporter-pptx.mjs`
+> pose un verrou entre sessions et ne quitte jamais un PowerPoint qu'il n'a pas lancé. Il fait
+> juger les polices embarquées, les réencode hors PowerPoint sur un FAIL, et refuse de livrer si
+> le jugement reste en échec. Self-test : contrôles C5 à C8.
+>
+> **Journal du 2026-09-11 — v2.6.0 (TF-1022 / TF-1023, décision humaine D-4 « 4b pour les
+> powerpoints »).** Ce skill ne peint plus depuis des valeurs écrites dans son texte. Il
+> **charge** les jetons du support « diapositives » du dossier de marque de l'émetteur
+> (source DTCG + dérivé CSS) par `scripts/lire-marque.mjs`, et rend la main si ce dossier
+> n'est pas joignable. Les couleurs et polices en dur du corps de ce fichier sont remplacées
+> par le **nom du jeton** ; `references/charte.md` devient une table de correspondance
+> jeton → usage PowerPoint. Les règles de composition (filets, kicker, logo à deux endroits,
+> footer, bijection sommaire ↔ intercalaires) sont inchangées : ce ne sont pas des valeurs.
+>
+> **Journal du 2026-09-11 — v2.5.1 (TF-1021 / TF-1022).** Ce skill ne vivait qu'en archive.
+> À sa mise en source : (a) les noms de clients et de personnes ont été **pseudonymisés** ;
+> (b) `references/charte.md`, `references/layouts.md` et `references/assets.md` ont été
+> **reconstitués** depuis la description de la v2.5.0 ; (c) les ressources citées par la v2.5.0
+> mais **jamais livrées** ont été retirées du corps de ce fichier plutôt que réinventées —
+> elles sont listées telles quelles sous « Non livré », section où chaque ligne porte la
+> mention pour que le self-test ne la compte pas comme lien mort.
+
+## Langue et année
+
+Toujours produire en **français**. Année de référence : **2026** (sauf instruction contraire).
+
+## D'où viennent les valeurs (et ce qui se passe quand elles manquent)
+
+Une couleur, une police, une cote sont des **données périssables** : elles vivent chez
+l'émetteur, datées et sourcées, jamais dans ce skill. Ce skill n'en connaît que les **noms de
+jetons** et l'**usage** qu'il en fait sur une diapositive.
+
+- **Dossier de marque** : donné par l'appelant, dans cet ordre — paramètre `--marque <dossier>`,
+  puis variable d'environnement `FACTORY_MARQUE`, puis, pour Factory, le chemin par défaut
+  `<racine des forges>/factory-marketing/donnees/marque/`.
+- **Artefacts lus** : la source DTCG `<marque>/tokens-diapositives.tokens.json` fait foi ; le
+  dérivé `<marque>/tokens-diapositives.css` sert de repli. Le dérivé aplatit les alias sur le
+  thème clair — préférer la source quand les deux sont là (c'est le défaut du lecteur).
+- **Lecture des deux thèmes sur ce support** : le thème **clair** est la diapositive de
+  **contenu**, le thème **sombre** est la **couverture** et les **intercalaires**. Ce n'est pas
+  une bascule utilisateur, c'est une navigation : le contraste signale le changement de partie.
+- **Sans dossier de marque joignable, ou s'il manque un jeton requis : RENDRE LA MAIN.** Le
+  skill ne retombe sur aucune valeur en dur, ne devine pas une couleur, ne substitue pas une
+  police « proche ». Il dit ce qui manque, où il a cherché, et s'arrête — un deck peint avec
+  une charte inventée est un défaut, pas un dépannage.
+- **Mentions [à valider]** : le dossier de marque porte sa propre documentation (`<marque>/MARQUE.md`
+  chez l'émetteur). Ce qui y est marqué à valider le reste ici : ne pas le figer dans le deck
+  sans arbitrage du porteur de la charte.
+
+## Workflow par défaut
+
+0. **Cadrer avant de générer** (TF-1383) — pour toute présentation remise à un commanditaire (enjeu
+   fort au sens du § 6 de la fiche de conception), jamais pour un brouillon de travail interne. Une
+   présentation remise conforme à ses oracles a été refusée à 9 demandes dont 5 sur le vocabulaire
+   du lecteur : la fiche, remplie après la remise, n'avait rien fixé. Quatre gestes (a à c pour une présentation remise, d pour tout deck, brouillon compris), avant toute
+   génération, avec les outils du pilot `factory-pilot` (chemin : `<racine des forges>/factory-pilot/`) :
+
+   ```bash
+   node oracles/oracle-gabarits-documents.mjs --livrable "<nom du deck>.pptx"
+   node oracles/oracle-gabarits-documents.mjs --fiche <fiche remplie>.md
+   ```
+
+   a. **Famille du catalogue (G8)** : la première commande résout la famille du livrable par son nom.
+      Aucune famille ne résout (FAIL de G8) : ce n'est pas une case à forcer, c'est un trou du catalogue ;
+      écrire `famille: aucune — candidature remontée` dans la fiche et le remonter au pilot.
+   b. **Fiche de conception (règle D8)** : remplir la fiche de conception du pilot (gabarits, documents, FICHE-CONCEPTION)
+      (lecteur défini par ce qu'il doit décider, vocabulaire fixé, intention de chaque partie), puis
+      la faire juger par G6 (seconde commande). Jamais d'emplacement `{…}` laissé.
+   c. **Validation humaine** de la fiche quand l'enjeu est fort, avant l'étape 1. Le vocabulaire fixé
+      par la fiche alimente le LEXIQUE.json que lira S5 à l'étape 8.
+
+   d. **Fichier de cadrage de la communication (TF-2379)** — audience, décision attendue, contexte, objection
+      attendue, écrit à l'étape 1 de `factory-communication` (gabarit `../factory-communication/references/gabarit-cadrage.md`),
+      **présent et complet avant de générer**, brouillon compris :
+
+      ```bash
+      node ../factory-communication/scripts/verifier-cadrage.mjs <fichier de cadrage>.md
+      ```
+
+      Exit 0 ⇒ générer. Exit 1 ou 2 ⇒ **ne pas générer** : une session qui suppose l'audience produit un deck que
+      tous les oracles laissent passer et que l'humain refuse (deux retours de contenu en un jour sur un même deck,
+      le 17/09/2026). Pour un support de formation, le fichier porte aussi le public réel de chaque module.
+
+   Sans pilot joignable : le dire à la restitution, ne pas déclarer le cadrage fait.
+1. **Charger le système de marque** — `node scripts/lire-marque.mjs` (options ci-dessus).
+   Sortie JSON : les jetons par thème, les polices et les cotes, convertis pour pptxgenjs (hexadécimal
+   **sans dièse**, pouces depuis les px à 96 px/pouce, face de police). Chaque clé de **couleur** de
+   `usages_pptx` rend un **objet** `{theme, jeton, pptx}` : à pptxgenjs on passe `usages_pptx.<clé>.pptx`,
+   jamais l'objet (« colorStr.replace is not a function », constaté le 16/09/2026). Les clés de police
+   rendent la **face** (une chaîne), `filet_epaisseur_pouces` un **nombre** (TF-2355). Forme de la sortie,
+   tenue égale à la sortie réelle par le self-test (C12) :
+
+   ```json
+   {
+     "usages_pptx": {
+       "fond_contenu": { "theme": "clair", "jeton": "--bg", "pptx": "<hex sans dièse>" },
+       "encre_contenu": { "theme": "clair", "jeton": "--ink", "pptx": "<hex sans dièse>" },
+       "encre_faible_contenu": { "theme": "clair", "jeton": "--muted", "pptx": "<hex sans dièse>" },
+       "trait_contenu": { "theme": "clair", "jeton": "--line", "pptx": "<hex sans dièse>" },
+       "surface_carte": { "theme": "clair", "jeton": "--card", "pptx": "<hex sans dièse>" },
+       "accent_filets": { "theme": "clair", "jeton": "--blue", "pptx": "<hex sans dièse>" },
+       "fond_couverture": { "theme": "sombre", "jeton": "--bg", "pptx": "<hex sans dièse>" },
+       "encre_couverture": { "theme": "sombre", "jeton": "--ink", "pptx": "<hex sans dièse>" },
+       "encre_faible_couverture": { "theme": "sombre", "jeton": "--muted", "pptx": "<hex sans dièse>" },
+       "trait_couverture": { "theme": "sombre", "jeton": "--line", "pptx": "<hex sans dièse>" },
+       "accent_couverture": { "theme": "sombre", "jeton": "--blue", "pptx": "<hex sans dièse>" },
+       "police_titre": "<face de police>",
+       "police_corps": "<face de police>",
+       "police_mono": "<face de police>",
+       "filet_epaisseur_pouces": 0
+     }
+   }
+   ```
+
+   Le champ `polices_poste` dit, pour chaque police, si elle est **installée** au poste (TF-2354) :
+   `installee: false` ⇒ PowerPoint substituera une autre face en silence et l'export PDF peut répéter le
+   dernier mot de chaque ligne coupée ; installer la police avant de rendre, ou donner la liste du poste de
+   rendu par `--polices-installees=<liste>`. `--exiger-polices` fait de l'absence un exit 2.
+   **Exit 2 ⇒ s'arrêter et rendre la main**, en citant le message du lecteur.
+2. Charger `references/charte.md` — table de correspondance **jeton → usage PowerPoint**,
+   règles de composition, dimensions — **toujours**.
+3. Identifier les layouts nécessaires dans `references/layouts.md`.
+4. Si slides canoniques demandés (interlocuteurs, réalisations) : consulter `references/assets.md`.
+5. **Images** — charger `references/drive-assets.md` : couverture (logo Factory + logo client
+   + photo d'habillage), illustrations sur **≈ 1 slide de contenu sur 2** (jamais intercalaire,
+   sommaire, prix). Sélection par tags, préparation via `prepare_images.py` (webp→PNG, coins
+   arrondis sans cadre), placement **contain-fit** (ratio préservé, jamais d'étirement).
+5 bis. **Vérifier que pptxgenjs se résout** (TF-2326), dans le dossier du script de construction :
+
+   ```bash
+   node scripts/verifier-prerequis.mjs --dossier <dossier du script de construction>
+   ```
+
+   **Exit 2** : le module ne se résout pas depuis ce dossier, un script de construction y sortirait en code 1
+   sans rien dire. La sortie donne la commande (`npm install pptxgenjs@…`, à exécuter dans ce dossier). Une
+   installation globale ne suffit pas : un `import` ne consulte ni la racine globale de npm ni `NODE_PATH`.
+6. Construire le PPTX avec pptxgenjs, **en n'écrivant que des valeurs venues de l'étape 1** :
+   aucune couleur ni police littérale dans le script de génération — les lire depuis le JSON.
+   **Poser la langue** : `lang: 'fr-FR'` dans les options de chaque `addText` et de chaque cellule d'`addTable` (TF-2368), sinon pptxgenjs
+   déclare `en-US` ; l'étape 6 quater le contrôle.
+   **Nommer le pied de page et la pagination** avec l'option `objectName` de pptxgenjs, exactement
+   « Pied de page » et « Pagination » : pptxgenjs ne sait pas écrire les espaces réservés `ftr` et
+   `sldNum` que la règle S4 de l'étape 8 exige, et l'étape 6 bis les pose à partir de ces noms.
+   **Un masque de couverture ou d'intercalaire ne porte pas d'espace réservé de titre** quand le titre se pose
+   en zone libre (TF-2599). Une diapositive créée sur un masque qui en porte un, et qui ne le remplit pas, le
+   garde vide : PowerPoint y affiche « Cliquez pour ajouter un titre » par-dessus le titre posé à côté (25
+   espaces réservés vides sur cinq supports, vus à l'ouverture le 12/11/2026). Avec pptxgenjs, ces diapositives
+   prennent un masque sans objet `placeholder` (`defineSlideMaster({ title: 'I', objects: [] })`), ou le titre
+   remplit l'espace réservé (`addText(…, { placeholder: 'titre' })`). La règle PH1 d'`oracle-pptx` refuse tout
+   espace réservé vide sur une diapositive, hors pied de page, numéro et date.
+6 bis. **Poser les espaces réservés de pied de page** (TF-1382), sur tout deck construit par pptxgenjs :
+
+   ```bash
+   python scripts/poser-pieds-de-page.py <deck pptxgenjs>.pptx --out <deck avec pieds>.pptx
+   ```
+
+   Chaque forme nommée « Pied de page » ou « Pagination » devient l'espace réservé `ftr` ou `sldNum` ;
+   sa position, son texte et sa mise en forme ne changent pas. Le deck d'entrée n'est jamais modifié et
+   une sortie existante jamais écrasée. **Exit 1** : aucune forme ne porte ces noms, le script de
+   génération doit les nommer. Les étapes 6 ter et 7 prennent le deck avec pieds en entrée.
+6 ter. **Poser les espaces insécables** (TF-2328), sur le fichier produit :
+
+   ```bash
+   python scripts/poser-insecables.py <deck>.pptx --out <deck avec insécables>.pptx
+   ```
+
+   La règle S8 de l'étape 8 avertit sur chaque espace ordinaire devant `: ; ! ?`, dans `« »`, entre un nom
+   et son numéro (« chapitre 4 »), entre un mois et son année. Relevé le 09/11/2026 : le texte source portait
+   U+00A0, le PPTX brut une espace ordinaire. Mesure du 10/11/2026 : pptxgenjs 3.12.0 et 4.0.1 **conservent**
+   U+00A0 (texte simple, passages, tableau, forme, notes) ; la perte vient d'un traitement du texte avant
+   l'écriture (`\s`, `trim`, NFKC en JavaScript, lecture non UTF-8). Le script applique la table de S8 au
+   fichier, quelle que soit la cause : chaque espace trouvée devient U+00A0, un second passage ne change rien,
+   le deck d'entrée n'est jamais modifié, une sortie existante jamais écrasée. L'espace fine U+202F est aussi
+   admise par S8 si le texte source la porte. L'étape 7 prend le deck de sortie en entrée.
+6 quater. **Langue, en-tête de tableau, formes décoratives** (TF-2368), sur le fichier produit :
+
+   ```bash
+   python scripts/accessibilite-deck.py <deck>.pptx                    # contrôle seul : exit 1 si constat
+   python scripts/accessibilite-deck.py <deck>.pptx --out <deck conforme>.pptx   # corrige, puis recontrôle la sortie
+   ```
+
+   pptxgenjs déclare `lang="en-US"` sur chaque passage tant que le script de génération ne passe pas
+   `lang: 'fr-FR'` dans les options de chaque `addText` : un lecteur d'écran lit alors le français avec une voix
+   anglaise (« Toujours français », `references/charte.md` § 7). Le contrôle lit la langue de chaque passage, la
+   déclaration de la première ligne d'un tableau comme en-tête (`firstRow`) et le marquage décoratif des formes
+   sans texte (bandeaux, filets). `--out` pose fr-FR, `firstRow="1"` et la marque décorative, jamais sur le deck
+   d'entrée ; une **image sans texte alternatif** reste un constat : c'est un choix de l'auteur. Un passage
+   volontairement étranger se remet à la main après `--out`.
+7. **Exporter par PowerPoint**, jamais par un script maison : le PPTX ressort avec ses polices
+   embarquées, et le PDF sert la passe QA et la remise.
+
+   ```bash
+   node scripts/exporter-pptx.mjs <deck pptxgenjs>.pptx --pptx <deck à livrer>.pptx --pdf <deck à livrer>.pdf
+   ```
+
+   Le script attend son tour derrière le verrou des autres sessions, travaille sur une copie, ne
+   ferme que sa présentation et ne quitte que l'instance qu'il a lancée lui-même, invisible et
+   sans autre présentation. `--png <dossier neuf>` tire en plus une image par diapositive, sans
+   juge de polices : c'est le rasteriseur de la passe QA sur un poste sans LibreOffice ni
+   pdftoppm (PowerPoint rend les images, le dossier ne doit pas exister). Il fait ensuite juger les polices embarquées par
+   `../quality-oracles/scripts/oracle-polices-embarquees.mjs`. Sur un FAIL, il les réencode hors
+   PowerPoint (`scripts/reembarquer-polices.py`) et les fait rejuger ; un second échec vaut
+   refus. Il n'écrase aucun fichier et livre tout ou rien. **Exit 1 ou 2 ⇒ rien n'est livré** :
+   citer le `motif` du rapport JSON. Si ce motif dit l'absence de Windows ou de PowerPoint, le
+   deck pptxgenjs part sans polices embarquées, et la restitution le dit.
+   `--instance-neuve` refuse de travailler dans un PowerPoint déjà ouvert, pour un export sans
+   surveillance ; `--deja-exporte` assainit seul un deck exporté ailleurs.
+
+   **Lire le texte du PDF** (TF-2354) : `python scripts/controler-mots-doubles.py <deck à livrer>.pdf`.
+   Sans la police exigée, l'export répète le dernier mot de chaque ligne coupée, ce que les oracles du
+   PPTX ne voient pas. **Exit 1** : des mots doublés ; vérifier `polices_poste` (étape 1), corriger,
+   ré-exporter, ne jamais livrer.
+8. **Passe QA finale (obligatoire)** — trois temps, la géométrie et l'oracle d'abord :
+
+   ```bash
+   python scripts/controler-grilles.py <deck.pptx> --familles '{"<famille>": [<n° des diapositives sœurs>]}'
+   node ../quality-oracles/scripts/oracle-charte-pptx-semantique.mjs <deck.pptx> --mesurer
+   ```
+
+   `controler-grilles.py` (TF-2374) refuse une barre latérale accolée à un bloc, et une page sœur qui
+   suit une autre grille que sa famille (`references/layouts.md`) ; sans `--familles`, il ne joue que les
+   barres latérales et le dit.
+
+   L'oracle vit dans le skill voisin quality-oracles, sous scripts/oracle-charte-pptx-semantique.mjs :
+   S1 bijection sommaire ↔ intercalaires, S2 kicker, S3 logos, S4 footer + pagination, S5
+   **lexique du destinataire** sur les textes de slide **et les notes du présentateur**
+   (TF-1152), S6 **alignement d'un repère « N / M » sur la 1re ligne du titre**, tolérance 1 pt
+   (TF-1379), S7 **aucune liste en ligne** dans le texte visible (E-11 : un « · » ou deux « ; » dans
+   un paragraphe, hors pied de page et couverture, est une énumération qui devait être une liste,
+   TF-1390). S6 se mesure sur le rendu : `--mesurer` fait lire par PowerPoint les bornes de la 1re
+   ligne de chaque titre (`quality-oracles/scripts/mesure-rendu-pptx.ps1`, sur une copie, sans
+   quitter l'instance de l'utilisateur). Sans PowerPoint, le `non_juge` dit « S6 NON jouée » : le
+   désaxement d'un repère est alors à chercher à l'œil sur le rendu. Verdict FAIL ⇒ corriger à la source et re-générer, jamais livrer. S5 lit le
+   fichier LEXIQUE.json du socle du projet où vit le deck : si le `non_juge` déclare l'avoir
+   cherché en vain, le vocabulaire du client n'a été jugé par personne — le dire, pas conclure.
+   Puis tirer les images (`--png` de l'étape 7, ou le PDF de l'étape 7 passé à pdftoppm si le poste l'a) et inspecter **chaque** slide — aucune image
+   déformée / hors zone / encadrée, aucun texte qui déborde d'un encart ou de la slide.
+   Détail : `references/drive-assets.md` §8.
+9. Nommer selon la convention ci-dessous, livrer dans `/mnt/user-data/outputs/` via `present_files`.
+
+Le slide canonique « Vos interlocuteurs » se **construit avec le deck** (étape 6), il ne se
+greffe pas sur un PPTX existant : l'outil de fusion XML décrit par la v2.5.0 est **non livré**
+(cf. « Non livré », note du 2026-09-11). Pour charter un PPTX reçu, le **reconstruire**
+(« garder le fond, changer la forme »).
+
+## Correspondance jeton → usage, en un coup d'œil
+
+Les clés `usages_pptx` rendues par l'étape 1, et ce qu'elles peignent. Valeurs : jamais ici.
+
+| Clé rendue | Thème | Jeton | Ce qu'elle peint |
+|---|---|---|---|
+| `fond_contenu` | clair | `--bg` | fond des slides de contenu |
+| `encre_contenu` / `encre_faible_contenu` | clair | `--ink` / `--muted` | titre-message, texte courant / mentions secondaires, footer |
+| `surface_carte` | clair | `--card` | fond des cartes et encarts |
+| `trait_contenu` | clair | `--line` | séparateurs, contours d'encarts, filets de tableau |
+| `accent_filets` | clair | `--blue` | filets haut et bas, accents de titraille, puces |
+| `fond_couverture` | sombre | `--bg` | fond de la **couverture** et des **intercalaires** |
+| `encre_couverture` / `encre_faible_couverture` | sombre | `--ink` / `--muted` | texte sur fond sombre |
+| `accent_couverture` | sombre | `--blue` | accent lisible sur fond sombre |
+| `police_titre` / `police_corps` / `police_mono` | — | `--head` / `--sans` / `--mono` | titres / corps et labels / extraits techniques |
+| `filet_epaisseur_pouces` | — | `--filet-epaisseur` | épaisseur des filets, déjà en pouces |
+
+Les cotes d'espacement (`dimensions`) arrivent en px **et** en pouces : composer avec l'échelle
+de l'émetteur plutôt qu'avec des marges improvisées slide par slide.
+
+## Convention de nommage des livrables
+
+**Format strict** : `Factory - {TypeDoc} {Client} - {Scope} - {YYYYMMDD}{itération}.{ext}`
+
+- Espaces autour des tirets, **pas d'underscores**, pas de caractères spéciaux dans le scope
+- `TypeDoc` au singulier : Propal, Plan Transfo, Support, Kickoff, COPIL, Restitution, Note
+- `Client` en MAJUSCULES si possible (CLIENT-K, CLIENT-A, CLIENT-F) ou tel que prononcé
+- `Scope` court, sans `+` ni `&` (tirets simples) : `L0-L3`, `F1-F2-C1-C2`, `Formation 20-5`
+- `itération` = suffixe alphabétique a, b, c… incrémenté à chaque révision du même jour
+
+Exemple : `Factory - Propal Client-F - L0-L3 - 20260422h.pptx`
+
+## Outillage
+
+Création from-scratch : **pptxgenjs (Node.js)**, à installer dans le dossier de travail du deck : le
+module n'est ni livré avec ce skill ni présent globalement sur le poste (mesuré le 09/11/2026 :
+`npm root -g` ne le contient pas). `node scripts/verifier-prerequis.mjs` (étape 5 bis) dit s'il se
+résout et donne la commande d'installation. Aucun outil de manipulation XML directe n'est livré avec
+ce skill (cf. « Non livré »).
+
+**Dépendance Python** : les deux scripts d'images (`scripts/fetch_drive_assets.py`,
+`scripts/prepare_images.py`) importent **Pillow** (`PIL`) — validation d'image et dimensions
+réelles pour le premier, transcodage et masque alpha pour le second. Prérequis :
+`pip install Pillow`. Sans Pillow, l'étape 5 (images) échoue ; le reste du workflow tient.
+`scripts/lire-marque.mjs` et `scripts/self-test.mjs` sont en Node pur, **sans dépendance** npm.
+
+**Export (étape 7)** : Windows, PowerPoint et Windows PowerShell 5.1 pour
+`scripts/exporter-powerpoint.ps1` ; Python 3 et fontTools, sinon `uv run --with fonttools`, pour
+`scripts/reembarquer-polices.py` et pour le juge ; le skill voisin quality-oracles, qui porte ce
+juge. S'il en manque un, l'export rend exit 2 avec son motif et ne livre rien. Le self-test rend
+alors SKIP sur les contrôles qu'il ne peut pas jouer, jamais PASS.
+
+## Références chargées à la demande
+
+Aucun de ces fichiers ne se lit d'office, sauf le premier. La colonne de droite dit le
+moment exact où le charger — charger tout d'avance coûte du contexte pour rien.
+
+| Fichier | Charger quand |
+|---|---|
+| `references/charte.md` | **Systématiquement avant toute génération PPTX**, après l'étape 1 : il dit quel jeton joue quel rôle, jamais quelle est sa valeur |
+| `references/layouts.md` | Choix des layouts (couverture, sommaire, cartes, roadmap, tableaux) |
+| `references/drive-assets.md` | **Toute image du deck** : 3 dépôts Factory (illustrations tagués, logos, profils webp) via canal public curl ; sélection par tags ; préparation `prepare_images.py` (webp→PNG, coins arrondis **sans cadre**) ; placement **contain-fit** (ratio préservé, jamais d'étirement) ; couverture logos + photo ; rythme ~1 contenu/2 ; **passe QA débordements**. Alt. MCP Drive privé |
+| `references/layouts.md` §Layouts 9-11 | Gabarits photo (couverture panneau photo, texte+visuel 60/40, visuel+étapes) issus de la propale Client-I |
+| `references/assets.md` | Utilisation des slides canoniques (interlocuteurs, réalisations) |
+
+## Scripts livrés
+
+- `scripts/lire-marque.mjs` — **charge le système de marque de l'émetteur** et rend les jetons
+  du support « diapositives » en JSON, convertis pour pptxgenjs. Exit 2 avec message nommant le
+  dossier exploré ou le jeton manquant. Fixtures : `fixtures/marque-valide` (verte, valeurs
+  attendues dans `attendu.json`) et `fixtures/marque-sans-blue` (rouge, exit 2). Node, sans dépendance.
+  Rend aussi `polices_poste` (TF-2354) : la police est-elle installée au poste, par le registre de
+  Windows ou `fc-list`.
+- `scripts/verifier-prerequis.mjs` — **l'étape 5 bis** (TF-2326) : pptxgenjs se résout-il depuis le
+  dossier du script de construction ? Exit 0 résolu (version et chemin), exit 2 sinon, avec la commande
+  d'installation. N'installe rien. Node, sans dépendance.
+- `scripts/controler-mots-doubles.py` — **la lecture du PDF de l'étape 7** (TF-2354) : mots doublés dans
+  une ligne, ou fin de ligne répétée en tête de la suivante. Exit 0 propre, 1 doublons, 2 PDF illisible ou
+  aucun lecteur (PyMuPDF, pypdf, `pdftotext`). Fixtures : `fixtures/pdf/` (saine, doublée).
+- `scripts/fetch_drive_assets.py` — liste / cherche par tag / télécharge / valide des images d'un dossier Drive public (raccourcis `images`, `logos`, `profils` ; webp reconnu). **Requiert Pillow.**
+- `scripts/prepare_images.py` — prépare pour embarquement PPTX : transcodage webp/gif→PNG, coins arrondis (masque alpha, **sans cadre**), calcul contain-fit, manifest JSON. **Requiert Pillow.** Rend un **SVG** par un navigateur (dégradés appliqués, facteur 3, rognage à la boîte non transparente ; Playwright et Chrome, Edge ou Chromium) et **refuse avec un message** (exit 2) tout format qu'il ne rend pas fidèlement : `references/drive-assets.md` § 4 (TF-2377). Fixtures : `fixtures/svg/`.
+- `scripts/poser-insecables.py` — **l'étape 6 ter** (TF-2328) : pose U+00A0 sur le fichier produit selon la table de S8 ; idempotent, le deck d'entrée n'est jamais modifié. Python standard, sans dépendance. Exit 0 traité, 2 usage ou sortie existante.
+- `scripts/accessibilite-deck.py` — **l'étape 6 quater** (TF-2368) : langue fr-FR de chaque passage, première ligne de tableau déclarée en-tête, formes sans texte marquées décoratives ; contrôle seul, ou `--out` pour corriger. Une image sans texte alternatif reste un constat. Python standard. Fixture : `fixtures/accessibilite/`.
+- `scripts/controler-grilles.py` — **la passe QA de l'étape 8** (TF-2374) : barre latérale accolée à un bloc, grille unique par famille de pages sœurs (`--familles`). Python standard. Fixtures : `fixtures/grilles/`.
+- `scripts/poser-pieds-de-page.py` — **l'étape 6 bis** : pose les espaces réservés `ftr` et `sldNum`
+  que pptxgenjs n'émet pas, sur les formes nommées « Pied de page » et « Pagination ». Python
+  standard, sans dépendance. Exit 0 posé, 1 aucune forme nommée, 2 usage ou sortie existante.
+- `scripts/exporter-pptx.mjs` — **l'export par PowerPoint** de l'étape 7 : verrou entre sessions,
+  appel de `scripts/exporter-powerpoint.ps1`, jugement des polices embarquées, réencodage si FAIL,
+  métadonnées personnelles vidées puis rejugées (TF-1535), images PNG de la passe QA par `--png`
+  (TF-1386), livraison tout ou rien. Rapport JSON ; exit 0 livré, 1 refus, 2 non joué.
+- `scripts/exporter-powerpoint.ps1` — le seul code qui pilote PowerPoint (COM) : copie unique
+  ouverte sans fenêtre, PPTX à polices embarquées et PDF, puis la règle de décision qui ne quitte
+  que l'instance lancée par l'export. Son mode `-Decision` rejoue la règle sans PowerPoint.
+- `scripts/reembarquer-polices.py` — réencode les polices embarquées d'un PPTX dans un processus
+  neuf, sur les polices sources du poste ou de `--polices`. Refuse sans rien écrire si une source
+  manque, diffère de version, ou si un glyphe se perdrait.
+- `scripts/self-test.mjs` — self-test du skill : liens relatifs du SKILL.md (C1), absence de nom
+  de client (C2), consommation effective du système de marque sur les deux fixtures (C3),
+  absence de valeur de marque en dur dans ce fichier (C4), règle de décision et ses 3 mutants
+  (C5), verrou entre processus (C6), chaîne d'assainissement sur fixtures fictives (C7), essai
+  réel par PowerPoint sur demande (C8, `--essai-powerpoint`, jamais si PowerPoint tourne), pieds de
+  page d'un vrai deck pptxgenjs, remède joué (C9), commandes de l'étape 0 rejouées sur une fiche
+  remplie et une fiche vide (C10), aide des scripts Python sous console cp1252 et refus de `--png`
+  sur un dossier existant (C11), documentation de `lire-marque.mjs` égale à sa sortie (C12), prérequis
+  pptxgenjs (C13), polices du poste et mots doublés du PDF (C14), espaces insécables (C15), langue, en-tête de
+  tableau et formes décoratives (C16), style de tableau de la charte (C17), grilles et barres latérales (C18),
+  rendu ou refus d'un SVG (C19), fichier de cadrage exigé avant de générer (C20). Les
+  deux polices sources fausses de C7 sortent de `fixtures/export/gen-source-defectueuse.py`.
+
+## Non livré (constat daté du 2026-09-11, TF-1022)
+
+Ressources citées par la v2.5.0 et **absentes du paquet**. Elles ne sont **pas** réinventées ici :
+le renvoi est retiré du workflow, le manque est déclaré.
+
+- Logo officiel Factory (PNG) — **non livré** dans le paquet, mais présent dans le dossier Drive `logos` (constat du
+  2026-10-12, TF-1386 : « Factory - Logo + Texte - Bleu.png »). Le récupérer avec `scripts/fetch_drive_assets.py` (`--name` et
+  `--folder logos`). Repli seulement si le Drive est injoignable : texte propre dans le panneau blanc.
+- Photos N&B carrées des interlocuteurs — **non livré**. Repli : dépôt `profils` (cf. `references/drive-assets.md`).
+- Fragment XML du slide « interlocuteurs » — **non livré**. Repli : construire le slide avec pptxgenjs.
+- Script de fusion XML d'un slide canonique dans un PPTX existant — **non livré**. Aucun repli : le patch de PPTX n'est pas outillé.
+- Squelette pptxgenjs pré-câblé — **non livré**. Repli : partir de l'étape 1 + `references/charte.md` + `references/layouts.md`.
+- Snippets pptxgenjs (addBanners / addHeader / addFooter) — **non livré**, non reconstituable sans le code d'origine.
+- Recueil des structures récurrentes des livrables passés — **non livré**, non reconstituable sans le corpus.
+
+## Garde-fous
+
+- **Jamais de valeur de marque en dur.** Aucune couleur hexadécimale, aucune famille de police,
+  aucune cote de charte écrite dans le script de génération : tout vient de l'étape 1. Une
+  valeur qu'on ne sait pas rattacher à un jeton est une question à poser, pas une valeur à
+  inventer. Sans dossier de marque : **rendre la main**.
+- **Jamais** d'underscore dans les noms de fichiers livrés
+- **Jamais** la police "Syne" — les titres prennent le jeton `--head`, le corps le jeton
+  `--sans`, point.
+- **Jamais** de PPTX sans : filets d'accent (`--blue`) haut/bas, footer avec pagination
+  (exception : la couverture n'a pas de footer ; l'intercalaire, si)
+- **Jamais de logo en haut à gauche des slides** — le logo Factory ne vit qu'à deux
+  endroits : le panneau blanc de la couverture et la slide canonique interlocuteurs.
+  Aucune slide de contenu ni intercalaire ne porte de logo (image ou texte).
+- **Jamais d'eyebrow / kicker au-dessus du titre d'une slide** (aucun libellé en
+  majuscules espacées type « 01 · VOTRE ENJEU » ou « CADRE DE LECTURE · … ») —
+  le titre-message ouvre seul la slide. Les étiquettes en majuscules à l'INTÉRIEUR
+  des cartes (labels de carte) restent autorisées. Le kicker de la couverture
+  (« PROPOSITION COMMERCIALE ») reste autorisé — couverture uniquement.
+- **Sommaire : deux formes admises.** Si le deck contient une slide sommaire, soit CHAQUE
+  entrée ouvre sa section par un intercalaire sombre « {NN} · {Titre} » (numérotation et
+  intitulés strictement identiques au sommaire), soit AUCUNE n'en ouvre : c'est la forme du
+  gabarit B de `factory-propale`, dont les entrées restent numérotées de 01 à 0N sans trou.
+  Un deck mixte, où certaines parties seulement ont leur intercalaire, est refusé par S1.
+  Vérifier au QA final la bijection sommaire ↔ intercalaires dans la première forme, la
+  numérotation continue dans la seconde.
+- **Charte v2 par défaut** : couverture et intercalaires sur le fond du thème **sombre**
+  (`fond_couverture`), contenu sur le fond du thème **clair** (`fond_contenu`) — le contraste
+  signale la navigation. Variante claire de bout en bout (v1) : sur demande explicite, en
+  peignant toutes les slides avec le thème clair — jamais en changeant les valeurs.
+- **Images : ratio d'origine préservé partout, jamais d'étirement** (contain-fit via
+  `containBox`, jamais `w`+`h` figés) et **aucun cadre** (pas de `line` ; arrondi = masque
+  alpha via `prepare_images.py`). webp/gif → PNG avant embarquement. Suivre `references/drive-assets.md`.
+- **Illustrations : ≈ 1 slide de contenu sur 2**, jamais sur intercalaire, sommaire, ni
+  prix/investissement. La couverture porte logo Factory + logo client + une photo d'habillage.
+  La slide interlocuteurs porte ses photos de profil (hors de ce rythme).
+- **Jamais de barre latérale accolée à un bloc**, et **une seule grille par famille de pages sœurs**
+  (`references/layouts.md`, TF-2374) : la hiérarchie passe par le titre de carte, la surface et le filet.
+- **Passe QA finale non négociable** : l'oracle de charte sémantique d'abord (S1-S7, dont
+  le **lexique du destinataire** sur textes et notes), puis rasteriser + inspecter chaque slide
+  (image déformée / hors zone / encadrée, **texte qui déborde d'un encart ou de la slide**, zones
+  qui se chevauchent). Corriger à la source et re-générer — jamais livrer avec un défaut.
+- **Toujours** vérifier visuellement le rendu avant de livrer (conversion PDF + lecture des slides)
+- **Jamais d'export PowerPoint par un script maison**, et jamais `Quit()` sur une application que
+  l'export n'a pas lancée : l'instance ouverte appartient à l'utilisateur, avec ses documents.
+  L'export passe par `scripts/exporter-pptx.mjs`, et un PPTX à polices embarquées ne se livre
+  qu'après le PASS de leur juge.
+
+## Exemple type
+
+- « Crée une propale pour X, périmètre Y » → `scripts/lire-marque.mjs` (étape 1) +
+  `references/charte.md` + `references/layouts.md` + `references/drive-assets.md` ; couverture
+  (logos + photo) + sommaire + contenu (images ~1/2) + interlocuteurs ; export (étape 7) ; QA ;
+  nommer ; livrer.
+- « Tire le PDF de ce deck » ou « embarque les polices » → `scripts/exporter-pptx.mjs` (étape 7),
+  sur un nom de sortie neuf ; le rapport dit si les polices sont saines, réencodées ou absentes.
+- « Mets le slide interlocuteurs à la fin de ce PPTX » → `references/assets.md` ; le slide se
+  **reconstruit** avec le deck (l'outil de greffe XML est **non livré**) ; vérifier ; nouveau
+  suffixe de date.
+- « Reformate ce PPTX à la charte » → étape 1 puis `references/charte.md` ; reconstruire ;
+  garder le fond, changer la forme.
+- « Le deck est pour un autre émetteur que Factory » → même workflow, `--marque <son dossier>` ;
+  si ce dossier n'existe pas encore, le faire produire (skill `systeme-de-marque`) **avant** de
+  générer quoi que ce soit.

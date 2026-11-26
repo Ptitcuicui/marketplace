@@ -1,0 +1,47 @@
+{
+  "factory-propale": {
+    "depot": "factory-forge-agents",
+    "chemin": ".claude/skills/factory-propale",
+    "commit": "099ccb94766a060b0042e77344d8e6b83349f196"
+  },
+  "factory-propale-review": {
+    "depot": "factory-forge-agents",
+    "chemin": ".claude/skills/factory-propale-review",
+    "commit": "099ccb94766a060b0042e77344d8e6b83349f196"
+  },
+  "factory-pptx": {
+    "depot": "factory-forge-agents",
+    "chemin": ".claude/skills/factory-pptx",
+    "commit": "099ccb94766a060b0042e77344d8e6b83349f196"
+  },
+  "factory-docx": {
+    "depot": "factory-forge-agents",
+    "chemin": ".claude/skills/factory-docx",
+    "commit": "099ccb94766a060b0042e77344d8e6b83349f196"
+  },
+  "factory-pdf": {
+    "depot": "factory-forge-agents",
+    "chemin": ".claude/skills/factory-pdf",
+    "commit": "099ccb94766a060b0042e77344d8e6b83349f196"
+  },
+  "factory-schemas": {
+    "depot": "factory-forge-agents",
+    "chemin": ".claude/skills/factory-schemas",
+    "commit": "099ccb94766a060b0042e77344d8e6b83349f196"
+  },
+  "factory-cv-review": {
+    "depot": "factory-forge-agents",
+    "chemin": ".claude/skills/factory-cv-review",
+    "commit": "099ccb94766a060b0042e77344d8e6b83349f196"
+  },
+  "plan-d-amelioration": {
+    "depot": "factory-forge-agents",
+    "chemin": ".claude/skills/plan-d-amelioration",
+    "commit": "099ccb94766a060b0042e77344d8e6b83349f196"
+  },
+  "qualifie-l-entrant": {
+    "depot": "factory-forge-conception",
+    "chemin": "skills/qualifie-l-entrant",
+    "commit": "16b8be0117c5eec82fb0ec6e4c6776cc00db351b"
+  }
+}

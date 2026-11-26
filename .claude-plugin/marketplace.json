@@ -1,0 +1,22 @@
+{
+  "name": "factory",
+  "description": "Factory : mallettes d'outils IA des consultants (skills, agents et contrôles de la factory)",
+  "owner": {
+    "name": "Ptitcuicui"
+  },
+  "plugins": [
+    {
+      "name": "factory-socle",
+      "source": "./plugins/factory-socle",
+      "description": "Socle commun Factory : contrôles qualité (oracles), pages HTML chartées, communication, amélioration de prompts, contre-expertise, pilotage de mission, boussole et accueil de la factory."
+    },
+    {
+      "name": "factory-avant-vente",
+      "source": "./plugins/factory-avant-vente",
+      "description": "Mallette conseil et avant-vente Factory : propales et revue de propale, réponse à appel d'offres, PowerPoint, Word et PDF chartés, schémas, revue de CV, plan d'amélioration, qualification des entrants.",
+      "dependencies": [
+        "factory-socle"
+      ]
+    }
+  ]
+}

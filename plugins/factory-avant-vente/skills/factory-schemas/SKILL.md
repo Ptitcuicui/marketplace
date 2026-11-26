@@ -1,0 +1,326 @@
+---
+name: factory-schemas
+description: "Génère des schémas d'architecture, de topologie réseau, de flux temporel ou de tableau de bord aux standards graphiques Factory. À utiliser systématiquement dès qu'un schéma technique est demandé dans un contexte de livrable (Factory, ou un engagement client dont la marque est paramétrée) (architecture cloud, topologie Azure, pipeline CI/CD, flux applicatif, comparatif visuel) — même si le mot 'schéma' n'est pas employé explicitement (ex. 'comment s'articulent les composants', 'dessine la chaîne', 'visualise la promotion'). Couvre cinq canevas standardisés — multi-bandes (architecture par couches), topologie (réseau hub-and-spoke), flux temporel (timeline avec swimlanes), tableau de bord (KPI portfolio), modèle de données (ERD avec classification PII). Garantit la charte Montserrat / Inter / JetBrains Mono, la palette sémantique, le routage des flèches sans superposition et les tooltips structurés. Use when a technical diagram is requested in a Factory or client-engagement context."
+metadata:
+  version: "1.0.2"
+---
+
+# Skill Factory Schemas · génération de schémas Factory aux standards graphiques
+
+Encode les standards graphiques des livrables Factory (briefs d'architecture, dossiers Design Authority, supports de comité) : un schéma produit doit être reconnaissable comme livrable Factory sans retouche.
+
+## Quand déclencher
+
+Contexte de livrable **et** schéma technique attendu : demande explicite (« schéma », « diagramme », « visualise », « dessine ») ou implicite (« comment s'articulent », « la chaîne complète », « la topologie », « le flux »), contexte de livrable (brief d'architecture, dossier Conformité Finale / Handoff / MEP, support DA), ou présence des conventions Factory dans les userPreferences.
+
+Ne pas déclencher pour : schémas hors contexte de livrable (outils standards type Visualizer), diagrammes interactifs ou animés (le canevas Factory est statique, imprimable PDF), simples listes ou tableaux.
+
+## Choix du canevas
+
+| Canevas | Quand | Signes typiques | Référence |
+| --- | --- | --- | --- |
+| Multi-bandes | Architecture par couches, pipelines CI/CD détaillés, vue d'ensemble | « architecture cible », « vue d'ensemble », « la chaîne complète » | `references/canevas-multi-bandes.md` + `assets/template-multi-bandes.html` |
+| Topologie | Hub-and-spoke, isolation de zones, VNets / RG / subscriptions | « topologie », « peering », « VNet », « segmentation » | `references/canevas-topologie.md` + `assets/template-topologie.html` |
+| Flux temporel | Séquences de pipelines, promotions entre environnements, swimlanes | « tag git → PROD », « promotion sans rebuild », « blue-green » | `references/canevas-flux-temporel.md` + `assets/template-flux-temporel.html` |
+| Tableau de bord | Synthèse KPI portfolio, vue de pilotage, comparatifs de parc | « dashboard », « vue DSI », « score par POC » | `references/canevas-tableau-de-bord.md` + `assets/template-tableau-de-bord.html` |
+| Modèle de données | Schéma relationnel de BDD, tables / colonnes / clés / relations, classification PII, dictionnaire de données | « schéma de base de données », « ERD », « MCD », « les tables et leurs relations » | `references/canevas-modele-donnees.md` + `assets/template-modele-donnees.html` |
+| Schéma de base **différentiel** | Ce qui CHANGE dans un schéma : tables créées / étendues / reprises, colonnes ajoutées / corrigées / reprises, colorées **et** marquées d'un glyphe | « tables et champs ajoutés ou modifiés de couleurs différentes », « ce qui change entre l'existant et la cible », « schéma des BDD Silver et Gold » | `assets/template-schema-differentiel.html` |
+
+Si plusieurs canevas semblent applicables, multi-bandes est le défaut. Si aucun ne colle, le besoin est probablement hors périmètre — utiliser un outil standard.
+
+## Conventions communes obligatoires
+
+Quel que soit le canevas, **toujours lire `references/conventions-communes.md`** avant de produire du SVG. Règles non négociables :
+
+- Palette sémantique (violet pâle, bleu, teal, corail, ambré, gris) avec hex exacts fond / texte / bordure
+- Typographies : Montserrat 700/800 (titres), Inter (corps), JetBrains Mono (code) — Roboto / DM Sans en premier repli (D-5 (a)/D-11 (a), 23/09/2026) — **jamais Syne**
+- Classes CSS scopées au SVG (`svg-c-purple`, `svg-arr`, `svg-tband`…) réutilisées telles quelles
+- Flèches en L pur, jamais en escalier multiple, jamais à travers un nœud ; couloirs verticaux dédiés pour les flux descendants
+- Titres de bande dans des pastilles blanches encadrées, hors couloirs de flèches
+- Tooltips au format structuré `Titre | Puce 1 | Puce 2 | Puce N` (backticks pour le code inline)
+- Footer : la formule de l'**émetteur**, lue par `node scripts/lire-signature.mjs` (clé « Footer de page de schéma » de son `MARQUE.md`, exit 2 ⇒ rendre la main, jamais de valeur écrite ici — TF-2350) — **marque paramétrable** pour un engagement client (`charte-livrable.json`, voir `references/conventions-communes.md`) ; le reste de la charte ne se paramètre pas
+
+Gabarit minimal d'un nœud et d'une flèche avec tooltips :
+
+```svg
+<g class="svg-c-blue">
+  <title>Module 1 — Référentiel POCs | Catalogue unifié des POCs et apps | Source de vérité des autres modules</title>
+  <rect x="260" y="360" width="240" height="80" rx="8"/>
+  <text class="svg-th" x="380" y="395" text-anchor="middle">Référentiel POCs</text>
+</g>
+<line x1="380" y1="440" x2="380" y2="470" class="svg-arr" marker-end="url(#arrL)">
+  <title>Flux d'alimentation | Objets POC et Application | Déclenché à chaque transition de cycle de vie</title>
+</line>
+```
+
+## Page hôte et nommage
+
+Le SVG est toujours encapsulé dans une page HTML autonome Factory : eyebrow majuscules espacées + H1 Montserrat 800 (42px) + sous-titre Inter + bloc méta `V{n}{indice} · {date longue}` ; diagram-wrap (fond gris très clair, bordure, radius 12px, padding 28px 20px, overflow-x auto) ; caption `Figure N — Description courte.` en italique gris 13px ; footer flex space-between avec brand à gauche. Détails (variables CSS, responsive, print) dans `references/conventions-communes.md`.
+
+Nommage : `{Marque} - {TypeDoc} {Client} - {Scope} - {YYYYMMDD}{indice}.{ext}` (ex. `Factory - Brief Produit-A - Architecture detaillee - 20260527d.html`). Indice alphabétique incrémenté à chaque itération du jour, redémarre à `a` chaque jour. Numéro de version (V0, V1…) affiché dans le bloc méta du contenu, **jamais dans le nom de fichier**.
+
+**Aucune police distante (A1/D-10, TF-0308) — et les faces sont EMBARQUÉES (TF-0336).** Les gabarits ne portent plus de `<link>` vers `fonts.googleapis.com` : un livrable qui téléphone au chargement signale au serveur tiers quand et d'où il est lu, et perd son rendu hors ligne. Ne pas remettre ces `<link>` dans une page produite.
+
+Jusqu'au 18/08, le rendu fidèle venait des WOFF2 bundlés de `scripts/fonts/`, **installés au cache fontconfig par `render_schema.py`** — c'est-à-dire d'une propriété du POSTE. Un gabarit ouvert ailleurs (autre machine, client, revue) retombait donc sur la pile système sans que rien ne le dise. Les faces vivent désormais DANS les pages, en `@font-face` data: base64, posées par un générateur :
+
+```bash
+node .claude/skills/factory-schemas/scripts/embarquer-polices.mjs --constat   # écart ? exit 1
+node .claude/skills/factory-schemas/scripts/embarquer-polices.mjs --ecrire    # (re)pose le bloc
+```
+
+Portée : **les pages seulement** (celles qui portent un `<head>`). Les trois fragments de canevas sont insérés dans `template-multi-bandes.html`, qui porte déjà les faces — les y dupliquer ajouterait 300 Ko par insertion pour la même police. **Écart assumé et déclaré au CSS produit** : sous-ensemble `latin` uniquement, graisses réellement employées ; `latin-ext` s'ajoute en une ligne du générateur le jour où un schéma porte du polonais, du tchèque ou du turc. La pile de repli système reste déclarée sur chaque famille.
+
+### Le canevas DIFFÉRENTIEL : ce qui change, pas ce qui est (TF-0938, 08/09/2026)
+
+Retour humain sur un livrable servi : « schéma des BDD Silver et Gold, tables et champs ajoutés
+ou modifiés de couleurs différentes ». Le skill n'avait **aucun** canevas différentiel — celui
+du modèle de données dessine un schéma à un instant, jamais son évolution. Le composant a donc
+été écrit chez le produit (40 cartes, 429 puces) et personne d'autre n'en a profité.
+
+**Pourquoi des cartes HTML et non un SVG.** Le canevas ERD place ses tables à la main : au-delà
+d'une trentaine, le placement DEVIENT le travail, et un schéma différentiel en compte
+typiquement plus. Une grille de cartes se dispose seule, se replie sur mobile, se cherche au
+Ctrl+F, et porte une infobulle par colonne — ce qu'un `<text>` SVG ne fait pas. **Ce que ce
+canevas ne fait pas** : dessiner les relations. Un schéma qui doit montrer ses cardinalités
+reste sur `template-modele-donnees.html`.
+
+**Trois états de table, trois états de colonne, jamais plus** — et chacun porte sa teinte **et**
+son glyphe : la couleur ne porte jamais seule l'information (WCAG 1.4.1), la légende donne les
+deux, et un lecteur qui imprime en noir et blanc lit les glyphes. Chaque puce de colonne porte
+une infobulle **structurée** (une ligne par objet, une sous-précision par ligne indentée —
+L3 (g) du socle, composant `infobulle.js`), jamais un paragraphe de sept objets : ce sont les
+deux règles qui ont coûté trois passes de `check_html` chez le produit.
+
+**Alimentation** : les cartes se dérivent de la projection d'évolutions (RD-5) — une table par
+carte, une colonne par puce, l'état lu dans la projection. Écrire quarante cartes à la main est
+le geste que ce canevas existe pour éviter.
+
+### Ce que check_html juge dans `assets/`, et ce qu'il écarte (TF-0308)
+
+Les six fichiers de `assets/` passent le contrôle de conformité du socle
+(`factory-page-html/scripts/check_html.py`, famille charte). Trois sont des **pages** et
+sont jugées entièrement : `exemple-reference.html`, `template-modele-donnees.html`,
+`template-multi-bandes.html` (ce dernier avec une exemption étroite : l'indice de version
+**daté** appartient à l'instance produite, son titre est un `{{PLACEHOLDER}}`).
+
+Quatre sont des **fragments par conception** — `template-topologie.html`,
+`template-flux-temporel.html`, `template-tableau-de-bord.html`,
+`template-schema-differentiel.html` : ils s'insèrent dans le
+squelette de `template-multi-bandes.html`, qui porte le `<head>`, le `<title>` et le favicon.
+La famille « autoportance » y est écartée par une **exemption déclarée et annoncée** (registre
+`EXEMPTIONS_DECLAREES` de `check_html.py`, avec son motif ; le contrôle l'imprime à chaque
+exécution). Tout le reste reste jugé : réseau A1, thème G1, police interdite, lisibilité.
+Un gabarit ajouté à `assets/` **échoue** tant qu'il n'est pas soit conforme, soit déclaré —
+une exemption se décide, elle ne se devine pas (R-30 §3).
+
+### Le skill émet des JETONS, jamais des couleurs ni des polices en dur (TF-0856, 04/09/2026)
+
+Mesuré le 03/09 par la critique d'implémentation de forge-design sur l'exemple de référence :
+**239 couleurs littérales** (`oracle-tokens` T1, dont 173 dans des `style=""` de textes SVG),
+**3 bandeaux latéraux** de 3 px (`oracle-slop` S1, red flag RF3), aucune règle de mouvement
+réduit (`oracle-mobile` M6) — et les cinq gabarits comme les canevas de `references/`
+prescrivaient les mêmes hexadécimaux. La cause n'était pas une page : c'était la doctrine.
+
+Ce qui vaut désormais pour tout schéma produit par ce skill, et que gabarits, exemple et canevas
+appliquent (transformation déterministe rejouée sur les douze fichiers) :
+
+- **une couleur est un jeton** : `fill`, `stroke`, `color`, `background`, `border` prennent
+  `var(--…)` ; les attributs de présentation SVG (`fill="#…"`) deviennent `style="fill:var(--…)"`.
+  Neuf jetons ont reçu un nom (`--c-purple-mid`, `--c-purple-deep`, `--c-purple-ink`,
+  `--c-slate-fg`, `--c-slate-mid`, `--c-slate-stroke`, `--c-amber-mid`, `--ink-strong`,
+  `--bg-soft-2`) : ils sont déclarés dans le `:root` de `conventions-communes.md`, des pages et de
+  l'exemple. Les fragments (topologie, flux temporel, tableau de bord) héritent du `:root` de
+  `template-multi-bandes.html` qui les accueille ;
+- **une police est un jeton** : `var(--head)`, `var(--sans)`, `var(--mono)` (`oracle-tokens` T2) ;
+- **pas de bandeau latéral** : `border-left` de 3 ou 4 px remplacé par une bordure fine complète de
+  la même couleur (`pre`, encadrés, exemples de lecture, cartes du modèle de données, KPI) — S1 est
+  un ban d'impeccable, l'identité de couleur passe par la bordure et la teinte de fond ;
+- **mouvement réduit** : bloc `prefers-reduced-motion` du socle dès qu'une transition existe.
+
+Résultat sur l'exemple : T1 239 → 2 (les deux restants vivent dans la copie embarquée de
+`table-filters.css`, composant du socle, à corriger chez lui), S1 3 → 0, M6 levé ; `check_html`,
+`render_page` (quatre largeurs), `oracle-lecture-tiers` et `oracle-parite-assets` restent PASS.
+Ce qui reste et se décide ailleurs (candidat au registre du pilot) : `S3` (« DM Sans » est une
+police réflexe pour impeccable mais LA police de corps de la charte Factory), `M4` (le `thead`
+masqué par le repli en cartes est le motif prescrit par le socle), `T3` (échelle d'espacement 4 pt),
+et les défauts préexistants des gabarits (`render_page` V4/C, `check_html` sur les fragments).
+
+### L'exemple de référence tient ses propres règles, mobile et lecture tierce comprises (TF-0789, 03/09/2026)
+
+`assets/exemple-reference.html` est jugé par **les mêmes oracles que ce qu'il enseigne**, à toutes
+les largeurs : `render_page.py` (défaut 1920/1280/768/390 px) et `oracle-lecture-tiers` en plus
+de `check_html.py`. Mesuré le 03/09 avant correction : **16 débordements bloquants V1 à 390 px**
+(13 tableaux, 3 blocs de code — un conteneur défilant n'exonère pas, `render_page` mesure le bord
+droit de chaque élément) et **T1/T2 en défaut** (aucune intention déclarée, 46 en-têtes sur 67
+sans glose). Après : 0 débordement, `render_page` PASS aux quatre largeurs, `oracle-lecture-tiers`
+PASS (67 en-têtes glosés). Ce que l'exemple porte désormais, et que tout schéma produit reprend :
+
+- **repli en cartes sous 640 px** (motif du socle, `composants.md` §6) : `table.repli-cartes`,
+  chaque `td` porte `data-label="<en-tête de sa colonne>"`, le `thead` disparaît, chaque ligne
+  devient une carte ; les blocs de code se replient (`white-space: pre-wrap`) au lieu de défiler ;
+- **intention déclarée** dans le chapeau (« cette page permet de décider… ») et dans
+  `<meta name="description">` (T1) ;
+- **chaque `th` porte `data-definition`** (T2, et G7 du socle sur une page de données) ; les
+  sigles des en-têtes sont glosés une fois en prose, juste après les métadonnées du chapeau.
+
+Un gabarit ou un exemple qui ne tient pas ses propres règles enseigne le défaut : la recette du
+skill les rejoue avant toute livraison.
+
+### Le gabarit multi-bandes et l'exemple passent les trois jeux d'oracles, et la recette les joue (TF-1890, 19/10/2026)
+
+Retour du lot Produit-84 20261019a (RT-9) : une page instanciée fidèlement depuis
+`template-multi-bandes.html` échouait à `check_html.py`, aux oracles de forge-design (`oracle-tokens`,
+`oracle-bascule`) et à `render_page.py`, et a demandé six passes. TF-1660 (14/10) n'avait traité que
+`render_page`. Mesuré le 19/10 avant correction, sur ce dépôt : l'instance du gabarit passait déjà
+`check_html` et le lanceur de forge-design (le `<link>` Google Fonts de l'ancien gabarit n'y est plus),
+mais `oracle-bascule` ne la jugeait pas (« rendu figé », aucun bouton), la pastille de la bande 2 cachait la
+flèche du couloir x = 127, et **`exemple-reference.html` échouait aux trois** : `check_html` (L30 (chapitre), « gate »
+non glosée dans six chapitres), forge-design (S6, `↔` ; T8, deux anneaux de focus sans jeton) et
+`render_page` (V4 sur la même pastille, V16 sur des badges d'état indiscernables, V18 aux largeurs 4K).
+
+Ce qui change, et qui s'applique à toute page produite :
+
+- **le gabarit porte la bascule sombre** : bouton en en-tête, script avant la première peinture,
+  projection `:root[data-theme="dark"]` sous `@media screen` de TOUS les jetons de couleur, jetons de
+  focus. `oracle-bascule` JUGE alors la page (B-T1 à B-T4) au lieu de s'en excuser ;
+- **`data-page="donnees"` sur `<body>`** : une page de schémas et de tableaux se déclare page de données.
+  Conséquence à connaître : un libellé SVG de 120 caractères ou plus y est jugé comme un bloc de prose
+  étroit (`render_page` V13) ; le couper en deux `<text>` ;
+- **la pastille de bande se pose entre deux couloirs** (185 px, 18 caractères) ; le libellé long passe au
+  `<title>` du groupe (`conventions-communes.md` §6) ;
+- **la palette s'écrit en jetons** (`conventions-communes.md` §1 : le tableau ne donne plus les
+  hexadécimaux, que le `:root` seul porte).
+
+**La recette** : `node scripts/self-test.mjs` (`--rapide` n'ouvre pas l'exemple dans le navigateur, ~4 min).
+Elle joue `check_html.py`, le lanceur de forge-design et `render_page.py` aux deux thèmes sur une instance du
+gabarit et sur l'exemple, puis quatre cas rouges, un défaut à la fois : un `<link>` Google Fonts (A1), une
+couleur en dur (T1), la projection sombre retirée (B-T4), la pastille remise sur le couloir (mesure de géométrie de la recette : `render_page` ne la voit pas sous un groupe titré). Un outil
+absent du poste rend un SKIP nommé. Elle ne juge pas la lecture humaine du rendu ; les quatre fragments et le canevas du modèle de données sont jugés par la section suivante.
+
+### Les cinq autres gabarits passent `run-oracles-design --rendu` tels quels (TF-2263, 06/11/2026)
+
+Retour du lot Produit-84 20261106c (RT-54) : une page de schéma bâtie sur un gabarit du skill passait `check_html.py` et échouait à la critique d'implémentation de forge-design (`run-oracles-design.mjs --rendu`). Mesuré le 06/11/2026 sur ce dépôt, chaque gabarit instancié tel quel, avant correction : flux temporel 105 bloquants `render_page` (V4, cadres de swimlane qui contiennent leurs nœuds), topologie 58 (V4 sur le cadre des zones et sur les pastilles de bande, V2, `prose_etroite`) et un constat `oracle-slop` S6, tableau de bord 2 (V18, tableau à 24 % de la largeur offerte au 4K), modèle de données 3 (`oracle-slop` S6, `oracle-bascule` B-T1 et B-T3) ; schéma différentiel et multi-bandes passaient déjà. Après correction les six gabarits de page ou de fragment rendent PASS. Ce qui change, et que tout schéma produit reprend :
+
+- **un cadre qui contient ses nœuds les déclare par paires** : chaque `rect.svg-frame` (swimlane, zone isolée) porte un `id` et `data-overlap-ok` listant les `id` des éléments qu'il abrite ; tout nœud dupliqué reçoit son `id` et s'ajoute à la liste. Un recouvrement non déclaré reste jugé (V4) ;
+- **la pastille de bande est un groupe titré et se pose entre deux couloirs** (`<g id="bande-N-pastille"><title>…`), comme dans le gabarit multi-bandes ;
+- **pas d'emoji** (S6) : la double flèche des infobulles de peering s'écrit « et », le cadenas des colonnes personnelles est un SVG dessiné ;
+- **le modèle de données porte la bascule de thème** (bouton, persistance `factory-theme`, jetons de focus) du gabarit multi-bandes, et les pages déclarent leurs polices de marque (`data-police-de-marque` sur `<html>`) ;
+- **une page de données donne au tableau toute la largeur offerte** (`width: 100%`) et aligne l'en-tête sur ses cellules ;
+- **une phrase de légende de plus d'une ligne se coupe en deux `<text>`** et se lit à un contraste de 4,5:1 au moins.
+
+La recette joue ces six contrôles (cinq instances, plus un sens rouge : le flux temporel sans ses `data-overlap-ok` échoue pour V4). **Avant de livrer une page de schéma, jouer cette étape sur la page produite**, pas seulement sur le gabarit :
+
+```bash
+node <factory-forge-design>/oracles/run-oracles-design.mjs <page.html> --rendu --json-only   # exit 0 = PASS
+```
+
+### Les règles de largeur s'écrivent sous `screen` (TF-1895, 21/10/2026)
+
+Décision D-41 (a) du 19/10/2026, dans le sillage du socle 1.37.0 (TF-1882) : une `@media (max-width: …)` sans `screen`
+se déclenche aussi à l'impression, où la largeur imprimable d'un A4 vaut ~698 px. Les gabarits, l'exemple et
+`conventions-communes.md` §11 écrivent `@media screen and (max-width: …)` (et `(min-width: …)`) ; le banc du socle
+(`run_format_a4`) refuse la forme d'avant dans ce skill.
+
+### Les composants du socle sont EMBARQUÉS, jamais recopiés (TF-0784, 03/09/2026)
+
+`assets/exemple-reference.html` porte trois composants du socle `factory-page-html` —
+`table-filters.js`, `table-filters.css`, `find-in-page.js`. Ils y vivent **inlinés** (règle A1 :
+une page autoportante ne charge rien), mais **posés à la construction**, jamais collés à la main :
+
+```bash
+node ../factory-page-html/scripts/embarquer-composants.mjs --constat   # écart ? exit 1
+node ../factory-page-html/scripts/embarquer-composants.mjs --ecrire    # (re)pose les blocs marqués
+```
+
+**Pourquoi cette règle existe, et elle a été payée ici.** La copie de `table-filters.js` de cet
+asset datait du jour où elle avait été collée. Le composant a été corrigé **sept fois** depuis
+(TF-0429/0430/0431 le 21/08 ; TF-0768/0769/0781/0782 le 02/09) — la copie, **zéro fois**. Elle
+triait encore « 1 000 » comme 1, rangeait les mois par ordre alphabétique et privait de facette la
+colonne clé, à deux dossiers des correctifs. Un skill qui embarque une COPIE d'un composant d'un
+autre skill s'en détache dès le correctif suivant, et personne ne le sait.
+
+Les jetons du socle que cette page ne nomme pas comme lui (`--surface`, `--muted`, `--blue`,
+`--r-sm`, `--sans`, `--hh`) sont **aliasés** dans son `:root` : c'est ce qui permet d'embarquer le
+CSS du socle **sans l'éditer**, donc de le garder à la parité de sa source.
+
+Le contrôle qui l'empêche de recommencer : `quality-oracles/scripts/oracle-parite-assets.mjs`
+(P1 déclaration · P2 empreinte · P3 parité octet · P4 exemption datée et motivée), rejoué sur le
+dépôt réel par le self-test de `quality-oracles`.
+
+### Le sommaire de l'exemple de référence (L25)
+
+Neuf chapitres : au-delà de trois, le socle exige un sommaire **visible en permanence** (L25). Il
+est **collant à toutes les largeurs** (`nav.toc.colle`, `top: var(--hh)`) : colonne latérale sur
+bureau, **bande compacte** sous 1100 px (les annonces cèdent la place, la barre défile en interne
+et ne dépasse jamais 32 % de l'écran — mesuré à 390, 768 et 1280 px). Le piège, payé ici même le
+03/09 : rendre le sommaire **statique** sur mobile le fait disparaître au premier écran, et
+`render_page` le compte en `sommaire_perdu` **à chaque largeur rendue**, pas seulement sur bureau.
+Chaque entrée porte son annonce `.toc-d` (L6). Conséquences assumées, et écrites dans la page :
+chaque chapitre porte son chapeau `.ch-apprend` (L7) et chaque chapitre à tableau long son
+`.exemple-lecture` (L10) — un sommaire rend les chapitres **atteignables**, donc lisibles seuls.
+
+## Workflow d'exécution
+
+1. **Identifier le canevas** via la grille ci-dessus ; si ambigu, poser une question fermée (canevas A ou B).
+2. **Lire la référence du canevas** (`references/canevas-{nom}.md`) : viewBox, bandes types, gabarits, exemple complet.
+3. **Lire `references/conventions-communes.md`** : palette, classes CSS, tooltips, routage.
+4. **Instancier le template** (`assets/template-{nom}.html`) en conservant couloirs, pastilles de bande, palette.
+5. **Rendre et valider (OBLIGATOIRE)** : exécuter la boucle render-view-fix décrite dans la section « Boucle de validation visuelle » ci-dessous jusqu'à ce que le schéma passe l'audit. Ne jamais livrer un SVG jugé sur le seul code.
+5 bis. **Rejouer la critique d'implémentation sur la page produite** : `node <factory-forge-design>/oracles/run-oracles-design.mjs <page.html> --rendu --json-only`, exit 0 exigé (jetons, cadres déclarés par paires, mouvement réduit, bascule, rendu aux deux thèmes — TF-2263). Une page qui n'a passé que `check_html.py` n'est pas jugée.
+6. **Encapsuler, nommer, livrer** : page hôte Factory, nommage conventionnel, `present_files` sans post-amble.
+
+## Boucle de validation visuelle (obligatoire)
+
+On ne juge pas un schéma depuis son SVG. Après génération ou édition, rendre en PNG, lire l'image, corriger ce qu'on voit — en boucle (2 à 4 itérations typiques).
+
+**Rendu** (dépend de `scripts/render_schema.py`, basé sur Playwright + Chromium) :
+
+```bash
+cd .claude/skills/factory-schemas/scripts
+uv run python render_schema.py <chemin-vers-schema.html>
+```
+
+Le script screenshote le conteneur `.diagram-wrap` (cadrage serré sur le schéma + son padding, hors eyebrow / H1 / footer) et écrit un PNG à côté du HTML. Lire ensuite ce PNG avec l'outil Read.
+
+Le script s'adapte seul à deux environnements, sans réglage manuel :
+- **Claude Code** (réseau ouvert) : Chromium installé localement. Depuis TF-0308 les gabarits ne chargent plus les polices par le réseau : le rendu utilise les polices installées sur le poste, sinon la pile de repli — vérifier la fidélité typographique sur le PNG, un titre en repli système se voit.
+- **Sandbox Claude.ai web** (réseau sur liste blanche) : il auto-détecte le Chromium pré-installé de l'image (`/opt/pw-browsers`) et installe les WOFF2 bundlés dans `scripts/fonts/` au cache fontconfig local — Roboto / DM Sans / JetBrains Mono rendent fidèlement même si `fonts.googleapis.com` est bloqué. Le script attend `document.fonts.ready` avant le screenshot, sinon les débordements de texte sont invisibles au rendu.
+
+**Première installation — Claude Code uniquement** (le sandbox web n'en a pas besoin, le navigateur y est déjà présent) :
+
+```bash
+cd .claude/skills/factory-schemas/scripts
+uv sync
+uv run playwright install chromium
+```
+
+**La boucle :**
+
+1. Rendre et lire le PNG.
+2. **Audit d'intention** : le canevas choisi est-il bien matérialisé ? Les couloirs de flèches sont-ils respectés ? La hiérarchie visuelle est-elle juste (nœuds maîtres dominants, détails plus petits) ? L'œil suit-il le flux prévu ?
+3. **Audit de défauts Factory** (chaque point = une règle dure de `conventions-communes.md` violée) :
+   - flèche traversant un nœud au lieu de longer son couloir → reroute en L pur
+   - flèche en escalier multiple → couloir vertical dédié
+   - titre de bande dans la zone des flèches → pastille blanche encadrée, déplacée hors couloir
+   - texte de nœud tronqué ou débordant le rect → élargir le rect
+   - tooltip non ancré / label flottant ambigu → repositionner près de sa cible
+   - espacement irrégulier entre bandes ou nœuds frères → réaligner les `y`/`x`
+   - section trop dense à côté d'une section trop vide → rééquilibrer la composition
+   - débordement viewBox ou coordonnée `y` négative → recadrer
+4. Corriger le SVG, re-rendre, re-lire.
+5. **Arrêt** quand : aucun texte tronqué, flèches en L propres contournant les nœuds, pastilles hors couloirs, espacement régulier, composition équilibrée — et tu montrerais le livrable sans réserve.
+
+Ne pas s'arrêter après une seule passe sous prétexte qu'il n'y a pas de bug critique : si la composition peut être meilleure, l'améliorer.
+
+## Anti-patterns à éviter
+
+- Flèches diagonales longues traversant plusieurs bandes — utiliser les **références numérotées** (`Réf. intégrations 1 · 4 · 6`)
+- Titre de bande en texte libre dans la zone des flèches — toujours en pastille blanche encadrée
+- Police Syne, même pour les titres
+- Tooltips d'une seule ligne non structurés — toujours `Titre | Puce 1 | Puce 2`
+- Gradient, ombre, blur, noise — le schéma est flat, lisible imprimé en N&B
+- Coordonnées y négatives ou débordement viewBox
+
+## Référence d'exemple
+
+Livrable de référence matérialisant ces standards : `assets/exemple-reference.html` (extrait d'un brief d'architecture détaillée Factory). À consulter en cas de doute sur l'application concrète d'une convention.

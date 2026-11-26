@@ -1,0 +1,81 @@
+{
+  "nom": "generique",
+  "version": "1.4.0",
+  "perf": {
+    "poids_warn": 2097152,
+    "poids_fail": 5242880,
+    "dom_warn": 6000,
+    "dom_fail": 12000,
+    "js_warn": 1258291,
+    "js_fail": 3145728
+  },
+  "pptx": {
+    "jpeg_interdit": false,
+    "transitions_interdites": false,
+    "_charte": "TF-1490 (01/10/2026) : ni zone de logos (logos) ni forme de pied de page (pied_de_page) déclarées. Le profil générique n'impose aucune charte de support : S3 et S4 d'oracle-charte-pptx-semantique ne sont pas jouées sous lui, et le disent. Un profil client les déclare : logos couverture-interlocuteurs ou partout, pied_de_page espace-reserve ou zone-texte."
+  },
+  "nommage": {
+    "_decision": "TF-0071 (11/08/2026) : convention générique MINIMALE plutôt que SKIP permanent — le motif Q3-bis est purement structurel (aucun préfixe imposé, aucun nom de marque) : seul un fichier qui ADOPTE la forme « <X> - <Y> - … » est jugé, et il doit alors la finir correctement (date AAAAMMJJ + indice). Un projet aux conventions propres n'est jamais condamné : ses fichiers ordinaires ne déclenchent pas.",
+    "prefixe": null,
+    "libelle": "<Projet> - <Objet> - AAAAMMJJ{a…}.<ext>",
+    "declencheur": "^.+ - .+ - \\d{8}",
+    "regex": "^[^_]+ - [^_]+ - \\d{8}[a-z](?: .*)?\\.[A-Za-z0-9]+$"
+  },
+  "claims": {
+    "actif": false,
+    "marqueurs_source": [
+      "source",
+      "sources?\\s*:",
+      "à vérifier",
+      "cf\\.",
+      "réf",
+      "\\[\\^?\\d+\\]",
+      "calculé",
+      "https?://"
+    ]
+  },
+  "juge": {
+    "rubrique": null
+  },
+  "ignore_patterns": [],
+  "niveaux": {
+    "note": {
+      "exclus": [
+        "Performance / poids",
+        "Accessibilité (WCAG structurel)"
+      ],
+      "warn_toleres": true
+    },
+    "diffuse": {
+      "exclus": [],
+      "warn_toleres": true
+    },
+    "production": {
+      "exclus": [],
+      "warn_toleres": false
+    }
+  },
+  "visual_diff": {
+    "seuil_ratio": 0.001,
+    "breakpoints": [
+      1280,
+      380
+    ],
+    "tolerance_pixel": 24,
+    "_calibration": "bruit de re-rendu mesuré à 0.0000% sur fixtures (chromium sandbox, 2026-07-21) — seuil 0.1% au-dessus du bruit"
+  },
+  "autorite": {
+    "_decision": "TF-0715 (02/09/2026) : profil generique -- aucun emetteur nomme, donc le controle A2 (decideur appartenant a l'emetteur) est DECLARE NON JUGE par l'oracle plutot que devine. Un profil client renseigne emetteur_motifs pour l'activer.",
+    "emetteur_motifs": []
+  },
+  "lecture_tiers": {
+    "_decision": "TF-0774 (02/09/2026) : la vue V6 a passe contrat, filtres, rendu et interactions -- quatre portes vertes -- puis l humain a lu la page : « on n y comprend absolument rien ». T4 fait lire la page par un TIERS qui n a ni le brief ni le code ; un « je ne sais pas » est un ECHEC. Il appelle un modele, donc il COUTE : `actif` reste FAUX par defaut et l invocation est explicite (--juge, --reponse, ou actif: true ici).",
+    "actif": false,
+    "juge": "claude",
+    "questions": [
+      "De quoi parle cette page ?",
+      "Que permet-elle de decider ?",
+      "Que signifie chaque en-tete de colonne ?"
+    ]
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "name": "factory-avant-vente",
+  "displayName": "Factory – Conseil et avant-vente",
+  "description": "Mallette conseil et avant-vente Factory : propales et revue de propale, réponse à appel d'offres, PowerPoint, Word et PDF chartés, schémas, revue de CV, plan d'amélioration, qualification des entrants.",
+  "author": {
+    "name": "Ptitcuicui"
+  },
+  "license": "MIT",
+  "dependencies": [
+    "factory-socle"
+  ]
+}

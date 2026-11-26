@@ -1,0 +1,33 @@
+{
+  "racine": "C:\\Users\\Ptitcuicui\\factory",
+  "plugins": {
+    "factory-socle": {
+      "skills": 11,
+      "skills_hors_marketplace": {},
+      "fichiers_de_code_avec_chemin_skill": 20,
+      "references_au_pilot": 440,
+      "chemins_c_dev": {
+        "plugins\\factory-socle\\skills\\quality-oracles\\references\\registre-oracles.json": 1,
+        "plugins\\factory-socle\\skills\\quality-oracles\\references\\registre-oracles.md": 2,
+        "plugins\\factory-socle\\skills\\quality-oracles\\scripts\\lib\\forges.mjs": 2,
+        "plugins\\factory-socle\\skills\\quality-oracles\\scripts\\self-test.mjs": 4,
+        "plugins\\factory-socle\\skills\\factory-page-html\\references\\lisibilite.md": 1,
+        "plugins\\factory-socle\\skills\\factory-page-html\\scripts\\check_markdown.py": 1,
+        "plugins\\factory-socle\\skills\\factory-communication\\scripts\\self-test.mjs": 1,
+        "plugins\\factory-socle\\skills\\ou-en-suis-je\\SKILL.md": 1
+      }
+    },
+    "factory-avant-vente": {
+      "skills": 9,
+      "skills_hors_marketplace": {},
+      "fichiers_de_code_avec_chemin_skill": 2,
+      "references_au_pilot": 24,
+      "chemins_c_dev": {
+        "plugins\\factory-avant-vente\\skills\\factory-propale\\scripts\\self-test.mjs": 1,
+        "plugins\\factory-avant-vente\\skills\\factory-propale-review\\scripts\\self-test.mjs": 1,
+        "plugins\\factory-avant-vente\\skills\\factory-pptx\\scripts\\self-test.mjs": 1,
+        "plugins\\factory-avant-vente\\skills\\factory-docx\\scripts\\oracle-docx.mjs": 1
+      }
+    }
+  }
+}
