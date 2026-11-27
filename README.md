@@ -30,8 +30,9 @@ se met à jour avec la marketplace. `outils/mallettes.json` les déclare dans `f
 
 ### Pilot embarqué (mode consultant)
 
-Le socle livre la partie outil du pilot, sans son état : ni `input/`, ni `output/`, ni les données de
-`todo/` (TODO, décisions, registres), ni `runs/`. La copie porte `EMBARQUE.json` : `bootstrap.mjs` n'y
+Le socle livre la partie outil du pilot, sans son état : ni `input/` (pas même l'index des anciens
+retours), ni `output/`, ni les données de `todo/` (TODO, décisions, registres), ni `runs/`. Seuls les
+fichiers suivis par git sont assemblés : ce qu'un poste a généré ou ignoré ne part jamais. La copie porte `EMBARQUE.json` : `bootstrap.mjs` n'y
 clone ni n'y tire rien.
 
 Sur un poste sans parc (ni `FORGE_ROOT`, ni `~/factory`), le hook d'ouverture du socle pose

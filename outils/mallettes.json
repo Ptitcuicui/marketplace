@@ -43,6 +43,7 @@
             "^(input|output)/(.+/)?(README|LISEZMOI)\\.md$"
           ],
           "exclure": [
+            "^input/00-retours/old/",
             "^todo/.*\\.jsonl$",
             "^todo/TF-decisions-",
             "^todo/registre-dette\\.json$",

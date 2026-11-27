@@ -12,8 +12,9 @@
 // { depot, inclure, exclure, marqueur } : inclure et exclure sont des expressions régulières sur le
 // chemin relatif (séparateur /) ; marqueur pose forges/<depot>/EMBARQUE.json, qui distingue la copie
 // embarquée d'un clone (le pilot embarqué dans le socle s'en sert pour ne rien cloner ni tirer).
-// Fins de ligne : tout fichier texte est rendu en LF, quel que soit le poste qui assemble
-// (Windows en CRLF, Linux en LF) : deux postes produisent les mêmes octets.
+// Fins de ligne : tout fichier texte (tout fichier sans octet nul) est rendu en LF, quel que soit
+// le poste qui assemble (Windows en CRLF, Linux en LF) : deux postes produisent les mêmes octets.
+// Seuls les fichiers suivis par git sont assemblés : l'état local d'un poste ne part jamais.
 // Sortie : un rapport des références qui ne se résolvent pas dans un plugin (chemins en dur,
 // dépendances au pilot) — outils/rapport-construction.json.
 
@@ -56,6 +57,27 @@ function lister(dir) {
   return out;
 }
 
+// Sources : seuls les fichiers suivis par git (27/11/2026). Un fichier non suivi ou ignoré (TODO
+// régénéré du pilot, hook git local, sortie d'un run) reste sur le poste qui assemble : deux postes
+// produisent la même marketplace, et l'état d'un poste ne part jamais chez les consultants.
+// Hors dépôt git, repli sur le listage du disque.
+function listerSources(dir) {
+  let suivis;
+  try {
+    suivis = execFileSync("git", ["-C", dir, "ls-files", "-z", "--cached", "--", "."], { encoding: "utf8", maxBuffer: 64e6 })
+      .split("\0").filter(Boolean);
+  } catch { return lister(dir); }
+  return suivis.map((r) => path.join(dir, r))
+    .filter((p) => !EXCLUS.some((r) => r.test(p)) && fs.existsSync(p) && fs.statSync(p).isFile());
+}
+
+// Fichier sans octet nul et hors liste TEXTE (LICENSE, .lock, .tf, hooks sans extension…) : texte
+// aussi, rendu en LF octet par octet, sans décodage, pour ne toucher à aucun encodage.
+function enLF(buf) {
+  if (buf.includes(0) || !buf.includes(13)) return buf;
+  return Buffer.from(buf.toString("latin1").replace(/\r\n/g, "\n"), "latin1");
+}
+
 function shaDepot(dossier) {
   try { return execFileSync("git", ["-C", dossier, "rev-parse", "HEAD"], { encoding: "utf8" }).trim(); }
   catch { return null; }
@@ -92,7 +114,7 @@ function compter(texte, fichier, constats) {
 function poser(rel, contenu) { sortie.set(rel.split(path.sep).join("/"), Buffer.isBuffer(contenu) ? contenu : Buffer.from(contenu)); }
 
 function copierDossier(src, dest, plugin, constats, ignorer = () => false) {
-  for (const f of lister(src)) {
+  for (const f of listerSources(src)) {
     if (ignorer(path.relative(src, f))) continue;
     const rel = path.join(dest, path.relative(src, f));
     if (TEXTE.test(f)) {
@@ -100,7 +122,7 @@ function copierDossier(src, dest, plugin, constats, ignorer = () => false) {
       t = transformer(t, plugin, MD.test(f), constats);
       compter(t, rel, constats);
       poser(rel, t);
-    } else poser(rel, fs.readFileSync(f));
+    } else poser(rel, enLF(fs.readFileSync(f)));
   }
 }
 
