@@ -2,12 +2,12 @@
   "data-quality-auditor": {
     "depot": "factory-forge-agents",
     "chemin": ".claude/skills/data-quality-auditor",
-    "commit": "200f72de09668324bc4d891922e1eff5e0d51e77"
+    "commit": "751595346464da69bc1249741f8c4eb52ee531bc"
   },
   "discipline-data": {
     "depot": "factory-forge-data",
     "chemin": "skills/discipline-data",
-    "commit": "c692a5a80d3129a1e9cd7d7b00daf9ed4c105cff"
+    "commit": "4262b329ed77f70bab5b7ec567352a7528366b1f"
   },
   "veille-derive": {
     "depot": "factory-forge-observability",
@@ -17,7 +17,7 @@
   "forge:factory-forge-data": {
     "depot": "factory-forge-data",
     "chemin": ".",
-    "commit": "c692a5a80d3129a1e9cd7d7b00daf9ed4c105cff"
+    "commit": "4262b329ed77f70bab5b7ec567352a7528366b1f"
   },
   "forge:factory-forge-observability": {
     "depot": "factory-forge-observability",

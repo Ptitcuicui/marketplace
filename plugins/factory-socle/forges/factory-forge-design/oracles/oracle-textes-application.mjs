@@ -1,0 +1,1001 @@
+#!/usr/bin/env node
+// oracle-textes-application — Domaine « Textes d'application (T4) : libellés, erreurs,
+// états vides » (déterministe). TF-1064, lot pilot du 12/09/2026.
+//
+// LE FAIT. Le 12/09/2026, le pilot a déposé un plancher d'écriture transverse
+// (`references\ECRITURE.md`, E-1 à E-12) dont la règle E-12 vise le type T4 — les textes
+// d'application : « un libellé nomme ce que la personne contrôle ; une erreur dit ce qui
+// s'est passé puis comment réparer ; un état vide invite à agir ». L'oracle d'écriture du
+// pilot juge le Markdown et déclare T4 en `non_juge` : les chaînes d'application vivent
+// dans du code ou des fichiers de ressources qu'il ne lit pas. Aucun oracle du parc ne
+// voyait donc une erreur sans réparation ni un état vide sans action — et c'est le type de
+// texte le plus lu par les utilisateurs finaux. La critique d'implémentation les regarde en
+// D7 Contenu (10 %), « la plus sous-traitée, la plus visible à l'usage ».
+//
+// CE QU'IL JUGE — la PRÉSENCE de ce que E-12 exige, jamais la justesse du ton :
+//   T4-1  ERREUR sans réparation ni cause — une chaîne d'erreur qui ne dit ni ce qui s'est
+//         passé (« dépasse », « manque », « n'existe pas », « déjà », « trop »…) ni comment
+//         réparer (« réessaye », « corrige », « vérifie », « compresse », « contacte »…)
+//         est bloquante. Elle n'en dit qu'UNE des deux : avertissement — E-12 demande la
+//         cause PUIS la réparation, et une seule moitié laisse la personne à mi-chemin.
+//   T4-2  ÉTAT VIDE sans action — un état vide qui constate le vide sans inviter à agir
+//         (« crée », « ajoute », « importe », « commence », « invite »…) est bloquant.
+//   T4-3  LIBELLÉ GÉNÉRIQUE — « Valider », « OK », « Soumettre », « Cliquez ici »,
+//         « Envoyer » seul, « Submit », « Click here » : avertissement. Un libellé nomme ce
+//         que la personne contrôle (« Enregistrer les modifications »), pas le geste du
+//         système.
+//   T4-4  ERREUR QUI S'EXCUSE — « désolé », « oups », « sorry », « oops » : avertissement.
+//         L'excuse occupe la place de la cause et de la réparation.
+//
+// CE QUI N'EST PAS UN MESSAGE (TF-1762, TF-1773, 15/10/2026) — la négation du vide
+// (« non vide », « pas vide »), l'infobulle `title` d'un code lié (balise de code, ou élément
+// dont le texte est un identifiant « C2 », « E-020 »), une valeur de statut seule (« Échec »,
+// « Refusé »), une pastille de statut (classe badge, pastille, statut…) et un libellé de donnée
+// où le mot d'erreur est complément de nom (« Date du refus »). Un `role="alert"` reste jugé.
+// TF-1910 (18/10/2026) : le `title` d'un <th> (ou d'un [role=columnheader|rowheader]) et celui de
+// tout élément à `data-definition` sont des DÉFINITIONS (convention du socle, dictionnaire de colonnes).
+// TF-2162 (04/11/2026, rattaché à TF-1762) : une CARTE DE CHOIX rédigée en négation (« Aucun système réel n'est
+// touché ») n'est pas un état vide. Le texte d'un <label>, d'un <button> ou d'une <option>, et les attributs d'un
+// <label>, d'une <option> ou d'un élément à rôle de choix (radio, checkbox, option, switch, tab, menuitem…) ne
+// sont plus jugés par T4-2 ; un bloc qui se déclare vide (classe empty|vide, data-etat="vide") et le title d'un
+// <button> (une infobulle est un message) le restent.
+// TF-2276 (06/11/2026, retour Produit-86, RP-49) : le GLOSSAIRE EN INFOBULLE, forme que la forge recommande (X9 d'oracle-exploitabilite),
+// n'est pas un message d'erreur. Sont des définitions, jamais lues en erreur ni en vide : tout ce qui est dans un `[data-lexique]`, un
+// élément `role="tooltip"` (attributs et texte) et l'infobulle (title, aria-label) d'un terme déclaré au lexique, hors <button>.
+// Le title d'une cellule de donnée ou d'un bouton qui n'est pas un terme du lexique reste jugé, comme `role="alert"` et `.error`.
+//
+// CE QUE LE LEXIQUE NE CONNAÎT PAS NE BLOQUE PAS (TF-2102, 03/11/2026) — les listes de verbes et d'indices
+// ci-dessous sont une classe OUVERTE de la langue : elles se complètent, elles ne seront jamais exhaustives.
+// Trois garde-fous, pour qu'un mot manquant ne fabrique pas un bloquant faux : (1) un mot en « -ez » (impératif
+// du vouvoiement : « rechargez », « utilisez ») vaut réparation ou invitation, hors « chez », « assez », « avez »,
+// « savez » ; (2) un texte classé erreur ou vide par sa SEULE clé ou son seul contexte, qui dit plus qu'un constat
+// nu (au moins deux mots de contenu), passe en AVERTISSEMENT « hors lexique » — un texte qui s'annonce lui-même
+// (« Une erreur est survenue », « Aucune donnée ») reste jugé comme avant ; (3) un libellé <option> est un choix,
+// jamais un état vide. Le coût assumé : « Impossible de télécharger le fichier », classé par sa clé seule, n'est
+// plus qu'un avertissement.
+//
+// POURQUOI T4-1…T4-4 ET NON TA1…TA4. Le lot du pilot nomme ces règles TA1 à TA4 ; ces
+// quatre identifiants sont DÉJÀ pris dans cette forge par `oracle-taste` (TA1 familles
+// d'accent, TA2 saturation, TA3 filets, TA4 systèmes cohabitants), et `grille.md` les cite
+// sous ce sens à la dimension D1. Deux sens pour un même identifiant dans un même rapport
+// est un défaut de cohérence, pas une nuance. Le préfixe retenu — T4 — est le code de
+// typologie de `references\ECRITURE.md` (« T4 : textes d'application »), donc il dit ce
+// qu'il juge. L'écart est consigné au lot de retours.
+//
+// ENTRÉE — un fichier de chaînes extraites, format déduit de l'extension (ou `--format`) :
+//   .json         plat `{cle: texte}` ou imbriqué (les clés sont aplaties en `a.b.c`)
+//   .arb          idem, `@@…` ignorés, `@cle.description` servant de contexte
+//   .po           blocs msgctxt / msgid / msgstr (msgstr s'il est rempli, sinon msgid)
+//   .properties   `cle=valeur`, continuations `\` et échappements `\n` `\uXXXX`
+//   .html         littéraux de `placeholder`, `title`, `aria-label`, `alt` ; texte des
+//                 `<button>`, `<label>`, `<option>` ; texte des éléments `role="alert"`,
+//                 `.error`, `.empty`, `[data-etat="vide"]`
+//
+// CE QU'IL NE JUGE PAS — déclaré en non_juge, jamais supposé : la justesse du ton, la voix
+// de marque (`voix.md` : elle n'est pas décidable par script et reste à l'arbitrage du
+// commanditaire), et toute chaîne NON EXTRAITE — un plancher franchi n'est pas une voix
+// trouvée, et un fichier de ressources incomplet ne prouve rien sur le produit.
+//
+// Contrat : JSON {oracle,domaine,artefact,verdict,findings[],non_juge[]} · exit 0/1/2.
+// Usage :
+//   node oracle-textes-application.mjs <chaines.json|.arb|.po|.properties|.html> [--format <f>] [--json-only]
+//   node oracle-textes-application.mjs --self-test
+
+import fs from 'node:fs';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { parse as parseHtml, elements, walk } from './lib/html.mjs';
+import { plageDeRegles, ecartDeListe, reglesEmises } from './lib/regles-jouees.mjs';
+
+const DOM = "Textes d'application (T4) : libellés, erreurs, états vides";
+// TF-2287 — les règles que l'oracle JOUE, déclarées UNE fois ; le message « sans écart » et le titre du self-test en dérivent
+// leur plage au lieu de la citer en dur. Une règle neuve s'ajoute ici : le --self-test refuse la liste qui s'écarte des
+// `add(…, 'T4-n', …)` de ce fichier (lib/regles-jouees.mjs).
+export const REGLES_JOUEES = ['T4-1', 'T4-2', 'T4-3', 'T4-4'];
+const PLAGE_JOUEE = plageDeRegles(REGLES_JOUEES, '…');
+
+// ── Constantes de langue, volontairement EXTENSIBLES ────────────────────────
+// Une donnée périssable est une donnée, pas du code : ces listes se complètent par
+// ajout, jamais par réécriture de la mécanique. Elles sont comparées sur un texte
+// NORMALISÉ (minuscules, accents retirés, apostrophes redressées), à la frontière
+// de mot — « compresse-le » compte pour « compresse ».
+
+export const VERBES_REPARATION = [
+  'reessaye', 'reessayer', 'reessayez', 'reessayons', 'ressaye', 'ressayer',
+  'corrige', 'corriger', 'corrigez', 'corrigeons',
+  'verifie', 'verifier', 'verifiez', 'verifions',
+  'choisis', 'choisir', 'choisissez',
+  'selectionne', 'selectionner', 'selectionnez',
+  'compresse', 'compresser', 'compressez',
+  'contacte', 'contacter', 'contactez',
+  'reduis', 'reduire', 'reduisez',
+  'renseigne', 'renseigner', 'renseignez',
+  'complete', 'completer', 'completez',
+  'supprime', 'supprimer', 'supprimez',
+  'reconnecte', 'reconnecter', 'reconnectez',
+  'recommence', 'recommencer', 'recommencez',
+  'actualise', 'actualiser', 'actualisez',
+  'rafraichis', 'rafraichir', 'rafraichissez',
+  'patiente', 'patienter', 'patientez',
+  'renomme', 'renommer', 'renommez',
+  'convertis', 'convertir', 'convertissez',
+  'envoie', 'envoyer', 'envoyez',
+  'reprends', 'reprendre', 'reprenez',
+  'attends', 'attendre', 'attendez',
+  'modifie', 'modifier', 'modifiez',
+  'ajuste', 'ajuster', 'ajustez',
+  // TF-2102 : formes courantes absentes du lexique (portail francophone, 03/11/2026).
+  'recharge', 'recharger', 'rechargez',
+  'ouvre', 'ouvrir', 'ouvrez',
+  'reviens', 'revenir', 'revenez',
+];
+
+export const INDICES_CAUSE = [
+  'depasse', 'depassent', 'depassement',
+  'manque', 'manquent', 'manquant', 'manquante',
+  "n'existe pas", 'nexiste pas', "n'existent pas",
+  'deja', 'trop',
+  'introuvable', 'introuvables',
+  'expire', 'expiree', 'expirees',
+  'incorrect', 'incorrecte', 'incorrects', 'incorrectes',
+  'invalide', 'invalides',
+  'requis', 'requise', 'obligatoire', 'obligatoires',
+  'indisponible', 'indisponibles',
+  'inconnu', 'inconnue',
+  'illisible', 'illisibles',
+  'non pris en charge', 'pas pris en charge', 'non supporte',
+  'refuse', 'refusee', 'verrouille', 'verrouillee',
+  'hors ligne', 'interrompue', 'interrompu',
+  // TF-2102 : formes courantes absentes du lexique.
+  'absent', 'absente', 'absents', 'absentes',
+  'perime', 'perimee', 'perimes', 'perimees',
+];
+
+export const VERBES_ACTION = [
+  'cree', 'creer', 'creez', 'creons',
+  'ajoute', 'ajouter', 'ajoutez',
+  'importe', 'importer', 'importez',
+  'commence', 'commencer', 'commencez',
+  'invite', 'inviter', 'invitez',
+  'demarre', 'demarrer', 'demarrez',
+  'lance', 'lancer', 'lancez',
+  'configure', 'configurer', 'configurez',
+  'connecte', 'connecter', 'connectez',
+  'depose', 'deposer', 'deposez',
+  'publie', 'publier', 'publiez',
+  'televerse', 'televerser', 'televersez',
+  'telecharge', 'telecharger', 'telechargez',
+  'parcours', 'parcourir', 'parcourez',
+  'explore', 'explorer', 'explorez',
+  'essaye', 'essayer', 'essayez',
+  'redige', 'rediger', 'redigez',
+  'planifie', 'planifier', 'planifiez',
+  'choisis', 'choisir', 'choisissez',
+  'selectionne', 'selectionner', 'selectionnez',
+  'enregistre', 'enregistrer', 'enregistrez',
+  // TF-2102 : formes courantes absentes du lexique.
+  'ouvre', 'ouvrir', 'ouvrez',
+  'reviens', 'revenir', 'revenez',
+  'recharge', 'recharger', 'rechargez',
+];
+
+// Comparés à la chaîne ENTIÈRE normalisée (ponctuation finale retirée), jamais en
+// sous-chaîne : « Valider » est générique, « Valider la commande » ne l'est pas.
+export const LIBELLES_GENERIQUES = [
+  'valider', 'validez', 'validation',
+  'ok', "c'est ok", 'okay',
+  'soumettre', 'soumettez',
+  'cliquez ici', 'cliquer ici', 'clique ici',
+  'click here', 'submit', 'send',
+  'envoyer', 'envoyez',
+  'continuer', 'go', 'lire la suite',
+];
+
+export const MARQUES_EXCUSE = ['desole', 'desolee', 'desoles', 'desolees', 'oups', 'sorry', 'oops', 'navre', 'navres', 'navree'];
+
+// Classification — clé, contexte ET texte servent de signal. Le texte est indispensable :
+// la fixture fondatrice « Une erreur est survenue » peut vivre sous n'importe quelle clé,
+// et c'est justement la chaîne qu'il faut voir.
+const RX_ERREUR = /(^|[^a-z0-9])(error|errors|erreur|erreurs|fail|failed|failure|echec|echecs|invalid|invalide|invalides|refus|refuse|refusee)([^a-z0-9]|$)/;
+const RX_VIDE = /(^|[^a-z0-9])(empty|vide|vides|aucun|aucune|aucuns|aucunes|no[_ -]?results?|nothing|pas encore|rien a afficher)([^a-z0-9]|$)/;
+
+export const normaliser = s => String(s)
+  .replace(/[\u2018\u2019\u02bc]/g, "'")
+  .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+  .toLowerCase().replace(/\s+/g, ' ').trim();
+
+const echapper = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const motif = liste => new RegExp('(^|[^a-z0-9])(' + liste.map(echapper).join('|') + ')([^a-z0-9]|$)');
+const RX_REPARATION = motif(VERBES_REPARATION);
+const RX_CAUSE = motif(INDICES_CAUSE);
+const RX_ACTION = motif(VERBES_ACTION);
+const RX_EXCUSE = motif(MARQUES_EXCUSE);
+
+// TF-2102 (03/11/2026) — UN LEXIQUE FERMÉ NE FAIT PAS AUTORITÉ SUR LA LANGUE. Les verbes d'invitation et les
+// formes de cause forment une classe OUVERTE : « rechargez », « ouvrez », « revenez » manquaient, et chaque mot
+// manquant fabriquait un bloquant faux. Deux garde-fous s'ajoutent à la complétion du lexique.
+// 1) L'impératif du vouvoiement se reconnaît à sa FORME (mot en « -ez » : « utilisez », « patientez »), pas à une
+//    liste. Les mots en « -ez » qui n'en sont pas sont listés (« chez », « assez », « avez », « savez »).
+const RX_IMPERATIF_VOUS = /(^|[^a-z0-9])(?!(?:chez|assez|nez|rez|lez|avez|savez|suez)(?:[^a-z0-9]|$))[a-z]{2,}ez(?=[^a-z0-9]|$)/;
+// 2) Un texte qui ne s'annonce PAS lui-même comme erreur ou comme vide (classé par sa clé ou son contexte seuls)
+//    et qui dit plus qu'un constat nu n'est pas refusé sur ce que le lexique ne connaît pas : il est signalé en
+//    avertissement. Les mots ci-dessous sont ceux d'un constat nu — mots-outils (classe fermée) et mots qui ne
+//    font qu'annoncer l'incident ou le vide ; tout autre mot porte une information que l'oracle ne sait pas lire.
+const MOTS_DU_CONSTAT_NU = new Set([
+  'le', 'la', 'les', 'un', 'une', 'des', 'du', 'de', 'au', 'aux', 'en', 'et', 'ou', 'ce', 'cet', 'cette', 'ces', 'se',
+  'sa', 'son', 'ses', 'il', 'elle', 'ils', 'elles', 'on', 'ne', 'pas', 'plus', 'est', 'sont', 'etait', 'ete', 'etre',
+  'sera', 'ont', 'as', 'ai', 'avoir', 'pour', 'par', 'sur', 'sous', 'dans', 'avec', 'sans', 'que', 'qui', 'quoi',
+  'dont', 'si', 'mais', 'donc', 'car', 'ni', 'votre', 'vos', 'notre', 'nos', 'mon', 'mes', 'ton', 'tes', 'leur',
+  'leurs', 'tout', 'tous', 'toute', 'toutes', 'ici', 'cela', 'ca', 'ceci', 'nous', 'vous', 'je', 'tu', 'lui',
+  // l'incident, sans un mot de plus
+  'erreur', 'erreurs', 'error', 'errors', 'fail', 'failed', 'failure', 'echec', 'echecs', 'echoue', 'echouee',
+  'survenue', 'survenues', 'survenu', 'inattendue', 'inattendu', 'probleme', 'problemes', 'impossible',
+  'continuer', 'mal', 'passe', 'produit', 'produite', 'quelque', 'chose', 'invalide', 'invalides', 'refus',
+  'refuse', 'refusee', 'oups', 'oops', 'desole', 'desolee', 'sorry', 'navre',
+  // le vide, sans un mot de plus
+  'aucun', 'aucune', 'aucuns', 'aucunes', 'rien', 'donnee', 'donnees', 'resultat', 'resultats', 'element',
+  'elements', 'instant', 'moment', 'encore', 'vide', 'vides', 'empty', 'nothing', 'no', 'result', 'results',
+  'data', 'afficher', 'disponible', 'disponibles', 'trouve', 'trouvee', 'trouves', 'trouvees',
+]);
+// Nombre de mots qui disent quelque chose au-delà du constat nu (les chiffres et les lettres isolées ne comptent pas).
+export const motsDeContenu = nTexte => nTexte.split(/[^a-z0-9]+/)
+  .filter(m => m.length >= 2 && !/\d/.test(m) && !MOTS_DU_CONSTAT_NU.has(m)).length;
+const SEUIL_CONTENU = 2;
+
+// TF-1762 — la négation du vide (« non vide », « non-vide », « pas vide », « jamais vide »).
+const RX_VIDE_NIE = /(^|[^a-z0-9])(non|pas|jamais|plus|ni)[ -](vide|vides|empty)(?=[^a-z0-9]|$)/g;
+// TF-1773 — une valeur de statut seule (« Échec », « En erreur », « Refusé »). Le vide n'y
+// figure pas : « Vide » seul reste un état vide jugé par T4-2.
+const RX_STATUT_SEUL = /^(en )?(echec|echecs|echoue|echouee|erreur|erreurs|error|failed|failure|refus|refuse|refusee|refuses|refusees|rejete|rejetee|invalide)$/;
+// TF-1773 — le mot d'erreur en complément de nom d'un libellé (« Date du refus », « Taux
+// d'erreur », « Motif de l'échec ») : il nomme une donnée, il n'annonce pas un incident.
+const RX_COMPLEMENT_DE_NOM = /^[a-z0-9']+(?: [a-z0-9']+){0,3} (?:du|des|de la|de l'|de|d'|par|apres|avant|sans|au|aux|pour) ?(?:l')?(refus|refuses|echec|echecs|erreur|erreurs|error|errors|failure|rejet|rejets)$/;
+const court = t => !/[.!?…]/.test(t) && t.trim().split(/\s+/).length <= 5;
+// ── Jugement — fonction pure, testable sans fichier ─────────────────────────
+/**
+ * @param {{cle:string, texte:string, contexte?:string, ou?:string}[]} entrees
+ * @returns {{findings:Array, compte:{total:number, erreurs:number, vides:number}}}
+ */
+export function juger(entrees) {
+  const findings = [];
+  const add = (sev, regle, msg, where) => findings.push({ sev, regle, msg, where });
+  let erreurs = 0, vides = 0;
+
+  for (const e of entrees) {
+    const texte = String(e.texte || '');
+    if (!texte.trim()) continue;
+    const nTexte = normaliser(texte);
+    // Une chaîne sans lettre (« — », « 12 », « % ») n'est pas un texte d'application.
+    if (!/[a-z]/.test(nTexte)) continue;
+    const signal = normaliser([e.cle || '', e.contexte || '', texte].join(' '));
+    const ou = e.ou || e.cle || '(sans clé)';
+    const extrait = texte.length > 90 ? texte.slice(0, 90) + '…' : texte;
+
+    // TF-1762, TF-1773 — UN LIBELLÉ DE DONNÉE N'EST PAS UN MESSAGE. Trois formes se lisaient
+    // en erreur ou en état vide, en bloquant, sans en être : la définition d'un code lié
+    // (infobulle « plan Terraform non vide » sur C2), la valeur d'un statut (tuile « Échec »,
+    // pastille « badge erreur ») et l'en-tête qui nomme une donnée (« Date du refus »). Un
+    // texte qui s'affiche comme une alerte (role="alert") reste toujours jugé.
+    const nuTexte = nTexte.replace(/[.!?…:;]+$/, '').trim();
+    const estAlerte = /(^| )alert( |$)/.test(normaliser(e.contexte || ''));
+    const libelleDeDonnee = !estAlerte && (e.definition || e.statut
+      || RX_STATUT_SEUL.test(nuTexte) || RX_COMPLEMENT_DE_NOM.test(nuTexte) && court(texte));
+    // « non vide », « pas vide », « jamais vide » : la négation du vide n'est pas un vide.
+    const signalVide = signal.replace(RX_VIDE_NIE, ' ');
+
+    const estErreur = !libelleDeDonnee && RX_ERREUR.test(signal);
+    // Précédence assumée : une chaîne qui porte les deux marques est jugée comme une
+    // ERREUR. « Aucune erreur » relève du message d'erreur, pas de l'état vide, et un
+    // état vide accusé de ne pas réparer serait un faux positif bruyant.
+    // TF-2102 : un libellé de CHOIX (<option>) n'est pas un état vide — « Aucun » y est une valeur à choisir.
+    const estVide = !libelleDeDonnee && !e.choix && !estErreur && RX_VIDE.test(signalVide);
+    // TF-2102 : le texte s'annonce-t-il LUI-MÊME comme erreur ou comme vide, ou seul sa clé / son contexte l'ont classé ?
+    const annonceErreur = RX_ERREUR.test(nTexte);
+    const annonceVide = RX_VIDE.test(nTexte.replace(RX_VIDE_NIE, ' '));
+    const horsLexique = motsDeContenu(nTexte) >= SEUIL_CONTENU;
+
+    if (estErreur) {
+      erreurs++;
+      const aReparation = RX_REPARATION.test(nTexte) || RX_IMPERATIF_VOUS.test(nTexte);
+      const aCause = RX_CAUSE.test(nTexte);
+      if (!aReparation && !aCause && !annonceErreur && horsLexique) {
+        // Classé erreur par sa seule clé ou son seul contexte, et dit plus qu'un constat nu : le lexique ne le
+        // reconnaît pas, il ne prouve pas pour autant qu'il manque la cause et la réparation (TF-2102).
+        add('avertissement', 'T4-1', `erreur dont le lexique ne reconnaît ni la cause ni la réparation : « ${extrait} ». `
+          + 'Le texte dit plus qu\'un constat nu, donc il n\'est pas refusé ; à relire : E-12 demande la cause PUIS la réparation', ou);
+      } else if (!aReparation && !aCause) {
+        add('bloquant', 'T4-1', `erreur sans cause ni réparation : « ${extrait} ». E-12 : une erreur dit ce qui `
+          + "s'est passé PUIS comment réparer. Ici la personne apprend qu'il y a un problème et rien d'autre", ou);
+      } else if (!aReparation) {
+        add('avertissement', 'T4-1', `erreur qui dit la cause mais pas la réparation : « ${extrait} ». `
+          + 'E-12 demande les deux — la moitié laisse la personne devant un constat', ou);
+      } else if (!aCause) {
+        add('avertissement', 'T4-1', `erreur qui dit la réparation mais pas la cause : « ${extrait} ». `
+          + "E-12 demande les deux — réparer sans savoir quoi est une devinette", ou);
+      }
+      if (RX_EXCUSE.test(nTexte)) {
+        add('avertissement', 'T4-4', `erreur qui s'excuse : « ${extrait} ». L'excuse occupe la place de la cause `
+          + "et de la réparation ; le contrat de voix la refuse (« jamais d'excuse, jamais de vague »)", ou);
+      }
+    }
+
+    if (estVide) {
+      vides++;
+      if (!RX_ACTION.test(nTexte) && !RX_IMPERATIF_VOUS.test(nTexte) && !annonceVide && horsLexique) {
+        // Classé vide par sa seule clé ou son seul contexte, texte hors lexique : avertissement (TF-2102).
+        add('avertissement', 'T4-2', `état vide dont le lexique ne reconnaît aucune invitation à agir : « ${extrait} ». `
+          + 'Le texte dit plus qu\'un constat nu, donc il n\'est pas refusé ; à relire : E-12 demande qu\'un état vide invite à agir', ou);
+      } else if (!RX_ACTION.test(nTexte) && !RX_IMPERATIF_VOUS.test(nTexte)) {
+        add('bloquant', 'T4-2', `état vide sans invitation à agir : « ${extrait} ». E-12 : un état vide invite à `
+          + "agir. Un constat de vide laisse l'écran sans issue", ou);
+      }
+    }
+
+    const nu = nTexte.replace(/[.!?…:;]+$/, '').trim();
+    if (LIBELLES_GENERIQUES.includes(nu)) {
+      add('avertissement', 'T4-3', `libellé générique : « ${texte.trim()} ». E-12 : un libellé nomme ce que la `
+        + 'personne contrôle (« Enregistrer les modifications »), pas le geste du système', ou);
+    }
+  }
+
+  return { findings, compte: { total: entrees.length, erreurs, vides } };
+}
+
+// ── Extraction — un format, une fonction, toutes rendant la même forme ──────
+
+const ligneDe = (brut, aiguille) => {
+  if (!aiguille) return null;
+  const i = brut.indexOf(aiguille);
+  return i === -1 ? null : brut.slice(0, i).split('\n').length;
+};
+
+export function aplatir(valeur, prefixe = '', out = []) {
+  if (Array.isArray(valeur)) {
+    valeur.forEach((v, i) => aplatir(v, `${prefixe}[${i}]`, out));
+  } else if (valeur && typeof valeur === 'object') {
+    for (const [k, v] of Object.entries(valeur)) aplatir(v, prefixe ? `${prefixe}.${k}` : k, out);
+  } else if (typeof valeur === 'string') {
+    out.push({ cle: prefixe, texte: valeur });
+  }
+  return out;
+}
+
+export function extraireJson(brut) {
+  return aplatir(JSON.parse(brut));
+}
+
+export function extraireArb(brut) {
+  const j = JSON.parse(brut);
+  const descriptions = {};
+  for (const [k, v] of Object.entries(j)) {
+    if (k.startsWith('@@') || !k.startsWith('@')) continue;
+    if (v && typeof v === 'object' && typeof v.description === 'string') descriptions[k.slice(1)] = v.description;
+  }
+  const out = [];
+  for (const [k, v] of Object.entries(j)) {
+    if (k.startsWith('@')) continue;
+    if (typeof v === 'string') out.push({ cle: k, texte: v, contexte: descriptions[k] || '' });
+  }
+  return out;
+}
+
+export function extrairePo(brut) {
+  const out = [];
+  const deguillemeter = l => {
+    const m = /^\s*(?:msgid|msgstr|msgctxt)?\s*"((?:\\.|[^"\\])*)"\s*$/.exec(l);
+    if (!m) return null;
+    return m[1].replace(/\\n/g, '\n').replace(/\\t/g, '\t').replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+  };
+  let bloc = { commentaires: [], ctxt: '', id: '', str: '' };
+  let champ = null;
+  const vider = () => {
+    const texte = bloc.str || bloc.id;
+    if (texte) out.push({ cle: bloc.ctxt || bloc.id, texte, contexte: bloc.commentaires.join(' ') });
+    bloc = { commentaires: [], ctxt: '', id: '', str: '' };
+    champ = null;
+  };
+  for (const ligne of brut.split(/\r?\n/)) {
+    if (!ligne.trim()) { vider(); continue; }
+    if (ligne.startsWith('#')) { if (ligne.startsWith('#.') || ligne.startsWith('#:')) bloc.commentaires.push(ligne.slice(2).trim()); continue; }
+    let cible = null;
+    if (/^msgctxt\s/.test(ligne)) cible = 'ctxt';
+    else if (/^msgid\s/.test(ligne)) cible = 'id';
+    else if (/^msgstr(\[\d+\])?\s/.test(ligne)) cible = 'str';
+    if (cible) champ = cible;
+    const v = deguillemeter(ligne.replace(/^(msgctxt|msgid|msgstr(\[\d+\])?)\s+/, ''));
+    if (v != null && champ) bloc[champ] += v;
+  }
+  vider();
+  return out;
+}
+
+export function extraireProperties(brut) {
+  const out = [];
+  const lignes = brut.split(/\r?\n/);
+  let tampon = '';
+  for (const l of lignes) {
+    const brute = tampon ? tampon + l.replace(/^\s+/, '') : l;
+    tampon = '';
+    const t = brute.trim();
+    if (!t || t.startsWith('#') || t.startsWith('!')) continue;
+    if (/\\$/.test(t) && !/\\\\$/.test(t)) { tampon = t.slice(0, -1); continue; }
+    const m = /^([^=:]+?)\s*[=:]\s*([\s\S]*)$/.exec(t);
+    if (!m) continue;
+    const texte = m[2]
+      .replace(/\\u([0-9a-fA-F]{4})/g, (_, h) => String.fromCharCode(parseInt(h, 16)))
+      .replace(/\\n/g, '\n').replace(/\\t/g, '\t').replace(/\\([:=#! \\])/g, '$1');
+    out.push({ cle: m[1].trim().replace(/\\([:=])/g, '$1'), texte });
+  }
+  return out;
+}
+
+const ATTRS_TEXTE = ['placeholder', 'title', 'aria-label', 'alt'];
+const BALISES_TEXTE = ['button', 'label', 'option'];
+const BALISES_CODE = ['abbr', 'code', 'dfn', 'kbd', 'samp', 'var'];
+const RX_IDENTIFIANT_CODE = /^[A-Z]{1,5}[-_]?\d{1,4}[a-z]?$/;
+const RX_ROLE_CHOIX = /^(radio|checkbox|option|switch|tab|menuitem|menuitemradio|menuitemcheckbox)$/;
+const RX_CLASSE_PASTILLE =/(^|[ _-])(badge|pastille|chip|pill|tag|statut|status|etiquette)([ _-]|$)/;
+
+export function extraireHtml(brut) {
+  const racine = parseHtml(brut);
+  const out = [];
+  const at = (el, k) => (el.attrs && el.attrs[k] != null ? String(el.attrs[k]) : '');
+  const texteDe = el => {
+    let t = '';
+    walk(el, n => { if (n.tag === '#text') t += ' ' + n.text; });
+    return t.replace(/\s+/g, ' ').trim();
+  };
+  const marqueurs = el => [el.tag, at(el, 'class'), at(el, 'role'), at(el, 'id'), at(el, 'data-etat'), at(el, 'name')]
+    .filter(Boolean).join(' ');
+
+  // TF-2276 (retour Produit-86 du 06/11/2026, RP-49, rattaché à TF-1910) — LE GLOSSAIRE EN INFOBULLE EST UNE AIDE, PAS UNE
+  // ERREUR. La forge recommande elle-même cette forme (X9 d'oracle-exploitabilite) : l'écran déclare son lexique
+  // (`[data-lexique]`, un <dl> dont chaque <dt> est un terme), chaque terme de l'écran porte sa définition en `title` (ou
+  // `aria-label`), et une aide peut vivre dans un élément `role="tooltip"`. Ces définitions disent « refus », « échec »,
+  // « invalide » parce que le métier en parle : 12 constats durs sur la fiche servie, aucun sur une erreur. Sont donc des
+  // définitions, jamais lues en erreur ni en vide : (1) tout ce qui se trouve DANS un [data-lexique] ; (2) l'élément
+  // role="tooltip" (ses attributs et son texte) ; (3) l'infobulle d'un terme déclaré au lexique, dans une prose courte
+  // (cinq mots au plus) qui contient le terme à la frontière de mot — un <button> en est exclu, son infobulle est un message.
+  // Une erreur reste une erreur : role="alert" est toujours jugé, et le title d'une cellule de donnée ou d'un bouton qui
+  // n'est pas un terme du lexique aussi (TF-1910, TF-2102, TF-2162).
+  const aLexique = el => Object.prototype.hasOwnProperty.call(el.attrs || {}, 'data-lexique');
+  const termesDuLexique = [];
+  for (const lx of elements(racine).filter(aLexique)) {
+    walk(lx, n => {
+      if (n.tag !== 'dt') return;
+      const t = normaliser(texteDe(n)).replace(/[.!?…:;]+$/, '').trim();
+      if (t && !termesDuLexique.includes(t)) termesDuLexique.push(t);
+    });
+  }
+  const dansLexique = el => { for (let p = el; p; p = p.parent) if (aLexique(p)) return true; return false; };
+  const termeDuLexique = el => {
+    if (el.tag === 'button' || !termesDuLexique.length) return false;
+    const t = normaliser(texteDe(el)).replace(/[.!?…:;]+$/, '').trim();
+    return !!t && t.split(' ').length <= 5
+      && termesDuLexique.some(x => new RegExp('(^|[^a-z0-9])' + echapper(x) + '([^a-z0-9]|$)').test(t));
+  };
+  const infobulleDeGlossaire = el => at(el, 'role') === 'tooltip' || dansLexique(el) || termeDuLexique(el);
+
+  for (const el of elements(racine)) {
+    if (el.tag === 'script' || el.tag === 'style') continue;
+    // TF-1762 — l'infobulle d'un CODE (balise de code, ou élément dont le texte est un
+    // identifiant comme « C2 », « E-020 ») est sa définition : elle décrit le code, elle
+    // n'est ni une erreur ni un état vide de l'écran.
+    const estCode = BALISES_CODE.includes(el.tag) || RX_IDENTIFIANT_CODE.test(texteDe(el));
+    // TF-1910 — l'infobulle de DÉFINITION d'un en-tête de colonne est une définition aussi. Le socle
+    // (factory-page-html, dictionnaire de colonnes, G9) la porte par `data-definition` ou par
+    // `title` sur chaque <th> ; un élément à `data-definition` déclare lui-même que son infobulle
+    // définit. « Code » et « Résultat » y disaient « refus » (le motif des décisions) : 11 constats
+    // durs sur une page sans une erreur. Un `role="alert"` reste jugé (voir juger).
+    const definitionEntete = el.tag === 'th' || /^(columnheader|rowheader)$/.test(at(el, 'role'))
+      || Object.prototype.hasOwnProperty.call(el.attrs || {}, 'data-definition');
+    const classe = normaliser(at(el, 'class'));
+    const estEtat = at(el, 'role') === 'alert'
+      || /(^| )(error|erreur|empty|vide)([ -]|$)/.test(classe)
+      || normaliser(at(el, 'data-etat')) === 'vide';
+    // TF-2162 (rattaché à TF-1762) — une CARTE DE CHOIX n'est pas un état vide. « Aucun système réel n'est
+    // touché », description d'une carte « Simulation », se lisait comme un état vide sans invitation (2 constats
+    // bloquants le 04/11/2026). Un contrôle qu'on CHOISIT (<label>, <option>, élément à rôle radio, checkbox,
+    // option, switch, tab, menuitem…) a un libellé, pas un message d'écran ; le texte d'un <button> aussi. Un bloc
+    // qui se déclare lui-même vide (classe empty|vide, data-etat="vide") reste jugé, et l'infobulle (title,
+    // aria-label) d'un <button> ordinaire aussi : c'est un message (« Aucune donnée à exporter »), pas un choix.
+    const videDeclare = /(^| )(empty|vide)([ -]|$)/.test(classe) || normaliser(at(el, 'data-etat')) === 'vide';
+    const estControleDeChoix = el.tag === 'label' || el.tag === 'option' || RX_ROLE_CHOIX.test(at(el, 'role'));
+    // TF-2200 (rattaché à TF-2162) — le title ou l'aria-label d'un <button> qui REPREND son texte visible (« Aucun » sur le
+    // bouton « Aucun », « Aucun filtre » sur « Aucun ») est le nom du contrôle, pas un message : 2 T4-2 bloquants par
+    // bouton « Aucun » du panneau de filtre (4 par écran filtrable, 05/11/2026). Une infobulle qui dit autre chose que
+    // le bouton (« Aucune donnée à exporter » sur « Exporter ») reste un message, donc reste jugée.
+    const texteBouton = el.tag === 'button' && !videDeclare ? normaliser(texteDe(el)).replace(/[.!?…:;]+$/, '').trim() : '';
+    const reprendLeBouton = v => {
+      if (!texteBouton) return false;
+      const n = normaliser(v).replace(/[.!?…:;]+$/, '').trim();
+      return n === texteBouton || n.startsWith(texteBouton + ' ');
+    };
+    for (const a of ATTRS_TEXTE) {
+      const v = at(el, a);
+      if (v.trim()) out.push({ cle: `${el.tag}[${a}]`, texte: v, contexte: marqueurs(el),
+        ...((a === 'title' && (estCode || definitionEntete)) || ((a === 'title' || a === 'aria-label') && infobulleDeGlossaire(el)) ? { definition: true } : {}),
+        ...((estControleDeChoix && !videDeclare) || ((a === 'title' || a === 'aria-label') && reprendLeBouton(v)) ? { choix: true } : {}) });
+    }
+    // TF-1773 — une pastille de statut (« badge erreur ») affiche une VALEUR, pas un message.
+    const estPastille = RX_CLASSE_PASTILLE.test(classe) && at(el, 'role') !== 'alert';
+    if (BALISES_TEXTE.includes(el.tag) || estEtat) {
+      const t = texteDe(el);
+      if (t) out.push({ cle: `<${el.tag}${at(el, 'class') ? ' class="' + at(el, 'class') + '"' : ''}>`, texte: t, contexte: marqueurs(el),
+        ...(estPastille ? { statut: true } : {}),
+        ...(at(el, 'role') === 'tooltip' || dansLexique(el) ? { definition: true } : {}),
+        ...(BALISES_TEXTE.includes(el.tag) && !videDeclare ? { choix: true } : {}) });
+    }
+  }
+  return out;
+}
+
+export function extraire(brut, format) {
+  switch (format) {
+    case 'json': return extraireJson(brut);
+    case 'arb': return extraireArb(brut);
+    case 'po': return extrairePo(brut);
+    case 'properties': return extraireProperties(brut);
+    case 'html': return extraireHtml(brut);
+    default: throw new Error(`format non pris en charge : ${format}`);
+  }
+}
+
+const FORMAT_PAR_EXTENSION = {
+  '.json': 'json', '.arb': 'arb', '.po': 'po', '.pot': 'po',
+  '.properties': 'properties', '.html': 'html', '.htm': 'html',
+};
+
+// ── Point d'entrée ──────────────────────────────────────────────────────────
+// Garde d'entrée : importé comme module, ce fichier n'exécute rien — sinon il ne serait
+// pas testable unitairement (même doctrine qu'oracle-coherence-promesse).
+const EST_POINT_D_ENTREE = process.argv[1] && path.basename(process.argv[1]) === 'oracle-textes-application.mjs';
+const args = EST_POINT_D_ENTREE ? process.argv.slice(2) : ['--module'];
+
+if (args.includes('--self-test')) {
+  let pass = 0, fail = 0;
+  const check = (nom, fn) => {
+    try { fn(); console.log(`  [PASS] ${nom}`); pass++; }
+    catch (e) { console.error(`  [FAIL] ${nom} — ${e.message}`); fail++; }
+  };
+  const regles = r => new Set(r.findings.map(f => f.regle));
+  const durs = r => r.findings.filter(f => f.sev === 'bloquant');
+  const un = (cle, texte) => juger([{ cle, texte }]);
+
+  // ── Les trois chaînes ROUGES du mandat, une par une ───────────────────────
+  check('ROUGE — « Une erreur est survenue » : T4-1 bloquant (ni cause, ni réparation)', () => {
+    const r = un('erreur.generique', 'Une erreur est survenue');
+    if (!durs(r).some(f => f.regle === 'T4-1')) throw new Error(JSON.stringify(r.findings));
+  });
+  check('ROUGE — « Aucune donnée » : T4-2 bloquant (aucun verbe d\'action)', () => {
+    const r = un('liste.message', 'Aucune donnée');
+    if (!durs(r).some(f => f.regle === 'T4-2')) throw new Error(JSON.stringify(r.findings));
+  });
+  check('ROUGE — « Valider » : T4-3 avertissement, jamais bloquant', () => {
+    const r = un('form.submit', 'Valider');
+    if (!regles(r).has('T4-3')) throw new Error('libellé générique non vu');
+    if (durs(r).length) throw new Error('T4-3 remonté en bloquant — le mandat en fait un avertissement');
+  });
+  check("ROUGE — « Oups, une erreur est survenue » : T4-4 en plus de T4-1", () => {
+    const r = un('erreur.envoi', 'Oups, une erreur est survenue.');
+    if (!regles(r).has('T4-4')) throw new Error('excuse non vue');
+  });
+
+  // ── Les trois chaînes VERTES du mandat ────────────────────────────────────
+  check('VERTE — « Le fichier dépasse 10 Mo. Compresse-le ou envoie-le en deux fois. » : muet', () => {
+    const r = un('erreur.taille_fichier', 'Le fichier dépasse 10 Mo. Compresse-le ou envoie-le en deux fois.');
+    if (r.findings.length) throw new Error(JSON.stringify(r.findings));
+  });
+  check('VERTE — « Aucun dossier pour l\'instant. Crée le premier. » : muet', () => {
+    const r = un('dossiers.vide', "Aucun dossier pour l'instant. Crée le premier.");
+    if (r.findings.length) throw new Error(JSON.stringify(r.findings));
+  });
+  check('VERTE — « Enregistrer les modifications » : muet', () => {
+    const r = un('form.enregistrer', 'Enregistrer les modifications');
+    if (r.findings.length) throw new Error(JSON.stringify(r.findings));
+  });
+
+  // ── Bornes — ce qui distingue une règle d'un grep ─────────────────────────
+  check('BORNE T4-1 — la cause SEULE est un avertissement, pas un bloquant', () => {
+    const r = un('erreur.taille', 'Le fichier dépasse 10 Mo.');
+    if (durs(r).length) throw new Error('bloquant alors que la cause est dite');
+    if (!regles(r).has('T4-1')) throw new Error('la moitié manquante passe en silence');
+  });
+  check('BORNE T4-1 — la réparation SEULE est un avertissement, pas un bloquant', () => {
+    const r = un('erreur.reseau', 'Réessaye dans un instant.');
+    if (durs(r).length) throw new Error('bloquant alors que la réparation est dite');
+  });
+  check('BORNE T4-3 — « Valider la commande » n\'est PAS générique (comparaison sur la chaîne entière)', () => {
+    const r = un('commande.cta', 'Valider la commande');
+    if (regles(r).has('T4-3')) throw new Error('sous-chaîne prise pour un libellé nu');
+  });
+  check('BORNE — une chaîne ordinaire ne déclenche rien (l\'oracle ne crie pas sur tout)', () => {
+    const r = un('titre.tableau_de_bord', 'Tableau de bord');
+    if (r.findings.length) throw new Error(JSON.stringify(r.findings));
+  });
+  check('BORNE — précédence : « Aucune erreur détectée » est jugée ERREUR, pas état vide', () => {
+    const r = un('controles.resume', 'Aucune erreur détectée');
+    if (regles(r).has('T4-2')) throw new Error('un résumé de contrôles accusé de ne pas inviter à agir');
+  });
+  check('BORNE — la clé seule suffit à classer : clé « error_upload », texte sans le mot', () => {
+    const r = un('error_upload', 'Impossible de continuer');
+    if (!durs(r).some(f => f.regle === 'T4-1')) throw new Error('la clé n\'a pas servi de signal');
+  });
+  check('BORNE — « compresse-le » compte : le trait d\'union est une frontière de mot', () => {
+    if (!RX_REPARATION.test(normaliser('Compresse-le ou recommence'))) throw new Error('frontière de mot mal posée');
+  });
+  check('BORNE — une chaîne sans lettre (« — », « 42 ») est ignorée', () => {
+    const r = juger([{ cle: 'sep', texte: '—' }, { cle: 'compteur', texte: '42' }]);
+    if (r.findings.length) throw new Error(JSON.stringify(r.findings));
+  });
+
+  // ── TF-1762 (lot Produit-64 du 15/10) : « non vide » n'est pas un état vide ─
+  check('VERTE TF-1762 — « plan Terraform non vide, écart déclaré/constaté » : aucun T4-2', () => {
+    const r = un('aide.code_c2', 'plan Terraform non vide, écart déclaré/constaté');
+    if (regles(r).has('T4-2')) throw new Error(JSON.stringify(r.findings));
+  });
+  check('VERTE TF-1762 — l\'infobulle (title) d\'un code lié est une définition, pas un texte d\'état', () => {
+    const e = extraireHtml('<p><a href="#c2" title="Aucun plan tant que la chaîne n\'a pas tourné">C2</a>'
+      + ' <abbr title="Aucune donnée en entrée">E-020</abbr></p>');
+    const r = juger(e);
+    if (r.findings.length) throw new Error(JSON.stringify(r.findings));
+  });
+  check('ROUGE TF-1762 — « Le plan est vide. » (affirmatif) reste un état vide bloquant', () => {
+    const r = un('plan.etat', 'Le plan est vide.');
+    if (!durs(r).some(f => f.regle === 'T4-2')) throw new Error(JSON.stringify(r.findings));
+  });
+  check('ROUGE TF-1762 — le title d\'un bouton qui n\'est pas un code reste jugé', () => {
+    const r = juger(extraireHtml('<button title="Aucune donnée">Exporter le tableau</button>'));
+    if (!durs(r).some(f => f.regle === 'T4-2')) throw new Error(JSON.stringify(r.findings));
+  });
+
+  // ── TF-1773 (lot Produit-83 du 15/10) : un libellé de donnée n'est pas un message ─
+  check('VERTE TF-1773 — « Date du refus » (en-tête de colonne) : aucun T4-1', () => {
+    const r = un('colonnes.date_refus', 'Date du refus');
+    if (regles(r).has('T4-1')) throw new Error(JSON.stringify(r.findings));
+  });
+  check('VERTE TF-1773 — l\'état de tuile « Échec » : valeur de statut, aucun T4-1', () => {
+    const r = un('tuile.etat.echec', 'Échec');
+    if (regles(r).has('T4-1')) throw new Error(JSON.stringify(r.findings));
+  });
+  check('VERTE TF-1773 — <span class="badge erreur">Refusé</span> : pastille de statut, aucun constat', () => {
+    const r = juger(extraireHtml('<span class="badge erreur">Refusé</span>'));
+    if (r.findings.length) throw new Error(JSON.stringify(r.findings));
+  });
+  check('ROUGE TF-1773 — <p role="alert">Échec</p> reste une erreur sans cause ni réparation', () => {
+    const r = juger(extraireHtml('<p role="alert">Échec</p>'));
+    if (!durs(r).some(f => f.regle === 'T4-1')) throw new Error(JSON.stringify(r.findings));
+  });
+  check('ROUGE TF-1773 — « Échec de l\'envoi » (le mot d\'erreur en tête) reste un message jugé', () => {
+    const r = un('envoi.resultat', "Échec de l'envoi");
+    if (!durs(r).some(f => f.regle === 'T4-1')) throw new Error(JSON.stringify(r.findings));
+  });
+
+  // ── TF-1910 (lot Produit-79 du 18/10) : l'infobulle de définition d'un en-tête n'est pas une erreur ─
+  check('VERTE TF-1910 — <th data-definition title> « Code » dont la définition dit « refus » : aucun constat', () => {
+    const r = juger(extraireHtml('<table><thead><tr><th data-definition="Code du motif de la décision, y compris le motif de refus."'
+      + ' title="Code du motif de la décision, y compris le motif de refus.">Code</th></tr></thead></table>'));
+    if (r.findings.length) throw new Error(JSON.stringify(r.findings));
+  });
+  check('VERTE TF-1910 — <th title> seul (G9 du socle) : une définition, aucun constat', () => {
+    const r = juger(extraireHtml('<table><thead><tr><th title="Résultat de l\'instruction : accepté, ou refusé avec son motif de refus.">Résultat</th></tr></thead></table>'));
+    if (r.findings.length) throw new Error(JSON.stringify(r.findings));
+  });
+  check('VERTE TF-1910 — <span data-definition title> hors <th> : l\'élément déclare sa définition, aucun constat', () => {
+    const r = juger(extraireHtml('<span data-definition="Nombre de dossiers en refus." title="Nombre de dossiers en refus.">Refus</span>'));
+    if (r.findings.length) throw new Error(JSON.stringify(r.findings));
+  });
+  check('ROUGE TF-1910 — même texte en title d\'une cellule <td> sans data-definition : reste jugé (T4-1 bloquant)', () => {
+    const r = juger(extraireHtml('<table><tbody><tr><td title="Date de la décision, refus compris.">Instruit le 03/10</td></tr></tbody></table>'));
+    if (!durs(r).some(f => f.regle === 'T4-1')) throw new Error(JSON.stringify(r.findings));
+  });
+  check('ROUGE TF-1910 — <th role="alert" title="Échec de l\'envoi"> : l\'alerte reste jugée', () => {
+    const r = juger(extraireHtml('<table><thead><tr><th role="alert" title="Échec de l\'envoi">Envoi</th></tr></thead></table>'));
+    if (!durs(r).some(f => f.regle === 'T4-1')) throw new Error(JSON.stringify(r.findings));
+  });
+
+  // ── TF-2102 (lot Produit-86 du 03/11) : un lexique fermé ne peut pas faire autorité sur la langue ─
+  // 3 bloquants faux sur 4 sur un portail francophone : « absent », « périmé », « rechargez »,
+  // « ouvrez », « revenez » n'étaient dans aucune liste, et un libellé <option> passait pour un état vide.
+  // Trois sens : les formes courantes passent (lexique complété, impératif du vouvoiement reconnu par sa
+  // forme), ce que le lexique ne connaît pas ne bloque pas (avertissement), les vrais défauts restent refusés.
+  check('VERTE TF-2102 — « Le jeton est périmé. Rechargez la page. » : cause et réparation reconnues, muet', () => {
+    const r = un('erreur.jeton', 'Le jeton est périmé. Rechargez la page.');
+    if (r.findings.length) throw new Error(JSON.stringify(r.findings));
+  });
+  check('VERTE TF-2102 — « La page demandée est absente. Revenez à l\'accueil. » : muet', () => {
+    const r = un('erreur.page', "La page demandée est absente. Revenez à l'accueil.");
+    if (r.findings.length) throw new Error(JSON.stringify(r.findings));
+  });
+  check('VERTE TF-2102 — « Aucun dossier pour l\'instant. Ouvrez le menu Dépôts. » : l\'invitation est vue, muet', () => {
+    const r = un('dossiers.vide', "Aucun dossier pour l'instant. Ouvrez le menu Dépôts.");
+    if (r.findings.length) throw new Error(JSON.stringify(r.findings));
+  });
+  check('VERTE TF-2102 — « Aucune facture. Revenez plus tard. » : muet', () => {
+    const r = un('factures.vide', 'Aucune facture. Revenez plus tard.');
+    if (r.findings.length) throw new Error(JSON.stringify(r.findings));
+  });
+  check('VERTE TF-2102 — verbe du vouvoiement hors lexique (« Utilisez le nouveau lien ») reconnu par sa forme en -ez', () => {
+    const r = un('erreur.lien', 'Erreur de lien : il ne fonctionne plus. Utilisez le nouveau lien.');
+    if (durs(r).length) throw new Error(JSON.stringify(r.findings));
+    if (r.findings.some(f => /sans réparation|ni la cause ni/.test(f.msg))) throw new Error('réparation en -ez non vue : ' + JSON.stringify(r.findings));
+  });
+  check('VERTE TF-2102 — un libellé <option> n\'est pas un état vide (« Aucun », « Aucune sélection »)', () => {
+    const r = juger(extraireHtml('<select><option value="">Aucun</option><option>Aucune sélection</option><option>Tous les dossiers</option></select>'));
+    if (r.findings.length) throw new Error(JSON.stringify(r.findings));
+  });
+  check('VERTE TF-2102 — erreur classée par sa clé seule, cause dite en une forme hors lexique : jamais bloquante', () => {
+    const r = un('erreur.session', 'Votre session est caduque pour des raisons de sécurité');
+    if (durs(r).length) throw new Error('bloquant sur une forme que le lexique ne connaît pas : ' + JSON.stringify(r.findings));
+    if (!r.findings.some(f => f.regle === 'T4-1' && f.sev === 'avertissement')) throw new Error('l\'inconnu doit rester signalé en avertissement : ' + JSON.stringify(r.findings));
+  });
+  check('VERTE TF-2102 — état vide classé par sa clé seule, texte hors lexique : avertissement, jamais bloquant', () => {
+    const r = un('dossiers.vide', 'Les dossiers déposés par votre équipe apparaîtront dans cette liste');
+    if (durs(r).length) throw new Error('bloquant sur une forme que le lexique ne connaît pas : ' + JSON.stringify(r.findings));
+    if (!r.findings.some(f => f.regle === 'T4-2' && f.sev === 'avertissement')) throw new Error('l\'inconnu doit rester signalé : ' + JSON.stringify(r.findings));
+  });
+  check('ROUGE TF-2102 — « Une erreur est survenue chez nous » : « chez » n\'est pas un impératif, T4-1 bloquant', () => {
+    const r = un('erreur.generique', 'Une erreur est survenue chez nous');
+    if (!durs(r).some(f => f.regle === 'T4-1')) throw new Error(JSON.stringify(r.findings));
+  });
+  check('ROUGE TF-2102 — « Aucun dossier chez ce client. » : « chez » n\'est pas une invitation, T4-2 bloquant', () => {
+    const r = un('dossiers.vide', 'Aucun dossier chez ce client.');
+    if (!durs(r).some(f => f.regle === 'T4-2')) throw new Error(JSON.stringify(r.findings));
+  });
+  check('ROUGE TF-2102 — « Erreur, vous n\'avez pas accès » : « avez » n\'est pas un impératif, T4-1 bloquant', () => {
+    const r = un('erreur.quota', "Erreur, vous n'avez pas accès");
+    if (!durs(r).some(f => f.regle === 'T4-1')) throw new Error(JSON.stringify(r.findings));
+  });
+  check('ROUGE TF-2102 — erreur classée par sa clé seule, constat nu (« Envoi impossible ») : T4-1 bloquant', () => {
+    const r = un('erreur.envoi', 'Envoi impossible');
+    if (!durs(r).some(f => f.regle === 'T4-1')) throw new Error(JSON.stringify(r.findings));
+  });
+  check('ROUGE TF-2102 — le title d\'une cellule <td> reste jugé : « refus compris » annonce l\'erreur, T4-1 bloquant', () => {
+    const r = juger(extraireHtml('<table><tbody><tr><td title="Date de la décision, refus compris.">Instruit le 03/10</td></tr></tbody></table>'));
+    if (!durs(r).some(f => f.regle === 'T4-1')) throw new Error(JSON.stringify(r.findings));
+  });
+  check('ROUGE TF-2102 — un état vide hors <option> reste jugé : <div class="empty">Aucune donnée</div> bloquant', () => {
+    const r = juger(extraireHtml('<div class="empty">Aucune donnée</div><select><option>Aucune donnée</option></select>'));
+    if (durs(r).filter(f => f.regle === 'T4-2').length !== 1) throw new Error(JSON.stringify(r.findings));
+  });
+
+  // ── TF-2162 (lot Produit-86 du 04/11, rattaché à TF-1762) : une carte de choix n'est pas un état vide ─
+  // « Aucun système réel n'est touché », description d'une carte « Simulation », se lisait comme un état vide
+  // sans invitation (2 constats bloquants). T4-2 ne juge plus le libellé d'un contrôle qu'on choisit.
+  const carte = n => fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', n), 'utf8');
+  check('VERTE TF-2162 — trois cartes de choix en négation (label, button, rôle radio) : aucun constat', () => {
+    const r = juger(extraireHtml(carte('textes-application-carte-choix-verte.html')));
+    if (r.findings.length) throw new Error(JSON.stringify(r.findings));
+  });
+  check('ROUGE TF-2162 — mêmes cartes + un vrai état vide (div.empty « Aucune donnée ») : exactement 1 T4-2 bloquant', () => {
+    const r = juger(extraireHtml(carte('textes-application-carte-choix-rouge.html')));
+    const t42 = durs(r).filter(f => f.regle === 'T4-2');
+    if (t42.length !== 1 || !/Aucune donnée/.test(t42[0].msg)) throw new Error(JSON.stringify(r.findings));
+  });
+  check('ROUGE TF-2162 — une carte qui se déclare vide (label class="empty") reste jugée', () => {
+    const r = juger(extraireHtml('<label class="empty">Aucune donnée</label>'));
+    if (!durs(r).some(f => f.regle === 'T4-2')) throw new Error(JSON.stringify(r.findings));
+  });
+  check('ROUGE TF-2162 — le title d\'un <button> ordinaire est un message, il reste jugé (T4-2 bloquant)', () => {
+    const r = juger(extraireHtml('<button title="Aucune donnée à exporter">Exporter</button>'));
+    if (!durs(r).some(f => f.regle === 'T4-2')) throw new Error(JSON.stringify(r.findings));
+  });
+  check('ROUGE TF-2162 — l\'exemption ne touche pas T4-1 : <p role="alert">Échec</p> reste une erreur sans réparation', () => {
+    const r = juger(extraireHtml('<p role="alert">Échec</p><label>Aucune donnée</label>'));
+    if (!durs(r).some(f => f.regle === 'T4-1')) throw new Error(JSON.stringify(r.findings));
+  });
+
+  // ── TF-2200 (lot Produit-86 du 05/11, rattaché à TF-2162) : le bouton « Aucun » du panneau de filtre ─
+  // Le composant `table-filters` du socle rend `<button class="tf-none">Aucun</button>` ; un produit y pose title et
+  // aria-label. Chaque attribut qui reprend le texte du bouton était un T4-2 bloquant (2 par bouton).
+  const panneauFiltre = (attrs) => '<div class="tf-panel" role="group" aria-label="Filtrer Statut"><div class="tf-actions">'
+    + '<button type="button" class="tf-all">Tous</button><button type="button" class="tf-none"' + attrs + '>Aucun</button></div></div>';
+  check('VERTE TF-2200 — panneau de filtre du socle (« Tous », « Aucun » en texte) : aucun constat', () => {
+    const r = juger(extraireHtml(panneauFiltre('')));
+    if (r.findings.length) throw new Error(JSON.stringify(r.findings));
+  });
+  check('VERTE TF-2200 — « Aucun » avec title et aria-label qui reprennent le bouton (« Aucun », « Aucun filtre ») : aucun constat', () => {
+    const r = juger(extraireHtml(panneauFiltre(' title="Aucun" aria-label="Aucun filtre"')));
+    if (r.findings.length) throw new Error(JSON.stringify(r.findings));
+  });
+  check('ROUGE TF-2200 — même bouton dont le title dit autre chose (« Aucune donnée à afficher ») : T4-2 bloquant, l\'exemption ne couvre que le nom du bouton', () => {
+    const r = juger(extraireHtml(panneauFiltre(' title="Aucune donnée à afficher"')));
+    if (durs(r).filter(f => f.regle === 'T4-2').length !== 1) throw new Error(JSON.stringify(r.findings));
+  });
+  check('ROUGE TF-2200 — un bloc qui se déclare vide reste jugé (div.empty « Aucun résultat »)', () => {
+    const r = juger(extraireHtml(panneauFiltre(' title="Aucun"') + '<div class="empty">Aucun résultat</div>'));
+    if (durs(r).filter(f => f.regle === 'T4-2').length !== 1) throw new Error(JSON.stringify(r.findings));
+  });
+
+  // ── TF-2276 (lot Produit-86 du 06/11, RP-49, rattaché à TF-1910) : le glossaire en infobulle n'est pas une erreur ─
+  const lexiqueDeni = '<dl data-lexique><dt>déni</dt><dd>Actif interdit explicitement.</dd></dl>';
+  check('VERTE TF-2276 — l\'infobulle (title) d\'un terme déclaré au lexique dit « refus » : aucun constat', () => {
+    const r = juger(extraireHtml('<p>Un <span title="Déni : actif interdit, tout refus d\'accès est consigné.">déni</span> est posé.</p>' + lexiqueDeni));
+    if (r.findings.length) throw new Error(JSON.stringify(r.findings));
+  });
+  check('VERTE TF-2276 — le aria-label d\'un terme du lexique, et son title dans une prose de quelques mots : aucun constat', () => {
+    const r = juger(extraireHtml('<p><span aria-label="Échec : tentative invalide.">le déni de service</span></p>'
+      + '<dl data-lexique><dt>déni de service</dt><dd>Tentative invalide.</dd></dl>'));
+    if (r.findings.length) throw new Error(JSON.stringify(r.findings));
+  });
+  check('VERTE TF-2276 — tout ce qui est dans un [data-lexique] est une définition (dt title, dd title)', () => {
+    const r = juger(extraireHtml('<dl data-lexique><dt title="Échec : tentative invalide, refusée.">échec</dt><dd title="Un refus invalide l\'essai.">Tentative refusée.</dd></dl>'));
+    if (r.findings.length) throw new Error(JSON.stringify(r.findings));
+  });
+  check('VERTE TF-2276 — un élément role="tooltip" est une aide : son title et son texte (classe error-help) ne sont pas une erreur', () => {
+    const r = juger(extraireHtml('<span role="tooltip" id="t" class="error-help" title="Un refus d\'accès invalide l\'essai.">Un refus d\'accès invalide l\'essai.</span>'));
+    if (r.findings.length) throw new Error(JSON.stringify(r.findings));
+  });
+  check('ROUGE TF-2276 — le même title sur un élément qui n\'est pas un terme du lexique reste jugé (T4-1 bloquant)', () => {
+    const r = juger(extraireHtml('<p><span title="Un refus d\'accès, sans plus.">Vendredi</span></p>' + lexiqueDeni));
+    if (durs(r).filter(f => f.regle === 'T4-1').length !== 1) throw new Error(JSON.stringify(r.findings));
+  });
+  check('ROUGE TF-2276 — le title d\'un <button> reste un message même si son texte est un terme du lexique (T4-1 bloquant)', () => {
+    const r = juger(extraireHtml('<dl data-lexique><dt>envoi</dt><dd>Transmission de la décision.</dd></dl><button type="button" title="Échec de l\'envoi">envoi</button>'));
+    if (durs(r).filter(f => f.regle === 'T4-1').length !== 1) throw new Error(JSON.stringify(r.findings));
+  });
+  check('ROUGE TF-2276 — un role="alert" reste jugé, terme du lexique ou non (T4-1 bloquant)', () => {
+    const r = juger(extraireHtml('<dl data-lexique><dt>envoi</dt><dd>Transmission.</dd></dl><p role="alert" title="Échec de l\'envoi">envoi</p><p role="alert">Une erreur est survenue</p>'));
+    if (durs(r).filter(f => f.regle === 'T4-1').length < 2) throw new Error(JSON.stringify(r.findings));
+  });
+
+  // ── Extraction : un format, un cas, aucune supposition ────────────────────
+  check('EXTRACTION json imbriqué — les clés sont aplaties en a.b.c', () => {
+    const e = extraireJson('{"ecran":{"liste":{"vide":"Aucune donnée"}}}');
+    if (e.length !== 1 || e[0].cle !== 'ecran.liste.vide') throw new Error(JSON.stringify(e));
+    if (!juger(e).findings.some(f => f.regle === 'T4-2')) throw new Error('chaîne imbriquée non jugée');
+  });
+  check('EXTRACTION arb — @@locale ignoré, @cle.description servant de contexte', () => {
+    const e = extraireArb('{"@@locale":"fr","vide":"Rien pour le moment","@vide":{"description":"empty state de la liste"}}');
+    if (e.length !== 1 || e[0].contexte !== 'empty state de la liste') throw new Error(JSON.stringify(e));
+    if (!juger(e).findings.some(f => f.regle === 'T4-2')) throw new Error('le contexte @description n\'a pas servi de signal');
+  });
+  check('EXTRACTION po — msgstr prime sur msgid, msgctxt sert de clé', () => {
+    const e = extrairePo('#. bouton principal\nmsgctxt "form.submit"\nmsgid "Submit"\nmsgstr "Valider"\n');
+    if (e.length !== 1 || e[0].texte !== 'Valider' || e[0].cle !== 'form.submit') throw new Error(JSON.stringify(e));
+  });
+  check('EXTRACTION po — msgstr vide : on juge le msgid, jamais rien', () => {
+    const e = extrairePo('msgid "Une erreur est survenue"\nmsgstr ""\n');
+    if (e.length !== 1 || e[0].texte !== 'Une erreur est survenue') throw new Error(JSON.stringify(e));
+  });
+  check('EXTRACTION properties — commentaires, échappements et continuations', () => {
+    const e = extraireProperties('# commentaire\nerreur.generique=Une erreur \\\nest survenue\nvide.liste : Aucune donn\\u00e9e\n');
+    const par = Object.fromEntries(e.map(x => [x.cle, x.texte]));
+    if (par['erreur.generique'] !== 'Une erreur est survenue') throw new Error(JSON.stringify(e));
+    if (par['vide.liste'] !== 'Aucune donnée') throw new Error(JSON.stringify(e));
+  });
+  check('EXTRACTION html — attributs, <button>, role="alert", .empty, [data-etat="vide"]', () => {
+    const e = extraireHtml('<div><input placeholder="Nom"><button>Valider</button>'
+      + '<p role="alert">Une erreur est survenue</p><div class="empty">Aucune donnée</div>'
+      + '<section data-etat="vide">Rien ici</section></div>');
+    const textes = e.map(x => x.texte);
+    for (const attendu of ['Nom', 'Valider', 'Une erreur est survenue', 'Aucune donnée', 'Rien ici'])
+      if (!textes.includes(attendu)) throw new Error(`« ${attendu} » non extrait : ${JSON.stringify(textes)}`);
+    const r = juger(e);
+    for (const regle of ['T4-1', 'T4-2', 'T4-3'])
+      if (!regles(r).has(regle)) throw new Error(`${regle} muet sur un HTML qui le porte`);
+  });
+  check('EXTRACTION html — le contenu d\'un <script> n\'est pas pris pour un texte d\'application', () => {
+    const e = extraireHtml('<script>const erreur = "Une erreur est survenue";</script><p>ok</p>');
+    if (e.some(x => /erreur/i.test(x.texte))) throw new Error(JSON.stringify(e));
+  });
+
+  // ── Les deux fixtures de dépôt, aux deux sens ─────────────────────────────
+  const fx = n => path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', n);
+  check('FIXTURE rouge — les quatre règles se déclenchent, verdict FAIL', () => {
+    const e = extraireJson(fs.readFileSync(fx('textes-application-rouge.json'), 'utf8'));
+    const r = juger(e);
+    const vues = regles(r);
+    const manquantes = ['T4-1', 'T4-2', 'T4-3', 'T4-4'].filter(x => !vues.has(x));
+    if (manquantes.length) throw new Error('règles muettes : ' + manquantes.join(', '));
+    if (!durs(r).length) throw new Error('aucune règle bloquante — la rouge ne sait pas échouer');
+  });
+  check('FIXTURE verte — aucun constat, verdict PASS', () => {
+    const e = extraireJson(fs.readFileSync(fx('textes-application-verte.json'), 'utf8'));
+    const r = juger(e);
+    if (r.findings.length) throw new Error(JSON.stringify(r.findings));
+  });
+
+  // ── TF-2287 — la plage citée dérive de la liste jouée, et la liste égale les règles émises ───────────
+  const source = fs.readFileSync(fileURLToPath(import.meta.url), 'utf8');
+  check('PLAGE TF-2287 — sens vert : le message de sortie « sans écart » dit la plage dérivée de REGLES_JOUEES (T4-1…T4-4)', () => {
+    const sortie = spawnSync(process.execPath, [fileURLToPath(import.meta.url), fx('textes-application-verte.json'), '--json-only'], { encoding: 'utf8' });
+    const json = JSON.parse(sortie.stdout);
+    // Le format est épinglé, mais assemblé : le verrou de self-test-regles-jouees.mjs refuse un littéral « plage sans écart ».
+    const attendu = ['T4-1…T4-4', 'sans écart'].join(' ');
+    if (sortie.status !== 0 || json.findings.length !== 1 || json.findings[0].msg !== attendu)
+      throw new Error(`exit ${sortie.status} · ${JSON.stringify(json.findings)}`);
+  });
+  check('PLAGE TF-2287 — sens vert : la liste REGLES_JOUEES égale les règles que le fichier émet', () => {
+    const e = ecartDeListe(source);
+    if (e.emises_non_declarees.length || e.declarees_non_emises.length || reglesEmises(source).length < 4)
+      throw new Error(JSON.stringify({ ...e, emises: reglesEmises(source) }));
+  });
+  check('PLAGE TF-2287 — sens rouge : une règle T4-5 émise sans figurer à REGLES_JOUEES est vue', () => {
+    const e = ecartDeListe(source + "\nadd('avertissement', 'T4-5', 'règle neuve non déclarée', ou);\n");
+    if (e.emises_non_declarees.join(' ') !== 'T4-5') throw new Error(JSON.stringify(e));
+  });
+  check('PLAGE TF-2287 — sens rouge : une règle déclarée sans être émise est vue', () => {
+    const e = ecartDeListe(source.replace("['T4-1', 'T4-2', 'T4-3', 'T4-4']", "['T4-1', 'T4-2', 'T4-3', 'T4-4', 'T4-7']"));
+    if (e.declarees_non_emises.join(' ') !== 'T4-7') throw new Error(JSON.stringify(e));
+  });
+  check('PLAGE TF-2287 — sens rouge : une règle ajoutée à la liste apparaît dans le message (T4-1…T4-5), plus de plage figée', () => {
+    const plage = plageDeRegles([...REGLES_JOUEES, 'T4-5'], '…');
+    if (plage !== 'T4-1…T4-5') throw new Error(plage);
+  });
+
+  console.log(`\nTextes d'application (${PLAGE_JOUEE}) : ${pass} PASS, ${fail} FAIL`);
+  process.exit(fail ? 1 : 0);
+}
+
+if (EST_POINT_D_ENTREE) {
+  const jsonOnly = args.includes('--json-only');
+  const opt = n => { const i = args.indexOf(n); return i === -1 ? null : args[i + 1]; };
+  const file = args.find(a => !a.startsWith('--') && args[args.indexOf(a) - 1] !== '--format');
+
+  const NON_JUGE = [
+    "la JUSTESSE du ton et la fidélité à la voix de marque — non décidable par script (voix.md) : cet oracle juge la PRÉSENCE d'une cause, d'une réparation et d'une action, jamais leur pertinence ni leur élégance. Un plancher franchi n'est pas une voix trouvée",
+    "les chaînes NON EXTRAITES — texte construit par concaténation ou interpolation, chaînes restées dans le code applicatif, contenu rendu par un <script src=\"…\"> ou un framework, libellés venus d'une API : ce qui n'est pas dans le fichier lu n'est pas jugé, et l'absence de constat ne vaut pas conformité du produit",
+    "la LANGUE du fichier — les listes de verbes et d'indices sont françaises ; sur un fichier en anglais ou dans une autre langue, l'oracle ne voit ni réparation ni action et le dirait à tort : le classer en non_juge plutôt que le croire",
+    "les formes HORS LEXIQUE (TF-2102) — un texte classé erreur ou vide par sa seule clé ou son seul contexte, qui dit plus qu'un constat nu, est signalé en avertissement et non refusé : l'oracle ne sait pas lire une cause ou une invitation qu'il ne connaît pas, et le dit au lieu de bloquer",
+    'la CONSTANCE des libellés entre écrans (même geste, même mot) — elle se vérifie à la relecture et reste au contrat de voix',
+    "les formes ICU (pluriels, genres, variables) : la variante rendue à l'utilisateur dépend de la donnée, pas du fichier",
+  ];
+
+  const sortir = (verdict, findings, code) => {
+    process.stdout.write(JSON.stringify({
+      oracle: 'oracle-textes-application', domaine: DOM, artefact: file || null,
+      verdict,
+      // TF-2535 : un SKIP n'a rien jugé, il ne rend jamais la ligne « sans écart ».
+      findings: (findings && findings.length) || verdict === 'SKIP' ? findings || []
+        : [{ sev: 'info', regle: '—', msg: `${PLAGE_JOUEE} sans écart`, where: file || null }],
+      non_juge: NON_JUGE,
+    }, null, jsonOnly ? 0 : 2));
+    process.exit(code);
+  };
+
+  if (!file || !fs.existsSync(file)) {
+    NON_JUGE.push(`fichier de chaînes absent ou non fourni${file ? ` : ${file}` : ''} — rien n'a été lu, donc rien n'est jugé`);
+    sortir('SKIP', [], 2);
+  }
+
+  const format = opt('--format') || FORMAT_PAR_EXTENSION[path.extname(file).toLowerCase()];
+  if (!format) {
+    NON_JUGE.push(`extension « ${path.extname(file) || '(aucune)'} » non reconnue — formats lus : .json, .arb, .po, .properties, .html ; forcer avec --format`);
+    sortir('SKIP', [], 2);
+  }
+
+  const brut = fs.readFileSync(file, 'utf8');
+  let entrees;
+  try {
+    entrees = extraire(brut, format);
+  } catch (e) {
+    NON_JUGE.push(`fichier illisible au format « ${format} » : ${e.message}`);
+    sortir('SKIP', [], 2);
+  }
+
+  if (!entrees.length) {
+    NON_JUGE.push(`aucune chaîne extraite de ${path.basename(file)} au format « ${format} » — un fichier muet ne prouve rien`);
+    sortir('SKIP', [], 2);
+  }
+
+  // Localisation : la clé, et la ligne quand le texte se retrouve tel quel dans le brut.
+  for (const e of entrees) {
+    const l = ligneDe(brut, e.texte);
+    e.ou = `${file}${l ? ':' + l : ''} · ${e.cle}`;
+  }
+
+  const { findings, compte } = juger(entrees);
+  NON_JUGE.push(`périmètre effectivement lu : ${compte.total} chaîne(s), dont ${compte.erreurs} classée(s) « erreur » `
+    + `et ${compte.vides} « état vide » — les autres ne sont jugées que par T4-3 (libellé générique)`);
+
+  if (!jsonOnly) {
+    for (const f of findings) process.stderr.write(`  ${f.sev === 'bloquant' ? 'DUR ' : 'AVERT'} ${f.regle} — ${f.msg} [${f.where}]\n`);
+    process.stderr.write(`  ${compte.total} chaîne(s) lue(s) · ${findings.filter(f => f.sev === 'bloquant').length} bloquant(s), `
+      + `${findings.filter(f => f.sev === 'avertissement').length} avertissement(s)\n`);
+  }
+
+  const durs = findings.filter(f => f.sev === 'bloquant').length;
+  sortir(durs ? 'FAIL' : 'PASS', findings, durs ? 1 : 0);
+}

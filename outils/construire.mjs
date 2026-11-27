@@ -126,6 +126,26 @@ function copierDossier(src, dest, plugin, constats, ignorer = () => false) {
   }
 }
 
+// Paquets npm d'une forge embarquée (`dependances_npm: true`, 27/11/2026) : le consultant n'a ni
+// npm ci à lancer ni réseau à ouvrir. Seuls les paquets de production que package-lock.json
+// déclare voyagent, octet pour octet (aucune transformation du code d'un tiers), et chacun doit
+// être installé à la version verrouillée : sinon l'assemblage s'arrête (npm ci dans la forge).
+function joindreNpm(src, dest) {
+  const verrou = JSON.parse(fs.readFileSync(path.join(src, "package-lock.json"), "utf8"));
+  const paquets = Object.entries(verrou.packages || {}).filter(([k, v]) => k.startsWith("node_modules/") && !v.dev);
+  if (!paquets.length) throw new Error(`${src} : dependances_npm déclaré, aucun paquet de production au verrou`);
+  for (const [cle, v] of paquets) {
+    const installe = path.join(src, cle, "package.json");
+    const version = fs.existsSync(installe) ? JSON.parse(fs.readFileSync(installe, "utf8")).version : null;
+    if (version !== v.version) throw new Error(`${cle} : ${version || "absent"} installé, ${v.version} verrouillé — lancer npm ci dans ${src}`);
+  }
+  const marcher = (d) => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => {
+    const p = path.join(d, e.name);
+    return e.isDirectory() ? (e.name === "node_modules" ? [] : marcher(p)) : [p];
+  });
+  for (const [cle] of paquets) for (const f of marcher(path.join(src, cle))) poser(path.join(dest, path.relative(src, f)), fs.readFileSync(f));
+}
+
 // Dans une forge embarquée, on ne reprend pas ce qui sert au dépôt et pas à l'outil : ses skills
 // (déjà assemblés par mallettes.json), sa config Claude Code, sa CI et ses réglages git.
 const forgeIgnoree = (rel) => /^(skills|\.claude|\.github)([\\/]|$)/.test(rel) || /^\.git(ignore|attributes)$/.test(rel);
@@ -171,6 +191,7 @@ for (const p of conf.plugins) {
       return exclure.some((m) => m.test(r));
     };
     copierDossier(src, path.join(base, "forges", forge), p.name, constats, ignorer);
+    if (spec.dependances_npm) joindreNpm(src, path.join(base, "forges", forge));
     const commit = shaDepot(src);
     provenance["forge:" + forge] = { depot: forge, chemin: ".", commit };
     if (spec.marqueur) {
@@ -208,7 +229,9 @@ poser(path.join(".claude-plugin", "marketplace.json"),
 const existant = new Map();
 for (const d of ["plugins", ".claude-plugin"]) {
   const abs = path.join(MARKETPLACE, d);
-  if (fs.existsSync(abs)) for (const f of lister(abs)) existant.set(path.relative(MARKETPLACE, f).split(path.sep).join("/"), fs.readFileSync(f));
+  // Sans EXCLUS : plugins/ porte les node_modules joints (joindreNpm), à comparer comme le reste.
+  const toutLister = (d) => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => e.isDirectory() ? toutLister(path.join(d, e.name)) : [path.join(d, e.name)]);
+  if (fs.existsSync(abs)) for (const f of toutLister(abs)) existant.set(path.relative(MARKETPLACE, f).split(path.sep).join("/"), fs.readFileSync(f));
 }
 const h = (b) => crypto.createHash("sha256").update(b).digest("hex");
 const differences = [...new Set([...sortie.keys(), ...existant.keys()])]

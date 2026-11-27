@@ -1,0 +1,6 @@
+{
+  "format": "forge-ops/porte-version@1",
+  "version": "0.9.1",
+  "fonctions_touchees": ["interface", "libelles"],
+  "porte": { "niveau": "legere" }
+}

@@ -1,0 +1,71 @@
+"""Registre des adaptateurs — un adaptateur = un couple (pan x technologie)."""
+
+from forge_tests.adaptateurs import (
+    accessibilite,
+    api,
+    batch,
+    clavier,
+    contraste,
+    data,
+    fichiers,
+    front,
+    i18n,
+    interface,
+    migrations,
+    mutation,
+    personas,
+    plancher,
+    prompts,
+    qualif,
+    reglages,
+    securite,
+    supabase,
+    visuel,
+    workers,
+)
+
+REGISTRE = {
+    "front-react": front,
+    "interface-statique": interface,
+    "api-fastapi": api,
+    "data-sql": data,
+    "migrations-sql": migrations,
+    "batch-python": batch,
+    "fichiers-python": fichiers,
+    "mutation-python": mutation,
+    "prompts-statique": prompts,
+    "qualif-navigateur": qualif,
+    "securite-oracles": securite,
+    "accessibilite-a11y": accessibilite,
+    # TF-0409 (O3) : deux familles que le parc DECLARAIT non couvertes. Le contraste avait
+    # une mesure existante et jamais cablee (render_page.py V2) ; la navigation clavier
+    # n'avait aucun oracle du tout.
+    "contraste-wcag": contraste,
+    "clavier-focus": clavier,
+    "visuel-golden": visuel,
+    # TF-0480 (23/08) : le PLANCHER visuel sur instance servie. La mesure tournait deja sur les
+    # routes depuis TF-0409 et rendait V1/V4/L2 en meme temps que le contraste — seul le
+    # contraste etait lu, le reste etait mesure puis JETE. Ce pan lit ce qui etait deja mesure.
+    "plancher-rendu": plancher,
+    "i18n-build-servi": i18n,
+    # TF-1998 (29/10/2026) : un Worker Cloudflare sortait de tous les pans. Inventaire STATIQUE
+    # de ses gestionnaires, exercé = dispatché par un test qui tourne dans le runtime Workers.
+    "workers-wrangler": workers,
+    # TF-2008 (29/10/2026) : `supabase/migrations/` n etait lu par aucun pan. Tables exposées,
+    # RLS active, tests pgTAP sous un rôle de l API — statique, comme `prompts` et `workers`.
+    "supabase-pgtap": supabase,
+    # TF-2123 (04/11/2026) : aucun pan n exigeait un parcours de bout en bout PAR persona. Les
+    # personas ou rôles que le produit déclare sont lus ; un persona qu aucun parcours ne cite
+    # est un FAIL nommé. Statique : le jeu contre l instance servie n est pas simulé.
+    "parcours-personas": personas,
+    # TF-2229 (06/11/2026, D-178) : un réglage de plateforme que le produit exige est LU en campagne
+    # et comparé à l attendu du registre des réglages sûrs, relié à l exigence. Sans exigence de
+    # réglage : sans objet.
+    "reglages-plateforme": reglages,
+}
+
+PANS_ATTENDUS = [
+    "front", "interface", "api", "data", "migrations", "batch", "fichiers", "back", "securite",
+    "accessibilite", "contraste", "clavier", "visuel", "plancher", "qualif", "prompts", "i18n",
+    "workers", "supabase", "parcours-personas", "reglages-plateforme",
+]

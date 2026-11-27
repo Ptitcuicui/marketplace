@@ -1,0 +1,235 @@
+// lib/socle.mjs — reconnaissance des blocs `COMPOSANT-EMBARQUE` du socle factory-page-html.
+//
+// TF-0830 (lot Produit-12, 06/09/2026). Trois pages NEUVES et conformes — `check_html` PASS
+// sur 36 règles, `render_page` PASS aux quatre largeurs — sortaient de `run-oracles-design`
+// en FAIL avec 19 à 20 écarts durs CHACUNE (T1 couleurs en dur `#fff` / `#f6f8fc`, T3
+// espacements hors échelle 4pt, T8 focus posés, S4 couleur pure). Les vingt étaient portés
+// par le MÊME composant du socle, `table-filters.css`, embarqué dans la page par le poseur
+// du socle et NON MODIFIABLE localement : la parité d'asset (`oracle-parite-assets`) refuse
+// justement qu'on l'édite sur place. Une fois le CSS de l'auteur corrigé, la liste hors
+// socle était vide sur les trois pages. Un juge qui refuse ce que l'auteur n'a pas le droit
+// de changer n'apprend rien à personne : il apprend à ignorer le juge.
+//
+// Ce module reconnaît ces blocs et dit lesquels sont VÉRIFIÉS, c'est-à-dire scellés par une
+// empreinte qui correspond bel et bien à la source du socle installée sur le poste. Un bloc
+// déclaré mais non vérifiable — socle absent, empreinte fausse, copie éditée sur place —
+// n'est PAS exempté : sans quoi le marqueur deviendrait une porte de sortie, et il suffirait
+// d'entourer son propre CSS de deux commentaires pour ne plus être jugé.
+//
+// Contrat de marquage (source : factory-page-html/scripts/embarquer-composants.mjs) :
+//   <!-- COMPOSANT-EMBARQUE:DEBUT <fichier> [socle=<chemin/relatif>] … -->
+//   <style|script data-composant="<fichier>" data-empreinte="sha256:…">…</style|script>
+//   <!-- COMPOSANT-EMBARQUE:FIN <fichier> -->
+
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import { trouverSkill } from './trouver-skill.mjs';
+
+const SOCLE_DEFAUT = 'factory-page-html/assets';
+// La racine des skills installés se RÉSOUT, dans l'ordre même du pilot (scripts/lib-config-installee.mjs
+// de factory-pilot) : `FORGE_SKILLS_INSTALLES` d'abord — c'est ce qui permet à une recette de poser
+// un socle d'ESSAI —, puis `CLAUDE_CONFIG_DIR/skills`, sinon `~/.claude/skills`. TF-1241 (22/09/2026) :
+// figée sur le répertoire personnel, cette racine rendait la passe d'imputation IMPROUVABLE dès que le
+// socle réel est propre — aucune fixture ne peut alors porter à la fois un sceau vérifié et des
+// constats, et la fixture verte de TF-0830 avait perdu, le 15/09, tout ce qu'elle démontrait.
+// Depuis le 25/11/2026, la racine est celle qui PORTE le skill du socle, trouvée par le résolveur du parc (variable des
+// recettes, puis sources des forges, plugins installés, adresse historique en dernier recours) : les skills n'ont plus à être
+// copiés dans ~/.claude/skills. Introuvable : l'ancienne adresse, que les messages nomment.
+const RACINE_SKILLS = (() => {
+  // La variable des recettes prime TELLE QUELLE (un socle d'essai n'a pas de SKILL.md) : comportement d'avant le 25/11/2026.
+  if (process.env.FORGE_SKILLS_INSTALLES) return process.env.FORGE_SKILLS_INSTALLES;
+  const t = trouverSkill(SOCLE_DEFAUT.split('/')[0]);
+  if (t) return path.dirname(t.chemin);
+  return process.env.FORGE_SKILLS_INSTALLES
+    || (process.env.CLAUDE_CONFIG_DIR ? path.join(process.env.CLAUDE_CONFIG_DIR, 'skills') : null)
+    || path.join(os.homedir(), '.claude', 'skills');
+})();
+const RE_DEBUT = /<!--\s*COMPOSANT-EMBARQUE:DEBUT\s+([A-Za-z0-9._-]+)(?:\s+socle=([A-Za-z0-9._/-]+))?/g;
+
+export const sha = txt => crypto.createHash('sha256').update(txt, 'utf8').digest('hex');
+
+// L'ÉCHAPPEMENT N'EST PAS UN DÉTAIL : `</script` à l'intérieur d'un `<script>` fermerait le
+// bloc de la page hôte. Le poseur du socle l'échappe à la copie — c'est la SEULE
+// transformation admise entre la source et le bloc embarqué, et on la refait ici à
+// l'identique pour comparer. On ne l'INVERSE jamais : une source peut déjà contenir la
+// séquence échappée (c'est le cas de source-reader.js), et l'inversion la casserait.
+const echapper = txt => txt.replace(/<\/script/gi, '<\\/script');
+
+// Comparaison à la ligne près, pas à l'octet : la copie vit dans un dépôt git qui peut la
+// livrer en CRLF, la source vit hors dépôt. L'empreinte, elle, reste calculée sur la SOURCE
+// telle qu'elle est sur le disque — c'est elle qui scelle, pas la comparaison de texte.
+const lignesLf = txt => txt.replace(/\r\n/g, '\n');
+
+// TF-1876 (lot Produit-84 du 16/10/2026) — LA FEUILLE DU GABARIT EST UNE SOURCE SYNTHÉTIQUE.
+// `embarquer-composants.mjs --poser … --composants boilerplate.css` pose la feuille du gabarit du
+// socle sous un bloc scellé comme les autres, mais `boilerplate.css` n'existe pas sur le disque : le
+// poseur l'extrait du premier `<style>` de `boilerplate.html` (TF-0926). Ce module cherchait un
+// fichier, ne le trouvait pas et rangeait le bloc « déclaré non vérifiable » : la critique imputait
+// à l'auteur la feuille du socle et gonflait les avertissements tokens et taste d'une page bâtie
+// au socle. La règle d'extraction est celle du poseur, au caractère près ; elle ne vaut, comme chez
+// lui, que pour le socle par défaut. Le sceau, lui, se confronte comme pour tout composant.
+const SOURCE_SYNTHETIQUE = 'boilerplate.css';
+function sourceDuSocle(socle, nom) {
+  if (nom === SOURCE_SYNTHETIQUE && socle === SOCLE_DEFAUT) {
+    const gabarit = path.join(RACINE_SKILLS, socle, 'boilerplate.html');
+    let html = null;
+    try { html = fs.readFileSync(gabarit, 'utf8'); } catch { /* gabarit absent : retombe sur la source introuvable */ }
+    const feuille = html === null ? null : html.match(/<style>([\s\S]*?)<\/style>/);
+    if (feuille) return { source: `${gabarit} (premier <style>)`, texte: feuille[1].replace(/^\n+/, '').replace(/\n+$/, '') };
+  }
+  const source = path.join(RACINE_SKILLS, socle, nom);
+  return { source, texte: fs.existsSync(source) ? fs.readFileSync(source, 'utf8') : null };
+}
+
+/** Bornes des blocs marqués d'un HTML : { nom, socle, debut, fin } (offsets d'octets). */
+export function blocsMarques(html) {
+  const trouves = [];
+  RE_DEBUT.lastIndex = 0;
+  let m;
+  while ((m = RE_DEBUT.exec(html)) !== null) {
+    const nom = m[1];
+    const marqueFin = `<!-- COMPOSANT-EMBARQUE:FIN ${nom} -->`;
+    const j = html.indexOf(marqueFin, m.index);
+    // Un marqueur d'ouverture sans sa fermeture n'est pas un bloc : le dire plutôt que de
+    // deviner sa borne — une borne devinée exempterait du contenu voisin.
+    trouves.push({ nom, socle: m[2] || SOCLE_DEFAUT, debut: m.index, fin: j < 0 ? -1 : j + marqueFin.length });
+  }
+  return trouves;
+}
+
+/**
+ * Les blocs du socle d'une page, partagés en `verifies` (exemptables) et `declares`
+ * (marqués mais non vérifiables — jugés comme le CSS de l'auteur, avec leur raison).
+ */
+export function blocsDuSocle(html) {
+  const verifies = [];
+  const declares = [];
+  for (const bloc of blocsMarques(html)) {
+    if (bloc.fin < 0) {
+      declares.push({ ...bloc, raison: 'marqueur de fin absent : bornes du bloc indécidables' });
+      continue;
+    }
+    const tranche = html.slice(bloc.debut, bloc.fin);
+    const b = /<(style|script)([^>]*)>([\s\S]*?)<\/\1\s*>/i.exec(tranche);
+    if (!b) {
+      declares.push({ ...bloc, raison: 'aucun <style> ni <script> entre les marqueurs' });
+      continue;
+    }
+    const empreinte = (/data-empreinte\s*=\s*["']sha256:([0-9a-f]{64})["']/i.exec(b[2]) || [])[1];
+    const composant = (/data-composant\s*=\s*["']([^"']+)["']/i.exec(b[2]) || [])[1];
+    if (!empreinte || composant !== bloc.nom) {
+      declares.push({ ...bloc, raison: 'bloc sans data-empreinte sha256 exploitable, ou data-composant qui ne nomme pas le bloc' });
+      continue;
+    }
+    const { source, texte } = sourceDuSocle(bloc.socle, bloc.nom);
+    if (texte === null) {
+      declares.push({ ...bloc, empreinte, raison: `source du socle introuvable (${source}) : le sceau n'a pas pu être confronté` });
+      continue;
+    }
+    if (sha(texte) !== empreinte) {
+      declares.push({ ...bloc, empreinte, raison: `empreinte déclarée ≠ empreinte de la source du socle (${sha(texte).slice(0, 12)}…)` });
+      continue;
+    }
+    const attendu = (b[1].toLowerCase() === 'script' ? echapper(texte) : texte).replace(/\n+$/, '');
+    const corps = b[3].replace(/^\r?\n/, '').replace(/\r?\n$/, '');
+    if (lignesLf(corps) !== lignesLf(attendu)) {
+      declares.push({ ...bloc, empreinte, raison: 'copie éditée sur place : le bloc ne correspond plus à la source qu\'il déclare' });
+      continue;
+    }
+    verifies.push({ ...bloc, empreinte, source });
+  }
+  for (const b of blocsServis(html, [...verifies, ...declares])) (b.verifie ? verifies : declares).push(b.bloc);
+  return { verifies, declares };
+}
+
+// ── TF-2430 (lot Produit-82 du 10/11/2026) · UN COMPOSANT DU SOCLE SERVI N'A PAS DE SCEAU, IL A UN CONTENU ──
+//
+// LE FAIT. Sur une page capturée d'une instance servie, run-oracles-design disait « fantômes » 7 boutons pleins et bordés que le
+// composant table-filters.css du socle habille (`.tf-actions button { background: none; border: none }` s'apparie à tout bouton,
+// l'appariement ne remontant pas les ancêtres) ; la contre-épreuve sans cette feuille rendait PASS. La même feuille posée en bloc
+// COMPOSANT-EMBARQUE scellé était imputée au socle (TF-0830) : seul le bloc scellé était reconnu. Une instance servie livre le
+// composant en feuille liée (`<link href="/assets/table-filters.css">`) que `--origine` intègre en `<style data-origine="…">` (lib/
+// rendre-autonome.mjs) : plus de marqueur, plus de sceau, donc jugée comme le CSS de l'auteur.
+//
+// LE REMÈDE. Un bloc intégré à l'origine est reconnu pour la même raison qu'un bloc scellé juste : il est CONFRONTÉ à la source du
+// socle installée. Faute de sceau, la preuve est le contenu : le bloc doit être identique à la source nommée par son nom de fichier
+// (`/assets/table-filters.css` → `table-filters.css` du socle par défaut). Le nom seul n'exempte rien : un homonyme édité sur place est
+// déclaré, jugé comme le CSS de l'auteur, avec sa raison ; un fichier dont le nom n'est pas celui d'un composant du socle (la feuille
+// du produit) reste à l'auteur sans être déclaré. Seules les adresses `url(…)` sont écartées de la comparaison : l'intégration les rend
+// absolues (lib/rendre-autonome.mjs), la source les garde relatives.
+const RE_SERVI = /<(style|script)\b([^>]*?\sdata-origine\s*=\s*(?:"([^"]*)"|'([^']*)')[^>]*)>([\s\S]*?)<\/\1\s*>/gi;
+const sansAdresses = css => css.replace(/url\(\s*(["']?)[^)"']*\1\s*\)/gi, 'url()');
+const NOM_DE_COMPOSANT = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+function blocsServis(html, dejaLus) {
+  const trouves = [];
+  RE_SERVI.lastIndex = 0;
+  for (const m of html.matchAll(RE_SERVI)) {
+    const debut = m.index;
+    const fin = m.index + m[0].length;
+    if (dejaLus.some(b => b.fin >= 0 && debut >= b.debut && fin <= b.fin)) continue; // déjà jugé comme bloc marqué
+    const origine = (m[3] ?? m[4] ?? '').replace(/&quot;/g, '"');
+    let nom = null;
+    try { nom = decodeURIComponent(origine.split(/[?#]/)[0]).replace(/\\/g, '/').split('/').pop(); } catch { /* adresse illisible : jugée comme l'auteur */ }
+    if (!nom || !NOM_DE_COMPOSANT.test(nom)) continue;
+    let lue = null;
+    try { lue = sourceDuSocle(SOCLE_DEFAUT, nom); } catch { /* source illisible (dossier, droits) : ce n'est pas un composant du socle */ }
+    if (!lue || lue.texte === null) continue; // pas un composant du socle (feuille du produit), ou socle introuvable : rien à confronter
+    const estScript = m[1].toLowerCase() === 'script';
+    const attendu = (estScript ? echapper(lue.texte) : lue.texte).replace(/\n+$/, '');
+    // L'intégration ajoute un retour à la ligne avant et après la ressource lue ; la ressource garde le sien : les retours de fin sont écartés des deux côtés.
+    const corps = m[5].replace(/^\r?\n/, '').replace(/(\r?\n)+$/, '');
+    const norme = t => (estScript ? lignesLf(t) : sansAdresses(lignesLf(t)));
+    const bloc = { nom, socle: SOCLE_DEFAUT, debut, fin, origine };
+    if (norme(corps) !== norme(attendu)) {
+      trouves.push({ verifie: false, bloc: { ...bloc, raison: `composant servi (${origine}) différent de la source du socle installée (${sha(lue.texte).slice(0, 12)}…) : copie éditée ou version périmée, jugé comme le CSS de l'auteur` } });
+    } else {
+      trouves.push({ verifie: true, bloc: { ...bloc, empreinte: sha(lue.texte), source: lue.source, par: 'contenu' } });
+    }
+  }
+  return trouves;
+}
+
+/**
+ * Copie du HTML dont les blocs donnés sont vidés, EN CONSERVANT le nombre de lignes :
+ * les numéros de ligne des findings restent ceux du fichier réel.
+ */
+export function neutraliser(html, blocs) {
+  let out = html;
+  // De la fin vers le début : les offsets des blocs précédents restent valides.
+  for (const bloc of [...blocs].sort((a, b) => b.debut - a.debut)) {
+    const tranche = out.slice(bloc.debut, bloc.fin);
+    out = out.slice(0, bloc.debut) + '\n'.repeat((tranche.match(/\n/g) || []).length) + out.slice(bloc.fin);
+  }
+  return out;
+}
+
+// ── LA CHARTE DE POLICE DU SOCLE SE LIT DANS LE SOCLE (TF-1023, décision humaine D-11 (a) du 23/09/2026) ──
+//
+// LE FAIT. oracle-slop reconnaissait une page « au socle » à une paire de polices ÉCRITE ICI — Roboto
+// en titres, DM Sans en corps — et exemptait ces deux familles de la règle S3. Le 23/09, le socle a
+// pris les polices de la charte des présentations (Montserrat, Inter), sur la décision humaine D-5 (a)
+// du 22/09 « la charte des présentations fait foi, les pages s'y alignent ». La paire écrite ici
+// devenait un second domicile de la charte : chaque page neuve bâtie sur le socle aurait échoué S3,
+// bancs compris, pour une police que le socle lui-même prescrit.
+//
+// LE REMÈDE. La paire se LIT dans le gabarit du socle INSTALLÉ, sous la même racine que les blocs
+// embarqués ci-dessus : la page reconnue est celle qui déclare les mêmes familles de tête que le
+// socle qui s'exécute sur ce poste. Jusqu'à la propagation du socle, c'est l'ancienne paire ;
+// après, la nouvelle — le juge suit le socle au moment exact où les générateurs le suivent.
+/** La paire de polices du socle installé : { head, sans, familles[], source }, ou null s'il est introuvable. */
+export function charteDePoliceDuSocle(racine = RACINE_SKILLS) {
+  const fichier = path.join(racine, 'factory-page-html', 'assets', 'boilerplate.html');
+  let txt;
+  try { txt = fs.readFileSync(fichier, 'utf8'); } catch { return null; }
+  const pile = (motif) => {
+    const m = motif.exec(txt);
+    return m ? m[1].split(',').map((x) => x.trim().replace(/^["']|["']$/g, '').toLowerCase()).filter(Boolean) : null;
+  };
+  const head = pile(/--head\s*:\s*([^;]+);/);
+  const sans = pile(/--sans\s*:\s*([^;]+);/);
+  if (!head || !sans) return null;
+  return { head: head[0], sans: sans[0], familles: [...new Set([...head, ...sans])], source: fichier };
+}

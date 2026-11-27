@@ -1,0 +1,654 @@
+#!/usr/bin/env node
+/**
+ * verifier-fiche-securite — LA PORTE BLOQUANTE QUI MANQUAIT (TF-0701).
+ *
+ * ── LE DÉSÉQUILIBRE QUI A PAYÉ CET ORACLE ─────────────────────────────────────────────────
+ * Le rapport d'audit a une porte machine : « le rapport n'est CONFORME (diffusable) que si exit
+ * code = 0 », tenue par `verifier-rapport*.mjs`. La fiche sécurité, elle, n'avait AUCUN contrôle
+ * — alors que les règles écrites dans le skill de conformité sont parfaitement mécaniques : zéro
+ * placeholder résiduel, et lien de l'environnement DEV présent. Deux règles écrites, tenues par
+ * personne.
+ *
+ * CAUSE, et elle est humaine : le kit a outillé le document le plus volumineux et laissé l'autre
+ * à la relecture. C'était défendable pour une fiche de deux pages, SAUF QUE la relecture humaine
+ * porte sur le HTML alors que ce qui est DIFFUSÉ est le PDF — **aucun œil ne relisait l'artefact
+ * réellement transmis**. C'est ce qui a laissé partir, le 24/07, un PDF d'indice `c` capturé en
+ * image pendant qu'un HTML d'indice `d` dormait à côté de lui.
+ *
+ * ── LES SEPT RÈGLES ───────────────────────────────────────────────────────────────────────
+ *   FS1 · zéro placeholder `{{…}}` résiduel — un livrable ne se diffuse pas avec ses trous.
+ *   FS2 · les 8 sections du canevas sont présentes — une section perdue est un chapitre perdu.
+ *   FS3 · référence interne `<TRIGRAMME>-SEC-<ENV>-<AAAAMMJJ><indice>` (ENV = DEV, HPR ou PRD),
+ *         bien formée, et IDENTIQUE en en-tête et en pied. Deux références divergentes dans un
+ *         même document ne se voient qu'en ouvrant les deux bouts ; personne ne le fait.
+ *         L'environnement jugé se lit dans le NOM du fichier (`… - HPR - 20261030a.html`), à défaut
+ *         dans la référence de l'en-tête, à défaut c'est DEV ; un nom et une référence qui
+ *         annoncent deux environnements sont refusés (TF-2087).
+ *   FS4 · le lien de l'environnement jugé (DEV, HPR ou PRD) est présent, et c'est une vraie URL.
+ *         C'est la ligne qui PORTE l'URL parmi celles dont l'intitulé désigne cet environnement qui
+ *         est jugée, pas la première dont l'intitulé contient « Dev » (TF-2086) ; les intitulés
+ *         sont lus en `th` (avec ou sans classe) comme en `td class="k"`, pour FS4 comme pour FS8,
+ *         FS10 et FS11. Un lien DEV ne tient pas lieu de lien HPR, ni un lien de pré-production de
+ *         lien de production (TF-2087).
+ *   FS5 · mise en page : colonne d'intitulés (`th`, `th.<classe>` ou `td.k`) ≤ 25 % et
+ *         `table-layout` FIXE (TF-0697, TF-2086). Sans
+ *         `table-layout:fixed`, une largeur déclarée n'est qu'un vœu — le moteur ré-élargit la
+ *         colonne dès qu'un libellé s'allonge, et la déclaration ment.
+ *   FS6 · le PDF de diffusion est là, et il porte le MÊME INDICE que le HTML (TF-0700 c).
+ *   FS7 · ce PDF porte du TEXTE EXTRACTIBLE au-dessus d'un seuil. Un PDF de fiche sous quelques
+ *         centaines d'unités de texte est une IMAGE : non recherchable, non contrôlable par
+ *         machine, et MUET POUR UN LECTEUR D'ÉCRAN alors que le destinataire est l'équipe
+ *         sécurité. Mesuré le 24/07 sur le PDF réellement diffusé : 0 caractère extractible,
+ *         9 images, 653 169 octets — contre 124 Ko pour le même document imprimé en texte.
+ *   FS8 · le champ « Population effectivement admise » (TF-0563, TF-1089) est PRÉSENT et REMPLI.
+ *         Ni FS1 (placeholder résiduel) ni FS2 (8 sections) ne voient une LIGNE ENTIÈREMENT
+ *         ABSENTE — mesuré le 14/09/2026 : une instance remplie sans ce champ rendait PASS sur
+ *         FS1 à FS7. « S'authentifier n'est pas être admis » : « aucune restriction » est une
+ *         réponse valide, une ligne manquante ne l'est jamais.
+ *   FS9 · le document REND VISIBLEMENT son gabarit et sa version (`Gabarit : gd-… · version du
+ *         gabarit x.y.z`) — restes archivés TF-0690/TF-0702 (Produit-11, 27-28/08) : une instance
+ *         périmée était INVISIBLE SUR L'ARTEFACT, sans registre pour la dater. Même convention
+ *         que `oracle-gabarits-documents.mjs` G4 du pilot.
+ *   FS10 · le champ « Restriction d'accès effective » (TF-0563, TF-1102) est PRÉSENT et REMPLI —
+ *          sœur de FS8, sur le DEUXIÈME champ du même bloc doctrinal resté en reste après TF-1089.
+ *   FS11 · le champ « Comptes externes / invités en portée » (TF-0563, TF-1102) est PRÉSENT et
+ *          REMPLI — sœur de FS8/FS10, sur le TROISIÈME champ du même bloc. Les trois existent
+ *          parce que la MÊME fiche a un jour dit vrai et fait comprendre faux (3 128 comptes
+ *          invités admis au même titre que les collaborateurs) : aucun des trois n'est optionnel.
+ *   FS12 · la version que la fiche CITE est la dernière étiquette DÉPLOYÉE (TF-2419). Le 10/11/2026,
+ *          la fiche CDC-SEC-HPR-20261104a citait v1.10.0 alors que v1.13.0 était qualifiée et servie :
+ *          jointe telle quelle à un courriel du référent sécurité, elle a dû être réémise (16 champs sur
+ *          29 changés). Aucune autre règle ne la voit : FS1 à FS11 jugent la FORME de la fiche, jamais
+ *          sa fraîcheur. Ce que sert l'environnement n'est pas dans la fiche : la chaîne de qualification
+ *          le DONNE (`--etiquette-deployee`), et FS12 le compare à la version lue sur la ligne « Version
+ *          déployée » (ou « Version de l'application », « Projet / application »). Citée ≠ déployée,
+ *          par défaut OU par excès, est refusé ; une fiche qui ne cite aucune version rend SKIP motivé
+ *          (la comparaison n'est ni réussie ni échouée) ; sans étiquette donnée, FS12 n'est pas jouée
+ *          et le DIT dans `non_juge` — jamais un PASS silencieux.
+ *
+ *   node oracles/verifier-fiche-securite.mjs <fiche.html> [--seuil-texte N] [--sans-pdf]
+ *                                            [--etiquette-deployee <x.y.z>] [--json-only]
+ *   node oracles/verifier-fiche-securite.mjs --self-test
+ *
+ * Verdicts : PASS (exit 0, DIFFUSABLE) · FAIL (exit 1) · SKIP motivé (exit 2, rien à juger).
+ */
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import zlib from 'node:zlib';
+import { fileURLToPath } from 'node:url';
+
+/** Le seuil de FS7 : en dessous, le « PDF » est une capture. Grossier, et c'est voulu. */
+export const SEUIL_TEXTE = 300;
+/** Le canevas de la fiche : huit sections numérotées. */
+export const SECTIONS = 8;
+/** FS9 (TF-1095) : mêmes expressions que `oracle-gabarits-documents.mjs` G4 du pilot. */
+export const RE_GABARIT_ID = /gabarit\s*:\s*(gd-[a-z0-9-]+)/i;
+export const RE_VERSION_GABARIT = /version[_ ]du[_ ]gabarit\s*:?\s*\d+\.\d+\.\d+/i;
+/**
+ * La référence interne : trigramme, objet, environnement, jour, indice. L'environnement est DEV,
+ * HPR (hors production, préproduction comprise) ou PRD (TF-2087) : la fiche d'un environnement
+ * n'est plus jugée comme si elle était celle de DEV.
+ */
+export const RE_REF = /\b([A-Z0-9]{2,6})-SEC-(DEV|HPR|PRD)-(\d{8})([a-z])\b/g;
+/** L'environnement porté par le NOM du fichier (`… - HPR - 20261030a.html`), mot entier. */
+export const RE_ENV_NOM = /(?<![A-Za-z0-9])(DEV|HPR|PRD)(?![A-Za-z0-9])/i;
+/**
+ * Par environnement, ce qui désigne SA ligne de lien dans la colonne des intitulés (TF-2087).
+ * HPR passe avant PRD : « pré-production » et « hors production » contiennent « production »
+ * sans être la production.
+ */
+const EST_HPR = (l) => /\bHPR\b|pr[ée][-\s]?prod|hors[-\s]+prod/i.test(l);
+export const ENVIRONNEMENTS = {
+  DEV: (l) => /\bDEV\b|développement|developpement/i.test(l),
+  HPR: EST_HPR,
+  PRD: (l) => !EST_HPR(l) && /\bPRD\b|\bprod(?:uction)?\b/i.test(l),
+};
+const RE_URL = /https?:\/\/[^\s"'<]+/i;
+/** Une cellule d'intitulé en `td` n'est lue que si elle porte la classe `k` (TF-2086). */
+const CLASSE_K = /\bclass\s*=\s*(["'])(?:[^"']*\s)?k(?:\s[^"']*)?\1/i;
+const texteDe = (h) => String(h).replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
+
+/**
+ * Les lignes « intitulé · valeur » d'une fiche, QUELLE QUE SOIT la cellule d'intitulé : `th` (avec
+ * ou sans classe) ou `td class="k"` (TF-2086). Un modèle de fiche qui nomme ses intitulés en
+ * `td.k` rendait FS8, FS10 et FS11 aveugles : la ligne existait, l'oracle ne la voyait pas.
+ */
+export function lignesDeChamps(html) {
+  const lignes = [];
+  for (const m of String(html).matchAll(/<tr\b[^>]*>\s*<(th|td)\b([^>]*)>([\s\S]*?)<\/\1>\s*<td\b[^>]*>([\s\S]*?)<\/td>/gi)) {
+    if (m[1].toLowerCase() === 'td' && !CLASSE_K.test(m[2])) continue;
+    lignes.push({ intitule: texteDe(m[3]), valeur: m[4] });
+  }
+  return lignes;
+}
+
+/**
+ * Les UNITÉS DE TEXTE réellement montrées par un PDF : opérateurs `Tj`/`TJ`/`'` des flux de
+ * contenu, chaînes littérales `(…)` comme chaînes hexadécimales `<…>` (les moteurs
+ * d'impression émettent des identifiants de glyphe sur deux octets pour les polices
+ * sous-ensemblées : compter les caractères ASCII seulement rendrait 0 sur un tirage parfait).
+ * Ce n'est PAS une extraction de texte lisible — c'est un COMPTEUR, et il suffit à séparer une
+ * impression d'une capture.
+ */
+export function unitesDeTexte(octets) {
+  let total = 0, i = 0, flux = 0;
+  const taille = (jeton) => (jeton.startsWith('<')
+    ? Math.ceil(jeton.slice(1, -1).replace(/\s/g, '').length / 4)
+    : Math.max(0, jeton.length - 2));
+  while (true) {
+    const s = octets.indexOf('stream', i);
+    if (s < 0) break;
+    let d = s + 6;
+    if (octets[d] === 13) d++;
+    if (octets[d] === 10) d++;
+    const e = octets.indexOf('endstream', d);
+    if (e < 0) break;
+    const brut = octets.subarray(d, e);
+    let texte;
+    try { texte = zlib.inflateSync(brut).toString('latin1'); } catch { texte = brut.toString('latin1'); }
+    i = e + 9;
+    // Un flux de CONTENU porte un bloc de texte (`BT`) et une sélection de police (`Tf`) ; un
+    // programme de police ou une image n'en portent pas. On ne compte pas les octets d'une image.
+    if (!/\bBT\b/.test(texte) || !/\bTf\b/.test(texte)) continue;
+    flux++;
+    for (const m of texte.matchAll(/(\((?:\\.|[^\\()])*\)|<[0-9A-Fa-f\s]*>)\s*(?:Tj|')/g)) total += taille(m[1]);
+    for (const m of texte.matchAll(/\[([\s\S]*?)\]\s*TJ/g))
+      for (const j of m[1].matchAll(/\((?:\\.|[^\\()])*\)|<[0-9A-Fa-f\s]*>/g)) total += taille(j[0]);
+  }
+  return { total, flux };
+}
+
+/**
+ * FS12 (TF-2419) · une version « x.y.z » (préfixe « v » toléré, suffixe de pré-version admis), mot entier : ni « 1.3 »
+ * (version de TLS), ni le « 1.10.0 » d'un numéro à quatre composantes.
+ */
+const RE_VERSION = /(?<![\w.])v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z]+(?:\.[0-9A-Za-z]+)*)?)(?!\w|\.\d)/gi;
+const RE_VERSION_SEULE = /^v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z]+(?:\.[0-9A-Za-z]+)*)?)$/i;
+/** Les intitulés dont la valeur dit QUELLE version la fiche décrit (jamais « version du gabarit », ni une version de TLS). */
+const INTITULE_VERSION = /^(?:version(?:\s+(?:d[ée]ploy[ée]e|de\s+l['’]application|livr[ée]e))?|projet\s*\/\s*application|(?:deployed|application)\s+version|project\s*\/\s*application)\s*:?$/i;
+/** « v1.13.0 » → « 1.13.0 » ; `null` si ce n'est pas une version x.y.z. */
+export const versionDe = (texte) => (RE_VERSION_SEULE.exec(String(texte ?? '').trim()) || [])[1] ?? null;
+/** Les versions distinctes que la fiche cite, lues sur les lignes qui désignent la version de l'application. */
+export function versionsCitees(lignes) {
+  const vues = new Set();
+  for (const l of lignes) {
+    if (!INTITULE_VERSION.test(l.intitule)) continue;
+    for (const m of texteDe(l.valeur).matchAll(RE_VERSION)) vues.add(m[1]);
+  }
+  return [...vues];
+}
+const sansPreVersion = (v) => v.split('-')[0].split('.').map(Number);
+/** Négatif si `a` précède `b`, positif si elle la suit, 0 si les trois composantes sont égales. */
+const comparer = (a, b) => { const x = sansPreVersion(a), y = sansPreVersion(b); return x[0] - y[0] || x[1] - y[1] || x[2] - y[2]; };
+
+/** Le PDF de diffusion attendu à côté d'un HTML de référence : même nom, même indice. */
+export const pdfDe = (html) => String(html).replace(/\.html?$/i, '') + '.pdf';
+/** `… - 20260902c.html` → `20260902c` ; `null` si le nom n'est pas daté. */
+export const indiceDe = (nom) => (/(\d{8}[a-z])(?=\.[A-Za-z0-9]+$|$)/.exec(path.basename(String(nom))) || [])[1] ?? null;
+
+/**
+ * Juge une fiche. Rend `{ verdict, findings, non_juge }` — la forme commune des oracles du dépôt.
+ * Aucune sortie, aucun `process.exit` : c'est ce qui rend l'auto-test possible.
+ */
+export function juger(fiche, { seuilTexte = SEUIL_TEXTE, sansPdf = false, etiquetteDeployee = null } = {}) {
+  const F = [];
+  const add = (statut, regle, message) => F.push({ statut, regle, message });
+  const html = fs.readFileSync(fiche, 'utf8');
+  const lignes = lignesDeChamps(html);
+
+  // ── FS1 · zéro placeholder résiduel ──────────────────────────────────────────────────────
+  const trous = [...html.matchAll(/\{\{\s*([^}]{0,80}?)\s*\}\}/g)].map((m) => m[1]);
+  if (trous.length) {
+    add('FAIL', 'FS1', `${trous.length} placeholder(s) non renseigné(s) : ${[...new Set(trous)].slice(0, 6).join(', ')}`
+      + (trous.length > 6 ? '…' : '') + '. Un livrable ne se diffuse pas avec ses trous — et la fiche '
+      + "part à l'équipe sécurité, qui n'a pas le contexte pour les combler.");
+  } else {
+    add('PASS', 'FS1', '0 placeholder résiduel');
+  }
+
+  // ── FS2 · les 8 sections du canevas ──────────────────────────────────────────────────────
+  // Numérotées plutôt que nommées : un tenant renomme ses sections, il n'en supprime pas.
+  const vues = new Set([...html.matchAll(/<h2[^>]*>\s*(\d+)\s*[·.)-]/g)].map((m) => Number(m[1])));
+  const manquantes = Array.from({ length: SECTIONS }, (_, k) => k + 1).filter((n) => !vues.has(n));
+  if (manquantes.length) {
+    add('FAIL', 'FS2', `${manquantes.length} section(s) absente(s) du canevas : ${manquantes.join(', ')} `
+      + `(${vues.size}/${SECTIONS} vues). Une section perdue est un chapitre perdu, et son absence ne se `
+      + 'voit pas dans un document que personne ne compare au canevas.');
+  } else {
+    add('PASS', 'FS2', `${SECTIONS}/${SECTIONS} sections du canevas présentes`);
+  }
+
+  // ── FS3 · référence interne bien formée, ET la même en en-tête et en pied ────────────────
+  const bloc = (balise) => (new RegExp(`<${balise}[^>]*>([\\s\\S]*?)</${balise}>`, 'i').exec(html) || [])[1] ?? '';
+  const refsDe = (t) => [...t.matchAll(RE_REF)].map((m) => m[0]);
+  const enTete = refsDe(bloc('header'));
+  const pied = refsDe(bloc('footer'));
+  const toutes = new Set(refsDe(html));
+  // TF-2087 · L'environnement jugé : celui du NOM du fichier, à défaut celui de la référence de
+  // l'en-tête, à défaut DEV (le cas historique). Nom et référence en désaccord : FS3 le refuse.
+  const envDeRef = (r) => (/-SEC-(DEV|HPR|PRD)-/.exec(r || '') || [])[1] ?? null;
+  const envNom = (RE_ENV_NOM.exec(path.basename(fiche)) || [])[1]?.toUpperCase() ?? null;
+  const envRefs = [...new Set([...toutes].map(envDeRef))];
+  const env = envNom ?? envDeRef(enTete[0] ?? [...toutes][0]) ?? 'DEV';
+  if (!toutes.size) {
+    add('FAIL', 'FS3', 'aucune référence interne au format <TRIGRAMME>-SEC-<DEV|HPR|PRD>-<AAAAMMJJ><indice>. '
+      + 'Sans elle, le document ne se rattache ni à son projet ni à sa révision : deux tirages '
+      + 'différents deviennent indiscernables une fois imprimés.');
+  } else if (!enTete.length || !pied.length) {
+    add('FAIL', 'FS3', `référence présente (${[...toutes][0]}) mais absente ${enTete.length ? 'du PIED' : "de l'EN-TÊTE"}. `
+      + 'Elle est due AUX DEUX BOUTS : une page détachée du reste doit encore dire de quelle révision elle vient.');
+  } else if (new Set([...enTete, ...pied]).size > 1) {
+    add('FAIL', 'FS3', `références DIVERGENTES dans le même document : en-tête ${enTete.join('/')} contre `
+      + `pied ${pied.join('/')}. Ce défaut ne se voit qu'en ouvrant les deux bouts, et personne ne le fait.`);
+  } else if (envNom && envRefs.some((e) => e !== envNom)) {
+    add('FAIL', 'FS3', `le nom du fichier annonce l'environnement ${envNom} et la référence imprimée DANS le `
+      + `document porte ${envRefs.join('/')} (${[...toutes][0]}). Une fiche ne juge qu'un environnement : `
+      + "celle-ci dit l'un à l'ouverture du fichier et l'autre à la lecture.");
+  } else {
+    add('PASS', 'FS3', `référence interne ${enTete[0]} (environnement ${env}), identique en en-tête et en pied`);
+  }
+
+  // ── FS3bis · la référence porte l'indice du NOM DE FICHIER ───────────────────────────────
+  const iNom = indiceDe(fiche);
+  const iRef = toutes.size ? (/(\d{8}[a-z])/.exec([...toutes][0]) || [])[1] : null;
+  if (!iNom) {
+    add('SKIP', 'FS3bis', `le nom « ${path.basename(fiche)} » n'est pas daté : rien à rapprocher de la `
+      + 'référence interne. Un livrable non daté est un livrable qui s\'écrase lui-même, mais ce n\'est '
+      + 'pas cet oracle qui le juge.');
+  } else if (iRef && iNom !== iRef) {
+    add('FAIL', 'FS3bis', `le nom du fichier porte ${iNom} et la référence imprimée DANS le document porte `
+      + `${iRef}. La divergence est invisible tant qu'on n'ouvre pas les deux — c'est exactement ce qui a `
+      + 'été demandé à la main sur un produit le 27/08, une fois quatre versions écrasées.');
+  } else if (iRef) {
+    add('PASS', 'FS3bis', `nom de fichier et référence interne portent le même indice (${iNom})`);
+  }
+
+  // ── FS4 · le lien de l'environnement jugé (DEV, HPR ou PRD — TF-2087) ───────────────────
+  // TF-2086 : on vise la ligne qui PORTE l'URL parmi celles dont l'intitulé désigne
+  // l'environnement. La PREMIÈRE ligne dont l'intitulé contient « Dev » (« Dev-team / run ») n'est
+  // pas forcément celle du lien : la prendre refusait une fiche complète.
+  const lignesEnv = lignes.filter((l) => ENVIRONNEMENTS[env](l.intitule));
+  const ligneLien = lignesEnv.find((l) => RE_URL.test(l.valeur));
+  if (!lignesEnv.length) {
+    add('FAIL', 'FS4', `aucune ligne ne porte le lien de l'environnement ${env}. C'est la seule information `
+      + 'de la fiche qui permet à un tiers de CONSTATER par lui-même ce qui est exposé.');
+  } else if (!ligneLien) {
+    add('FAIL', 'FS4', (lignesEnv.length === 1
+      ? `la ligne « ${lignesEnv[0].intitule.slice(0, 60)} » ne porte pas d'URL : « ${texteDe(lignesEnv[0].valeur).slice(0, 60)} »`
+      : `aucune des ${lignesEnv.length} lignes de l'environnement ${env} (${lignesEnv.map((l) => `« ${l.intitule.slice(0, 40)} »`).join(', ')}) `
+        + 'ne porte d\'URL')
+      + `. Un lien annoncé et absent vaut moins qu'un lien absent.`);
+  } else {
+    add('PASS', 'FS4', `lien ${env} présent : ${RE_URL.exec(ligneLien.valeur)[0].slice(0, 70)}`);
+  }
+
+  // ── FS5 · la mise en page ne réserve pas la page à la colonne des intitulés (TF-0697) ────
+  // TF-2086 : `th` nu, `th.<classe>` (modèle à `th.k{…}`) ou `td.k`, y compris en liste de sélecteurs.
+  const largeurDe = (balise) => (new RegExp(`(?:^|[{};,\\s])${balise}\\s*(?:,[^{}]*)?\\{[^}]*\\bwidth\\s*:\\s*([\\d.]+)%`, 'i')
+    .exec(html) || [])[1];
+  const largeurTh = Number(largeurDe('th(?:\\.[\\w-]+)?') ?? largeurDe('td\\.k'));
+  const fixe = /table-layout\s*:\s*fixed/i.test(html);
+  if (!Number.isFinite(largeurTh)) {
+    add('SKIP', 'FS5', "aucune largeur de colonne d'intitulés déclarée en pourcentage : la mise en page "
+      + "n'est pas jugée ici (elle l'est par la mesure au moteur, hors de cet oracle).");
+  } else if (largeurTh > 25 || !fixe) {
+    add('FAIL', 'FS5', `colonne d'intitulés à ${largeurTh} %${fixe ? '' : ' et `table-layout` NON fixe'}. `
+      + 'Mesuré sur des fiches livrées : 32 % réservés à des intitulés courts (Nom, Tags, Budget) pendant '
+      + 'que la colonne de droite porte des paragraphes entiers — 12,6 % à 19,4 % de largeur GASPILLÉS sur '
+      + '7 tables sur 8. Sans `table-layout:fixed`, la largeur déclarée n\'est qu\'un vœu : le moteur '
+      + "ré-élargit la colonne dès qu'un libellé s'allonge.");
+  } else {
+    add('PASS', 'FS5', `colonne d'intitulés à ${largeurTh} % avec table-layout fixe — la largeur déclarée est tenue`);
+  }
+
+  // ── FS6 / FS7 · le PDF RÉELLEMENT DIFFUSÉ ───────────────────────────────────────────────
+  const pdf = pdfDe(fiche);
+  if (sansPdf) {
+    add('SKIP', 'FS6', '--sans-pdf : écart DÉCLARÉ. Le jeu remis est incomplet au regard du catalogue '
+      + '(formats html + pdf) — le dire au destinataire fait partie de la remise.');
+    add('SKIP', 'FS7', '--sans-pdf : aucun tirage à relire.');
+  } else if (!fs.existsSync(pdf)) {
+    add('FAIL', 'FS6', `aucun PDF de diffusion à côté du HTML (attendu : ${path.basename(pdf)}). Le HTML est la `
+      + "révision de RÉFÉRENCE ; le PDF est ce qui PART. Une fiche rendue sans son PDF de même indice n'est "
+      + 'pas complète — et un format qu\'aucun outil ne produit est un format qu\'on refait à la main, quand '
+      + 'on y pense. `node fiche-en-pdf.mjs <fiche.html>` le produit.');
+    add('SKIP', 'FS7', 'aucun tirage à relire.');
+  } else {
+    const iPdf = indiceDe(pdf);
+    if (iNom && iPdf && iNom !== iPdf) {
+      add('FAIL', 'FS6', `indices divergents : HTML ${iNom}, PDF ${iPdf}. Ce qui est diffusé n'est pas la `
+        + 'révision de référence conservée à côté de lui.');
+    } else {
+      add('PASS', 'FS6', `PDF de diffusion présent${iPdf ? ` et de même indice (${iPdf})` : ''} : ${path.basename(pdf)}`);
+    }
+    const octets = fs.readFileSync(pdf);
+    const { total, flux } = unitesDeTexte(octets);
+    const images = (octets.toString('latin1').match(/\/Subtype\s*\/Image/g) || []).length;
+    if (total < seuilTexte) {
+      add('FAIL', 'FS7', `${total} unité(s) de texte extractible dans ${flux} flux de contenu (seuil ${seuilTexte}), `
+        + `pour ${images} image(s) incorporée(s) et ${octets.length} octets : ce PDF est une CAPTURE, pas une `
+        + 'impression. Conséquences vérifiables : non recherchable, MUET POUR UN LECTEUR D\'ÉCRAN alors que le '
+        + "destinataire est l'équipe sécurité, non contrôlable par machine, et environ 5× plus lourd. Le gabarit "
+        + 'porte déjà `@media print` et `@page` : `node fiche-en-pdf.mjs <fiche.html>` imprime au lieu de capturer.');
+    } else {
+      add('PASS', 'FS7', `${total} unités de texte extractible (seuil ${seuilTexte}), ${images} image(s) — `
+        + 'tirage IMPRIMÉ, recherchable et lisible par un lecteur d\'écran');
+    }
+  }
+
+  // ── FS8 / FS10 / FS11 · les TROIS champs du bloc doctrinal TF-0563, chacun PRÉSENT ET REMPLI ─
+  // FS1 ne voit qu'un PLACEHOLDER résiduel, FS2 ne voit que des SECTIONS entières manquantes :
+  // aucune des deux ne voit une LIGNE de champ absente à l'intérieur d'une section par ailleurs
+  // complète. Bilingue (le canevas source, deliverables/templates/fiche-securite.template.en.md),
+  // même si ce générateur ne rend que du FR. Un seul mécanisme pour les trois : ils existent
+  // parce que la MÊME fiche a un jour dit vrai et fait comprendre faux (3 128 comptes invités
+  // admis au même titre que les collaborateurs, TF-0563) — aucun n'est optionnel par rapport aux
+  // deux autres (TF-1089 n'avait couvert que le premier, FS8 ; TF-1102 clôt les deux restants).
+  const champDuBloc = (regle, motifLabel, nomAffiche) => {
+    // TF-2086 : l'intitulé est lu en `th` comme en `td.k`, et sans ses balises internes.
+    const re = new RegExp(`^(?:${motifLabel})\\s*:?$`, 'i');
+    const ligne = lignes.find((l) => re.test(l.intitule));
+    if (!ligne) {
+      add('FAIL', regle, `aucune ligne « ${nomAffiche} » dans le document. Le champ existe au canevas `
+        + "depuis TF-0563 (3 128 comptes invités admis sans que la fiche le dise) : une ligne "
+        + "SUPPRIMÉE plutôt que remplie n'est vue par AUCUNE autre règle de cet oracle.");
+      return;
+    }
+    const valeur = texteDe(ligne.valeur);
+    if (!valeur) {
+      add('FAIL', regle, `le champ « ${nomAffiche} » est présent mais VIDE. « aucune restriction » `
+        + 'est une réponse valide à porter au rapport ; une case vide ne l\'est jamais.');
+    } else {
+      add('PASS', regle, `${nomAffiche} renseigné(e) : « ${valeur.slice(0, 80)}${valeur.length > 80 ? '…' : ''} »`);
+    }
+  };
+  champDuBloc('FS8', "population\\s+(?:effectivement\\s+admise|actually\\s+admitted)", 'Population effectivement admise');
+
+  // ── FS9 · le document rend VISIBLEMENT son gabarit et sa version (TF-1095) ─────────────────
+  const idGabarit = RE_GABARIT_ID.exec(html);
+  const versionRendue = RE_VERSION_GABARIT.test(html);
+  if (!idGabarit || !versionRendue) {
+    const manque = [!idGabarit && "l'identifiant (« Gabarit : gd-… »)", !versionRendue && 'la « version du gabarit x.y.z »']
+      .filter(Boolean).join(' ni ');
+    add('FAIL', 'FS9', `le document ne rend pas ${manque} : une instance périmée reste invisible sur `
+      + "l'artefact — sans eux, aucun tiers ne peut dater sa conformité (TF-0690, restes archivés).");
+  } else {
+    add('PASS', 'FS9', `gabarit ${idGabarit[1]} rendu avec sa version`);
+  }
+
+  // ── FS10 / FS11 · les deux champs restés en reste après TF-1089 (TF-1102) ──────────────────
+  champDuBloc('FS10', "restriction\\s+d['’]acc[eè]s\\s+effective|effective\\s+access\\s+restriction",
+    "Restriction d'accès effective");
+  champDuBloc('FS11', 'comptes\\s+externes\\s*/\\s*invit[ée]s\\s+en\\s+port[ée]e|external\\s*/\\s*guest\\s+accounts\\s+in\\s+scope',
+    'Comptes externes / invités en portée');
+
+  // ── FS12 · la version citée par la fiche est la dernière étiquette déployée (TF-2419) ─────
+  // Les onze règles précédentes jugent la FORME de la fiche ; aucune ne voit qu'elle décrit une version que
+  // l'environnement ne sert plus. Ce que l'environnement sert n'est pas dans la fiche : l'appelant le DONNE.
+  if (etiquetteDeployee != null) {
+    const deployee = versionDe(etiquetteDeployee);
+    const citees = versionsCitees(lignes);
+    if (!deployee) {
+      add('FAIL', 'FS12', `l'étiquette déployée donnée (« ${etiquetteDeployee} ») n'est pas une version x.y.z : la `
+        + 'comparaison ne peut pas se faire, et elle ne se devine pas.');
+    } else if (!citees.length) {
+      add('SKIP', 'FS12', `la fiche ne cite aucune version (ni « Version déployée », ni « Version de l'application », ni `
+        + `« Projet / application » avec une version x.y.z) : la comparaison à l'étiquette déployée ${deployee} n'est NI `
+        + 'réussie NI échouée, elle n\'a pas pu se faire.');
+    } else if (citees.length > 1) {
+      add('FAIL', 'FS12', `la fiche cite ${citees.length} versions différentes (${citees.join(', ')}) : une fiche décrit `
+        + `UNE version, et la dernière étiquette déployée est ${deployee}.`);
+    } else if (citees[0].toLowerCase() === deployee.toLowerCase()) {
+      add('PASS', 'FS12', `la version citée (${citees[0]}) est la dernière étiquette déployée`);
+    } else {
+      const sens = comparer(citees[0], deployee) < 0
+        ? `ANTÉRIEURE à la dernière étiquette déployée (${deployee}) : la fiche décrit une version que l'environnement ne `
+          + 'sert plus. Ne pas la diffuser telle quelle — la RÉÉMETTRE sur la version servie (le 10/11/2026, une fiche '
+          + 'v1.10.0 jointe à un courriel alors que v1.13.0 était servie : 16 champs sur 29 changés).'
+        : `POSTÉRIEURE à la dernière étiquette déployée (${deployee}) : la fiche décrit une version que l'environnement ne `
+          + 'sert pas encore. Elle ne se diffuse pas avant le déploiement.';
+      add('FAIL', 'FS12', `la version citée (${citees[0]}) est ${sens}`);
+    }
+  }
+
+  const echecs = F.filter((f) => f.statut === 'FAIL').length;
+  return {
+    oracle: 'verifier-fiche-securite',
+    artefact: path.resolve(fiche),
+    verdict: echecs ? 'FAIL' : 'PASS',
+    findings: F,
+    non_juge: [
+      "la VÉRACITÉ des valeurs saisies : qu'une exposition annoncée « interne » le soit vraiment relève de "
+      + "l'audit, pas de cet oracle — il juge qu'une réponse est là, jamais qu'elle est vraie",
+      'la qualité RÉDACTIONNELLE de la fiche, et la pertinence des garde-fous décrits',
+      'la conformité d\'accessibilité du PDF (PDF/UA, arbre de structure) : FS7 mesure la présence de texte '
+      + 'extractible, ce qui sépare une impression d\'une capture — ce n\'est pas un audit d\'accessibilité',
+      'la mise en page RENDUE : FS5 lit la feuille de style, il ne mesure pas au moteur (cette mesure vit '
+      + 'dans `tools/fiche-en-pdf.mjs --self-test` et dans les tests, qui ont un navigateur)',
+      ...(etiquetteDeployee == null ? [
+        "FS12 (fraîcheur de la version citée) NON JOUÉE : aucune étiquette déployée donnée (`--etiquette-deployee <x.y.z>`) — "
+        + 'la version que la fiche cite n\'est comparée à rien ; ni réussie ni échouée, elle n\'a pas eu lieu',
+      ] : []),
+    ],
+  };
+}
+
+// ── Auto-test À DOUBLE SENS — un cas vert accepté, un cas rouge par règle ────────────────────
+const FICHE_VERTE = (ref = 'ACM-SEC-DEV-20260902a') => `<!DOCTYPE html><html lang="fr"><head><meta charset="utf-8">
+<title>Fiche</title><style>table{table-layout:fixed;border-collapse:collapse;width:100%}
+th{background:#eee;width:20%}td{overflow-wrap:break-word}</style></head><body>
+<header>Réf. ${ref} · validée par le responsable sécurité</header>
+<h1>Fiche sécurité</h1>
+${Array.from({ length: 8 }, (_, k) => `<section><h2>${k + 1} · Section ${k + 1}</h2><table><tbody>`
+    + (k === 0 ? '<tr><th>Lien environnement DEV</th><td>https://dev.exemple.test/app</td></tr>'
+      + '<tr><th>Population effectivement admise</th><td>Collaborateurs du tenant (128)</td></tr>'
+      + "<tr><th>Restriction d'accès effective</th><td>assignation de rôle requise</td></tr>"
+      + '<tr><th>Comptes externes / invités en portée</th><td>0 (portail invités désactivé)</td></tr>' : '')
+    + `<tr><th>Champ ${k + 1}</th><td>valeur</td></tr></tbody></table></section>`).join('\n')}
+<footer>Réf. ${ref} — 0 placeholder exigé avant diffusion. Gabarit : gd-fiche-securite-auditcore · version du gabarit 1.0.0.</footer>
+</body></html>`;
+
+/**
+ * TF-2086 / TF-2087 · le modèle de fiche à intitulés en `th.k` et `td.k`, pour un environnement
+ * donné : une première ligne « Dev-team / run » SANS URL avant la ligne qui porte le lien.
+ */
+const FICHE_MODELE = (env = 'DEV', { ref = `CDC-SEC-${env}-20261030a`, largeur = 22, lien = `https://${env.toLowerCase()}.exemple.test/app` } = {}) =>
+  `<!DOCTYPE html><html lang="fr"><head><meta charset="utf-8"><title>Fiche</title><style>table{table-layout:fixed;width:100%}`
+  + `th.k{width:${largeur}%}td.k{font-weight:600}</style></head><body><header>Réf. ${ref}</header>\n`
+  + Array.from({ length: 8 }, (_, k) => `<section><h2>${k + 1} · Section ${k + 1}</h2><table><tbody>`
+    + (k === 0 ? '<tr><th class="k">Dev-team / run</th><td>Équipe A, run partagé</td></tr>'
+      + `<tr><th class="k">Lien environnement ${env}</th><td>${lien}</td></tr>`
+      + '<tr><td class="k">Population effectivement admise</td><td>Collaborateurs du tenant (128)</td></tr>'
+      + "<tr><td class=\"k\">Restriction d'accès effective</td><td>assignation de rôle requise</td></tr>"
+      + '<tr><td class="k">Comptes externes / invités en portée</td><td>0 (portail invités désactivé)</td></tr>' : '')
+    + `<tr><td class="k">Champ ${k + 1}</td><td>valeur</td></tr></tbody></table></section>`).join('\n')
+  + `\n<footer>Réf. ${ref} — Gabarit : gd-fiche-securite-auditcore · version du gabarit 1.0.0.</footer></body></html>`;
+
+/** Un PDF minimal VALIDE dont on choisit la quantité de texte montré et le nombre d'images. */
+function pdfFabrique(unites, images = 0) {
+  const chaine = 'Fiche securite de mise a disposition — ligne de texte reelle. ';
+  const lignes = Math.ceil(unites / chaine.length);
+  let contenu = 'BT\n/F1 11 Tf\n';
+  for (let i = 0; i < lignes; i++) contenu += `1 0 0 -1 10 ${20 + i * 12} Tm\n(${chaine}) Tj\n`;
+  contenu += 'ET\n';
+  let corps = '%PDF-1.4\n';
+  corps += `3 0 obj\n<< /Type /Page /MediaBox [0 0 595.28 841.89] /Contents 4 0 R >>\nendobj\n`;
+  corps += `4 0 obj\n<< /Length ${contenu.length} >>\nstream\n${contenu}\nendstream\nendobj\n`;
+  for (let i = 0; i < images; i++)
+    corps += `${5 + i} 0 obj\n<< /Type /XObject /Subtype /Image /Width 8 /Height 8 >>\nendobj\n`;
+  corps += 'trailer\n<< /Root 1 0 R >>\n%%EOF';
+  return Buffer.from(corps, 'latin1');
+}
+
+function selfTest() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fiche-sec-'));
+  const casse = [];
+  const ecrire = (nom, contenu) => { const p = path.join(dir, nom); fs.writeFileSync(p, contenu, 'utf8'); return p; };
+  const statut = (r, regle) => (r.findings.find((f) => f.regle === regle) || {}).statut;
+
+  // ── LE CAS VERT : une fiche complète, avec son PDF imprimé de même indice, est ACCEPTÉE. ──
+  const vert = ecrire('ACM - Fiche Securite - Dev - 20260902a.html', FICHE_VERTE());
+  fs.writeFileSync(pdfDe(vert), pdfFabrique(1200));
+  let r = juger(vert);
+  if (r.verdict !== 'PASS') casse.push('la fiche VERTE est refusée : ' + r.findings.filter((f) => f.statut === 'FAIL').map((f) => f.regle).join(','));
+
+  // ── LES CAS ROUGES : un par règle, chacun le défaut réellement constaté. ──────────────────
+  const rouge = (nom, contenu, regle, avecPdf = true, opts = {}) => {
+    const p = ecrire(nom, contenu);
+    if (avecPdf) fs.writeFileSync(pdfDe(p), pdfFabrique(1200));
+    const j = juger(p, opts);
+    if (statut(j, regle) !== 'FAIL') casse.push(`${regle} : le cas rouge « ${nom} » n'est PAS refusé (statut ${statut(j, regle)})`);
+    if (j.verdict !== 'FAIL') casse.push(`${regle} : verdict ${j.verdict} sur un cas rouge`);
+  };
+  rouge('ACM - Fiche Securite - Dev - 20260902b.html',
+    FICHE_VERTE('ACM-SEC-DEV-20260902b').replace('<td>valeur</td>', '<td>{{auth.mode}}</td>'), 'FS1');
+  rouge('ACM - Fiche Securite - Dev - 20260902c.html',
+    FICHE_VERTE('ACM-SEC-DEV-20260902c').replace(/<section><h2>8 · [\s\S]*?<\/section>/, ''), 'FS2');
+  rouge('ACM - Fiche Securite - Dev - 20260902d.html',
+    FICHE_VERTE('ACM-SEC-DEV-20260902d').replace('<footer>Réf. ACM-SEC-DEV-20260902d', '<footer>Réf. ACM-SEC-DEV-20260901a'), 'FS3');
+  rouge('ACM - Fiche Securite - Dev - 20260902e.html', FICHE_VERTE('ACM-SEC-DEV-20260902a'), 'FS3bis');
+  rouge('ACM - Fiche Securite - Dev - 20260902f.html',
+    FICHE_VERTE('ACM-SEC-DEV-20260902f').replace('https://dev.exemple.test/app', 'à venir'), 'FS4');
+  rouge('ACM - Fiche Securite - Dev - 20260902g.html',
+    FICHE_VERTE('ACM-SEC-DEV-20260902g').replace('table-layout:fixed;', '').replace('width:20%', 'width:32%'), 'FS5');
+  rouge('ACM - Fiche Securite - Dev - 20260902h.html', FICHE_VERTE('ACM-SEC-DEV-20260902h'), 'FS6', false);
+  // FS7 : LE DÉFAUT FONDATEUR — un PDF d'une page, sans texte, plein d'images. Une capture.
+  const capture = ecrire('ACM - Fiche Securite - Dev - 20260902i.html', FICHE_VERTE('ACM-SEC-DEV-20260902i'));
+  fs.writeFileSync(pdfDe(capture), pdfFabrique(0, 9));
+  r = juger(capture);
+  if (statut(r, 'FS7') !== 'FAIL') casse.push("FS7 : un PDF SANS texte et à 9 images n'est pas refusé — c'est le défaut du 24/07, non attrapé");
+  if (statut(r, 'FS6') !== 'PASS') casse.push('FS7 : le cas rouge de FS7 fait aussi tomber FS6 — la fixture ne prouve pas ce qu\'elle prétend');
+
+  // Le PDF d'indice divergent : le second défaut du même dossier.
+  const div = ecrire('ACM - Fiche Securite - Dev - 20260902j.html', FICHE_VERTE('ACM-SEC-DEV-20260902j'));
+  fs.writeFileSync(path.join(dir, 'ACM - Fiche Securite - Dev - 20260902j.pdf'), pdfFabrique(1200));
+  // Le nom du PDF ne peut pas diverger par construction (il dérive du HTML) : on prouve donc
+  // l'autre sens, celui qui SE PRODUIT — le PDF absent, déjà couvert par FS6 ci-dessus.
+  if (juger(div).verdict !== 'PASS') casse.push('la fiche témoin de contrôle est refusée à tort');
+
+  // L'écart DÉCLARÉ ne se confond pas avec le défaut : il rend SKIP, jamais PASS silencieux.
+  const sansPdf = ecrire('ACM - Fiche Securite - Dev - 20260902k.html', FICHE_VERTE('ACM-SEC-DEV-20260902k'));
+  const j = juger(sansPdf, { sansPdf: true });
+  if (statut(j, 'FS6') !== 'SKIP' || statut(j, 'FS7') !== 'SKIP')
+    casse.push('--sans-pdf ne rend pas un SKIP motivé : un écart déclaré doit se lire, jamais se taire');
+
+  // FS8 — LE DÉFAUT DE TF-1089 : une ligne SUPPRIMÉE, pas un placeholder. FS1/FS2 restent au
+  // vert (aucun {{…}}, 8 sections présentes) alors que le champ d'audience n'existe plus.
+  rouge('ACM - Fiche Securite - Dev - 20260902l.html',
+    FICHE_VERTE('ACM-SEC-DEV-20260902l').replace('<tr><th>Population effectivement admise</th><td>Collaborateurs du tenant (128)</td></tr>', ''),
+    'FS8');
+  // FS8, second sens — la ligne existe mais sa valeur est VIDE (le canevas rempli à moitié).
+  rouge('ACM - Fiche Securite - Dev - 20260902m.html',
+    FICHE_VERTE('ACM-SEC-DEV-20260902m').replace('<td>Collaborateurs du tenant (128)</td>', '<td></td>'),
+    'FS8');
+
+  // FS9 — LE DÉFAUT MESURÉ CHEZ PRODUIT-11 (27/08) : « ni gd-fiche-securite, ni version ».
+  // Une instance périmée est invisible sur l'artefact tant que ce couple n'est pas rendu.
+  rouge('ACM - Fiche Securite - Dev - 20260902n.html',
+    FICHE_VERTE('ACM-SEC-DEV-20260902n').replace(' Gabarit : gd-fiche-securite-auditcore · version du gabarit 1.0.0.', ''),
+    'FS9');
+
+  // FS10 / FS11 (TF-1102) — les deux champs frères de FS8, restés en reste après TF-1089 : une
+  // ligne SUPPRIMÉE sur l'un des deux n'est vue par AUCUNE des règles précédentes.
+  rouge('ACM - Fiche Securite - Dev - 20260902o.html',
+    FICHE_VERTE('ACM-SEC-DEV-20260902o').replace("<tr><th>Restriction d'accès effective</th><td>assignation de rôle requise</td></tr>", ''),
+    'FS10');
+  rouge('ACM - Fiche Securite - Dev - 20260902p.html',
+    FICHE_VERTE('ACM-SEC-DEV-20260902p').replace('<tr><th>Comptes externes / invités en portée</th><td>0 (portail invités désactivé)</td></tr>', ''),
+    'FS11');
+
+  // TF-2086 / TF-2087 — le modèle à cellules th.k / td.k et les trois environnements, À DOUBLE SENS.
+  // Sens vert : le modèle DEV (ligne « Dev-team / run » sans URL avant celle du lien) et le modèle
+  // HPR sont ACCEPTÉS ; sens rouge : th.k à 32 % (FS5, qui rendait SKIP), modèle sans URL (FS4),
+  // nom HPR contre référence DEV (FS3).
+  for (const [nom, env] of [['ACM - Fiche Securite - Dev - 20261030a.html', 'DEV'], ['ACM - Fiche Securite - HPR - 20261030a.html', 'HPR']]) {
+    const p = ecrire(nom, FICHE_MODELE(env));
+    fs.writeFileSync(pdfDe(p), pdfFabrique(1200));
+    const m = juger(p);
+    if (m.verdict !== 'PASS') casse.push(`le modèle th.k/td.k ${env} est refusé : ` + m.findings.filter((f) => f.statut === 'FAIL').map((f) => f.regle).join(','));
+  }
+  rouge('ACM - Fiche Securite - Dev - 20261030b.html', FICHE_MODELE('DEV', { ref: 'CDC-SEC-DEV-20261030b', largeur: 32 }), 'FS5');
+  rouge('ACM - Fiche Securite - Dev - 20261030c.html', FICHE_MODELE('DEV', { ref: 'CDC-SEC-DEV-20261030c', lien: 'à venir' }), 'FS4');
+  rouge('ACM - Fiche Securite - HPR - 20261030d.html', FICHE_MODELE('HPR', { ref: 'CDC-SEC-DEV-20261030d' }), 'FS3');
+
+  // FS12 (TF-2419) — LE DÉFAUT DU 10/11/2026, À DOUBLE SENS : une fiche qui cite v1.10.0 pendant que v1.13.0 est
+  // servie est refusée ; la même fiche à jour (v1.13.0) est ACCEPTÉE. Les autres sorties se prouvent aussi : citée
+  // postérieure à l'étiquette (FAIL), aucune version citée (SKIP motivé, la comparaison n'a pas eu lieu), aucune
+  // étiquette donnée (FS12 non jouée et DITE dans non_juge, verdict inchangé).
+  const avecVersion = (ref, v) => FICHE_VERTE(ref).replace('<tr><th>Population effectivement admise</th>',
+    `<tr><th>Version déployée</th><td>${v}</td></tr><tr><th>Population effectivement admise</th>`);
+  const aJour = ecrire('ACM - Fiche Securite - Dev - 20261110a.html', avecVersion('ACM-SEC-DEV-20261110a', 'v1.13.0'));
+  fs.writeFileSync(pdfDe(aJour), pdfFabrique(1200));
+  r = juger(aJour, { etiquetteDeployee: 'v1.13.0' });
+  if (r.verdict !== 'PASS' || statut(r, 'FS12') !== 'PASS') casse.push(`FS12 : la fiche À JOUR (v1.13.0 contre v1.13.0) est refusée : ${r.findings.filter((f) => f.statut === 'FAIL').map((f) => f.regle).join(',')}`);
+  rouge('ACM - Fiche Securite - Dev - 20261110b.html', avecVersion('ACM-SEC-DEV-20261110b', 'v1.10.0'), 'FS12', true, { etiquetteDeployee: 'v1.13.0' });
+  rouge('ACM - Fiche Securite - Dev - 20261110c.html', avecVersion('ACM-SEC-DEV-20261110c', 'v1.14.0'), 'FS12', true, { etiquetteDeployee: 'v1.13.0' });
+  r = juger(vert, { etiquetteDeployee: '1.13.0' });
+  if (statut(r, 'FS12') !== 'SKIP' || r.verdict !== 'PASS') casse.push('FS12 : une fiche sans version citée ne rend pas un SKIP motivé qui laisse le verdict à PASS');
+  const perimee = ecrire('ACM - Fiche Securite - Dev - 20261110d.html', avecVersion('ACM-SEC-DEV-20261110d', 'v1.10.0'));
+  fs.writeFileSync(pdfDe(perimee), pdfFabrique(1200));
+  r = juger(perimee);
+  if (statut(r, 'FS12') !== undefined || !r.non_juge.some((n) => /FS12/.test(n)))
+    casse.push('FS12 : sans étiquette donnée, la règle doit être ABSENTE des constats et DITE non jouée dans non_juge');
+
+  fs.rmSync(dir, { recursive: true, force: true });
+  console.log(casse.length
+    ? 'SELF-TEST FAIL : ' + casse.join(' · ')
+    : 'Self-test verifier-fiche-securite : 26/26 PASS — fiche complète acceptée, modèle th.k/td.k en DEV et en HPR '
+      + 'acceptés (TF-2086, TF-2087) · th.k à 32 % (FS5), modèle sans URL (FS4), nom HPR contre référence DEV (FS3) '
+      + 'refusés · placeholder résiduel (FS1), '
+      + 'section perdue (FS2), références divergentes en-tête/pied (FS3), indice du nom ≠ indice imprimé (FS3bis), '
+      + 'lien DEV sans URL (FS4), colonne à 32 % sans table-layout fixe (FS5), PDF de diffusion absent (FS6), '
+      + 'PDF sans texte à 9 images — la capture du 24/07 (FS7), champ « Population effectivement admise » absent '
+      + 'et champ présent mais vide (FS8, TF-1089), gabarit et sa version non rendus (FS9, TF-1095), '
+      + '« Restriction d\'accès effective » absente (FS10, TF-1102), « Comptes externes / invités en portée » '
+      + 'absente (FS11, TF-1102) : tous REFUSÉS · fiche à jour sur la version déployée acceptée, version citée antérieure '
+      + 'ou postérieure à la dernière étiquette déployée refusée (FS12, TF-2419), fiche sans version citée en SKIP motivé, '
+      + 'FS12 non jouée sans étiquette et dite dans non_juge · --sans-pdf rendu en SKIP motivé');
+  return casse.length ? 1 : 0;
+}
+
+// ── Ligne de commande ────────────────────────────────────────────────────────────────────────
+if (path.resolve(process.argv[1] ?? '') === path.resolve(fileURLToPath(import.meta.url))) {
+  const args = process.argv.slice(2);
+  if (args.includes('--self-test')) process.exit(selfTest());
+  // TF-2131 : la valeur d'une option n'est jamais une autre option (règle de `valeurFichierOuUsage`, tools/lib.mjs,
+  // recopiée ICI : cet oracle est autoportant, embarqué dans le kit, sans import du dépôt).
+  const opt = (n, d = null) => {
+    const i = args.indexOf(n);
+    if (i === -1) return d;
+    const v = args[i + 1];
+    if (v === undefined || v.startsWith('-')) {
+      console.error(v === undefined
+        ? `Option ${n} sans valeur : une valeur est attendue.`
+        : `Option ${n} : « ${v} » refusé comme fichier, un argument qui commence par « - » est une option, pas un fichier.`);
+      console.error('usage: node verifier-fiche-securite.mjs <fiche.html> [--seuil-texte N] [--sans-pdf] [--etiquette-deployee <x.y.z>] [--json-only]');
+      process.exit(2);
+    }
+    return v;
+  };
+  // FS12 (TF-2419) : une étiquette qui n'est pas une version x.y.z est une erreur d'usage, pas un constat sur la fiche.
+  const etiquette = opt('--etiquette-deployee');
+  if (etiquette !== null && !versionDe(etiquette)) {
+    console.error(`Option --etiquette-deployee : « ${etiquette} » n'est pas une version x.y.z (« v1.13.0 » ou « 1.13.0 »).`);
+    process.exit(2);
+  }
+  const jsonOnly = args.includes('--json-only');
+  const cible = args.find((a) => !a.startsWith('--') && /\.html?$/i.test(a));
+  if (!cible || !fs.existsSync(cible)) {
+    process.stdout.write(JSON.stringify({
+      oracle: 'verifier-fiche-securite', artefact: cible ? path.resolve(cible) : null, verdict: 'SKIP',
+      findings: [{ statut: 'SKIP', regle: 'FS0', message: cible ? `fiche introuvable : ${cible}` : 'aucune fiche .html donnée — rien à juger' }],
+      non_juge: [],
+    }, null, jsonOnly ? 0 : 2) + '\n');
+    process.exit(2);
+  }
+  const rapport = juger(cible, {
+    seuilTexte: opt('--seuil-texte') ? Number(opt('--seuil-texte')) : SEUIL_TEXTE,
+    sansPdf: args.includes('--sans-pdf'),
+    etiquetteDeployee: etiquette,
+  });
+  process.stdout.write(JSON.stringify(rapport, null, jsonOnly ? 0 : 2) + '\n');
+  process.exit(rapport.verdict === 'FAIL' ? 1 : 0);
+}

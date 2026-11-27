@@ -1,0 +1,454 @@
+#!/usr/bin/env node
+// oracle-bascule — Domaine « Bascule sombre : présence, câblage, dérivation » (déterministe).
+//
+// Aval R-30 (REGLES-PROJET §J du pilot, TF-0133) : tout HTML autonome livré porte une
+// bascule sombre en zone d'en-tête, câblée (loi transverse n° 1 — une bascule sans effet
+// observable est un défaut), persistée, et une palette sombre dérivée des mêmes tokens
+// (jamais une seconde charte). Quatre règles, décidables sur le fichier seul :
+//   B-T1  bouton .theme-toggle ou [data-theme-toggle] présent, en zone d'en-tête
+//         (ancêtre <header>, ou classe header/entete/topbar/navbar/app-bar). Rendu figé —
+//         ni bouton, ni palette sombre, ni script de thème : AVERTISSEMENT seul, B-T2 à B-T4
+//         non jugées, même lecture que check_html.py G1 et oracle-tokens T4 (TF-1661)
+//   B-T2  câblé — un écouteur de clic atteint CE bouton (attachement direct par
+//         getElementById / querySelector + addEventListener ou onclick=, attribut
+//         onclick inline, BOUCLE (querySelectorAll parcouru par forEach/map/for…of dont
+//         le corps pose l'écouteur, TF-2790), ou DÉLÉGATION : addEventListener('click') sur
+//         document/body/window avec closest()/matches() sur un sélecteur qui vise ce
+//         bouton, ou lecture de data-theme-toggle sur la cible) ET le JS inline mute
+//         data-theme sur la racine (<html>/documentElement) quelque part — un bouton
+//         sans écouteur, ou un écouteur qui ne mute jamais la racine, est une bascule
+//         morte (loi n° 1)
+//   B-T3  persistance localStorage déclarée (lecture ET écriture d'une clé de thème :
+//         littéral contenant « theme », ou constante du même script dont la valeur ou
+//         le nom le contient)
+//   B-T4  palette sombre présente sous [data-theme="dark"] (un @media prefers-color-scheme:
+//         dark n’en tient plus lieu, R-30 : avertissement auto-sombre), dérivée des tokens clairs (parité) — aucune couleur en dur nouvelle dans
+//         une règle scopée au thème sombre hors du bloc de définition des tokens
+//
+// TF-0800 (lot pilot du 05/09/2026) — POURQUOI B-T2 ET B-T3 ONT ÉTÉ ÉLARGIES. Un produit
+// dont la bascule fonctionnait depuis sa v0.1.0 a été jugé « bascule morte » : son écouteur
+// était délégué (closest) et sa clé vivait dans une constante. La session du 01/09 a réécrit
+// son app.js pour obtenir le PASS — un oracle qui refuse un comportement correct au nom d'une
+// convention non écrite pousse les produits à réécrire du code qui marche, ou à l'ignorer.
+// Les deux motifs sont statiquement lisibles : les reconnaître ne relâche aucun seuil, et
+// laisse intact ce qui doit être refusé — un bouton sans écouteur, un écouteur délégué dont
+// le sélecteur vise autre chose, une clé qu'aucune lecture ne rattache au thème. Ce dernier
+// cas n'est plus un refus mais un AVERTISSEMENT qui énonce la convention : refuser à tort et
+// se taire sont deux façons de mentir.
+//
+// Ce que cet oracle NE juge PAS (déclaré en non_juge, jamais dupliqué) :
+//   - le contraste AA des deux thèmes : delegué à render_page.py (mesure déjà 2 thèmes,
+//     voir --rendu de run-oracles-design.mjs) ;
+//   - la révocation par projet (frontmatter docs/projet/PARAMETRAGE.md) : hors périmètre
+//     d'un fichier HTML unique ;
+//   - le câblage porté par un script externe ou un framework (React/Vue/Web Components) :
+//     analyse statique limitée au JS inline ;
+//   - la corrélation causale stricte écouteur→mutation : ce contrôle vérifie leur
+//     coprésence (écouteur sur CE bouton + mutation data-theme quelque part dans le JS
+//     inline), pas un suivi de flux d'exécution complet.
+//
+// Contrat : JSON {oracle,domaine,artefact,verdict,findings[],non_juge[]} · exit 0/1/2.
+// Usage : node oracle-bascule.mjs <fichier.html> [--json-only]
+
+import fs from 'node:fs';
+import { parse as parseHtml, elements, css, cssRulesDeep } from './lib/html.mjs';
+import { findColors } from './lib/color.mjs';
+import { plageDeRegles } from './lib/regles-jouees.mjs';
+// TF-2287 — les règles que l'oracle JOUE, déclarées UNE fois ; la plage citée à la sortie en dérive, jamais écrite en dur.
+// Une règle neuve s'ajoute ici : self-test-regles-jouees.mjs refuse la liste qui s'écarte des règles émises par ce fichier.
+const REGLES_JOUEES = ['B-T1', 'B-T2', 'B-T3', 'B-T4'];
+const PLAGE_JOUEE = plageDeRegles(REGLES_JOUEES);
+
+const DOM = 'Bascule sombre : présence, câblage, dérivation';
+const args = process.argv.slice(2);
+const file = args.find(a => !a.startsWith('--'));
+const jsonOnly = args.includes('--json-only');
+
+const NON_JUGE = [
+  'contraste AA des deux thèmes — délégué à render_page.py (mesure déjà 2 thèmes), non dupliqué ici',
+  'révocation par projet (frontmatter docs/projet/PARAMETRAGE.md) — hors périmètre d\'un fichier HTML unique',
+  'câblage porté par un script externe (src=…) ou un framework (React/Vue/Web Components) — analyse statique limitée au JS inline',
+  'corrélation causale stricte entre l\'écouteur de clic et la mutation observée — coprésence vérifiée, pas un suivi de flux d\'exécution complet',
+  'priorité effective du choix persisté sur prefers-color-scheme au runtime — comportement dynamique non observable sur le fichier seul',
+];
+
+const F = [];
+const add = (sev, regle, msg, where) => F.push({ sev, regle, msg, where });
+
+// TF-2535 — « sans écart » dit qu'un jugement a eu lieu : un SKIP n'a rien jugé, il ne rend jamais cette ligne.
+function sortir(verdict, code) {
+  process.stdout.write(JSON.stringify({
+    oracle: 'oracle-bascule', domaine: DOM, artefact: file || null,
+    verdict, findings: F.length || verdict === 'SKIP' ? F : [{ sev: 'info', regle: '—', msg: `${PLAGE_JOUEE} sans écart`, where: file }],
+    non_juge: NON_JUGE,
+  }, null, jsonOnly ? 0 : 2));
+  process.exit(code);
+}
+
+if (!file || !fs.existsSync(file)) sortir('SKIP', 2);
+if (!/\.html?$/i.test(file)) sortir('SKIP', 2);
+
+const html = fs.readFileSync(file, 'utf8');
+const root = parseHtml(html);
+
+// ── B-T1 · bouton présent, en zone d'en-tête ────────────────────────────────
+function classesDe(el) {
+  return ((el.attrs && el.attrs.class) || '').split(/\s+/).filter(Boolean);
+}
+function estBoutonBascule(el) {
+  if (el.tag.startsWith('#')) return false;
+  return classesDe(el).includes('theme-toggle')
+    || Object.prototype.hasOwnProperty.call(el.attrs || {}, 'data-theme-toggle');
+}
+function enZoneEntete(el) {
+  let p = el.parent;
+  while (p) {
+    if (p.tag === 'header') return true;
+    const cls = (p.attrs && p.attrs.class) || '';
+    if (/(^|\s)(header|entete|en-tete|topbar|navbar|app-bar)(\s|$)/i.test(cls)) return true;
+    p = p.parent;
+  }
+  return false;
+}
+
+// TF-1661 (retour du 13/10/2026, mesuré sur une même page dans une même exécution de
+// run-oracles-design.mjs) — LE RENDU FIGÉ N'EST PAS UNE BASCULE ABSENTE. Une page claire seule,
+// sans bouton, sans palette sombre et sans script de thème, sortait B-T1, B-T3 et B-T4 en
+// bloquant, alors que oracle-tokens T4 la déclare conforme (« sombre optionnel ») et que la règle
+// G1 de check_html.py, qui tient le contrôle exécutable de R-30, n'en fait qu'un avertissement
+// (« un rendu figé n'a légitimement aucune bascule »). Trois juges, deux verdicts : l'agrégateur
+// restait FAIL sur une page que le socle dit conforme. Cet oracle s'aligne sur G1 : la bascule
+// n'est jugée que si la page en DÉCLARE une — un bouton, une palette sombre, ou un script qui
+// mute data-theme. Dès qu'un seul de ces signes existe, les quatre règles redeviennent dures :
+// une bascule à moitié posée reste le défaut qu'elle était.
+const sombreDeclare = (() => {
+  const texteCss = css(html, root).replace(/\/\*[\s\S]*?\*\//g, ' ');
+  return cssRulesDeep(texteCss).some(r =>
+    /:root|\[data-theme|^html(\.|:)|\.theme-/i.test(r.selector)
+    && !r.atRules.some(a => /prefers-color-scheme\s*:\s*dark/i.test(a)) && /dark/i.test(r.selector)
+    && /--[\w-]+\s*:/.test(r.body));
+})();
+const scriptDeTheme = elements(root, 'script')
+  .filter(s => !(s.attrs && Object.prototype.hasOwnProperty.call(s.attrs, 'src')))
+  .flatMap(s => s.children.filter(c => c.tag === '#raw').map(c => c.text))
+  .some(t => /setAttribute\(\s*['"]data-theme['"]|dataset\.theme\s*=/i.test(t));
+
+const boutons = elements(root).filter(estBoutonBascule);
+let bouton = null;
+let renduFige = false;
+if (boutons.length === 0 && !sombreDeclare && !scriptDeTheme) {
+  renduFige = true;
+  add('avertissement', 'B-T1',
+    'aucune bascule déclarée (ni bouton .theme-toggle / [data-theme-toggle], ni palette sombre, ni script ' +
+    'de thème) : rendu figé en thème clair. Avertissement R-30, pas un défaut bloquant — même lecture que ' +
+    'check_html.py G1 et oracle-tokens T4 (sombre optionnel). Si la page est un livrable interactif, poser ' +
+    'la bascule S-G1 ; sinon consigner la révocation au PARAMETRAGE.md du projet (R-30 §3).', file);
+  NON_JUGE.push('B-T2, B-T3, B-T4 non jugées : rendu figé, aucune bascule déclarée (TF-1661) — elles redeviennent bloquantes dès qu\'un bouton, une palette sombre ou un script de thème apparaît');
+} else if (boutons.length === 0) {
+  add('bloquant', 'B-T1', 'aucun bouton de bascule détecté (sélecteur .theme-toggle ou [data-theme-toggle])' +
+    (sombreDeclare ? ' alors qu\'une palette sombre est déclarée : le lecteur ne peut pas la choisir' : ' alors qu\'un script mute data-theme'), file);
+} else {
+  bouton = boutons.find(enZoneEntete) || boutons[0];
+  if (!enZoneEntete(bouton)) {
+    add('majeur', 'B-T1', 'bouton de bascule présent mais hors zone d\'en-tête (aucun ancêtre <header> ou conteneur d\'en-tête reconnu)', 'DOM');
+  }
+}
+
+// ── Collecte du JS inline (scripts sans src) + attribut onclick du bouton ──
+const scriptsInline = [];
+for (const s of elements(root, 'script')) {
+  if (s.attrs && Object.prototype.hasOwnProperty.call(s.attrs, 'src')) continue;
+  for (const c of s.children) if (c.tag === '#raw') scriptsInline.push(c.text);
+}
+const texteScripts = scriptsInline.join('\n');
+const boutonOnclick = bouton && bouton.attrs ? bouton.attrs.onclick || '' : '';
+const texteAnalyse = texteScripts + '\n' + boutonOnclick;
+if (elements(root, 'script').some(s => s.attrs && Object.prototype.hasOwnProperty.call(s.attrs, 'src'))) {
+  NON_JUGE.push('au moins un <script src="…"> détecté : son contenu n\'est pas analysé (câblage éventuellement porté par lui, hors périmètre)');
+}
+
+// TF-1906 (retour Produit-79 du 18/10/2026) — LIRE CHAQUE DÉCLARATEUR, PAS SEULEMENT LE PREMIER.
+// `var racine = document.documentElement, bouton = document.getElementById('theme')` puis
+// `bouton.addEventListener('click', …)` : la bascule marchait (Chromium 13/13) et B-T2 rendait un
+// bloquant, parce que les lectures d'alias (bouton, racine) et de constante (clé de thème)
+// s'ancraient sur le mot-clé var/let/const et ne voyaient que le déclarateur qui le suit.
+// Cette lecture découpe une déclaration multiple aux virgules de niveau 0 (hors parenthèses,
+// crochets, accolades, chaînes et commentaires) et rend chaque déclarateur `nom = initialisation`.
+function declarateurs(texte) {
+  const out = [];
+  for (const d of texte.matchAll(/(?<![\w$.])(?:var|let|const)\s+(?=[A-Za-z_$])/g)) {
+    const morceaux = [];
+    let i = d.index + d[0].length, debut = i, profondeur = 0, guillemet = null;
+    for (; i < texte.length; i++) {
+      const c = texte[i];
+      if (guillemet) { if (c === '\\') i++; else if (c === guillemet) guillemet = null; continue; }
+      if (c === '"' || c === "'" || c === '`') { guillemet = c; continue; }
+      if (c === '/' && texte[i + 1] === '/') { const fin = texte.indexOf('\n', i); i = fin < 0 ? texte.length : fin - 1; continue; }
+      if (c === '/' && texte[i + 1] === '*') { const fin = texte.indexOf('*/', i + 2); i = fin < 0 ? texte.length : fin + 1; continue; }
+      if ('([{'.includes(c)) profondeur++;
+      else if (')]}'.includes(c)) { if (profondeur === 0) break; profondeur--; }
+      else if (profondeur === 0 && c === ',') { morceaux.push(texte.slice(debut, i)); debut = i + 1; }
+      else if (profondeur === 0 && c === ';') break;
+      else if (profondeur === 0 && c === '\n') {
+        // fin d'instruction sans point-virgule, sauf si la ligne se poursuit (virgule ou opérateur avant/après)
+        const avant = texte.slice(debut, i).trimEnd();
+        const apres = /^\s*([^\s])/.exec(texte.slice(i + 1));
+        if (avant && !/[,=+\-*?:&|.]$/.test(avant) && !(apres && /[,.?:+\-*&|=]/.test(apres[1]))) break;
+      }
+    }
+    morceaux.push(texte.slice(debut, i));
+    for (const m of morceaux) {
+      const x = /^\s*([A-Za-z_$][\w$]*)\s*=\s*([\s\S]*)$/.exec(m);
+      if (x) out.push({ nom: x[1], init: x[2].trim() });
+    }
+  }
+  return out;
+}
+
+// ── B-T2 · câblage : écouteur sur CE bouton + mutation data-theme sur la racine ──
+function coincideBouton(fn, arg, bt) {
+  if (!bt) return false;
+  const id = bt.attrs && bt.attrs.id;
+  if (fn === 'getElementById') return !!id && arg === id;
+  const a = arg.trim();
+  if (a.startsWith('#')) return !!id && a.slice(1) === id;
+  if (a.startsWith('.')) return classesDe(bt).includes(a.slice(1));
+  if (a.startsWith('[')) return /data-theme-toggle/i.test(a) && Object.prototype.hasOwnProperty.call(bt.attrs || {}, 'data-theme-toggle');
+  return false;
+}
+
+let ecouteurTrouve = !!boutonOnclick;
+if (bouton) {
+  const REF_DIRECTE = /document\.(getElementById|querySelector)\(\s*(['"])([^'"]+)\2\s*\)/g;
+  for (const m of texteScripts.matchAll(REF_DIRECTE)) {
+    if (!coincideBouton(m[1], m[3], bouton)) continue;
+    const suite = texteScripts.slice(m.index + m[0].length, m.index + m[0].length + 60);
+    if (/^\s*\.\s*(addEventListener\(\s*['"]click['"]|onclick\s*=)/.test(suite)) ecouteurTrouve = true;
+  }
+  // TF-0800 (lot pilot du 05/09/2026) — LA DÉLÉGATION EST UN CÂBLAGE, PAS UNE ABSENCE.
+  // Un produit dont la bascule marchait depuis sa v0.1.0 a été jugé « bascule morte » parce
+  // que son écouteur était posé sur le document et retrouvait le bouton par `closest()`.
+  // La session du 01/09 a réécrit son app.js pour obtenir le PASS : l'oracle refusait un
+  // comportement correct au nom d'une convention que personne n'avait écrite. Or la
+  // délégation offre EXACTEMENT la même preuve statique que l'attachement direct — un
+  // écouteur de clic, et un sélecteur qui vise ce bouton — au niveau de coprésence que cet
+  // oracle déclare déjà juger (voir non_juge). La reconnaître n'affaiblit rien : une
+  // bascule sans écouteur, ou dont le sélecteur délégué vise autre chose, reste refusée.
+  const ECOUTE_DELEGUEE = /(?:document(?:\s*\.\s*(?:body|documentElement))?|window)\s*\.\s*addEventListener\(\s*['"]click['"]/;
+  if (ECOUTE_DELEGUEE.test(texteScripts)) {
+    const CIBLE_DELEGUEE = /\.\s*(?:closest|matches)\(\s*(['"])([^'"]+)\1\s*\)/g;
+    for (const m of texteScripts.matchAll(CIBLE_DELEGUEE)) {
+      for (const morceau of m[2].split(',')) {
+        const sel = morceau.trim();
+        const parId = /#([\w-]+)/.exec(sel);
+        const parClasse = /\.([\w-]+)/.exec(sel);
+        const viseBouton =
+          (parId && bouton.attrs.id === parId[1]) ||
+          (parClasse && classesDe(bouton).includes(parClasse[1])) ||
+          (/\[\s*data-theme-toggle/i.test(sel) && Object.prototype.hasOwnProperty.call(bouton.attrs || {}, 'data-theme-toggle'));
+        if (viseBouton) ecouteurTrouve = true;
+      }
+    }
+    // Second motif de délégation, sans sélecteur : le gestionnaire interroge directement
+    // l'attribut de marquage sur la cible du clic.
+    if (/\.(?:dataset\s*\.\s*themeToggle|getAttribute\(\s*['"]data-theme-toggle['"]\s*\))/i.test(texteScripts)
+      && Object.prototype.hasOwnProperty.call(bouton.attrs || {}, 'data-theme-toggle')) {
+      ecouteurTrouve = true;
+    }
+  }
+  // TF-1906 : chaque déclarateur d'une déclaration multiple est lu (voir declarateurs()).
+  const REF_ALIAS = /^document\.(getElementById|querySelector)\(\s*(['"])([^'"]+)\2\s*\)/;
+  for (const { nom: alias, init } of declarateurs(texteScripts)) {
+    const m = REF_ALIAS.exec(init);
+    if (!m || !coincideBouton(m[1], m[3], bouton)) continue;
+    const usage = new RegExp(`\\b${alias}\\b\\s*\\.\\s*(?:addEventListener\\(\\s*['"]click['"]|onclick\\s*=)`);
+    if (usage.test(texteScripts)) ecouteurTrouve = true;
+  }
+  // TF-2790 (retour du 16/11/2026, factory-site) — LA BOUCLE EST UN CÂBLAGE, PAS UNE ABSENCE.
+  // `document.querySelectorAll('[data-theme-toggle]').forEach((b) => b.addEventListener('click', …))`
+  // posait un écouteur sur CHAQUE bouton de bascule, avec le comportement du site servi : B-T2 rendait
+  // « bascule morte » (1 cycle de correction de la maquette). La même preuve statique que l'attachement
+  // direct existe — un sélecteur qui vise CE bouton, et un écouteur de clic posé par la boucle qui le
+  // parcourt. Quatre formes sont lues : forEach/map sur la sélection (nue, Array.from ou [...]), `for … of`
+  // sur la sélection, et les deux mêmes par un alias (`const boutons = document.querySelectorAll(…)`). La
+  // boucle doit POSER un écouteur de clic DANS SON CORPS (appariement des parenthèses) : une boucle qui ne
+  // fait que changer aria-pressed, ou qui parcourt autre chose, ne câble rien et reste refusée.
+  const viseBoutonParSelecteur = (sel) => sel.split(',').some((morceau) => {
+    const s = morceau.trim();
+    const parId = /#([\w-]+)/.exec(s);
+    const parClasse = /\.([\w-]+)/.exec(s);
+    return (parId && bouton.attrs.id === parId[1]) ||
+      (parClasse && classesDe(bouton).includes(parClasse[1])) ||
+      (/\[\s*data-theme-toggle/i.test(s) && Object.prototype.hasOwnProperty.call(bouton.attrs || {}, 'data-theme-toggle'));
+  });
+  const POSE_ECOUTEUR = /addEventListener\(\s*['"]click['"]|\.onclick\s*=/;
+  // Le corps d'une boucle se lit par appariement des parenthèses et accolades : un écouteur posé plus loin,
+  // sur autre chose, ne compte pas pour la boucle qui précède.
+  const jusqueFermeture = (texte, debut) => {
+    let prof = 1, guillemet = null;
+    for (let i = debut; i < texte.length; i++) {
+      const c = texte[i];
+      if (guillemet) { if (c === '\\') i++; else if (c === guillemet) guillemet = null; continue; }
+      if (c === '"' || c === "'" || c === '`') { guillemet = c; continue; }
+      if ('([{'.includes(c)) prof++;
+      else if (')]}'.includes(c) && --prof === 0) return texte.slice(debut, i);
+    }
+    return texte.slice(debut);
+  };
+  const poseDansAppel = (texte, debut) => POSE_ECOUTEUR.test(jusqueFermeture(texte, debut));
+  const poseDansInstruction = (texte, debut) => {
+    const suite = texte.slice(debut).replace(/^\s+/, '');
+    return POSE_ECOUTEUR.test(suite.startsWith('{') ? jusqueFermeture(suite, 1) : suite.split(/[;\n]/)[0]);
+  };
+  const BOUCLE_SUR = (expression) => new RegExp(`(?:^|[^\\w$.])for\\s*\\(\\s*(?:const|let|var)\\s+[\\w$]+\\s+of\\s*${expression}\\s*\\)`, 'g');
+  const aliasDeBoucle = [];
+  for (const m of texteScripts.matchAll(/document\.querySelectorAll\(\s*(['"])([^'"]+)\1\s*\)/g)) {
+    if (!viseBoutonParSelecteur(m[2])) continue;
+    const avant = texteScripts.slice(Math.max(0, m.index - 80), m.index);
+    const fin = m.index + m[0].length;
+    // (a) forEach / map sur la sélection, nue ou enveloppée : Array.from(…) ou […]
+    const boucle = /^\s*[)\]]?\s*\.\s*(?:forEach|map)\(/.exec(texteScripts.slice(fin));
+    if (boucle && poseDansAppel(texteScripts, fin + boucle[0].length)) ecouteurTrouve = true;
+    // (b) for (const b of document.querySelectorAll(…)) b.addEventListener('click', …)
+    const pour = /^\s*\)/.exec(texteScripts.slice(fin));
+    if (pour && /for\s*\(\s*(?:const|let|var)\s+[\w$]+\s+of\s*$/.test(avant) && poseDansInstruction(texteScripts, fin + pour[0].length)) ecouteurTrouve = true;
+    // (c) la sélection est rangée sous un nom, relu ci-dessous
+    const alias = /(?:^|[^\w$.])(?:var|let|const)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:Array\.from\(\s*|\[\s*\.\.\.\s*)?$/.exec(avant);
+    if (alias) aliasDeBoucle.push(alias[1]);
+  }
+  for (const nom of aliasDeBoucle) {
+    const n = nom.replace(/[$]/g, '\\$');
+    for (const u of texteScripts.matchAll(new RegExp(`(?:^|[^\\w$.])${n}\\s*\\.\\s*(?:forEach|map)\\(`, 'g'))) {
+      if (poseDansAppel(texteScripts, u.index + u[0].length)) ecouteurTrouve = true;
+    }
+    for (const u of texteScripts.matchAll(BOUCLE_SUR(n))) {
+      if (poseDansInstruction(texteScripts, u.index + u[0].length)) ecouteurTrouve = true;
+    }
+  }
+}
+
+const ROOT_ALIAS_RE = /^document\.(?:documentElement\b|querySelector\(\s*['"](?:html|:root)['"]\s*\)|getElementsByTagName\(\s*['"]html['"]\s*\)\s*\[0\])/;
+const declarationsAnalysees = declarateurs(texteAnalyse);
+const aliasRacine = declarationsAnalysees.filter(d => ROOT_ALIAS_RE.test(d.init)).map(d => d.nom);
+const alternatives = ['document\\.documentElement', "document\\.querySelector\\(\\s*['\"](?:html|:root)['\"]\\s*\\)", ...aliasRacine.map(a => `\\b${a}\\b`)];
+const MUTATION_RE = new RegExp(`(?:${alternatives.join('|')})\\s*\\.\\s*(?:setAttribute\\(\\s*['"]data-theme['"]|dataset\\.theme\\s*=)`, 'i');
+const mutationTrouvee = MUTATION_RE.test(texteAnalyse);
+
+if (bouton) {
+  if (!ecouteurTrouve) {
+    add('bloquant', 'B-T2',
+      'bouton de bascule présent mais aucun écouteur de clic ne lui est attaché : bascule morte — loi n° 1. ' +
+      'Motifs reconnus : (1) écouteur attaché au bouton — getElementById/querySelector, directement ou par ' +
+      'alias (y compris déclaré dans un var/let/const multiple), suivi de addEventListener(\'click\') ou onclick= ; (2) attribut onclick inline ; ' +
+      '(3) délégation — addEventListener(\'click\') sur document/body/window, avec closest() ou matches() sur ' +
+      'un sélecteur qui vise CE bouton, ou lecture de data-theme-toggle sur la cible du clic. ' +
+      'Un câblage porté par un script externe ou un framework n\'est pas lisible ici : le déclarer.',
+      'JS inline');
+  } else if (!mutationTrouvee) {
+    add('bloquant', 'B-T2', 'écouteur de clic détecté sur le bouton, mais aucune mutation de data-theme sur la racine (<html>) trouvée dans le JS inline : bascule inopérante — loi n° 1', 'JS inline');
+  }
+} else if (!renduFige) {
+  NON_JUGE.push('câblage (B-T2) non jugé : bouton absent (voir B-T1)');
+}
+
+// Rendu figé (TF-1661) : rien de déclaré, donc ni persistance ni palette à juger.
+if (renduFige) conclure();
+
+// ── B-T3 · persistance localStorage déclarée ────────────────────────────────
+// TF-0800, second motif : LA CLÉ EN CONSTANTE. `localStorage.setItem(CLE, theme)` avec
+// `const CLE = 'produit.theme'` déclaré deux lignes plus haut est aussi lisible qu'un
+// littéral — il suffit de résoudre la constante, ce qui est déterministe. La clé est
+// reconnue si la constante RÉSOUT vers une valeur contenant « theme », ou si son NOM
+// le contient (`CLE_THEME`, `themeKey`) : dans les deux cas, la trace existe.
+const litteraux = new Map();
+for (const { nom, init } of declarationsAnalysees) {
+  const m = /^(['"])([^'"]*)\1/.exec(init);
+  if (m && !litteraux.has(nom)) litteraux.set(nom, m[2]);
+}
+const EST_CLE_THEME = /theme/i;
+/** Un appel localStorage porte-t-il une clé de thème reconnaissable ? */
+function accesLocalStorage(methode) {
+  const re = new RegExp(`localStorage\\s*\\.\\s*${methode}\\(\\s*(?:(['"])([^'"]*)\\1|([A-Za-z_$][\\w$]*))`, 'g');
+  let reconnu = false, opaque = false;
+  for (const m of texteAnalyse.matchAll(re)) {
+    if (m[2] !== undefined) { if (EST_CLE_THEME.test(m[2])) reconnu = true; else opaque = true; continue; }
+    const nom = m[3];
+    const valeur = litteraux.get(nom);
+    if ((valeur !== undefined && EST_CLE_THEME.test(valeur)) || EST_CLE_THEME.test(nom)) reconnu = true;
+    else opaque = true;
+  }
+  return { reconnu, opaque };
+}
+const ecriture = accesLocalStorage('setItem');
+const lecture = accesLocalStorage('getItem');
+const A_ECRITURE = ecriture.reconnu;
+const A_LECTURE = lecture.reconnu;
+const CONVENTION_CLE = 'Motifs reconnus pour la clé : un littéral contenant « theme », ou une ' +
+  'constante déclarée dans le même script dont la valeur ou le nom le contient. Une clé calculée ' +
+  '(concaténation, variable d\'environnement, préfixe injecté) n\'est pas lisible statiquement : ' +
+  'la déclarer, ou nommer la constante d\'après le thème.';
+if (!A_ECRITURE && !A_LECTURE && (ecriture.opaque || lecture.opaque)) {
+  // La page persiste QUELQUE CHOSE, sous une clé que l'analyse statique ne sait pas
+  // rattacher au thème. Refuser serait mentir ; se taire aussi. On le dit, et on dit
+  // ce qui rendrait la clé lisible — c'est la convention, énoncée là où elle sert.
+  add('avertissement', 'B-T3',
+    'un accès localStorage existe mais sa clé n\'est pas rattachable au thème par lecture statique. ' +
+    CONVENTION_CLE, 'JS inline');
+  NON_JUGE.push('B-T3 : persistance présente sous une clé non résolue — la sauvegarde du thème n\'a PAS été vérifiée, elle n\'est pas non plus refusée');
+} else if (!A_ECRITURE && !A_LECTURE) {
+  add('bloquant', 'B-T3',
+    'aucune persistance localStorage déclarée pour le thème (ni lecture ni écriture d\'une clé de thème). ' +
+    CONVENTION_CLE, 'JS inline');
+} else if (!A_ECRITURE) {
+  add('majeur', 'B-T3', 'persistance localStorage partielle : lecture (getItem) sans écriture (setItem) — le choix de l\'utilisateur ne serait jamais sauvegardé', 'JS inline');
+} else if (!A_LECTURE) {
+  add('majeur', 'B-T3', 'persistance localStorage partielle : écriture (setItem) sans lecture (getItem) au chargement — le choix persisté ne serait jamais relu', 'JS inline');
+}
+
+// ── B-T4 · palette sombre dérivée des tokens clairs ─────────────────────────
+const cssText = css(html, root).replace(/\/\*[\s\S]*?\*\//g, ' ');
+const regles = cssRulesDeep(cssText);
+const estBlocToken = r => /:root|\[data-theme|^html(\.|:)|\.theme-/i.test(r.selector);
+// R-30 du pilot (clair par défaut strict, TF-0158) : la palette sombre se déclare sous
+// [data-theme="dark"] ; un bloc @media (prefers-color-scheme: dark) n'en est pas une (check_html G1
+// le refuse) — ses jetons sont écartés et la forme se signale (troisième vague du 15/10).
+const estAutoSombre = r => r.atRules.some(a => /prefers-color-scheme\s*:\s*dark/i.test(a));
+const estSombre = r => !estAutoSombre(r) && /dark/i.test(r.selector);
+
+const tokensClairs = new Map();
+const tokensSombres = new Map();
+for (const r of regles) {
+  if (!estBlocToken(r)) continue;
+  if (estAutoSombre(r)) continue;
+  const dest = estSombre(r) ? tokensSombres : tokensClairs;
+  for (const m of r.body.matchAll(/(--[\w-]+)\s*:\s*([^;]+)/g)) dest.set(m[1], m[2].trim());
+}
+
+if (regles.some(estAutoSombre) || /matchMedia\s*\(\s*['"][^'"]*prefers-color-scheme/.test(texteScripts)) {
+  add('avertissement', 'B-T4', 'auto-sombre hérité de l’OS (@media ou matchMedia prefers-color-scheme) : R-30 le retire (clair par défaut strict, le sombre est un choix du lecteur) et check_html G1 le refuse — palette sous :root[data-theme="dark"], initialisation « choix stocké, sinon light »', 'CSS / JS inline');
+}
+if (tokensSombres.size === 0) {
+  add('bloquant', 'B-T4', 'aucun bloc de thème sombre détecté sous [data-theme="dark"] (un @media (prefers-color-scheme: dark) n’en tient pas lieu, R-30) : palette sombre absente', file);
+} else {
+  for (const [k, v] of tokensClairs) {
+    if (/#|rgb|hsl|oklch/i.test(v) && !tokensSombres.has(k)) {
+      add('bloquant', 'B-T4', `token « ${k} » défini en clair mais absent du thème sombre : palette non dérivée (une source, deux projections attendu)`, 'bloc de thème sombre');
+    }
+  }
+  for (const r of regles) {
+    if (estBlocToken(r) || !estSombre(r)) continue;
+    for (const c of findColors(r.body)) {
+      add('bloquant', 'B-T4', `couleur en dur « ${c.raw} » dans une règle scopée au thème sombre « ${r.selector.slice(0, 60)} » : dériver de var(--token) au lieu d'une nouvelle charte`, 'CSS');
+    }
+  }
+}
+
+// ── Verdict ──────────────────────────────────────────────────────────────
+conclure();
+function conclure() {
+F.sort((a, b) => ({ bloquant: 0, majeur: 1, avertissement: 2, info: 3 })[a.sev] - ({ bloquant: 0, majeur: 1, avertissement: 2, info: 3 })[b.sev]);
+const durs = F.filter(f => f.sev === 'bloquant' || f.sev === 'majeur');
+if (!jsonOnly) process.stderr.write(durs.length ? `FAIL — ${durs.length} écart(s) dur(s)\n` : `PASS — ${PLAGE_JOUEE} sans écart\n`);
+if (durs.length) sortir('FAIL', 1);
+sortir('PASS', 0);
+}

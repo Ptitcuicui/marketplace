@@ -1,0 +1,702 @@
+"""Noyau — contrat de sortie, cotation du risque, agregation, rapport.
+
+Le noyau ne connait AUCUNE technologie : il ne sait rien de pytest, Playwright ou PostgreSQL.
+Toute connaissance de stack vit dans un adaptateur. Un nom d outil de test ici est un defaut.
+"""
+
+from __future__ import annotations
+
+import json
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+from typing import Literal
+
+from forge_tests import classes, exclusions
+
+# « NA » (sans objet) — décision humaine du 14/08 : « les pans qui n'ont pas de périmètre dans
+# un projet doivent ressortir en Non Applicable lors des tests, puisqu'il n'y a rien à tester ».
+#
+# NA n'est PAS un synonyme de SKIP, et la distinction est tout l'intérêt :
+#   - SKIP  = il y a quelque chose à mesurer et je n'ai PAS PU (configuration absente, suite non
+#             exécutée, précondition non établie). C'est un manque, il compte, il rend PARTIEL ;
+#   - NA    = il n'y a RIEN à mesurer ici, et je le PROUVE (le projet n'a pas de migrations, pas
+#             de front, pas de prompt). Ce n'est pas un manque : ne pas avoir de traitement par
+#             lot n'est pas un défaut.
+#
+# Garde-fou hérité, non négociable : un inventaire vide ne suffit PAS à conclure NA. Le
+# framework tient depuis l'origine qu'« un inventaire vide ne prouve pas que tout est couvert :
+# il prouve que l'adaptateur n'a RIEN SU ÉNUMÉRER ici ». NA exige donc une preuve POSITIVE
+# d'absence, fournie par l'adaptateur (`sans_objet=` d'`evaluer_surface`) : il a cherché aux
+# endroits qu'il déclare, et ces endroits n'existent pas. Sans cette preuve, on reste en SKIP.
+#
+# DELAI_DEPASSE (TF-2311) — la suite du projet a DÉMARRÉ et a été interrompue faute de temps. Ce
+# n'est ni un SKIP (la mesure n'était pas impossible : elle a commencé), ni un FAIL (aucun test
+# n'a échoué : une suite rouge se nomme par ses tests). Le pan n'est pas mesuré, il compte comme
+# un manque et rend PARTIEL, mais son verdict dit CE QUI manque : du temps, et le réglage qui en
+# donne. Un SKIP « délai dépassé » se lisait comme une configuration absente.
+Verdict = Literal["PASS", "FAIL", "SKIP", "NA", "DELAI_DEPASSE"]
+DELAI_DEPASSE: Verdict = "DELAI_DEPASSE"
+CAUSE_DELAI_DEPASSE = "delai-depasse"
+# TF-0146 — verdict d un ESSAI individuel (un cas exécuté), distinct du Verdict d ADAPTATEUR
+# ci-dessus (un pan entier). Trois valeurs, jamais un vert par défaut : un cas dont l issue
+# n a pas été observée est NON_EXECUTE, jamais tacitement PASSANT.
+VerdictEssai = Literal["passant", "non_passant", "non_execute"]
+
+
+@dataclass(frozen=True)
+class Element:
+    """Un element de surface inventorie, porteur d un identifiant stable."""
+
+    id: str
+    pan: str
+    libelle: str
+    source: str
+    #: TF-0380 (lot Produit-10 20260818b) — `produit` (le projet le fabrique et le modifie) ou
+    #: `entrant` (une donnee recue, que le projet ne produit ni ne modifie jamais). Laissee VIDE,
+    #: elle est deduite du chemin par `provenance_de` au moment de l evaluation : aucun adaptateur
+    #: n a a connaitre le mecanisme, et un adaptateur futur en herite sans une ligne (meme
+    #: principe que `qualifier`). Un adaptateur qui sait mieux la pose explicitement.
+    provenance: str = ""
+
+
+#: Familles d ENTRANTS de la convention pilot : « tout entrant est une DONNEE ». Un element
+#: inventorie sous l une d elles n est pas de la surface du produit — le projet ne l a pas ecrit
+#: et n a aucun moyen de le corriger.
+#:
+#: LE FAIT (TF-0380) : sur un audit reel, le SEUL pan couvert affichait « interface 15/15,
+#: ratio 1,0, PASS » — et ses 15 elements etaient les 15 ancres de deux fichiers `input/*.html`,
+#: des documents RECUS du client. Au meme commit, les trois livrables HTML de `output/` portaient
+#: 27 ancres, dont aucune n etait inventoriee (`output/` est exclu depuis RT-9/RT-10, a juste
+#: titre : auditer ses propres artefacts est un auto-audit). Le seul PASS de l audit portait donc
+#: sur ce que le projet ne produit pas. Un ratio de 1,0 sur des entrants est PLUS TROMPEUR qu un
+#: pan franchement non couvert : le second se voit, le premier se lit comme une reussite.
+FAMILLES_ENTRANTES = ("input",)
+
+
+def provenance_de(source: str | Path, racine: str | Path | None = None) -> str:
+    """`entrant` si le chemin traverse une famille d entrants declaree, `produit` sinon.
+
+    Deduite du CHEMIN et non d une liste tenue a la main : une famille ajoutee a la convention
+    profite a tous les pans sans qu un adaptateur change. Le sens de l erreur est voulu — ce qui
+    n est pas reconnu comme entrant reste `produit`, donc COMPTE dans la couverture : mieux vaut
+    exiger a tort la couverture d un fichier recu que de dispenser a tort celle d un livrable.
+
+    Avec `racine` (TF-2577), seuls les segments SOUS le projet comptent : un projet pose sous un
+    dossier `input` n est pas un entrant, ce sont ses propres sous-dossiers qui le disent.
+    """
+    chemin = Path(str(source))
+    parties = {
+        p.lower()
+        for p in (chemin.parts if racine is None else exclusions.parties_du_projet(chemin, racine))
+    }
+    return "entrant" if parties & {f.lower() for f in FAMILLES_ENTRANTES} else "produit"
+
+
+@dataclass
+class Finding:
+    """Un defaut constate, toujours rattache a un element identifie."""
+
+    id: str
+    classe: str
+    localisation: str
+    message: str
+    severite: str = "bloquant"
+    risque: int | None = None
+
+
+@dataclass(frozen=True)
+class NonTestable:
+    """Un element inventorie qu AUCUNE execution ne peut atteindre FAUTE DE CONFIGURATION.
+
+    RT-6 : distinguer « la suite ne l exerce pas » de « personne ne PEUT l exercer ici ». Le
+    premier est un trou de couverture, imputable au projet. Le second est un manque
+    d identifiants, de jeton ou de cle, imputable a l environnement d audit — et il se repare
+    en saisissant `champs_requis`, pas en ecrivant un test. Les confondre, c est soit accuser a
+    tort, soit taire un pan entier.
+    """
+
+    element: str
+    champs_requis: list[str]
+    pan: str = ""
+    motif: str = ""
+    #: TF-0381 (lot Produit-10 20260818b) — `element` nomme-t-il un élément INVENTORIÉ, ou est-il le
+    #: marque-place d un pan dont rien n est énumérable ? Nommer le pan reste juste (loi 3 : un
+    #: silence ressemblerait à « rien à tester ici »), mais l APPELER un élément inventorié est
+    #: faux, et c est ce que l action générée disait : « 1 élément(s) sont inventoriés » sur un
+    #: pan dont le motif, deux champs plus haut, annonçait « 0 elements INVENTORIES ».
+    inventorie: bool = True
+    #: `constate` (le projet ou une trace d exécution a nommé le champ) ou `presume` (déduit d un
+    #: `.env.example` que personne ne revendique). Un champ présumé pour un pan sans élément ne
+    #: mène nulle part : c est la combinaison que TF-0381 a payée, dix actions manuelles pour dix
+    #: pans, toutes réclamant six variables Databricks sur un projet d ANALYSE.
+    provenance: str = "constate"
+
+
+@dataclass(frozen=True)
+class Essai:
+    """TF-0146 — UN cas exécuté (ou non), avec son verdict et son POURQUOI.
+
+    Le noyau ne sait toujours rien de la technologie qui l a produit (pytest, Playwright...) :
+    un `Essai` est une ligne neutre, comme `Finding`. Ce que sait la technologie (nom du test,
+    trace de l échec, message de skip) vit dans l adaptateur ou la sonde qui construit la liste
+    — voir `forge_tests.sondes.junit` pour un exemple qui lit du JUnit XML réel.
+    """
+
+    id: str
+    pan: str
+    verdict: VerdictEssai
+    pourquoi: str | None = None
+    details: str | None = None
+    # None = inconnu (aucun signal disponible) ; False = un « passant » explicitement NON
+    # adossé à une mesure (mutation nulle sur ce module, ou aucune ligne couverte) — c est ce
+    # deuxième cas que « aucun ✓ sans oracle » existe pour rendre visible, jamais silencieux.
+    couvert: bool | None = None
+
+
+class EssaiSansMotif(RuntimeError):
+    """TF-0146 — un essai NON PASSANT ou NON EXÉCUTÉ sans `pourquoi`.
+
+    Un verdict qui ne se motive pas n est pas un verdict exploitable — c est un silence qui
+    porte un vernis de mesure. Refusé avant toute agrégation, comme `RapportRefuse` pour la
+    règle conjointe.
+    """
+
+
+def resume_essais(essais: list[Essai]) -> dict[str, object]:
+    """Agrège une liste d essais en la section `essais` du rapport.
+
+    Oracle « aucun ✓ sans oracle » : un essai PASSANT dont `couvert is False` est un vert que
+    rien ne soutient (mutation nulle, ligne jamais exécutée sous mesure) — il rejoint
+    `signales`, visible, jamais fondu dans le total des passants sans distinction.
+    """
+    manques = [
+        e.id for e in essais if e.verdict != "passant" and not (e.pourquoi or "").strip()
+    ]
+    if manques:
+        raise EssaiSansMotif(
+            "essai(s) sans POURQUOI motivé, non PASSANT : " + ", ".join(sorted(manques))
+        )
+    totaux = {"passant": 0, "non_passant": 0, "non_execute": 0}
+    for e in essais:
+        totaux[e.verdict] += 1
+    signales = [
+        {
+            "id": e.id,
+            "pan": e.pan,
+            "motif": "vert non couvert par la mutation ni par la couverture — aucun ✓ sans "
+            "oracle",
+        }
+        for e in essais
+        if e.verdict == "passant" and e.couvert is False
+    ]
+    return {
+        "cas": [
+            {
+                "id": e.id,
+                "pan": e.pan,
+                "verdict": e.verdict,
+                "pourquoi": e.pourquoi,
+                "details": e.details,
+                "couvert": e.couvert,
+            }
+            for e in sorted(essais, key=lambda e: (e.pan, e.id))
+        ],
+        "totaux": totaux,
+        "signales": signales,
+        "fourni": True,
+    }
+
+
+@dataclass
+class SortieAdaptateur:
+    """Contrat de sortie commun a tous les adaptateurs."""
+
+    adaptateur: str
+    pan: str
+    cible: str
+    verdict: Verdict
+    findings: list[Finding] = field(default_factory=list)
+    non_juge: list[str] = field(default_factory=list)
+    surface: dict | None = None
+    mutation: dict | None = None
+    # RT-6a : tout adaptateur peut en declarer ; le noyau les agrege, comme les `non_juge`.
+    non_testables: list[NonTestable] = field(default_factory=list)
+    # A-2 : inventaire des modules SOURCES du projet, avec l etat de chacun. Porte par
+    # l adaptateur qui connait l arborescence du code ; agrege tel quel par le noyau.
+    modules: list[dict] = field(default_factory=list)
+
+    def json(self) -> str:
+        return json.dumps(asdict(self), ensure_ascii=False, indent=2)
+
+
+# --- Cotation du risque (criticite x probabilite x cout de detection tardive) ------------------
+BANDE_CRITIQUE = 36
+BANDE_STANDARD = 12
+
+
+def score_risque(criticite: int, probabilite: int, cout_tardif: int) -> int:
+    notes = (("criticite", criticite), ("probabilite", probabilite), ("cout", cout_tardif))
+    for nom, valeur in notes:
+        if not 1 <= valeur <= 5:
+            raise ValueError(f"{nom} doit etre note de 1 a 5 (recu {valeur})")
+    return criticite * probabilite * cout_tardif
+
+
+def bande(score: int) -> str:
+    if score >= BANDE_CRITIQUE:
+        return "critique"
+    if score >= BANDE_STANDARD:
+        return "standard"
+    return "differe"
+
+
+# --- Agregation de surface --------------------------------------------------------------------
+def evaluer_surface(
+    adaptateur: str,
+    pan: str,
+    cible: str,
+    inventaire: list[Element],
+    exerces: set[str],
+    seuil: float,
+    non_juge: list[str],
+    sans_objet: str | None = None,
+) -> SortieAdaptateur:
+    """Compare l inventaire au perimetre exerce. Tout element non exerce est un FAIL NOMME.
+
+    `sans_objet` (14/08) : PREUVE POSITIVE que le projet n a pas ce perimetre — « aucun dossier
+    `frontend\\`, aucun fichier de migration ». Fournie, et l inventaire etant vide, le pan sort
+    **NA** : il n y a rien a tester, ce n est pas un manque. Absente, l inventaire vide reste un
+    SKIP : l adaptateur n a rien su enumerer, et c est autre chose.
+    """
+    from forge_tests.risque import coter
+
+    if not inventaire:
+        if sans_objet:
+            # Sans objet, et PROUVE : le pan a cherche aux endroits qu il declare, ils n existent
+            # pas. Ne pas avoir de traitement par lot n est pas un defaut de traitement par lot.
+            return SortieAdaptateur(
+                adaptateur, pan, cible, "NA",
+                non_juge=[*non_juge, f"{pan} : SANS OBJET sur ce projet — {sans_objet}"],
+            )
+        # Un inventaire vide ne prouve pas que tout est couvert : il prouve que l adaptateur
+        # n a RIEN SU ENUMERER ici. Conclure « 100 % OK » serait l absence silencieuse que le
+        # framework existe pour interdire — revele par la phase 2, premier projet reel.
+        return SortieAdaptateur(
+            adaptateur, pan, cible, "SKIP",
+            non_juge=[*non_juge, f"{pan} : inventaire VIDE — surface non enumerable sur ce projet"],
+        )
+    # TF-0380 — la couverture se mesure sur ce que le projet PRODUIT. Les entrants restent
+    # inventories et NOMMES (les taire ferait disparaitre ce qui a ete lu), mais ils ne comptent
+    # ni au numerateur ni au denominateur : exiger d un projet qu il teste un document recu du
+    # client est un reproche qu il ne peut pas honorer, et le compter comme couvert est pire —
+    # c est le « ratio 1,0 » qui a fait passer un audit pour vert.
+    def _provenance(e: Element) -> str:
+        return e.provenance or provenance_de(e.source, cible)
+
+    entrants = [e for e in inventaire if _provenance(e) == "entrant"]
+    produits = [e for e in inventaire if _provenance(e) != "entrant"]
+    mention_entrants = (
+        f"{pan} : {len(entrants)} element(s) INVENTORIE(S) mais ENTRANT(S) — recu(s), jamais "
+        f"produit(s) par ce projet, donc hors du ratio de couverture "
+        f"({', '.join(sorted(e.id for e in entrants)[:8])}"
+        f"{' …' if len(entrants) > 8 else ''})"
+        if entrants else ""
+    )
+    if entrants and not produits:
+        # Tout l inventaire est entrant : il n y a rien du produit a couvrir ici. NA, et le motif
+        # le DIT — « 15/15 ratio 1,0 PASS » sur des entrants etait le pire des rapports possibles.
+        return SortieAdaptateur(
+            adaptateur, pan, cible, "NA",
+            non_juge=[
+                *non_juge,
+                f"{pan} : SANS OBJET sur ce projet — les {len(entrants)} element(s) enumere(s) "
+                "sont TOUS des entrants (familles "
+                f"{', '.join(FAMILLES_ENTRANTES)}), donc aucun element PRODUIT a couvrir. "
+                "Un ratio de 1,0 sur des entrants est plus trompeur qu un pan franchement non "
+                "couvert (TF-0380)",
+            ],
+            surface={
+                "inventorie": 0, "exerce": 0, "ratio": 1.0, "seuil": seuil,
+                "elements_exerces": [], "elements_non_exerces": [],
+                "entrants_hors_ratio": sorted(e.id for e in entrants),
+            },
+        )
+    if mention_entrants:
+        non_juge = [*non_juge, mention_entrants]
+    inventaire = produits
+    manquants = [e for e in inventaire if e.id not in exerces]
+    total = len(inventaire)
+    ratio = (total - len(manquants)) / total
+    findings = [
+        Finding(
+            id=e.id,
+            classe=classes.ELEMENT_NON_EXERCE,
+            localisation=e.source,
+            message=f"{e.libelle} : inventorie, jamais exerce par la suite",
+            risque=coter(pan, e.id, e.source),
+        )
+        for e in manquants
+    ]
+    # P1 — le plus risque d abord : sans tri, 83 findings egaux forment une liste qu on ne lit pas.
+    findings.sort(key=lambda f: f.risque or 0, reverse=True)
+    if total and ratio < seuil:
+        findings.insert(
+            0,
+            Finding(
+                id=f"seuil:{pan}",
+                classe=classes.SEUIL_NON_TENU,
+                localisation=cible,
+                message=f"couverture de surface {ratio:.0%} sous le seuil {seuil:.0%}",
+                risque=coter(pan, f"seuil:{pan}", inventaire[0].source if inventaire else cible),
+            ),
+        )
+    return SortieAdaptateur(
+        adaptateur=adaptateur,
+        pan=pan,
+        cible=cible,
+        verdict="FAIL" if findings else "PASS",
+        findings=findings,
+        non_juge=non_juge,
+        surface={
+            "inventorie": total,
+            "exerce": total - len(manquants),
+            "ratio": round(ratio, 4),
+            "seuil": seuil,
+            # RT-6b : la LISTE des elements exerces, pas seulement leur compte. Sans elle, une
+            # reprise ne saurait pas quel element etait deja vert et devrait tout rejouer.
+            "elements_exerces": sorted(e.id for e in inventaire if e.id in exerces),
+            "elements_non_exerces": [e.id for e in manquants],
+            # TF-0380 : ce qui a ete ECARTE du ratio se publie. Un ecart tu se lirait comme un
+            # perimetre complet — exactement ce que ce champ existe pour empecher.
+            "entrants_hors_ratio": sorted(e.id for e in entrants),
+        },
+    )
+
+
+# --- Regle d affichage conjoint ----------------------------------------------------------------
+class RapportRefuse(RuntimeError):
+    """Un score de mutation publie sans couverture de surface est un indicateur trompeur."""
+
+
+def verifier_regle_conjointe(sorties: list[SortieAdaptateur]) -> None:
+    """Interdit la publication d un score de mutation sans couverture de surface au rapport.
+
+    Le score de mutation se calcule sur le SEUL perimetre atteint : publie seul, il flatte
+    d autant plus que la suite est incomplete.
+    """
+    a_mutation = any(s.mutation is not None for s in sorties)
+    a_surface = any(s.surface is not None for s in sorties)
+    if a_mutation and not a_surface:
+        raise RapportRefuse(
+            "score de mutation present sans aucune couverture de surface : rapport refuse"
+        )
+
+
+POUR_COUVRIR_DEFAUT = (
+    "écrire l adaptateur du pan, ou fournir au projet la convention qu il attend — voir "
+    "« Contrat du projet audité » au README"
+)
+#: TF-2311 — le chemin de couverture d un pan dont la suite a dépassé son délai : relever le délai,
+#: dont le motif nomme le réglage, puis rejouer. Écrit ici pour ne pas citer un outil de test.
+POUR_COUVRIR_DELAI = (
+    "relever le délai nommé au motif dans `<projet>/.env.forge-tests`, puis relancer avec "
+    "`--reprendre <rapport.json>`"
+)
+
+
+def entree_non_couverte(pan: str, motif: str, chemin: str, verdict: str | None) -> dict:
+    """L entrée de `pans_non_couverts` d un pan. Un pan en DELAI_DEPASSE porte sa cause, que les
+    actions lisent : ce n est ni un adaptateur manquant ni une configuration absente."""
+    if verdict == DELAI_DEPASSE:
+        return {
+            "pan": pan, "motif": motif, "pour_couvrir": POUR_COUVRIR_DELAI,
+            "cause": CAUSE_DELAI_DEPASSE,
+        }
+    return {"pan": pan, "motif": motif, "pour_couvrir": chemin}
+
+
+#: TF-2769 — la clé de configuration d audit qui nomme les pans CENTRAUX du produit : une liste de
+#: pans, séparés par des virgules ou des espaces.
+VARIABLE_PANS_CENTRAUX = "FORGE_TESTS_PANS_CENTRAUX"
+
+
+def lire_pans_centraux(valeur: str | None) -> list[str]:
+    """Les pans que le projet déclare centraux, dans l ordre où il les écrit, sans doublon.
+
+    Le projet seul sait quelle fonction porte son produit : la forge ne le devine jamais (un pan
+    déclaré central par défaut ferait échouer tout audit PARTIEL, et un pan jamais déclaré laisse
+    le verdict inchangé).
+    """
+    vus: list[str] = []
+    for mot in (valeur or "").replace(";", ",").replace(",", " ").split():
+        pan = mot.strip().lower()
+        if pan and pan not in vus:
+            vus.append(pan)
+    return vus
+
+
+def pans_bloquants(couverture: dict[str, dict], pans_centraux: list[str]) -> list[dict]:
+    """Les pans centraux MESURÉS à 0 % : de la surface inventoriée, aucun élément exercé.
+
+    TF-2769 : le 08/11, l audit d un produit inventoriait 15 modèles d IA au pan `prompts` et n en
+    exerçait aucun (0 sur 15, seuil 1) ; le verdict PARTIEL (sortie 3), porté par d autres pans non
+    couverts, a été accepté, et la version est partie en production alors que la rédaction par IA
+    n avait jamais tourné. Un pan central à 0 % n est pas un manque de mesure, c est une fonction
+    que rien n atteint : il rend ÉCHEC, et le rapport le nomme. Un pan non mesuré (SKIP, NA, absent)
+    n est pas à 0 % : il reste un manque, nommé à part.
+    """
+    bloquants = []
+    for pan in pans_centraux:
+        surface = couverture.get(pan) or {}
+        inventorie = int(surface.get("inventorie") or 0)
+        if inventorie > 0 and int(surface.get("exerce") or 0) == 0:
+            bloquants.append({
+                "pan": pan,
+                "inventorie": inventorie,
+                "exerce": 0,
+                "ratio": 0.0,
+                "seuil": surface.get("seuil"),
+                "motif": (
+                    f"pan central « {pan} » à 0 % : {inventorie} élément(s) inventorié(s), aucun "
+                    "exercé — la fonction que ce pan porte n a jamais tourné sous test"
+                ),
+            })
+    return bloquants
+
+
+def mention_pans_centraux(
+    pans_centraux: list[str], couverture: dict[str, dict], pans_attendus: list[str]
+) -> list[str]:
+    """Les lignes `non_juge` d une déclaration sans effet : pan inconnu, pan non mesuré."""
+    lignes = []
+    for pan in pans_centraux:
+        if pan not in pans_attendus:
+            lignes.append(
+                f"pans centraux : « {pan} » n est pas un pan connu de forge-tests "
+                f"({', '.join(pans_attendus)}) — déclaration sans effet, à corriger dans "
+                f"{VARIABLE_PANS_CENTRAUX}"
+            )
+        elif pan not in couverture:
+            lignes.append(
+                f"pans centraux : « {pan} » est déclaré central mais n a aucune couverture mesurée "
+                "dans ce rapport (pan non joué, sans objet ou sans surface) — le verdict ÉCHEC ne "
+                "s applique qu à un pan mesuré à 0 %"
+            )
+    return lignes
+
+
+def rapport(
+    sorties: list[SortieAdaptateur],
+    pans_attendus: list[str],
+    pour_couvrir: dict[str, str] | None = None,
+    modules: list[dict] | None = None,
+    essais: list[Essai] | None = None,
+    instance: dict | None = None,
+    boucle: dict | None = None,
+    gabarit_env: dict | None = None,
+    vendorisation: list[dict] | None = None,
+    scripts_node: dict | None = None,
+    residus_instance: dict | None = None,
+    pans_centraux: list[str] | None = None,
+) -> dict:
+    """Assemble le rapport. Un pan sans adaptateur est NOMME, jamais omis.
+
+    A-5 : un pan non couvert ne sort plus un simple motif — il sort ce qu il FAUDRAIT pour le
+    couvrir. Un motif seul est un constat ; le couple motif + chemin est une action.
+
+    TF-0146 : `essais`, s il est fourni, porte le détail test-par-test (section `essais` du
+    rapport, agrégée par `resume_essais`). Paramètre optionnel et rétro-compatible.
+    TF-2254 : `__main__` l alimente avec les essais des suites que l audit a lancées (JUnit de
+    pytest et de Playwright, `execution.essais_de_la_cible`), et un essai NON EXÉCUTÉ (un test
+    sauté) pèse sur le verdict PARTIEL, au rang d un pan non couvert : « 27 passés, 1 sauté » ne
+    se lit plus PASS. Sans lui, la section reste PRÉSENTE mais déclare son absence :
+    un rapport qui l omettrait silencieusement serait indiscernable d un rapport qui l a
+    mesurée et n a rien trouvé, exactement le silence que ce framework interdit ailleurs.
+
+    TF-2769 : `pans_centraux` (clé `FORGE_TESTS_PANS_CENTRAUX`) nomme les pans que le projet tient
+    pour centraux. Un pan central mesuré à 0 % rend le verdict FAIL, avant PARTIEL que d autres
+    pans non couverts ne doivent plus pouvoir faire accepter, et le rapport le nomme en
+    `pans_bloquants`.
+    """
+    from forge_tests.actions import classifier
+    from forge_tests.risque import NON_JUGE as NON_JUGE_RISQUE
+    from forge_tests.seuils import au_rapport as seuils_au_rapport
+
+    verifier_regle_conjointe(sorties)
+    chemins = pour_couvrir or {}
+    couverts = {s.pan for s in sorties if s.verdict not in ("SKIP", "NA", DELAI_DEPASSE)}
+    # NA — sans objet, PROUVE : le pan sort du calcul de couverture sans compter comme manque.
+    # Il reste NOMME au rapport avec son motif : un pan qui disparaitrait laisserait croire que
+    # le sujet n existe pas dans le framework, exactement l absence silencieuse interdite.
+    sans_objet = {
+        s.pan: (s.non_juge[-1] if s.non_juge else "sans motif")
+        for s in sorties
+        if s.verdict == "NA"
+    }
+    motifs_skip = {
+        s.pan: s.non_juge[-1] if s.non_juge else "sans motif"
+        for s in sorties
+        if s.verdict in ("SKIP", DELAI_DEPASSE)
+    }
+    verdicts_par_pan = {s.pan: s.verdict for s in sorties}
+    centraux = list(pans_centraux or [])
+    couverture = {s.pan: s.surface for s in sorties if s.surface is not None}
+    bloquants = pans_bloquants(couverture, centraux)
+    essais_non_executes = sorted(e.id for e in essais or [] if e.verdict == "non_execute")
+    non_couverts = [
+        entree_non_couverte(
+            p,
+            motifs_skip.get(p, "adaptateur absent : aucun module ne traite ce pan"),
+            chemins.get(p, POUR_COUVRIR_DEFAUT),
+            verdicts_par_pan.get(p),
+        )
+        for p in pans_attendus
+        if p not in couverts and p not in sans_objet
+    ]
+    # Le PAN de chaque finding est porte au rapport : sans lui, une reprise ne sait pas quels
+    # findings d un rapport anterieur appartiennent a un pan qu elle ne rejoue pas (RT-6b).
+    tous = sorted(
+        ((f, s.pan) for s in sorties for f in s.findings),
+        key=lambda couple: couple[0].risque or 0,
+        reverse=True,
+    )
+    bandes = {"critique": 0, "standard": 0, "differe": 0, "non_cote": 0}
+    for f, _ in tous:
+        bandes["non_cote" if f.risque is None else bande(f.risque)] += 1
+    findings_json = [{**asdict(f), "pan": pan} for f, pan in tous]
+    non_testables_json = [
+        asdict(n)
+        for n in sorted(
+            (n for s in sorties for n in s.non_testables),
+            key=lambda n: (n.pan, n.element),
+        )
+    ]
+    return {
+        "adaptateurs": [
+            {"nom": s.adaptateur, "pan": s.pan, "verdict": s.verdict} for s in sorties
+        ],
+        "couverture_par_pan": {
+            s.pan: s.surface for s in sorties if s.surface is not None
+        },
+        "mutation": {s.pan: s.mutation for s in sorties if s.mutation is not None},
+        # A-3 : les seuils opposables, valeur ET justification, dans le rapport lui-meme.
+        "seuils": seuils_au_rapport(),
+        # TF-0340/TF-0341 — le cycle de vie et la PROVENANCE de l instance servie. Section
+        # toujours presente : absente quand aucune instance n est declaree, elle serait
+        # indiscernable d une section qui a mesure et n a rien trouve. Un audit qui laisse une
+        # instance debout le DIT, et un audit qui mesure un code plus ancien que le depot le dit
+        # aussi — c est la generalisation du terme de comparaison de TF-0288 a l instance entiere.
+        "instance": instance if instance is not None else {
+            "cycle_de_vie": None, "provenance": None,
+            "non_juge": ["instance : section non alimentee par cet appelant (`rapport(..., "
+                         "instance=...)`) — ni le cycle de vie ni la provenance n ont ete mesures"],
+        },
+        # A-2 : l inventaire des modules SOURCES — exerce, mute, ou jamais exerce et NOMME.
+        "modules": modules if modules is not None else [
+            m for s in sorties for m in s.modules
+        ],
+        "pans_non_couverts": non_couverts,
+        # « NA » (14/08) : les pans SANS OBJET sur ce projet, nommés avec leur preuve d absence.
+        # Distincts des non couverts : ceux-ci sont un manque, ceux-là n en sont pas un.
+        "pans_sans_objet": [
+            {"pan": p, "motif": motif} for p, motif in sorted(sans_objet.items())
+        ],
+        "motifs_non_couverture": motifs_skip,
+        "bandes_de_risque": bandes,
+        "findings": findings_json,
+        # RT-6a : ce qu aucune execution ne POUVAIT atteindre ici, et ce qu il faut fournir
+        # pour que la prochaine passe le puisse. Section toujours presente, meme vide.
+        "non_testables": non_testables_json,
+        # Mandat 2 : la suite a donner, CLASSEE, portee par le rapport lui-meme. Le dashboard
+        # ne fait que la rendre — s il la calculait, deux lecteurs du meme audit auraient deux
+        # verites. Filtre MEP : `jq '.actions[] | select(.categorie=="manuelle_utilisateur")'`.
+        "actions": classifier(findings_json, non_testables_json, non_couverts),
+        "non_juge": sorted(
+            {n for s in sorties for n in s.non_juge}
+            | set(NON_JUGE_RISQUE)
+            | set(_mention_essais_non_executes(essais_non_executes))
+            | set(mention_pans_centraux(centraux, couverture, pans_attendus))
+            | set((scripts_node or {}).get("non_juge", []))
+            | set((residus_instance or {}).get("non_juge", []))
+        ),
+        # TF-0146 — détail test-par-test. Présente même sans `essais` fourni : `fourni: False`
+        # dit explicitement « non mesuré ici », jamais confondu avec « mesuré, rien à signaler ».
+        "essais": resume_essais(essais) if essais is not None else {
+            "cas": [], "totaux": {}, "signales": [], "fourni": False,
+        },
+        # TF-0352/0353 — la CAMPAGNE peut-elle clore ? Le verdict ci-dessous juge CE run ; la
+        # section `boucle` juge la campagne qui l entoure. Les confondre est exactement la
+        # faute du 12/08 : un rapport PARTIEL conforme, 121 findings, produit inchangé. Section
+        # toujours présente : « pas de journal » se lit, il ne se devine pas.
+        "boucle": boucle if boucle is not None else _boucle_non_mesuree(),
+        # TF-0539 : ce que la forge a depose (ou pourquoi elle ne l'a pas fait) — le lecteur
+        # du rapport apprend qu'un gabarit l'attend, sans avoir a le deviner.
+        "gabarit_env": gabarit_env if gabarit_env is not None else {
+            "depose": False,
+            "motif": "non mesure (audit hors flux principal)",
+            "fichier": None,
+        },
+        # TF-0580 : les copies vendorisees et leur ecart a l amont — « non comparable » n est
+        # JAMAIS « a jour », sinon l outil reproduit le defaut qu il detecte.
+        "vendorisation": vendorisation if vendorisation is not None else [],
+        # TF-2387 — les scripts Node d un produit sans `package.json` : inventaire, scripts
+        # exercés ou jamais chargés par un test, tests rouges. Section toujours présente : son
+        # absence serait indiscernable d un produit dont les scripts ont été jugés sans défaut.
+        "scripts_node": scripts_node if scripts_node is not None else {
+            "applicable": None, "statut": "non_mesure", "inventaire": [], "exerces": [],
+            "non_exerces": [], "echecs": [], "non_juge": [],
+            "motif": "section non alimentée par cet appelant (`rapport(..., scripts_node=...)`) "
+                     "— les scripts Node du produit n ont pas été inventoriés",
+        },
+        # TF-2661 — le décompte des objets métier de l instance, avant et après la campagne. Section
+        # toujours présente : « non mesuré » se lit, il ne se confond pas avec « rien laissé ».
+        "residus_instance": residus_instance if residus_instance is not None else {
+            "statut": "non_mesure", "verdict": None, "commande": None, "avant": None,
+            "apres": None, "ecarts": [], "non_juge": [],
+            "motif": "section non alimentée par cet appelant "
+                     "(`rapport(..., residus_instance=...)`) — l état de l instance n a pas été "
+                     "confronté avant et après la campagne",
+        },
+        # TF-2769 : les pans centraux déclarés par le projet, et ceux qui sont mesurés à 0 %.
+        # Section toujours présente : « aucun pan central déclaré » se lit, il ne se devine pas.
+        "pans_centraux": centraux,
+        "pans_bloquants": bloquants,
+        "verdict": (
+            "FAIL"
+            if bloquants
+            else "PARTIEL"
+            if non_couverts or essais_non_executes
+            else (
+                "FAIL"
+                if any(s.verdict == "FAIL" for s in sorties)
+                or (scripts_node or {}).get("echecs")
+                or (residus_instance or {}).get("statut") == "residus"
+                else "PASS"
+            )
+        ),
+    }
+
+
+#: Au-delà, les essais non exécutés ne sont plus tous nommés ici ; le total se dit, et la section
+#: `essais` du rapport les porte tous (aucune borne d affichage silencieuse).
+PLAFOND_ESSAIS_NOMMES = 20
+
+
+def _mention_essais_non_executes(ids: list[str]) -> list[str]:
+    if not ids:
+        return []
+    nommes = ", ".join(ids[:PLAFOND_ESSAIS_NOMMES])
+    reste = (
+        f" … et {len(ids) - PLAFOND_ESSAIS_NOMMES} autre(s), tous dans la section `essais`"
+        if len(ids) > PLAFOND_ESSAIS_NOMMES else ""
+    )
+    return [
+        f"essais : {len(ids)} essai(s) NON EXÉCUTÉ(S) — un test sauté ne prouve rien : il pèse sur "
+        f"le verdict PARTIEL au lieu de se fondre dans les passants ({nommes}{reste})"
+    ]
+
+
+def _boucle_non_mesuree() -> dict:
+    from forge_tests import boucle as _boucle
+
+    return _boucle.verdict([])

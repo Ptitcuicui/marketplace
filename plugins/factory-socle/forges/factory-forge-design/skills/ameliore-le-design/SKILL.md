@@ -1,0 +1,163 @@
+---
+name: ameliore-le-design
+description: "Transforme une idée, une spécification, un design ou un produit web existant — URL, screenshot, fichier — en maquette navigable : redesign intégral et parcours d'écrans simulés (landing, connexion, tableau de bord, CRUD, catalogue, galerie, onboarding), cible web ou mobile, en un seul fichier HTML autonome, thèmes clair et sombre, zéro réseau. Deux fidélités, wireframe ou maquette. Use when / déclencher dès que l'utilisateur veut refondre, relooker, moderniser ou repenser le design d'un site ou d'une application, demande une maquette, un prototype cliquable ou une proposition visuelle à partir d'une URL, d'un screenshot ou d'un simple brief, ou veut montrer à un client ce que son produit pourrait devenir. Ne pas déclencher pour une page chartée Factory (→ factory-page-html), une fiche ou un schéma (→ factory-fiches-html), poser les tokens (→ systeme-de-marque), arbitrer entre directions (→ studio-de-direction), ni auditer une appli en production (→ audite-et-corrige-l-appli)."
+version: 2.6.1
+---
+
+# Améliore le design
+
+Produit une **maquette navigable en un fichier HTML unique** à partir d'un entrant
+hétérogène — produit existant, design, spécification, ou simple idée. Livrable de
+conviction : le commanditaire doit voir ce que son produit pourrait devenir, écran
+par écran, en cliquant.
+
+## Ce que ce skill apporte en propre
+
+Direction artistique → `impeccable` · tokens de marque → `systeme-de-marque` ·
+arbitrage entre directions → `studio-de-direction` · socle HTML et juge de rendu
+`render_page.py` → `factory-page-html` · itération → `la-boucle`.
+
+Restent en propre, et c'est tout l'objet du skill : le protocole d'ingestion d'un
+entrant hétérogène, l'inventaire canonique des écrans, le contrat du fichier
+unique, les patterns d'interaction attendus, et l'orchestration du contrôle.
+
+## Quick start
+
+```
+0. Cadrage         → cible (web|mobile) et fidélité (wireframe|maquette), déclarées
+1. Ingestion       → references/ingestion.md
+2. Direction       → systeme-de-marque si tokens absents, sinon impeccable craft ;
+                     critique du plan avant tout code ; aucune direction arrêtée :
+                     3 designs à challenger (studio-de-direction, Claude, Codex, Gemini)
+3. Écrans          → references/inventaire-ecrans.md (tous produits, sans exception)
+4. Build           → references/contrat-technique.md + references/patterns-interaction.md
+                     cible mobile → references/cadre-mobile.md
+5. Contrôle        → python scripts/check_maquette.py <fichier.html>
+                     puis les 4 oracles de la forge (criteres-sortie.md §Critères)
+6. Restitution     → references/criteres-sortie.md §Restitution
+```
+
+## Trois designs à challenger, et les images
+
+(D-240 (b) et réponse du porteur à D-231, 23/11/2026.) Quand la demande ne fixe aucune direction,
+la maquette ne part pas d'une seule proposition : `studio-de-direction` en produit 3, une par Claude,
+une par Codex et une par Gemini (skill `delegue-a-codex-et-gemini`, geste `concevoir`), jugées sur
+une rubrique figée, et l'humain challenge les 3 avant la construction. Une maquette dont la direction
+est déjà arrêtée (tokens présents, brief précis) se construit directement.
+
+Quand un écran a besoin d'une image (illustration, visuel d'ambiance, vignette), Claude la fait
+générer par le geste `image` du même skill, puis la regarde avant de l'intégrer en fichier local,
+au lieu de la dessiner par programme.
+
+Ces 2 délégations ne valent que pour les agents que `agent-tiers.mjs etat` rend disponibles sur le
+poste (consigne du porteur du 23/11/2026). Sans Codex ni Gemini configuré, Claude produit les 3
+designs et dessine l'image par programme, comme avant, sans le signaler comme un défaut.
+
+## Cible et fidélité — deux réglages, déclarés avant le premier écran
+
+**Cible** : `web` (défaut) · `mobile` · `web+mobile`. Le mobile ajoute châssis
+d'appareil et patterns natifs — `references/cadre-mobile.md`.
+**Fidélité** : `maquette` (défaut) · `wireframe`. Le wireframe est un réglage, pas
+un livrable distinct : une seule police, aucune couleur de marque, mais même contrat
+technique, même inventaire d'écrans, mêmes oracles. Change ce qu'on montre — la
+structure et le parcours — pas la peau.
+
+## Règles dures
+
+**La charte Factory ne s'applique pas au design de la maquette.** Elle porte
+l'identité du client de bout en bout : typographie, palette et thème selon le
+secteur, pas selon le gabarit maison. Nommage du fichier et oracles restent
+applicables — règles de livraison, pas de design.
+
+**Une maquette de bureau se conçoit à 1920 px, et se vérifie jusqu'au 4K.** Le viewport
+du rendu de travail, les captures et les cotes annoncées sont à **1920 px** (Full HD) —
+jamais 1280, jamais 1440 : la largeur à laquelle une maquette est dessinée est la largeur
+à laquelle son lecteur la juge. La grille de vérification compte sept largeurs —
+`3840, 2560, 1920, 1440, 1024, 768, 390` — et un écran non mesuré à 2560 et 3840 n'est pas
+jugé adapté. Règle E5 du pilot (`references\BEST-PRACTICES-HTML.md`), portée par
+`contrat-technique.md` (ligne « Breakpoints ») et `criteres-sortie.md` (C1).
+
+**Zéro dépendance réseau au runtime du livrable.** Réseau autorisé **au build**
+(corpus, images, docs), interdit dans le fichier rendu, qui s'ouvre en double-clic
+hors connexion. Conséquences : cartographie SVG/GeoJSON inline, graphiques SVG
+maison, 3D pré-calculée, polices en base64. Plafond : 10 Mo.
+
+**Le mouvement passe par Motion vendoré.** Build UMD autonome (79 ko, v12.23.12)
+inliné depuis `oracles/vendor/` — jamais `cdn.jsdelivr.net`. L'AI Kit sert à
+l'auteur, pas au livrable. `transform` et `opacity` seulement.
+
+**Le mouvement se prescrit avant de s'écrire.** Durées et courbes viennent des tokens
+`--dur-*` / `--ease-*` du système de marque, consommés par `var()` : une durée en dur
+alors que les tokens existent est refusée (`oracle-motion` R8), comme un token au-delà
+du plafond de 300 ms (R9). La révocation `prefers-reduced-motion` doit **neutraliser
+vraiment** — un `@media` présent mais sans effet est **bloquant** (R10, repris en C4
+par `check_maquette.py`, qui délègue au lieu de grepper).
+
+**Aucune donnée inventée non signalée.** Données de démonstration cohérentes et
+volumineuses, mais tout écran chiffré porte un bandeau permanent « Données de
+démonstration — non contractuelles ». Aucun montant ni tarif inventé : placeholder.
+
+**Aucun visuel non déclaré.** Images en base64, plafonnées par `.env`, tracées
+dans un `<script id="manifeste-images">`. Générées via Gemini au build : `genere:
+true`, prompt, modèle et date. Reprises telles quelles sur mandat du propriétaire
+(photos réelles) : `genere: false`, **source et date de relevé** — prompt et
+modèle n'ont alors pas d'objet et ne se remplissent pas de « aucun ». Aucun
+visage, lieu ou logo réel fabriqué et présenté comme authentique.
+
+**Tout champ est TYPÉ, PROPOSÉ, BORNÉ, ATTEIGNABLE, COMPILABLE.** Type d'entrée natif pour
+tout format connu ; valeur par défaut = meilleure hypothèse du système selon le contexte
+(fin de période = aujourd'hui, début = dernière position connue sinon profondeur
+métier justifiée, port = celui du protocole) ; bornes `min`/`max` posées par le sens,
+avec garde serveur symétrique au contrat du produit ; et **cible de geste qui couvre
+tout le composant** — sur un champ date natif, un clic n'importe où ouvre le sélecteur,
+la saisie clavier restant entière (`oracle-saisie` SA1–SA7, SA8 en avertissement, snippet de référence dans
+`contrat-technique.md`). Toute promesse écrite dans l'aide est câblée dans le champ :
+« la période part de la dernière lecture » sans `value` est un défaut, pas une intention.
+Tout `pattern` COMPILE sous le drapeau `v` — celui que le navigateur applique réellement
+pour juger `validity.valid` — sans quoi le motif est ignoré en silence et le champ
+accepte tout (SA7, TF-1343).
+
+**Un choix exclusif se pose AVANT les champs qu'il commande.** Un panneau de tâche ne
+coexiste pas avec la liste qu'il alimente et ne rend que les champs de la branche
+retenue. Deux motifs de création sont légitimes — formulaire replié pour une création
+simple (≤ 4 champs, aucune branche), panneau adressable dès qu'il y a branche, étape ou
+plus de 4 champs (`oracle-panneau-tache` PA1–PA7, doctrine et balisage dans
+`patterns-interaction.md`).
+
+**Secteur, cible et job de l'écran sont établis avant le premier choix visuel.**
+S'ils ne se déduisent pas de l'entrant, ils sont demandés. Jamais supposés en
+silence.
+
+**Aucun ✓ sans exécution.** `check_maquette.py` et les oracles de la forge sont
+lancés avant toute restitution, verdicts reportés tels quels — `SKIP` compris.
+
+**Une nouvelle passe compare, et « rien à changer » est une sortie valide.** Sur une
+maquette déjà passée, la passe suivante compare la version précédente et la candidate,
+et dit ce que l'ajout apporte à un critère ; un ajout qui n'en fait progresser aucun
+n'est pas un progrès. Quand tous les critères passent, la conclusion « rien à changer »
+est permise, avec sa preuve (oracles lancés, constats lus) et sans passe de plus. La loi
+n° 3 reste entière : ce qui manque (aide, onboarding, favicon, états vides) se propose
+une fois, jamais par omission. Détail : `references/criteres-sortie.md` §Boucle.
+
+## Références
+
+Chaque référence s'ouvre au moment que sa ligne nomme, pas avant.
+
+| Fichier | À lire quand |
+|---|---|
+| `references/ingestion.md` | au démarrage, pour tout entrant |
+| `references/inventaire-ecrans.md` | avant de construire les écrans |
+| `references/contrat-technique.md` | avant d'écrire la première ligne de code |
+| `references/cadre-mobile.md` | dès que la cible inclut le mobile |
+| `references/patterns-interaction.md` | pour les tables, composants et états |
+| `references/criteres-sortie.md` | avant de rendre la main |
+
+## Pièges connus
+
+- **Tables larges en 390 px** : reflow en cartes obligatoire — l'écart de rendu le
+  plus fréquemment non convergé sur les livrables HTML maison.
+- **Thème sombre par inversion** : recalculer les contrastes, remplacer les ombres
+  par des élévations, majorer le line-height du texte clair.
+- **Menu annonçant un écran inexistant** : bijection stricte, vérifiée par script.
+- **Direction générique** : crème + serif + terracotta, noir + accent acide,
+  broadsheet à filets. Trois défauts, pas trois choix.

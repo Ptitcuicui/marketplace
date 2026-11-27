@@ -1,0 +1,331 @@
+#!/usr/bin/env node
+// oracle-surcouche — Domaine « Composant dynamique et sur-couche : habillage explicite » (déterministe).
+//
+// TF-0796 (lot pilot du 05/09/2026, fait du 01/09/2026). Une fenêtre `dialog` de choix
+// de dossier, stylée aux jetons et VERTE à sa campagne de tests (api 483/483, suite
+// 989/989), s'est affichée en boîte sombre aux boutons natifs sur le poste de
+// l'utilisateur : mode sombre au niveau du système, composant rendu en top-layer,
+// `color-scheme` absent du socle. Mots de l'utilisateur : « des trucs moches sortis de
+// nulle part ». Aucun référentiel de la forge ne pouvait le voir — tous jugent ce que la
+// PAGE dessine, aucun ne jugeait ce que le NAVIGATEUR dessine à sa place.
+//
+// Quatre règles, décidables sur le fichier seul :
+//   SC1  chaque composant en sur-couche (<dialog>, [popover], role="dialog"/"alertdialog")
+//        porte un habillage EXPLICITE de sa surface — fond, couleur de texte, et un
+//        contour (bordure, contour ou ombre portée). Une facette absente = la valeur par
+//        défaut du navigateur, jamais celle de la marque.
+//   SC2  les contrôles portés par la sur-couche (button, input, select, textarea) portent
+//        eux aussi fond ET couleur : c'est le défaut exact du 01/09 — « boutons natifs ».
+//   SC3  le voile ::backdrop d'un composant modal est habillé depuis les jetons — sinon
+//        c'est le voile par défaut du navigateur, qui ignore le thème de la page.
+//   SC4  `color-scheme` est déclaré PAR THÈME : `light` au bloc de base, `dark` au bloc
+//        sombre dès qu'un thème sombre existe. Sans lui, la page obéit à data-theme et le
+//        navigateur au réglage du système : deux autorités sur un même écran. SC4 juge le
+//        THÈME de la page : elle est évaluée dès qu'un bloc [data-theme="dark"] ou une règle
+//        prefers-color-scheme existe, avec ou sans composant en sur-couche (TF-2384) ; SC1–SC3
+//        et SC5, qui jugent un composant, sont alors sans objet et le non_juge le dit.
+//
+// Une règle d'AVERTISSEMENT, extraite de textes tiers (TF-1911, voie taste-skill ;
+// attribution : `regles-importees-vercel-emil.md`) :
+//   SC5  une modale ou un tiroir (<dialog>, role="dialog"/"alertdialog", classe drawer, sheet
+//        ou tiroir) contient son défilement : `overscroll-behavior: contain` (ou `none`)
+//        sur lui ou sur un descendant (Vercel Web Interface Guidelines l.106 ; Emil Kowalski,
+//        mobile-native §6)
+//
+// Ce que cet oracle NE juge PAS (déclaré en non_juge, jamais dupliqué) :
+//   - la prescription et le contraste de l'anneau de focus → oracle-tokens T8 ;
+//   - la traçabilité des couleurs employées (couleur en dur hors bloc de tokens) → T1 ;
+//   - le rendu réel du composant OUVERT (top-layer, ::backdrop composé) → render_page.py,
+//     matrice d'états de la critique d'implémentation ;
+//   - l'ouverture effective (showModal(), popovertarget) → pan `interface` de forge-tests ;
+//   - un habillage porté par une feuille externe (<link rel="stylesheet">) ou un
+//     framework : lecture limitée au CSS du document et au fichier --tokens ;
+//   - un composant construit sans littéral de gabarit (document.createElement en série).
+//
+// Contrat : JSON {oracle,domaine,artefact,verdict,findings[],non_juge[]} · exit 0/1/2.
+// Usage : node oracle-surcouche.mjs <fichier.html> [--tokens tokens.css] [--json-only]
+
+import fs from 'node:fs';
+import { parse as parseHtml, elements, arbres, css, cssRulesDeep } from './lib/html.mjs';
+import { declarationsPour as declarationsDe } from './lib/selecteurs.mjs';
+import { estSurcouche, estAutoSombre, estSombre, reglesDeclarentUnThemeSombre } from './lib/surcouche.mjs';
+import { plageDeRegles } from './lib/regles-jouees.mjs';
+// TF-2287 — les règles que l'oracle JOUE, déclarées UNE fois ; la plage citée à la sortie en dérive, jamais écrite en dur.
+// Une règle neuve s'ajoute ici : self-test-regles-jouees.mjs refuse la liste qui s'écarte des règles émises par ce fichier.
+const REGLES_JOUEES = ['SC1', 'SC2', 'SC3', 'SC4', 'SC5'];
+let plageJouee = plageDeRegles(REGLES_JOUEES); // SC4 seule quand aucun composant en sur-couche n'existe (TF-2384)
+// TF-2293 — les règles qui jugent un composant, sans objet quand aucun n'existe ; SC4 (le thème) reste jouée : les sous-plages en dérivent.
+const REGLES_SANS_OBJET_SANS_COMPOSANT = ['SC1', 'SC2', 'SC3', 'SC5'];
+
+const DOM = 'Composant dynamique et sur-couche : habillage explicite depuis les jetons';
+const args = process.argv.slice(2);
+const iTokens = args.indexOf('--tokens');
+const file = args.find((a, i) => !a.startsWith('--') && !(iTokens !== -1 && i === iTokens + 1));
+const tokensArg = iTokens === -1 ? null : args[iTokens + 1];
+const jsonOnly = args.includes('--json-only');
+
+const NJ = [
+  'prescription et contraste de l\'anneau de focus — oracle-tokens T8, non dupliqué ici',
+  'traçabilité des couleurs employées (couleur en dur hors bloc de tokens) — oracle-tokens T1',
+  'rendu réel du composant OUVERT (top-layer, ::backdrop composé, ordre d\'empilement) — render_page.py, matrice d\'états de la critique d\'implémentation',
+  'ouverture effective du composant (showModal(), popovertarget, piège de focus) — pan « interface » de forge-tests',
+  'SC5 : présence de overscroll-behavior sur le composant ou un descendant, sans vérifier que cet élément est bien celui qui défile ; le comportement du défilement sur la racine de la page (html, body) n\'est pas jugé, les sources tierces divergeant',
+  'habillage porté par une feuille externe (<link rel="stylesheet">) ou un framework — lecture limitée au CSS du document et au fichier --tokens',
+  'composant construit sans littéral de gabarit (document.createElement en série) — non lu par l\'analyse statique',
+  'partie ANCÊTRE d\'un sélecteur descendant (« .modale .bouton ») — seul le dernier compound est confronté à l\'élément, l\'arbre n\'est pas remonté : une règle qui ne s\'applique qu\'en contexte est comptée comme si elle s\'appliquait (lib/selecteurs.mjs, TF-0921)',
+];
+const F = [];
+const add = (sev, regle, msg, where) => F.push({ sev, regle, msg, where });
+
+// TF-2535 — « sans écart » dit qu'un jugement a eu lieu : un SKIP n'a rien jugé, il ne rend jamais cette ligne.
+function sortir(verdict, code) {
+  process.stdout.write(JSON.stringify({
+    oracle: 'oracle-surcouche', domaine: DOM, artefact: file || null,
+    verdict, findings: F.length || verdict === 'SKIP' ? F : [{ sev: 'info', regle: '—', msg: `${plageJouee} sans écart`, where: file }],
+    non_juge: NJ,
+  }, null, jsonOnly ? 0 : 2));
+  process.exit(code);
+}
+
+if (!file || !fs.existsSync(file)) { NJ.push('fichier absent'); sortir('SKIP', 2); }
+if (!/\.html?$/i.test(file)) { NJ.push('cible non HTML'); sortir('SKIP', 2); }
+
+const html = fs.readFileSync(file, 'utf8');
+const root = parseHtml(html);
+let cssText = css(html, root).replace(/\/\*[\s\S]*?\*\//g, ' ');
+if (tokensArg && fs.existsSync(tokensArg)) {
+  cssText = fs.readFileSync(tokensArg, 'utf8').replace(/\/\*[\s\S]*?\*\//g, ' ') + '\n' + cssText;
+} else if (tokensArg) {
+  NJ.push(`fichier --tokens introuvable (${tokensArg}) : SC4 jugé sur le seul CSS du document`);
+}
+if (elements(root, 'link').some(l => /stylesheet/i.test(l.attrs.rel || ''))) {
+  NJ.push('au moins un <link rel="stylesheet"> détecté : son contenu n\'est pas lu (habillage éventuellement porté par lui)');
+}
+
+const regles = cssRulesDeep(cssText).filter(r => !r.atRules.some(a => /\bprint\b/i.test(a)));
+
+// ── Repérage des composants en sur-couche, DOM statique ET gabarits JS ─────
+// Le contrat technique de la forge impose un rendu dynamique : la fenêtre du 01/09
+// vivait dans un littéral de gabarit, pas dans le DOM statique. Un oracle aveugle au
+// runtime rendrait PASS sur le composant même qu'il doit juger.
+const ARBRES = arbres(html, root);
+const classesDe = el => String((el.attrs && el.attrs.class) || '').split(/\s+/).filter(Boolean);
+const roleDe = el => String((el.attrs && el.attrs.role) || '').toLowerCase();
+const aAttribut = (el, n) => Object.prototype.hasOwnProperty.call(el.attrs || {}, n);
+
+// TF-2092 : la définition d'une sur-couche vit dans lib/surcouche.mjs, partagée avec le lanceur.
+function estNatif(el) {
+  return el.tag === 'dialog' || aAttribut(el, 'popover');
+}
+function estModal(el) {
+  return estNatif(el) || String((el.attrs && el.attrs['aria-modal']) || '') === 'true';
+}
+
+const composants = [];
+for (const [i, a] of ARBRES.entries()) {
+  const provenance = i === 0 ? 'DOM statique' : 'gabarit JS';
+  for (const el of elements(a)) {
+    if (!estSurcouche(el)) continue;
+    const id = el.attrs.id ? `#${el.attrs.id}` : '';
+    const cls = classesDe(el).length ? `.${classesDe(el)[0]}` : '';
+    const nom = `${el.tag}${id}${cls}` + (aAttribut(el, 'popover') ? '[popover]' : '');
+    composants.push({ el, nom, provenance, natif: estNatif(el), modal: estModal(el) });
+  }
+}
+
+// TF-2384 (retour du 28/09/2026, RV-204) — SC4 NE DÉPEND PAS DE LA SUR-COUCHE. L'oracle sortait en SKIP dès qu'une
+// page n'avait ni <dialog> ni [popover], avant d'évaluer SC4, et affichait pourtant « SC1–SC4 sans écart » : une
+// page dotée d'un thème sombre mais sans color-scheme: dark gardait ses barres de défilement blanches en sombre
+// (12 jours de défaut non vu, du 16 au 28/09/2026). SC1–SC3 et SC5 jugent un composant : sans composant, ils sont
+// sans objet. SC4 juge le thème : dès qu'un bloc [data-theme="dark"] ou une règle prefers-color-scheme existe, elle
+// est évaluée, avec ou sans sur-couche. Sans composant ni thème sombre, l'oracle reste SKIP : rien à juger.
+const sc4Seule = composants.length === 0 && reglesDeclarentUnThemeSombre(regles);
+if (composants.length === 0 && !sc4Seule) {
+  NJ.push(`aucun composant en sur-couche dans ce document (ni <dialog>, ni [popover], ni role="dialog"/"alertdialog") et aucun thème sombre déclaré (ni bloc [data-theme="dark"] portant des jetons, ni règle prefers-color-scheme) : ${plageJouee} sans objet, SC4 non évaluée`);
+  sortir('SKIP', 2);
+}
+if (sc4Seule) {
+  plageJouee = plageDeRegles(REGLES_JOUEES.filter(r => !REGLES_SANS_OBJET_SANS_COMPOSANT.includes(r)));
+  NJ.push(`aucun composant en sur-couche dans ce document : ${plageDeRegles(REGLES_SANS_OBJET_SANS_COMPOSANT)} sans objet ; ${plageJouee} évaluée seule parce que le document déclare un thème sombre (TF-2384) — elle juge le thème de la page, pas un composant`);
+}
+
+// ── Appariement élément → règles CSS ───────────────────────────────────────
+// TF-0921 (08/09/2026). Cet oracle appariait par JETON : une règle comptait pour l'élément
+// dès qu'UN de ses morceaux — balise, id, une classe — se retrouvait dans le sélecteur. La
+// mécanique avait déjà été corrigée le 05/09 dans `oracle-declencheurs.mjs` (TF-0833) et
+// subsistait ici à l'identique : deux implémentations divergentes du même geste. Mesuré sur
+// la fixture de sur-couche : un élément héritait d'une bordure venue d'une règle dont il ne
+// portait qu'un seul jeton du sélecteur composé, et SC1 passait POUR LA MAUVAISE RAISON —
+// le pire des verdicts, parce qu'il ne se signale pas.
+// La règle vit désormais à UN endroit, `lib/selecteurs.mjs` : dernier compound, TOUTES ses
+// conditions tenues. Les attributs `popover` et `role` que l'ancien appariement listait à
+// part sont des conditions de compound comme les autres — `[popover]`, `[role="dialog"]` —
+// donc mieux jugés par la règle générale que par une liste de jetons.
+const declarationsPour = (el, { pseudo = false } = {}) =>
+  declarationsDe(el, regles, pseudo ? { pseudoElement: '::backdrop' } : {});
+
+// TF-0834 (lot Produit-61, 05/09/2026). La nullité se lisait sur le DÉBUT de la valeur :
+// « 0 » en tête suffisait. `box-shadow: 0 -8px 24px var(--ombre)` — l'écriture naturelle
+// d'une ombre portée, décalage horizontal d'abord — était donc prise pour une absence de
+// contour, et SC1 déclarait NUE une fenêtre parfaitement habillée. Le contournement était
+// d'écrire la couleur en tête, c'est-à-dire de tordre le CSS pour plaire au juge : une
+// passe de maquette payée pour cela.
+//
+// La nullité se décide maintenant PAR COMPOSANTES : une valeur n'est nulle que si CHACUN
+// de ses morceaux est nul. Un seul morceau porteur — une longueur non nulle, une couleur,
+// un style de trait — et la propriété est posée.
+const MOT_NUL = /^(?:none|transparent|initial|unset|revert|hidden)$/i;
+const MORCEAU_NUL = /^0(?:[a-z%]+)?$/i; // 0, 0px, 0rem, 0% — un zéro, quelle qu'en soit l'unité
+const NUL = val => {
+  const v = String(val).trim();
+  if (!v) return true;
+  return v.split(/\s+/).every(m => MORCEAU_NUL.test(m) || MOT_NUL.test(m));
+};
+const CONTOUR = ['border', 'border-color', 'border-width', 'border-style', 'border-top',
+  'border-block-start', 'outline', 'box-shadow'];
+// Deux questions distinctes, deux mesures. « Posé et opaque » pour la SURFACE d'une
+// sur-couche : un fond transparent laisse voir la page à travers la fenêtre. « Déclaré »
+// pour un CONTRÔLE : un `background: transparent` explicite est une DÉCISION (un bouton
+// fantôme), pas un oubli — sa légitimité comme point d'entrée relève du registre des
+// déclencheurs (oracle-declencheurs), pas d'ici.
+const pose = (d, props) => props.some(p => d.get(p) !== undefined && !NUL(d.get(p)));
+const declare = (d, props) => props.some(p => d.get(p) !== undefined);
+const aFond = d => pose(d, ['background', 'background-color']);
+const aTexte = d => pose(d, ['color']);
+const aContour = d => pose(d, CONTOUR);
+
+// ── SC1 · la surface du composant est habillée ─────────────────────────────
+// Le degré d'exigence suit le RENDU PAR DÉFAUT, il n'est pas un goût : la feuille de
+// style du navigateur pose sur un <dialog> ou un [popover] `background-color: canvas`,
+// `color: canvastext` et une bordure — trois valeurs qui gagnent sur l'héritage et qui
+// suivent le schéma de l'OS. Un conteneur `role="dialog"`, lui, hérite normalement de
+// la couleur de texte de la page : la lui réclamer serait un contrôle qui ment.
+for (const c of composants) {
+  const d = declarationsPour(c.el);
+  const manques = [];
+  if (!aFond(d)) manques.push('fond');
+  if (c.natif && !aTexte(d)) manques.push('couleur de texte');
+  if (!aContour(d)) manques.push('contour (bordure, outline ou ombre)');
+  if (!manques.length) continue;
+  add('bloquant', 'SC1',
+    `composant en sur-couche « ${c.nom} » (${c.provenance}) rendu NU : ${manques.join(', ')} — ` +
+    'aucune règle du document ne le pose, donc c\'est le rendu par défaut du navigateur qui s\'affiche, ' +
+    'pas l\'habillage de la marque (TF-0796)',
+    c.provenance);
+}
+
+// ── SC2 · les contrôles de la sur-couche sont habillés ─────────────────────
+const CONTROLES = new Set(['button', 'input', 'select', 'textarea']);
+for (const c of composants) {
+  const vus = new Set();
+  for (const el of elements(c.el)) {
+    if (!CONTROLES.has(el.tag)) continue;
+    if (el.tag === 'input' && /^(hidden)$/i.test(String(el.attrs.type || ''))) continue;
+    const signature = `${el.tag}${el.attrs.type ? `[type=${el.attrs.type}]` : ''}` +
+      (classesDe(el).length ? `.${classesDe(el)[0]}` : '');
+    if (vus.has(signature)) continue;
+    vus.add(signature);
+    const d = declarationsPour(el);
+    const manques = [];
+    if (!declare(d, ['background', 'background-color', 'appearance', '-webkit-appearance'])) manques.push('fond ou appearance');
+    if (!declare(d, ['color'])) manques.push('couleur de texte');
+    if (manques.length < 2) continue; // une facette déclarée = le contrôle a été pris en main
+    add('bloquant', 'SC2',
+      `contrôle « ${signature} » de la sur-couche « ${c.nom} » rendu NATIF : ${manques.join(', ')} — ` +
+      'un bouton non habillé prend l\'apparence du système d\'exploitation, pas celle de la page ' +
+      '(le défaut constaté le 01/09 : « boutons natifs »)',
+      `${c.provenance} · ${c.nom}`);
+  }
+}
+
+// ── SC3 · le voile ::backdrop d'un composant modal est habillé ─────────────
+// Le pseudo-élément ::backdrop n'existe QUE pour le top-layer (dialog modal, popover) :
+// un conteneur role="dialog" peint son voile avec un élément à lui, que cette règle ne
+// saurait pas reconnaître. La réclamer là serait un refus au nom d'une convention.
+for (const c of composants) {
+  if (!c.natif || !c.modal) continue;
+  const d = declarationsPour(c.el, { pseudo: true });
+  if (aFond(d)) continue;
+  add('majeur', 'SC3',
+    `composant modal « ${c.nom} » sans voile habillé : aucune règle ::backdrop ne pose de fond — ` +
+    'le voile par défaut du navigateur ignore le thème de la page et ne suit aucun jeton',
+    `${c.provenance} · ${c.nom}`);
+}
+
+// ── SC5 · une modale ou un tiroir contient le défilement (avertissement, TF-1911) ──
+// Sans `overscroll-behavior: contain`, le défilement de la fenêtre se prolonge dans la page
+// derrière elle (Vercel Web Interface Guidelines l.106 ; Emil Kowalski, mobile-native §6).
+// `none` est accepté : il contient aussi, et supprime en plus le rebond. Visés : <dialog>,
+// role="dialog"/"alertdialog", et les conteneurs dont la classe nomme un tiroir (drawer,
+// sheet, tiroir) ; un [popover] seul, qui ne défile pas, n'est pas visé. La propriété est
+// cherchée sur le composant et sur ses descendants (le conteneur qui défile est souvent un
+// enfant). Sur la racine de la page les sources divergent : non jugée.
+for (const c of composants) {
+  const el = c.el;
+  const visee = el.tag === 'dialog' || ['dialog', 'alertdialog'].includes(roleDe(el))
+    || classesDe(el).some(k => /drawer|sheet|tiroir/i.test(k));
+  if (!visee) continue;
+  const contient = [el, ...elements(el)].some(x => {
+    const d = declarationsPour(x);
+    return /^(contain|none)\b/i.test(String(d.get('overscroll-behavior') ?? d.get('overscroll-behavior-y') ?? ''));
+  });
+  if (contient) continue;
+  add('avertissement', 'SC5',
+    `composant en sur-couche « ${c.nom} » (${c.provenance}) sans overscroll-behavior: contain : ` +
+    'le défilement de la fenêtre se prolonge dans la page derrière elle — le poser sur le composant ou sur son conteneur défilant',
+    `${c.provenance} · ${c.nom}`);
+}
+
+// ── SC4 · color-scheme déclaré par thème ───────────────────────────────────
+// La règle vaut pour la page qui rend un composant en sur-couche : c'est là que le
+// navigateur peint pour son propre compte. Le socle de jetons la porte à la source
+// (scripts/generer-tokens-css.mjs, vérifié par oracle-dtcg D3) ; ici on vérifie qu'elle
+// est bien ARRIVÉE jusqu'à la page — par son CSS ou par le fichier --tokens.
+{
+  // R-30 : un bloc @media (prefers-color-scheme: dark) n'est pas le thème sombre (check_html G1).
+  // estAutoSombre et estSombre vivent dans lib/surcouche.mjs, lues aussi par le lanceur (TF-2384).
+  if (regles.some(estAutoSombre)) {
+    add('avertissement', 'SC4', 'bloc @media (prefers-color-scheme: dark) : auto-sombre hérité de l’OS, retiré par R-30 et refusé par check_html G1 — il ne compte pas comme thème sombre ; déclarer le sombre (et son color-scheme: dark) sous :root[data-theme="dark"]', 'bloc @media prefers-color-scheme');
+  }
+  const schemas = [];
+  for (const r of regles) {
+    for (const m of r.body.matchAll(/(^|[;{\s])color-scheme\s*:\s*([^;]+)/gi)) {
+      schemas.push({ sombre: estSombre(r), valeur: m[2].trim().toLowerCase(), selecteur: r.selector.trim().slice(0, 60) });
+    }
+  }
+  const aThemeSombre = regles.some(r => estSombre(r) && /--[\w-]+\s*:/.test(r.body));
+  const clairDeclare = schemas.some(s => !s.sombre && /\blight\b/.test(s.valeur));
+  const sombreDeclare = schemas.some(s => s.sombre && /\bdark\b/.test(s.valeur));
+  const meta = elements(root, 'meta').find(m => /^color-scheme$/i.test(String(m.attrs.name || '')));
+
+  if (!clairDeclare) {
+    add('bloquant', 'SC4',
+      'aucune déclaration CSS « color-scheme » pour le thème de base : les composants que le ' +
+      'navigateur peint lui-même (top-layer, contrôles natifs, barres de défilement, ::backdrop) ' +
+      'suivent le réglage du système d\'exploitation, pas le thème de la page' +
+      (meta ? ` — la balise <meta name="color-scheme" content="${String(meta.attrs.content || '').slice(0, 20)}"> annonce ce que la page SUPPORTE, elle ne suit pas la bascule` : '') +
+      '. Poser « color-scheme: light » au bloc :root (TF-0796)',
+      'bloc de tokens');
+  }
+  if (aThemeSombre && !sombreDeclare) {
+    add('bloquant', 'SC4',
+      'un thème sombre est déclaré (bloc [data-theme="dark"]) ' +
+      'mais aucun « color-scheme: dark » ne l\'accompagne : la page bascule, les composants natifs ' +
+      'restent clairs — le rendu bâtard du 01/09, dans l\'autre sens',
+      'bloc de thème sombre');
+  }
+  if (!aThemeSombre) {
+    NJ.push('SC4 : aucun bloc de thème sombre dans ce document — seul le schéma de base a été exigé (clair strict)');
+  }
+}
+
+// ── Verdict ────────────────────────────────────────────────────────────────
+F.sort((a, b) => ({ bloquant: 0, majeur: 1, avertissement: 2, info: 3 })[a.sev] - ({ bloquant: 0, majeur: 1, avertissement: 2, info: 3 })[b.sev]);
+const durs = F.filter(f => f.sev === 'bloquant' || f.sev === 'majeur');
+if (!jsonOnly) {
+  process.stderr.write(durs.length
+    ? `FAIL — ${durs.length} écart(s) dur(s) sur ${sc4Seule ? 'le thème de la page (SC4 seule, aucun composant en sur-couche)' : composants.length + ' composant(s) en sur-couche'}\n`
+    : `PASS — ${sc4Seule ? 'aucun composant en sur-couche, thème sombre déclaré' : composants.length + ' composant(s) en sur-couche'}, ${plageJouee} sans écart\n`);
+}
+if (durs.length) sortir('FAIL', 1);
+sortir('PASS', 0);

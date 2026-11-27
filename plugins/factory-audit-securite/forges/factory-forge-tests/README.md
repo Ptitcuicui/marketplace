@@ -1,0 +1,2216 @@
+# Forge Tests
+
+> Rendre la qualité d'un projet vérifiable, reproductible et enrichissable dans le temps —
+> sans dépendre de la mémoire d'un humain sur ce qu'il faut penser à vérifier.
+
+**État : outil en service.** Le noyau, ses adaptateurs, le générateur de cas, le registre
+de dette et la recette du corpus sont écrits et exécutables. La recette officielle
+(`recette/verifier_corpus.py`) détecte **chacun** des défauts plantés au banc rouge — leur
+compte vivant est celui de `CORPUS` dans ce fichier, jamais recopié ici (loi 4) — ne lève
+**aucun finding bloquant** au banc vert, et vérifie sur pièces — en treize sections — le
+lecteur SQL (RT-8), la qualification des non-testables (RT-6), l'analyse statique des
+divergences (RT-9 / RT-10), la suite unitaire (TF-0006) et le linter (TF-0226).
+
+*Ces deux derniers pas existent pour la même raison : un contrôle que rien ne joue n'est pas
+un garde-fou. `pytest` puis `ruff` étaient configurés sans qu'aucune vérification ne les
+appelle ; ils sont désormais des sections comme les autres, et leur échec fait tomber S-01.*
+
+## Utilisation
+
+Cette forge ne se lance pas seule : la Factory la mobilise quand votre demande en a besoin.
+Ouvrez une session Claude Code dans le dossier de votre projet et collez cette phrase, la même
+pour tous les cas d'usage :
+
+```
+Utilise https://github.com/Ptitcuicui/factory pour ce projet
+```
+
+La Factory installe ce qui manque, cette forge comprise, puis vous demande ce que vous voulez
+obtenir. Détail : [README de la Factory](https://github.com/Ptitcuicui/factory#utiliser-la-factory--une-seule-phrase).
+
+## Catalogue de services
+
+> Section proposée par la campagne « catalogues » du pilot (2026-08-13) — générée depuis
+> la source unique `catalogues/catalogue.jsonl` du pilot (v1.6.0, challengée état de
+> l'art le 12/08/2026). **prouvé** = preuve exécutée ; *déclaré* = méthode documentée seulement.
+
+| Service | Intention (« je veux… ») | Point d'entrée | Statut |
+|---|---|---|---|
+| **Auditer une suite de tests** | savoir ce que mes tests couvrent vraiment et ce qui n'est pas exercé | `uv run python -m forge_tests <racine> --json [--sortie <fichier>]` | prouvé (experimental) |
+| **Générer des cas de tests à adopter et exécuter** | recevoir des cas de tests que j'adopte, j'exécute — ou que je solde motivés (R-40) — sans pollution de mon projet | `uv run python -m forge_tests <racine> --generer <dossier-cas-derives>` | prouvé (experimental) |
+| **Livrables de tests dérivés (cas à adopter et exécuter)** | obtenir cahiers de tests, jeu de données synthétique et dashboard, chacun publiant son **solde** de cas non soldés | `uv run python -m forge_tests <racine> --livrables <dossier-cas-derives>` | prouvé (experimental) |
+| **Tendance et reprise ciblée** | comparer deux audits et ne rejouer que ce qui n'était pas vert | `uv run python -m forge_tests <racine> --precedent <r.json> | --reprendre <r.json>` | prouvé (experimental) |
+| **Inventaire sans exécution** | cartographier la surface de test sans rien exécuter | `env FORGE_TESTS_SANS_EXECUTION=1 + CLI` | déclaré (experimental) |
+| **Impact par diff, flaky, propriétés, mutation par risque** | auditer moins mais juste : cibler par diff, isoler les flaky, proposer du property-based | `forge_tests\{impact,flaky,generateur_proprietes}.py · risque.repartir_mutants` | déclaré (experimental) |
+| **Rapport exhaustif test-par-test** | obtenir le verdict et le pourquoi de CHAQUE test, pas seulement un agrégat par pan | `forge_tests
+oyau.py (section essais) + forge_tests\junit.py` | prouvé (experimental) |
+| **Prouver la 404 personnalisée par langue (M-9)** | joindre au dossier de MEP la preuve que chaque adresse inconnue rend une 404 du même gabarit, par langue | `uv run python recette/quatre_cent_quatre.py <url-préprod> --prefixes fr,en` | prouvé (experimental) |
+| **Une suite jouée par la chaîne, ou déclarée hors portée (TF-1043)** | savoir si un fichier de suite présent au dépôt est réellement collecté par la chaîne, ou s'il s'est tu en silence | `uv run python -m forge_tests.chaine <racine>` | prouvé (experimental) |
+
+Le catalogue consolidé des dix forges vit chez le pilot :
+[factory-pilot/catalogues/CATALOGUES.md](https://github.com/Ptitcuicui/factory/blob/main/catalogues/CATALOGUES.md).
+
+## Le problème
+
+Une suite de tests verte ne dit rien de ce qu'elle n'atteint pas. Le défaut fondateur du
+projet, constaté sur un cas réel : une suite d'interface qui restait sur les premières pages
+d'une application, sans jamais atteindre les suivantes ni exercer tous les types de boutons.
+La suite passait. Rien, dans son exécution, ne signalait les écrans qu'elle ignorait.
+
+Cause : **biais de disponibilité du générateur** — les tests sont écrits depuis ce que l'agent
+a sous les yeux, pas depuis un inventaire mécanique de la surface de l'application.
+
+Conséquence de conception : **inverser le sens de la génération**. Énumérer d'abord la surface
+depuis le code source, générer ensuite, mesurer le ratio couvert / inventorié, échouer sous
+seuil — et nommer chaque élément non exercé plutôt que de produire un total agrégé.
+
+## Les deux contre-oracles
+
+| Question | Contre-oracle | Défaut attrapé |
+|---|---|---|
+| A-t-on **atteint** tout ce qui existe ? | Couverture de surface | Parcours tronqué, élément jamais exercé |
+| Ce qu'on atteint, le **vérifie**-t-on ? | Score de mutation | Assertion affaiblie, doublure trop permissive |
+| Ce qui est **promis** existe-t-il ? | Contrôle statique de l'interface | Bouton, lien, formulaire inertes — que nulle suite ne peut atteindre |
+| Tout le **code** est-il seulement regardé ? | Inventaire de modules | Module jamais importé par la suite, module métier jamais muté |
+| Ce que l'**utilisateur** ouvre tient-il debout ? | Parcours d'une instance servie et peuplée | Page en erreur, console rouge, écran vide, bouton sans effet en conditions réelles |
+
+**Règle dure** : le score de mutation ne peut jamais être publié seul. Il se calcule sur le
+seul périmètre atteint et flatte d'autant plus que la suite est lacunaire. Un rapport qui
+porterait un score de mutation sans aucune couverture de surface est **refusé** (code 2).
+
+## Usage
+
+```bash
+uv sync                                        # environnement de Forge Tests
+uv run python -m forge_tests <projet>          # rapport lisible
+uv run python -m forge_tests <projet> --json   # rapport machine
+```
+
+| Option | Effet |
+|---|---|
+| `--json` | rapport complet en JSON sur stdout (sinon résumé lisible) |
+| `--pans <pan> [...]` | restreint l'audit à ces pans (`front interface api data migrations batch fichiers back securite accessibilite contraste clavier visuel plancher qualif prompts i18n workers supabase parcours-personas reglages-plateforme`) |
+| `--generer <dossier>` | dépose les cas de test générés dans ce dossier de **dépôt extérieur** — jamais dans le projet analysé. Ces cas sont **à adopter et exécuter** (R-40), pas un livrable en soi. Les messages partent sur stderr : `--generer --json` produit un stdout JSON pur |
+| `--sortie <fichier>` | persiste le rapport dans ce fichier, **à l'identique** de stdout (le dossier parent est créé au besoin) |
+| `--python <interpréteur>` | interpréteur qui lance la suite du projet (couverture, mutation) quand il n'a pas de `.venv` : un **outil autonome** rangé hors de `backend/` (TF-2173). Équivaut à `FORGE_TESTS_PYTHON` et prime sur sa valeur dans `.env.forge-tests` ou `audit.env`. Un chemin qui n'existe pas est refusé à l'entrée (code 2), jamais remplacé par un autre interpréteur |
+| `--reprendre <rapport.json>` | relit un rapport antérieur et **ne rejoue que ce qui n'était pas vert** ; le rapport produit fusionne l'ancien et le neuf avec la provenance de chaque élément — voir « Audit de qualification avec reprise » |
+| `--livrables <dossier>` | produit les **livrables dérivés** dans ce dossier de dépôt, **hors du projet audité** : deux cahiers de tests, un jeu de données synthétique, un dashboard HTML autonome. Régénérés à chaque audit, `--reprendre` compris. Messages sur stderr — voir « Cahiers de tests dérivés et dashboard d'exécution » |
+| `--copie-output` | avec `--livrables` : dépose aussi une copie du **dashboard daté** dans `<projet>/output/`, la pièce que `ETAPE-MEP.md` § 4 du pilot exige au dossier de MEP (TF-1808). Seul ce fichier entre dans le projet, sous `output/`, que l'audit exclut ; une copie existante de contenu différent est refusée, jamais écrasée |
+| `--precedent <rapport.json>` | rapport antérieur servant de **point de comparaison** : le dashboard affiche alors la tendance de chaque compteur. Sans lui, l'onglet Synthèse le déclare |
+
+### Codes de sortie
+
+| Code | Signification |
+|---|---|
+| `0` | `PASS` — tous les pans attendus couverts, aucun défaut bloquant |
+| `1` | `FAIL` — au moins un élément inventorié n'est pas exercé, ou un seuil n'est pas tenu, ou un test de la suite backend du projet, ou de sa suite e2e Playwright, est rouge (TF-2269 et TF-2286 : constat `suite-rouge:<test>` nommé, jamais un SKIP « couverture non mesurable ») |
+| `2` | **Rapport refusé** (règle d'affichage conjoint) ou **erreur d'exécution**. Dans les deux cas stdout porte un JSON `{"verdict": "REFUSE"\|"ERREUR", "motif": "…"}` et la trace part sur stderr |
+| `3` | `PARTIEL` — au moins un pan attendu n'a pas pu être couvert. Chaque pan non couvert est nommé **avec son motif ET son chemin de couverture**. Non bloquant par décision de conception : un projet dont un pan n'a pas d'adaptateur reste auditable. Un **essai non exécuté** (TF-2254) — un test sauté dans la suite backend ou e2e que l'audit a lancée, lue en JUnit — rend aussi `PARTIEL`, nommé au non-jugé : « 27 passés, 1 sauté » ne se lit plus `PASS`. Une suite backend **interrompue faute de temps** (TF-2311) rend, pour chacun des pans qui la lisent (`api`, `data`, `migrations`, `batch`, `fichiers`), le verdict de pan `DELAI_DEPASSE` : ni `SKIP` (la suite a démarré), ni `FAIL` (aucun test n'a échoué). Le motif commence par le nom du verdict, donne la durée atteinte, le délai et le réglage `FORGE_TESTS_DELAI_BACKEND_S` avec une valeur à essayer (le double du délai atteint, la durée réelle étant inconnue), et l'action du rapport est un réglage `auto_ia` / `mep-config`. La suite e2e du front (`FORGE_TESTS_DELAI_FRONT_S`) et le rejeu des migrations sur base neuve (`FORGE_TESTS_DELAI_MIGRATIONS_S`), 900 s par défaut, rendent le même verdict (TF-2389) : le pan `front` en `DELAI_DEPASSE` ; les pans `migrations` et `data`, dont le rejeu interrompu n'a pas vérifié l'effet réel, en `DELAI_DEPASSE` au lieu du `PASS` de leur couverture (un `FAIL` reste `FAIL` et dit le délai) |
+| `4` | **Refus G-1** — le dossier passé à `--livrables` tombe dans le projet audité. Distinct du `2` : ce n'est pas une panne de génération mais un dossier mal désigné, et le remède n'est pas le même. Le motif est imprimé **en queue de sortie** : `G-1 : livrables HORS projet requis — chemin reçu : <chemin>`. Le rapport, lui, reste publié |
+
+### Un pan non couvert sort une action, pas un constat
+
+`pans_non_couverts[]` porte, pour chaque pan, trois champs — jamais un nom seul :
+
+```json
+{
+  "pan": "qualif",
+  "motif": "qualif : aucune instance servie declaree — le pan exige une application EN SERVICE et PEUPLEE…",
+  "pour_couvrir": "servir une instance PEUPLEE du produit et declarer son URL dans FORGE_TESTS_QUALIF_URL ; fournir un compte par FORGE_TESTS_QUALIF_LOGIN / …"
+}
+```
+
+Le motif dit **pourquoi la mesure n'a pas eu lieu** ; `pour_couvrir` dit **ce qu'il faut faire
+pour qu'elle ait lieu** — adaptateur à écrire, configuration à fournir, convention à respecter.
+La sortie d'un audit partiel devient ainsi une liste de travaux, pas un relevé de manques. Le
+chemin est déclaré par l'adaptateur lui-même (constante `POUR_COUVRIR`), jamais par le noyau :
+lui ne connaît aucune technologie et ne saurait pas quoi dire.
+
+### `actions[]` — qui répare, et où
+
+Un rapport nommait des défauts sans jamais dire **qui** les répare. Trois destinataires
+existent réellement, et les confondre adresse le travail au mauvais interlocuteur :
+
+| catégorie | ce qu'elle signifie |
+|---|---|
+| `auto_ia` | un agent de code sait le faire seul : la source qui fait foi (schéma OpenAPI, contrainte SQL, mutant survivant) dit exactement ce qu'il faut écrire. Reste une **proposition à relire** — la loi du générateur ne bouge pas |
+| `manuelle_dev` | un développeur doit **trancher** : câbler ou retirer une affordance, aligner une déclaration sur un comportement, décider ce que le test doit affirmer |
+| `manuelle_utilisateur` | personne d'autre que l'humain qui exploite le produit ne peut le faire : fournir un identifiant, servir une instance peuplée, **arbitrer** qu'un rendu modifié est bien le rendu voulu |
+
+Et cinq **étapes cibles** qui disent où la correction atterrit : `development`, `tests-suite`,
+`design`, `mep-config`, et `forge` — cette dernière réservée au **défaut d'auditeur** : la forge
+ne sait pas classer la classe de finding, ou n'a pas d'adaptateur pour le pan. Un défaut de la
+forge se nomme comme les autres, il ne se tait pas.
+
+```json
+{
+  "finding_ref": "visuel/visuel:/accueil",
+  "categorie": "manuelle_utilisateur",
+  "etape_cible": "design",
+  "attendu": "ARBITRER le rendu de « visuel:/accueil » : valider le nouveau golden si le changement est voulu, sinon corriger le rendu…"
+}
+```
+
+Deux règles dures :
+
+- **le champ vit au rapport JSON, pas au dashboard.** Si le HTML calculait la classification,
+  deux lecteurs du même audit — l'un par la page, l'autre par `jq` — auraient deux vérités ;
+- **tout finding a exactement une action.** Un constat sans destinataire est un constat qui ne
+  sera pas traité. La recette le vérifie, classe par classe.
+
+Les entrées qui ne viennent pas d'un finding portent un préfixe explicite : `non-testable:<pan>`
+(configuration absente, regroupée par champs requis) et `pan-non-couvert:<pan>`.
+
+Filtre attendu par le **DOSSIER-MEP** du pilot — une seule expression, sans traitement :
+
+```bash
+jq '.actions[] | select(.categorie=="manuelle_utilisateur")' rapport.json
+```
+
+## Cahiers de tests dérivés et dashboard d'exécution
+
+`--livrables <dossier>` produit quatre fichiers datés, nommés à la convention Factory
+(`<Produit> - <Nature> - AAAAMMJJ<i>.<ext>`), dans un **dossier de dépôt extérieur au projet
+audité**. Le garde-fou G-1 n'est pas une convention de nommage : le chemin est résolu, et
+s'il tombe sous la racine auditée la production est **refusée avant d'écrire quoi que ce soit**.
+
+| Livrable | Contenu |
+|---|---|
+| `… - Cahier de tests fonctionnels - …md` | chapitré par écran/parcours, sous-chapitré par état (nominal, vide, erreur, chargement). Chaque cas : préconditions, jeu de données associé, exigence(s) rattachée(s), étapes, résultat attendu |
+| `… - Cahier de tests techniques - …md` | chapitré par pan puis module / table / fichier / job |
+| `… - Jeu de donnees de tests - …json` | valeurs **synthétiques uniquement**, vérifiées avant écriture |
+| `… - Dashboard tests - …html` | page autonome à six onglets, dérivée du **seul** rapport JSON |
+
+### Un cas dérivé n'est pas un livrable — trois états, solde attendu zéro (R-40)
+
+La voie « proposition de tests » est **fermée** (R-40 du pilot, 17/08, TF-0349 ; coût mesuré :
+971 cas dérivés pour 0 adopté sur un produit réel — un contrôle jamais joué livré comme s'il
+protégeait). Un cas dérivé **naît « à adopter et exécuter »** : état transitoire, jamais
+terminal. Il se solde de **trois façons, aucune autre**, déclarées par le PROJET dans
+`<projet>/forge/cas-adoptes.jsonl` (lu en lecture seule, G-1) :
+
+| État | Ligne à déclarer | Vérification faite par la forge |
+|---|---|---|
+| **adopté et exécuté** | `{"cas": "F1-3025-3", "test": "frontend/tests/e2e/10-navigation.spec.ts"}` | le test cité doit **exister**, sinon la déclaration est refusée avec son motif |
+| **`non_testable` motivé** (RT-6) | `{"cas": "T2-0481-1", "non_testable": true, "champs_requis": ["FORGE_TESTS_QUALIF_URL"]}` | `champs_requis` **non vide** — il se répare en fournissant, pas en écrivant un test |
+| **écarté par décision humaine nommée** | `{"cas": "F1-3025-2", "ecarte_par": "<nom>", "date": "2026-08-17", "motif": "<pourquoi>"}` | `ecarte_par` **et** `motif` exigés — un écart anonyme est un silence déguisé |
+
+Le **solde** `dérivés − adoptés − non_testables − écartés` est calculé par
+`forge_tests.adoption` et **publié** en tête de chaque cahier, par chapitre, et sur le
+dashboard. Le solde attendu est **zéro** : un cahier non soldé porte un **reste-à-faire**, ce
+n'est pas un livrable clos. Une déclaration invérifiable reste **au** solde, avec son motif —
+sinon le solde descendrait sur du vide (RT-13).
+
+Les références de cas sont **stables** d'un audit à l'autre : elles sont citables depuis du
+code. Antériorité : les fichiers et rapports écrits avant le 17/08 portent l'ancien vocabulaire
+(`proposition`) — le lecteur l'accepte et l'affiche comme « à adopter », le producteur ne
+l'émet plus.
+
+### « Exhaustif » — une définition opposable, pas une intention
+
+> Chaque élément de surface inventorié porte **au moins un cas**, ou figure en **« non couvert »
+> avec sa raison**. Zéro absence silencieuse.
+
+C'est la seule définition qui se contrôle : « tous les cas importants » ne se contrôle pas. Le
+tableau d'exhaustivité est en tête de chaque cahier, et la recette vérifie que **chaque élément
+du rapport** figure bien dans l'un des deux paniers.
+
+Un élément qu'aucune exécution ne pouvait atteindre ici (configuration absente) ne reçoit **pas**
+un cas de complaisance : il est déclaré non couvert, avec les champs à fournir. La loi du
+générateur ne change pas d'un étage à l'autre — un cas qu'on sait injouable invite à assouplir
+son assertion pour le faire passer, c'est-à-dire le test-fitting que G-2 interdit.
+
+### Chapitres dérivés — un pan futur apparaît seul
+
+Les chapitres ne sont écrits nulle part en dur. Chaque adaptateur déclare les siens :
+
+```python
+CHAPITRES = (
+    {"code": "T2", "famille": "technique", "titre": "Données",
+     "decoupe": "table", "axe_cas": "unitaire"},
+)
+```
+
+Le cahier et le dashboard les **dérivent du registre**. Un pan ajouté demain apparaît avec son
+chapitre sans qu'une ligne soit touchée ; un pan qui n'en déclare aucun reçoit quand même un
+chapitre, nommé « pan sans chapitre déclaré » — visible, jamais absent. Un axe de découpe ou de
+génération de cas inconnu ne casse rien : il retombe sur un repli, **déclaré dans le cahier**.
+
+Les pans donnent aujourd'hui : `F1` parcours bout en bout, `F2` écrans × états, `F3`
+affordances, `F4` accessibilité, `F5` rendu visuel (goldens × thèmes × largeurs, déclarés par le
+pan `visuel` lui-même) ; `T1` API par routeur, `T2` données par table, `T3` migrations par
+fichier (aller / retour / rejeu), `T4` batch par job, `T5` fichiers par format, `T6` robustesse
+de la suite par module, `T7` sécurité, `T8` prompts & modèles.
+
+### Sceau — une édition manuelle est un défaut, et ça se voit
+
+Chaque cahier s'ouvre sur un bloc de sceau : empreintes SHA-256 des **sources** (rapport,
+référentiel d'exigences, jeu de données) et du **corps** du document.
+
+```
+<!-- SCEAU FORGE-TESTS
+  produit: ASD Mail Manager 2
+  rapport_sha256: 96921e2aaa6ea9e4165acfa4bef54c8d…
+  sceau_corps: 213f43122dd9bfe29ff8fdee5987296066c…
+-->
+```
+
+Le cahier est **régénéré à chaque audit** : une correction faite dans le fichier serait écrasée
+sans bruit à la passe suivante. Le sceau la trahit avant — `nommage.verifier_sceau()` recompare
+l'empreinte du corps. Corollaire : deux productions du même rapport donnent le **même octet**
+(vérifié par la recette, sha256 à l'appui), ce qui suppose qu'aucune valeur non déterministe
+n'entre dans le document.
+
+### Exigences — un rattachement déclaré, jamais deviné
+
+`FORGE_TESTS_EXIGENCES=<chemin EXIGENCES.json>` (variable d'environnement ou
+`<projet>/.env.forge-tests`). Deux provenances, et elles ne se valent pas :
+
+- `declare` — le référentiel porte lui-même la clé technique (`"elements": ["code:GET /x=200"]`).
+  C'est un **fait** ;
+- `lexical` — le référentiel ne porte que du français et la surface que de la technique. Le
+  rapprochement se fait sur les racines de mots (≥ 2 racines communes de 5 caractères), il est
+  publié **avec sa provenance et la mention « À VALIDER »**.
+
+Affirmer « ce cas vérifie E-014 » sans que rien ne l'établisse fabriquerait une traçabilité
+fausse — pire que pas de traçabilité, parce qu'on cesse de la vérifier. Le référentiel absent
+est **déclaré en tête du cahier** : les cas sont alors dérivés de la seule surface.
+
+La réciproque, que personne ne regarde jamais, est en annexe : **les exigences qu'aucun cas ne
+touche**, nommément. C'est le seul moyen de voir qu'un pan entier du besoin n'a pas de test
+quand la couverture de surface, elle, est au vert.
+
+### Jeux de données — synthétiques, et prouvés tels avant écriture
+
+Un jeu de données déposé à côté d'un cahier est un fichier qui circule. Les valeurs sont
+fabriquées à partir de listes fermées écrites dans le code, les courriels vivent sous `.test`
+(TLD réservé RFC 6761 : aucune adresse n'est joignable), et un garde-fou **codé** relit la
+production **avant** de l'écrire. Il lève — il ne signale pas : une fois le fichier posé, il est
+trop tard.
+
+Trois motifs de refus : un courriel hors domaine réservé ; une valeur qui ressemble à un secret
+(clé `sk-…`, jeton GitHub, JWT, bloc PEM, empreinte hexadécimale longue, identifiants dans une
+URL) ; une valeur qui figure dans la configuration du projet audité (`.env*`) ou dans une
+variable d'environnement sensible.
+
+### Dashboard — six onglets, une seule source
+
+| Onglet | Contenu |
+|---|---|
+| 1 · Synthèse | verdict, compteurs (éléments, passés, échecs, dont bloquants, non joués, actions), seuils opposables avec leur état constaté, tendance vs `--precedent` |
+| 2 · Fonctionnels | chapitres `F*` dérivés, sous-chapitres, éléments et constats |
+| 3 · Techniques | chapitres `T*` dérivés, idem |
+| 4 · Échecs | chaque finding avec sa **raison mesurée**, trié par risque |
+| 5 · Non joués | `non_testables[]` (champs requis, motif) et `pans_non_couverts[]` (motif, `pour_couvrir`) |
+| 6 · Actions | `actions[]` du rapport, filtrable par catégorie et par étape — la page **rend**, elle ne classe pas |
+
+Trois contraintes dures, toutes vérifiées par la recette :
+
+- **autonome** — double-cliquable, zéro requête réseau. Les liens Google Fonts du boilerplate
+  `factory-page-html` sont retirés (incompatibles avec la contrainte) ; le repli système est
+  explicite dans chaque `font-family`, ce que le contrôle de charte exige. `check_html.py` du
+  skill est joué en recette et doit sortir **PASS** ;
+- **zéro secret** — aucune valeur de jeton, clé ou mot de passe n'entre dans la page ; les
+  **noms** des champs manquants, oui, c'est l'information utile. La frontière est déclarée : le
+  jeu de données interdit *toute* valeur de configuration (il doit être intégralement fabriqué),
+  le dashboard interdit les **secrets** — l'URL de l'instance auditée figure au rapport, elle est
+  le sujet de l'audit et la masquer rendrait les constats du pan `qualif` inintelligibles ;
+- **totaux exacts** — chaque compteur affiché porte un `data-total="<clé>"`. La recette relit ce
+  qui est **affiché**, le recompare au rapport, et vérifie que le contrôle **discrimine** en lui
+  soumettant une page dont un total a été volontairement faussé.
+
+Un pan non couvert n'est jamais absent : son chapitre sort **grisé**, avec son motif et son
+chemin de couverture. Un chapitre absent laisserait croire que le sujet n'existe pas dans le
+produit.
+
+## Audit de qualification avec reprise
+
+Un audit réel chez un client ne tient pas en une passe. La première bute sur ce qui n'est pas
+configuré — une clé d'API tierce, un compte de recette, un jeton. Un humain les saisit. La
+seconde passe ne devrait éclairer que ces trous-là. Deux mécanismes rendent ce cycle possible.
+
+### `non_testables[]` — ce qu'aucune exécution ne pouvait atteindre ici
+
+Section **toujours présente** au rapport, même vide (son absence serait indiscernable d'un
+« rien à signaler », qui est exactement le silence que le framework interdit). Chaque entrée
+porte `element`, `champs_requis[]`, `pan` et `motif` :
+
+```json
+"non_testables": [
+  { "element": "endpoint:GET /api/factures", "champs_requis": ["ZZ_JETON_CLIENT"],
+    "pan": "api", "motif": "api : non exercable sans configuration (constate) — fournir …" }
+]
+```
+
+Trois sources, de la plus sûre à la plus prudente :
+
+1. **constaté** — la trace du run en échec **cite** une variable absente : `KeyError: 'X'`,
+   `X is not set`, `Field required` de `pydantic-settings`, `SKIPPED … X`. Le projet audité dit
+   lui-même ce qui lui manque ;
+2. **constaté** — un adaptateur le déclare (l'authentification déclare `FORGE_TESTS_API_URL`,
+   `…_LOGIN`, `…_PASSWORD` quand aucun compte n'est configuré) ;
+3. **présumé** — le projet déclare ses clés dans un `.env.example` et l'environnement ne les
+   porte pas. Aucune exécution ne l'a dit : la provenance est marquée `presume`.
+
+Un nom cité mais **correctement fourni** n'est jamais retenu : ce serait du bruit de trace, pas
+un manque. Le mécanisme est générique — n'importe quel adaptateur peut remplir `non_testables`,
+et le noyau les agrège comme il agrège les `non_juge`. Le remplissage automatique se fait en un
+**point unique** au-dessus de tous les adaptateurs : un adaptateur futur en hérite sans une
+ligne de code.
+
+**Chaque champ appartient au pan qui le réclame.** Un domaine de configuration (`acces`,
+`backend`, `front`) est un sac partagé : l'authentification y dépose le compte, le pan `qualif`
+son URL d'instance peuplée. Tout pan en `SKIP` repartait avec le sac entier — le pan `data`
+réclamait `FORGE_TESTS_QUALIF_URL`, qui ne l'aurait jamais débloqué (16 actions
+`manuelle_utilisateur` fausses au rapport ASD du 07/08). Chaque adaptateur déclare donc sa
+constante `CHAMPS_REQUIS` — les variables qui débloquent **ce** pan — et un champ revendiqué
+n'est plus publié que pour ses revendicateurs. Un champ que **personne** ne revendique reste
+partagé : c'est le cas des variables propres au projet audité, citées par une trace, dont aucun
+adaptateur ne connaît le nom.
+
+**Limites déclarées.** Un service tiers injoignable qui ne nomme jamais sa clé reste un pan non
+mesuré ordinaire, pas un non-testable. Les champs tirés d'un `.env.example` sont présumés
+requis : le fichier ne dit pas quel pan dépend de quelle clé.
+
+### `--reprendre` — rejouer ce qui manque, garder ce qui était vert
+
+```bash
+uv run python -m forge_tests <projet> --json --sortie rapport-1.json   # première passe
+# … l'humain saisit les identifiants manquants listés en non_testables …
+uv run python -m forge_tests <projet> --reprendre rapport-1.json --json --sortie rapport-2.json
+```
+
+Sont rejoués les pans qui **n'étaient pas verts** : pans non couverts, pans dont le verdict
+n'est pas `PASS`, pans porteurs d'éléments non exercés, de non-testables ou de findings. Les
+autres ne sont **même pas lancés** — leur contenu est repris tel quel.
+
+Le rapport fusionné porte une section `reprise` :
+
+| Champ | Contenu |
+|---|---|
+| `rapport_repris` | chemin du rapport rechargé |
+| `pans_rejoues` | pans réellement relancés par cette passe |
+| `pans_repris_sans_rejeu` | pans déjà verts, **non relancés** |
+| `provenance[pan]` | `exerce_le_run` : éléments exercés par cette passe · `repris_de` : éléments repris du rapport antérieur |
+
+Chaque finding porte aussi sa `provenance` (`exerce_le_run` ou `repris_de:<chemin>`). Un
+élément exercé au run précédent et non atteint par le nouveau reste **couvert**, et le finding
+« jamais exercé » correspondant disparaît — c'est tout l'objet de la reprise.
+
+`actions[]` est **recalculé** sur le rapport fusionné, jamais repris tel quel : une action
+héritée d'un finding résorbé par la reprise réclamerait un travail déjà fait, et c'est le genre
+de faux positif qui fait fermer la liste.
+
+Si `--livrables` est passé, les livrables sont **régénérés après la fusion**, exactement comme
+après un audit complet. Une reprise qui laisserait un dashboard périmé serait pire qu'aucun
+dashboard : on lirait des chiffres d'avant en croyant lire ceux d'après.
+
+```bash
+uv run python -m forge_tests <projet> --reprendre rapport-1.json \
+    --json --sortie rapport-2.json --livrables ../propositions --precedent rapport-1.json
+```
+
+**Limites déclarées.** La ré-exécution a la granularité du **pan** : un pan à rejouer l'est en
+entier, c'est l'unité qu'un adaptateur sait lancer. La provenance, elle, est donnée élément par
+élément. Et un élément repris atteste d'une mesure **passée** : si le code a changé entre les
+deux passes, seule une passe complète fait foi.
+
+## Contrôle statique de l'interface — pan `interface`
+
+> *Une affordance est câblée, ou elle n'existe pas.*
+
+La couverture endpoint × code ne voit pas les promesses d'interface non tenues. Une suite
+n'atteint jamais un bouton mort : il n'y a rien à atteindre. Le pan `interface` mesure autre
+chose, **en amont de toute exécution** — un `<button>` promet un effet, un `<a>` promet une
+destination, un `<form>` promet un envoi ; le contre-oracle vérifie que la promesse est câblée
+quelque part dans les sources et **nomme** celles qui ne le sont pas (fichier, ligne, élément,
+libellé).
+
+Périmètre : les gabarits rendus tels quels — `.html`, `.htm`, `.jinja`, `.jinja2`, `.j2`,
+`.twig`, `.ejs`, `.hbs` — hors `node_modules`, `.venv`, `dist`, `build`, `.visuel` et autres
+artefacts, **et les destinations littérales des liens des composants React** (`.jsx`, `.tsx`).
+Aucune exécution, aucun navigateur : le pan est disponible là où Playwright ne l'est pas (projet
+non constructible, front servi par le backend, gabarit rendu côté serveur).
+
+Est déclaré **inerte** :
+
+| Cas | Verdict |
+|---|---|
+| `<button>` hors formulaire, sans attribut de gestionnaire, dont ni l'`id`, ni une classe, ni un `data-*` n'est cité dans le JS du projet | inerte |
+| `<button type="submit">` dans un formulaire lui-même sans `action` ni gestionnaire | inerte |
+| `<a>` sans `href`, ou `href` valant `#`, vide, `javascript:;`, `javascript:void(0)` | inerte |
+| `<form>` sans `action` ni gestionnaire de soumission | inerte |
+
+Sont réputés câblés : tout attribut de gestionnaire (`onclick`, `@click`, `v-on:`, `x-on:`,
+`hx-*`, `wire:`, `ng-*`, `data-action`, `formaction`…), un `href` réel, une `action` réelle,
+`type="reset"` (effet natif), et un `id`/classe/`data-*` cité dans le JS du projet — script en
+ligne du document compris. Un élément `disabled` ou `aria-disabled="true"` n'est pas accusé :
+son inertie est **voulue et déclarée**.
+
+### Liens des composants React — la destination, pas le câblage (TF-0283)
+
+Les composants `.jsx`/`.tsx` étaient **entièrement** hors périmètre : « leur câblage est une
+expression du langage, pas un attribut du gabarit ». C'est vrai du **câblage** ; c'était faux de
+la **destination**. Le 15/08/2026, sur un produit legacy en production, quatre liens faux
+vivaient dans des `.tsx` — logo anglais vers `/en/blog`, « Contact » de l'en-tête **et** du pied
+de page anglais vers la page *française*, bascule « Français » vers `/blog`. Vrais `href`, pages
+cibles existantes, aucune suite qui clique : invisibles à tout oracle, livrés, signalés deux fois
+par l'humain.
+
+Le pan lit donc aussi les `href`/`to` **littéraux** des `<a>`, `<Link>` et `<NavLink>` des
+composants, et juge quatre choses :
+
+| Contrôle | Constat |
+|---|---|
+| la destination existe dans l'arborescence (routes Next `app/` et `pages/`, tables react-router et TanStack, gabarits, fichiers de `public/`) | `destination absente de l'arborescence` |
+| un composant qui sert une locale ne renvoie pas vers une autre **quand sa contrepartie existe** | `composant de la locale « en » pointant vers « /contact » alors que « /en/contact » existe` |
+| le **logo** mène à l'accueil de sa locale — sa cible est connue d'avance | `lien du logo vers « /en/blog » au lieu de l'accueil « /en »` |
+| la **bascule de langue** mène à l'accueil de la langue visée | `bascule de langue « Français » vers « /blog » au lieu de « / »` |
+
+Classe de finding propre — `lien-casse`, jamais `affordance-inerte` : un lien qui pointe à côté
+**a** un effet, et c'est le mauvais. Il n'y a rien à câbler, il y a une destination à corriger.
+
+**Limites déclarées** (reprises telles quelles en `non_juge`) :
+
+- contrôle **statique** : un gestionnaire posé à l'exécution par un framework, ou une
+  délégation d'événement sur un ancêtre, est invisible ici. « Inerte » se lit *aucun câblage
+  lisible dans les sources* ;
+- un élément jugé câblé ne l'est que par **présomption** : la coïncidence de chaîne suffit à le
+  blanchir. Le pan attrape l'inerte flagrant, il ne certifie pas le câblé ;
+- le câblage prouve l'existence d'un gestionnaire, jamais que son **effet soit observable** —
+  un handler vide passerait pour câblé ;
+- le **câblage** des composants (`.jsx`, `.tsx`, `.vue`, `.svelte`) n'est pas analysé comme celui
+  d'un gabarit ; leur surface interactive est inventoriée par le pan `front` via `data-testid`.
+  Seule la **destination** de leurs liens est jugée — pour React (`.jsx`/`.tsx`), Vue (`.vue`) et
+  Svelte (`.svelte`), chacun avec **sa** grammaire déclarée : les formes liées de Vue (`:to`,
+  `v-bind:href`) et les interpolations Svelte (`href="{x}"`) sont comptées **exprimées**, jamais
+  jugées, et à conflit c'est la liaison qui l'emporte comme à l'exécution (TF-0295). Un dialecte
+  absent de la table — Angular, Astro, Solid — n'est pas lu ;
+- les **locales opposables** sont lues dans l'arborescence littérale **et** dans la configuration
+  du framework (`locales: [...]` de Next, nuxt, next-intl — TF-0295). Quand le produit route ses
+  locales par un segment **dynamique** (`app/[locale]/…`) sans les déclarer, aucune racine de
+  locale n'est connaissable : logo, bascule de langue et cohérence de locale sont alors **non
+  jugés**, et le rapport le dit. Les deviner accusait un logo pourtant correct ;
+- une destination **exprimée** (`href={chemin}`, template avec `${…}`, constante importée) n'est
+  pas résolue : elle est **comptée** et déclarée non jugée. Un lien **relatif** (sans `/`
+  initial) non plus — sa résolution dépend de l'URL de rendu ;
+- si **aucune** route n'est énumérable, le contrôle d'existence est **désactivé** plutôt que
+  deviné : accuser tous les liens d'un projet dont on n'a pas su lire les routes serait un faux
+  positif massif ;
+- « logo » et « bascule de langue » sont reconnus par **heuristique** (mention de `logo` dans le
+  contenu du lien, libellé égal à un nom de langue, attribut `hrefLang`) — un constat ainsi
+  produit se conteste comme tout autre (`.forge-tests-declarations.json`) ;
+- une ancre `#nom` dont la cible n'existe pas dans le document n'est pas jugée morte : la cible
+  peut être injectée au rendu.
+
+### Écart SERVI ↔ VERSIONNÉ — ce que la production sert n'est pas ce que la source promet (TF-0288)
+
+Le 15/08/2026, un menu anglais amputé, signalé **deux fois** par l'humain. La cause évidente était
+fausse : `HeaderEn.tsx` portait bien ses **8 entrées** de premier niveau et ses 36 liens, et il
+était utilisé par 36 pages EN sur 36. La production en servait **trois**. L'écart vivait entre la
+source et le servi, et aucun oracle de l'écosystème ne comparait ces deux termes-là — le pan
+`i18n` compare les locales du servi *entre elles*, le contrôle ci-dessus juge la cohérence
+*interne* de la source, le pan `qualif` juge la *santé* du servi, et un menu amputé mais
+fonctionnel n'est en erreur nulle part. Sans le bloc (b) de l'instruction, la réponse évidente
+aurait été d'ajouter au composant des entrées qu'il portait déjà : un développement inutile sur un
+défaut de **déploiement**.
+
+Le contrôle tient les deux termes, avec des lecteurs déjà livrés — la grammaire de composants
+ci-dessus pour la source, la lecture du build servi du pan `i18n` pour le servi. Il compare les
+entrées de navigation **entrée par entrée**, par destination délocalisée, et rend un verdict de
+machine :
+
+| Issue | Quand | Ce qui est publié |
+|---|---|---|
+| `FAIL` | une entrée promise par la source n'est pas servie | un constat par locale, les entrées manquantes **nommées**, et la phrase qui compte : *le code est déjà correct, c'est le servi qui a dérivé* |
+| `PASS` | chaque entrée promise est servie | la confrontation, avec le nombre d'entrées servies par locale |
+| `SKIP` | un des deux termes manque | **lequel** manque : sans source, il n'y a pas de versionné opposable (l'aggravant du cas fondateur : le produit n'était pas sous git) ; sans build servi, il n'y a rien à confronter |
+
+Classe de finding propre — `ecart-servi-versionne` — et destinataire propre : `manuelle_utilisateur`
+/ `mep-config`, jamais `development`. La suite à donner est un **redéploiement depuis la source**,
+avec la consigne explicite de *ne pas toucher au code*. Le classer en `development` renverrait le
+développeur corriger un code déjà juste, c'est-à-dire refaire l'erreur qui a coûté deux
+« toujours pas ».
+
+Le contrôle se déclare au rapport dans les **trois** issues : un `SKIP` muet rendrait « aucun
+écart » indiscernable de « la comparaison n'a pas eu lieu ».
+
+Bancs d'essai (TF-0300) : la branche qui **accuse** est mesurée par la recette elle-même, entrée
+de corpus `H-20`. `fixtures/banc-rouge/site/` porte la source du site servi par
+`fixtures/banc-rouge/dist` — son menu anglais promet trois entrées de premier niveau quand la
+production n'en sert que deux, la page des tarifs n'étant jamais arrivée au menu. Le banc vert n'a
+pas de source de site : son contrôle reste en `SKIP`, et aucun constat nouveau n'y apparaît. Sans
+cette entrée, seule la suite `pytest` prouvait la branche `FAIL` — exactement l'écart que TF-0293
+venait de fermer pour le pan `i18n`.
+
+**Limites déclarées** (reprises telles quelles en `non_juge`) :
+
+- la comparaison porte sur les liens d'un `<nav>` **littéral**, des deux côtés. Un menu rendu par
+  un composant `<Nav>`, marqué `role="navigation"` ou construit à l'exécution échappe aux deux
+  lecteurs — c'est voulu : les deux côtés doivent voir la même chose, sous peine de mesurer
+  l'écart des lecteurs et non celui du produit ;
+- la comparaison n'est **pas symétrique** : une entrée servie qu'aucune source ne promet n'est pas
+  jugée. Elle peut venir d'un autre composant ou d'un gabarit rendu côté serveur, et l'accuser
+  serait accuser la limite du lecteur ;
+- le « versionné » est le **working tree**, pas une référence git : un produit hors git n'a pas de
+  version opposable, seulement des fichiers. Poser git est le préalable, pas ce contrôle ;
+- la confrontation porte sur la page d'**accueil** de chaque locale servie ; un menu qui ne
+  différerait que sur une page profonde n'est pas vu ;
+- une destination **exprimée** n'entre pas dans les entrées promises — comparer ce qu'on n'a pas
+  résolu accuserait un déploiement correct.
+
+La **prévention** est l'autre volet du même sujet et elle vit chez `forge-ops` (empreinte scellée
+au déploiement, comparée au servi) : chaque volet dans le domaine de sa forge, aucun ne singe
+l'autre — verdict O3 de l'étude d'opportunité du 17/08.
+
+## Seuils opposables — au-dessus des standards, et versionnés
+
+Les valeurs usuelles du marché sont un **plancher de recevabilité**, pas une cible : un produit
+qui les atteint tout juste a une suite qui accompagne son code, pas qui le contredit. Les
+seuils de Forge Tests sont donc plus durs, déclarés dans `forge_tests/seuils.py`, et **publiés
+au rapport** (section `seuils`) avec leur justification — un lecteur qui trouve le verdict
+sévère lit pourquoi sans ouvrir le code.
+
+| Seuil | Valeur | Sévérité | Porte sur | Pourquoi cette valeur |
+|---|---|---|---|---|
+| `mutation_globale` | **0,70** | bloquant | score de mutation agrégé du pan `back` | le standard de recevabilité (mutmut, Stryker) est de l'ordre de 0,60 ; 0,70 le dépasse sans exiger un 1,0 qui pousse à *supprimer* le mutant gênant plutôt qu'à écrire l'assertion manquante |
+| `mutation_module_metier` | **0,50** | bloquant | score de **chaque** module de logique métier muté | un score global de 0,70 se tient très bien avec un module métier à 0,0 noyé dans la masse. Le seuil par module **interdit la compensation** — c'est exactement le défaut soldé par la campagne A-1/A-3. Dès sa mise en service il a attrapé **trois trous d'assertion réels dans la suite du banc vert**, jusque-là réputée saine |
+| `branches_module_exerce` | **0,60** | signalé | couverture de **branches** de chaque module exercé | le standard usuel (0,70) porte sur l'ensemble du code et se laisse compenser ; par module il est plus dur à valeur nominale plus basse. Signalé et non bloquant : `coverage.py` ne voit pas les branches implicites (ternaire, court-circuit), le ratio est minoré par construction |
+| `couverture_surface_api` | **1,00** | bloquant | endpoints × codes de retour | un code d'erreur déclaré que la suite n'émet jamais est un chemin non vérifié : sur la surface d'API, l'exhaustivité est le standard maison |
+| `couverture_surface_modules` | **1,00** | bloquant | modules sources d'un outil à racine plate exercés par la suite | un outil autonome n'a pas d'autre surface que ses modules ; un module jamais importé est du code que personne n'exerce (TF-2173) |
+| `couverture_surface_interface` | **1,00** | bloquant | affordances câblées | « une affordance est câblée ou elle n'existe pas » n'a pas de fraction acceptable |
+| `couverture_surface_qualif` | **1,00** | bloquant | routes UI parcourues sans erreur | une route qui rend une erreur est vue par le premier utilisateur |
+| `couverture_surface_i18n` | **1,00** | bloquant | routes servies dans chaque locale, et dans la bonne langue | une locale publiée est une promesse : une route qui manque dans sa langue est une impasse, une route servie dans une autre langue est un mensonge. Mesuré le 15/08/2026 sur un produit en production : 1 route manquante sur 201, 9 pages sur 200 servies en français sous `/en` |
+| `densite_mots_outils_francais` | **0,08** | bloquant | part de mots-outils français dans une page servie sous une locale non française (**heuristique**) | la marge est ce qui rend ce seuil opposable malgré sa nature : un texte français mesure 0,25 à 0,40 sur ce lexique, un texte anglais reste sous 0,02 — et le lexique exclut délibérément les mots ambigus (`on`, `en`, `a`, `plus`, `car`) |
+
+**Ce qui est « logique métier ».** Le défaut est *oui* : l'exemption se déclare, jamais
+l'exigence. Sont réputés infrastructure les modules nommés `main`, `db`, `database`, `migrate`,
+`settings`, `config`, `conf`, `modeles`, `models`, `schemas`, `deps`, `dependencies`, `wsgi`,
+`asgi` (liste `SOCLE` de `forge_tests/seuils.py`). **Tout le reste** — `services/`,
+`fournisseurs/`, `auth`, `rbac`, adaptateurs — est soumis au seuil par module. Un projet dont
+l'architecture diffère redéclare la liste ; il ne la contourne pas silencieusement.
+
+## La mutation est une campagne À LA DEMANDE (D-34, décision humaine du 01/09/2026)
+
+**La règle, mot pour mot** : « Tous les tests sont pleinement exécutés tout le temps, sauf les
+tests sur les mutants qui sont exécutés à la demande, lors d'un passage en Prod sur proposition de
+l'IA, et uniquement s'ils n'ont été exécutés depuis plusieurs modifications de code. »
+
+Elle répond à une mesure : une campagne réelle du 01/09 tenait 67 minutes, dont **54 de mutation**,
+à 28,2 s par mutant — chaque mutant relance la suite entière. L'étude qui l'a instruite cherchait à
+rendre la mutation moins CHÈRE ; la décision la rend plus RARE, et le raisonnement est le plus
+solide des deux : le coût d'une campagne ne devient un problème que parce qu'on la joue à chaque
+fois. Jouée une fois avant une mise en production, 54 minutes ne sont plus un coût — c'est le prix
+d'une porte, et une porte se franchit rarement.
+
+**Ce que la règle interdit, et c'est le versant qu'on oublierait** : « pleinement exécutés tout le
+temps » ferme la porte à toute SÉLECTION sur la suite ordinaire. Ne rejouer que les tests touchés
+par un changement est **refusé**, et ne se représentera pas sous un autre nom.
+
+| Variable | Défaut | Effet |
+|---|---|---|
+| `FORGE_TESTS_MUTATION` | absente | demande la campagne. Sans elle, le pan rend `SKIP` en DISANT ce qu'il n'a pas mesuré, publie quand même `modules[]`, et le seuil bloquant `mutation_globale` est déclaré **sans porteur** |
+| `FORGE_TESTS_MUTATION_PEREMPTION` | `10` | nombre de commits touchant le **paquet de sources** au-delà duquel la campagne est proposée. « Plusieurs » est un mot ; le seuil est un chiffre, et il est publié au rapport |
+
+La campagne jouée se **note** chez le produit (`forge\mutation-derniere-campagne.json` : commit,
+date, score, survivants). Sans ce point de départ, « depuis plusieurs modifications » n'a rien à
+compter et la porte proposerait la campagne à chaque passage — c'est-à-dire redeviendrait du bruit.
+
+**Une ancienneté inconnue vaut périmée** — pas de dépôt git, pas de campagne antérieure notée, ou
+compte en échec : la campagne est proposée. Le choix inverse ferait passer un projet neuf entre les
+mailles pour toujours, sans que rien ne le dise.
+
+Le rapport publie l'état complet sous `mutation.a_la_demande` — dernière campagne, modifications
+depuis, seuil retenu, et la **proposition** rédigée. « Sur proposition de l'IA » n'a d'exécutant que
+si le texte porte la proposition : un pan qui se contente de se taire ne propose rien.
+
+> Un pan **non demandé** et un pan dont le score est **nul** sont deux choses différentes. Les
+> confondre au tableau de bord ferait lire une absence de mesure comme un échec de mesure.
+
+**L'exception, et elle est unique : la recette de la forge DEMANDE la campagne** (TF-0763). D-34
+porte sur les **produits audités** — « avant un passage en production, après plusieurs
+modifications ». Elle ne dit rien de `recette/verifier_corpus.py`, qui n'audite aucun produit :
+il met le pan à l'épreuve. Livrée sans ce mot le 01/09, la recette a perdu le jour même deux
+défauts de son corpus — **H-08** (assertions permissives) et **A-3** (seuil de mutation par
+module), les deux seuls que la mutation porte — et sortait `ECHEC` **21/23** pour une raison qui
+n'était pas un défaut du framework : le pan n'était simplement plus joué. La recette pose donc
+`FORGE_TESTS_MUTATION=1` sur ses deux bancs, le temps de l'analyse et sans toucher
+l'environnement de l'opérateur. Le coût est assumé : la recette est une porte, pas une boucle.
+
+*Ce que la campagne écrit chez le banc* — le marqueur `forge/mutation-derniere-campagne.json` et
+`forge/avancement.jsonl` — est **ignoré par git, aux bancs seulement** : son contenu change à
+chaque campagne, et TF-0294 le voyait apparaître pendant la recette et REFUSAIT le verdict. Chez
+un vrai produit, ces fichiers restent visibles : c'est tout leur intérêt.
+
+## Le coût du pan, réconcilié avec lui-même (TF-0744, 02/09/2026)
+
+Le rapport de campagne du 31/08 publiait quatre valeurs : 115 mutants, ~54 min de mutation,
+67 min de campagne — et **« ~37 s par mutant »**. Les trois premières sont cohérentes entre
+elles (54 min / 115 = 28,2 s). La quatrième est **arithmétiquement impossible** : 115 × 37 s
+= 71 min, soit **plus que la campagne entière**. Elle n'avait pas été calculée depuis la
+mesure : elle avait été estimée. Toute estimation de gain bâtie dessus était surévaluée
+d'environ **31 %**.
+
+**Le remède est à la source, pas au libellé.** Le pan chronomètre désormais chaque rejeu et
+publie `mutation.cout`, dont la valeur par mutant est **dérivée** (`durée_pan / mutants`) et
+jamais saisie. `anomalies_cout()` refuse tout bloc dont `valeur × mutants` dépasse la durée
+mesurée — l'invariant du défaut fondateur, câblé (`tests/test_tf_0744_cout_mutation.py`,
+fixture rouge sur les chiffres du 31/08, fixture verte sur la valeur dérivée).
+
+**Et la moyenne globale, même juste, ne décrit aucun mutant réel** : `_suite_verte` passe `-x`
+à pytest, donc un mutant **tué** s'arrête au premier échec quand un **survivant** parcourt la
+suite entière. Le bloc publie la décomposition par classe — nombre, moyenne, part du temps de
+mutation — et le mécanisme en toutes lettres.
+
+| Classe | Mutants | Moyenne | Part du temps de mutation |
+|---|---|---|---|
+| survivants | 23 (20 %) | ~52 s | **37 %** |
+| tués | 92 (80 %) | ~22 s | 63 % |
+
+*Décomposition de la campagne fondatrice du 31/08.* **Le coût se concentre sur les mutants qui
+survivent** — c'est-à-dire sur ceux qui portent l'information utile. Un levier d'optimisation
+qui vise « le mutant moyen » vise une classe qui n'existe pas, et c'est ce que la valeur unique
+cachait.
+
+## Le ciblage par ligne mutée : écrit, éprouvé, ÉTEINT (D-36 (a), 01/09/2026)
+
+À l'intérieur d'une campagne, chaque mutant relance aujourd'hui la suite ENTIÈRE — 984 tests
+sur le produit mesuré, pour une poignée qui touchent la ligne altérée. Le ciblage ne rejoue que
+les tests couvrant cette ligne, à partir d'une passe de couverture **par test**
+(`dynamic_context`). Surcoût fixe mesuré le 01/09 : **0,386 s** par mutant (médiane de trois,
+suite de 1 174 tests), contre un critère d'abandon posé à 10 s.
+
+Il vit derrière `FORGE_TESTS_MUTATION_CIBLAGE=1`, **absent par défaut**, et la décision humaine
+du 01/09 l'y maintient : il se vérifie d'abord, il ne se suppose pas. La décision d'hier disait
+« tous les tests sont pleinement exécutés tout le temps » — une phrase qui vise la suite
+ordinaire et reste muette sur le rejeu d'un mutant ; l'ambiguïté a été portée à l'humain plutôt
+que tranchée à sa place.
+
+**La condition de non-perte est JOUABLE, et c'est ce qui rend la décision opposable.** Deux
+campagnes sur le même code, l'une pleine, l'autre ciblée, doivent rendre **exactement la même
+liste de survivants** — pas un score proche, la même liste aux mêmes identifiants :
+
+```
+python recette/non_perte_ciblage.py <projet>
+```
+
+Sortie JSON, exit `0` tenue · `1` perte mesurée · `2` rien à comparer — aucun mutant joué des
+deux côtés, ou campagne « ciblée » qui n'a rien ciblé. Quatre choix y sont portés, et chacun
+contre un verdict faux dans le sens qui rassure :
+
+- **le sens de l'écart n'est pas symétrique.** Un survivant que la ciblée liste EN PLUS coûte du
+  temps ; un survivant qu'elle PERD est un **faux vert** — un mutant déclaré tué par une
+  sélection qui n'a jamais joué le test qui l'aurait tué. Les deux échouent, le rapport les
+  nomme séparément ;
+- **deux campagnes vides se ressemblent parfaitement.** Aucun mutant viable des deux côtés rend
+  `SANS_OBJET`, jamais `PASS` : déclarer tenue une condition jamais éprouvée serait pire que ne
+  pas la jouer ;
+- **l'échantillon est figé des deux côtés.** Le tirage des mutants est déterministe, mais
+  seulement si ses variables ne bougent pas entre les deux passes : elles sont fixées par la
+  recette et publiées au rapport ;
+- **le drapeau demande le ciblage, il ne prouve pas qu'il ait eu lieu.** Quand la carte de
+  couverture par test n'aboutit pas — `coverage` absent du venv du projet, suite rouge, délai
+  dépassé — l'adaptateur repart en suite entière pour chaque mutant, et sans bruit : les deux
+  passes jouent alors la **même** stratégie, les listes coïncident par construction, et le
+  `PASS` ne comparerait qu'une campagne avec elle-même. C'est le piège précédent sous une autre
+  cause, et plus insidieux parce que les campagnes, elles, ne sont pas vides. La preuve exigée
+  est donc **positive** : la campagne ciblée doit publier `mutation.ciblage.carte_obtenue` vrai
+  **et** `mutants_cibles` non nul. Sans cette preuve, `SANS_OBJET` — et le rapport nomme ce qui
+  manque.
+
+**JOUÉE le 14/09/2026 (TF-0748/TF-0749) : la condition de non-perte est VÉRIFIÉE une première
+fois.** Le blocage n'était pas `coverage` (présent dans les venvs des bancs) mais le démon de
+conteneurs arrêté sur ce poste — la suite d'un projet réel s'y monte par conteneur. Démon
+démarré, puis un seul rejeu de `python recette/non_perte_ciblage.py fixtures/banc-vert` :
+`PASS`, 12 mutants viables, liste de survivants identique des deux côtés
+(`mutant:app/main.py:18:0->1`), et la preuve positive du piège n° 4 tenue — `carte_obtenue`
+vrai, 10 mutants sur 12 réellement ciblés (pas une comparaison d'une campagne avec elle-même).
+Rien n'a été simulé. **Ce que cela ne tranche pas** : le ciblage reste éteint par défaut — une
+condition tenue une première fois sur un banc n'est pas le passage en défaut, qui reste une
+décision humaine distincte.
+
+## Périmètre de mutation total et inventaire des modules
+
+**Le périmètre n'est plus une liste blanche.** L'adaptateur de mutation lisait
+`backend/app/*.py` — un `glob` **non récursif**. Sur le premier produit réel, il mutait sept
+modules de socle et ignorait `services/` et `fournisseurs/`, c'est-à-dire toute la logique
+métier : le rapport annonçait *« mutation 37/37, score 1,0 »* sur un produit dont les deux
+tiers du code n'avaient jamais été touchés. La découverte est désormais **récursive sur toute
+l'arborescence des sources**, et toute exclusion est **nominative, motivée et publiée**.
+
+**Profondeur échantillonnée, périmètre total.** Le coût d'une mutation est une exécution de
+suite par mutant. C'est donc la profondeur — combien de mutants par module — qui est bornée,
+jamais le périmètre :
+
+| Variable | Défaut | Effet |
+|---|---|---|
+| `FORGE_TESTS_MUTANTS_PAR_MODULE` | `3` | mutants joués **par module**, répartis à intervalle régulier sur tout le fichier (jamais les *n* premiers, qui seraient tous en tête) |
+| `FORGE_TESTS_MUTATION_PLAFOND` | `400` | garde-fou global ; s'il mord, il est **déclaré** au rapport |
+| `FORGE_TESTS_MUTATION_EXCLUT` | — | motifs `fnmatch` d'exclusion (`app/fournisseurs/*`) ; chaque module écarté est **nommé avec son motif** dans `modules[]` |
+
+L'échantillon est **déterministe** : deux audits du même code jouent les mêmes mutants, et un
+écart de score se lit comme un écart de suite, pas comme un effet du tirage. Il est tiré parmi
+les mutants qui **compilent**, et non filtré après coup : l'ordre inverse laissait des modules
+entiers sans score — sur ASD Mail Manager, huit modules dont `auth.py`, `rbac.py` et
+`services/courrier.py` voyaient leurs trois mutants tirés tomber tous les trois à la
+compilation. Filtrer avant coûte quelques millisecondes ; jouer un mutant coûte une exécution
+complète de la suite.
+
+Un module sans score sort donc avec la **cause exacte**, jamais un motif fourre-tout : aucun
+mutant compilable, aucun échantillonné, ou échantillonné mais non joué (plafond ou délai).
+
+**Ce qui n'est pas muté, et pourquoi.** Docstrings, chaînes, commentaires — et, depuis le
+2026-08-06, le **texte des f-strings**. Sur Python 3.12+ celui-ci n'est plus un jeton `STRING`
+mais une suite de `FSTRING_MIDDLE` : le filtre, écrit sous 3.11, ne le voyait plus. Chaque
+`f"colonnes attendues plat/quantite"` offrait donc un mutant `/` → `*` qui ne change *que* le
+libellé d'un message — équivalent par construction, survivant garanti. L'effet ne se voyait pas
+tant que la mutation ne touchait que huit modules de socle ; le périmètre total l'a révélé en
+plein, les modules `fournisseurs/` d'ASD Mail Manager — surtout faits de messages d'erreur —
+sortant tous à 0,00, un score qui n'accusait pas la suite mais l'outil.
+
+**Aucun module silencieux — section `modules[]`.** Le rapport porte l'inventaire des modules
+sources avec l'état de chacun : exercé (lignes et branches couvertes), muté (score), ou
+**jamais exercé et nommé**. C'est le principe fondateur de la forge appliqué à l'étage du
+module — on nomme, on n'agrège pas.
+
+```json
+{
+  "module": "app/services/courrier.py",
+  "categorie": "metier",
+  "exerce": true,
+  "lignes_couvertes": 118, "lignes_total": 126, "ratio_lignes": 0.9365,
+  "branches_couvertes": 38, "branches_total": 44, "ratio_branches": 0.8636,
+  "mute": true, "mutants_viables": 3, "tues": 3, "score_mutation": 1.0
+}
+```
+
+Trois classes de finding en sortent, toutes **nommées** : `module-non-exerce:<module>` (jamais
+importé par la suite), `seuil:mutation-module:<module>` (module métier sous 0,50) et
+`seuil:branches:<module>` (module exercé sous 0,60, signalé).
+
+Une exclusion par défaut, et une seule : un module **sans aucune instruction exécutable** hors
+imports, docstring et constantes de ré-export — le cas type du `__init__.py` de paquet. Elle
+est décidée sur le **contenu**, pas sur le nom : un `__init__.py` porteur de logique reste dans
+le périmètre. Elle apparaît quand même dans `modules[]`, avec son motif.
+
+## Pan `qualif` — l'instance servie et peuplée
+
+Généralisation du prototype `qualif_populee.py` d'ASD Mail Manager (14 pages, Playwright,
+staging peuplé). Le prototype prouvait la valeur du contrôle mais était écrit *pour* un
+produit : routes en dur, marqueurs en dur, peuplement en dur. Le pan reprend le contrôle et
+laisse au projet ce qui lui appartient — **le peuplement**, car lui seul sait ce que « peuplé »
+veut dire chez lui.
+
+Contre une instance **servie et peuplée**, le pan parcourt les routes UI (exploration des liens
+depuis la racine, plus les routes d'amorce déclarées) et vérifie, route par route :
+
+| Contrôle | Défaut attrapé |
+|---|---|
+| statut HTTP | 5xx, ou 404 sur une route pourtant liée depuis une page |
+| trace d'exception rendue | `Internal Server Error`, `Traceback`, `jinja2.exceptions`, `TemplateNotFound`… |
+| erreur console | exception JavaScript non rattrapée, ressource manquante |
+| marqueur de contenu | page qui répond 200 sans rien afficher d'identifiable |
+| **élément interactif → effet, dynamique** | affordance sans aucun écouteur attaché, sans destination, sans soumission |
+
+Le dernier contrôle est le **pendant dynamique de RT-7** : le pan `interface` lit les gabarits,
+celui-ci interroge le DOM *rendu* via le protocole DevTools — il voit donc les gestionnaires
+posés à l'exécution par un framework, que l'analyse statique déclare hors de sa portée. Quand
+une **délégation d'événement** est posée sur `document` ou `body`, plus aucun élément ne peut
+être déclaré inerte avec certitude : les éléments concernés sont alors **nommés en `non_juge`
+au lieu d'être accusés**.
+
+### Câblé n'est pas exercé (TF-0876)
+
+**Par défaut, aucun clic n'est émis.** L'instance visée est peuplée : cliquer y déclencherait des
+écritures réelles — suppression, envoi de courriel, appel d'API tierce facturée. Le pan lit les
+écouteurs attachés, il ne les déclenche pas.
+
+Ce prix était déclaré au `non_juge` depuis l'origine. *Il n'a rien rattrapé. Rapport
+`…-20260905g.json`, pan `qualif` : **68/68 exercés, 100 %**. Le lendemain, un humain ouvrait
+l'instance — « Ma commande » menait à la page d'aide, « Panier » n'avait aucun effet visible. Les
+deux portaient un écouteur, et c'est tout ce que le pan regardait. Le smoke M-3, joué en HTTP
+direct, ne pouvait pas le voir non plus : il ne clique pas.* Un registre de dette ne corrige pas
+un chiffre : c'est le mot **exercé** qui devait changer de sens.
+
+| | Ce que ça veut dire | Ce que le rapport publie |
+|---|---|---|
+| **câblé** | un écouteur, une destination ou une soumission a été **lu** dans le DOM rendu | `surface.affordances_cablees[]` — et une ligne `non_juge` qui en donne le compte |
+| **exercé** | le clic a été **joué** et un effet a **suivi** : navigation, nouvel onglet, changement du titre ou du DOM | `surface.affordances_exercees[]`, et l'effet constaté en clair |
+
+`surface.effets_observes` dit lequel des deux régimes a été appliqué. Sans clic demandé, tout ce
+qui est câblé reste **compté au ratio** — l'en sortir ferait tomber d'un coup tous les produits
+déjà mesurés, sans qu'aucun n'ait changé — mais il n'est plus appelé « exercé ».
+
+**Pour mesurer vraiment**, déclarer `FORGE_TESTS_QUALIF_EFFETS=1`. Chaque affordance est alors
+cliquée sur une page **rechargée** (sans quoi le second clic mesurerait les suites du premier),
+et ce qui ne produit rien devient un défaut nommé — `clic joué, aucun effet observé`. À ne
+demander que sur une instance dont on **accepte** qu'elle soit écrite : c'est une frontière
+d'environnement, pas une option de confort.
+
+Ce qui reste hors de portée, et c'est déclaré : la **pertinence** de la destination. « Ma
+commande » qui mène à `/aide` produit bien une navigation, donc un effet. La destination
+constatée est publiée avec l'affordance pour qu'un relecteur la voie ; aucune attente ne lui est
+opposée, faute d'attente déclarée.
+
+Sans instance servie, le pan **ne devine rien** : `SKIP` avec son motif, ses champs à fournir
+(publiés en `non_testables[]` par le mécanisme RT-6a, sans une ligne spécifique) et son
+`pour_couvrir`. Une fois l'URL fournie, `--reprendre` rejoue ce seul pan.
+
+| Variable | Rôle |
+|---|---|
+| `FORGE_TESTS_QUALIF_URL` | instance servie **et peuplée** à parcourir (à défaut, `FORGE_TESTS_BASE_URL`) |
+| `FORGE_TESTS_QUALIF_LOGIN` / `_PASSWORD` | compte de lecture (à défaut, `FORGE_TESTS_LOGIN` / `_PASSWORD`) |
+| `FORGE_TESTS_QUALIF_CONNEXION` | route de la mire, si elle n'est ni `/connexion` ni `/login` |
+| `FORGE_TESTS_QUALIF_STORAGE_STATE` | session **déjà ouverte** (`storageState.json` Playwright) quand la forge ne peut pas rejouer la mire — IdP d'entreprise, MFA, accès conditionnel. La **provenance** est publiée au rapport, et une session capturée périme |
+| `FORGE_TESTS_QUALIF_STORAGE_STATES` | **N sessions étiquetées** `role=chemin` (virgule) — un contexte navigateur par rôle, parcours rejoué par profil, **couverture par rôle** au rapport. L'étiquette est **déclarative** : la forge constate ce que la session VOIT, elle ne vérifie pas qu'elle EST ce rôle (dette déclarée au `non_juge`) |
+| `FORGE_TESTS_QUALIF_BEARER` | en-tête `Authorization` ajouté aux requêtes (valeur **jamais publiée**) ; posé sur toutes les sessions étiquetées, ce qui est déclaré |
+| `FORGE_TESTS_QUALIF_ROUTES` | routes d'amorce (virgule) — celles qu'aucun lien n'atteint |
+| `FORGE_TESTS_QUALIF_MARQUEURS` | JSON `{"/route": "marqueur métier"}` ; à défaut le titre de la page (premier `h1` non vide, sinon `title`) |
+| `FORGE_TESTS_QUALIF_PLAFOND` | nombre maximal de routes visitées (défaut `40`) |
+| `FORGE_TESTS_QUALIF_EFFETS` | `1` : le pan **clique** chaque affordance sur une page rechargée et n'appelle `exercé` que ce dont l'effet a été observé (navigation, onglet, titre, DOM). Absente : rien n'est cliqué, et ce qui est seulement câblé est publié comme tel (TF-0876). Une instance peuplée est **écrite** par ces clics |
+| `FORGE_TESTS_QUALIF_EFFETS_PLAFOND` | nombre maximal d'affordances observées par page (défaut `25`) — chaque observation recharge la page ; au-delà, le rapport le dit |
+| `FORGE_TESTS_QUALIF_REFUS` | routes (virgule) sur lesquelles le produit ATTERRIT pour dire « accès refusé » sans rendre 401/403 ni sa mire (`/erreur/403`, `/oups`). Déclarées, elles jugent ; absentes, seuls les segments nommant l'erreur d'autorisation (`403`, `acces-refuse`, `forbidden`…) sont reconnus, et un refus servi sous un nom quelconque reste **compté comme parcouru** plutôt qu'accusé à tort (TF-0325) |
+
+## Pan `i18n` — la parité entre locales, sur le build servi
+
+**Aucun oracle de l'écosystème ne jugeait le multilingue** — ni cette forge, ni
+`quality-oracles`, ni les gates de forge-development. Étude du 15/08/2026, sur un produit en
+production : une route française sur 201 sans équivalent anglais ; un menu anglais à **4
+entrées** quand le français en portait **9**, non détecté depuis juin ; **9 pages sur 200**
+servies sous `/en` avec du contenu **français** (câblage de données qui renvoyait la langue par
+défaut quelle que soit la locale demandée). Les trois ont été trouvés à la main en quelques
+minutes, et les trois sont scriptables sans le moindre modèle de langage.
+
+Le pan lit le **build servi** — l'arborescence de pages telle que le visiteur la reçoit —
+déclaré par `FORGE_TESTS_I18N_BUILD` ou découvert sous la racine. Ni le code source (une locale
+peut être déclarée et jamais construite), ni un site distant : **aucun réseau, aucun
+navigateur**.
+
+| Contrôle | Nature | Constat |
+|---|---|---|
+| **parité de routes** — chaque route est servie dans chaque locale | comparaison exacte | `route « /en/tarifs » absente du build : servie dans 1 locale(s) sur 2` |
+| **parité de navigation** — le menu de la page d'accueil de chaque locale, apparié **entrée par entrée** par destination délocalisée | comparaison exacte | `menu de la locale « en » : 2 entree(s) distincte(s) contre 4 en « defaut » — manquent 2 entree(s) : « /contact », « /tarifs »` |
+| **langue du contenu** — densité des mots-outils d'une langue sous une locale qui n'est pas la sienne | **heuristique**, seuil `densite_mots_outils_francais` | `page servie sous « /en » dont le contenu est en « fr » : 30 % de mots-outils fr sur 89 mots (seuil 8 %)` |
+
+L'appariement de navigation se fait par **destination délocalisée** et non par nombre d'entrées :
+deux menus de même taille aux entrées différentes échouent, et les entrées manquantes sont
+**nommées** — « manquent 2 entrées » ne disait rien à faire au lecteur (TF-0295). La clé ne peut
+pas être le libellé : il est traduit, c'est tout l'objet du sujet.
+
+Le lexique de langue est une **table** — `fr` et `en` livrés, extensible par
+`FORGE_TESTS_I18N_LEXIQUES` (fichier JSON `{"de": ["der", "die", …]}`) — et la règle est
+générale : sous la locale L, la densité du lexique d'une langue M ≠ L est un constat. Un lexique
+déclaré de moins de 20 mots-outils est **refusé** avec son motif : il ne discrimine rien et
+accuserait au hasard. Aucun mot n'est partagé entre deux lexiques, condition sans laquelle le
+contrôle accuserait à tort des deux côtés. Le rapport **dit** contre quels lexiques il a mesuré :
+« aucun anglais détecté » et « la langue n'a été mesurée contre aucun lexique » ne sont pas le
+même rapport.
+
+**Ce que le pan ne juge pas** (repris tels quels en `non_juge`) : une locale déclarée mais
+jamais construite ; un sous-menu qui ne s'ouvre qu'au clic (absent du HTML servi) ; une entrée
+sans destination lisible, appariée sur son libellé donc jamais entre deux langues ; une page de
+moins de 40 mots visibles (sous ce volume la densité est du bruit, pas un signal) ; une langue
+servie sans lexique opposable ; la **locale par défaut**, qui n'a pas de préfixe donc pas de
+langue opposable. L'attribut `lang` du document n'est **jamais** opposé au contenu : un
+`lang="en"` posé sur du français *est* le défaut, le croire reviendrait à interroger le suspect.
+
+**Ce qui n'est pas un défaut** : ne pas être multilingue. Un produit sans build servi **et**
+sans signe d'internationalisation (dépendance `next-intl`/`i18next`, dossier de traductions,
+segment de route `[locale]`) sort en **NA** avec sa preuve. Un produit qui *se dit* multilingue
+mais dont le build est absent sort en **SKIP** : le manque est le dossier, pas le sujet, et il
+se répare en le fournissant.
+
+Bancs d'essai : le **build servi** des bancs historiques — `fixtures/banc-rouge/dist` (les trois
+défauts, entrées de corpus `H-17`, `H-18`, `H-19`) et `fixtures/banc-vert/dist` (les mêmes pages
+corrigées). Joués de bout en bout par `tests/test_tf_0284_i18n.py` **et** par la section `corpus`
+de la recette, seule à prononcer S-01 : le pan a d'abord vécu dans des bancs séparés, donc hors
+du corpus, c'est-à-dire non mesuré par la recette du dépôt (TF-0293).
+
+### Le dimensionnement SERP, locale par locale (TF-1318)
+
+La chaîne « audite les traductions » du pilot (`references\CHAINE-TRADUCTION.md`, étape **B6**)
+demande que la taille des titres et descriptions servis soit jugée **par langue** : une traduction
+change la longueur du texte, et un titre tronqué dans la page de résultats perd ce qui venait
+après la coupe. Sur le produit d'origine, un contrôleur **propre au produit** tenait cette étape en
+comptant des caractères ; le produit suivant n'en aura pas.
+
+Le contrôle **(l)** mesure, sur chaque page du build servi et pour chaque locale, la longueur du
+premier `<title>` et de la `<meta name="description">`, contre des bornes **déclarées** :
+
+| Constat | Exemple |
+|---|---|
+| `i18n:serp:<locale>:<route>:<balise>` | `title de « /de » (locale de) : 76 caractere(s), au-dela du maximum declare de 60` |
+
+**La borne est une donnée, pas du code.** La troncature d'un moteur change sans préavis et se fait
+en largeur de pixels : elle se déclare dans `FORGE_TESTS_SERP_BORNES`, **sourcée et datée**. Rien de
+déclaré, rien de jugé, et le rapport le dit ; une borne sans `source` ni `verifie_le` est
+**refusée** avec son motif au lieu d'être crue. Le compte se fait en caractères, que le rapport
+déclare comme une approche de la largeur réelle. Recette à double sens :
+`tests/test_tf_1318_dimensionnement_serp.py`.
+
+### Site rendu côté serveur : l'export statique (TF-2670)
+
+Le pan lit un **dossier de pages**, jamais un serveur. Un site rendu côté serveur (FastAPI et
+gabarits, contenus en Markdown…) n'en émet pas : sans catalogue de chaînes JSON, le pan sort en
+SKIP, et son motif renvoie ici. *Mesuré le 16/11/2026 sur le site public d'un produit : aucun dossier
+construit, aucune route déclarée, donc aucune parité jugée.* La recette tient en trois gestes, tous
+chez le produit :
+
+1. **Déclarer les routes** de chaque locale dans le fichier de `FORGE_TESTS_I18N_ROUTES`
+   (`{"fr": ["/", "/tarifs"], "en": ["/en", "/en/pricing"]}`) : le pan juge déjà leur parité sans
+   build.
+2. **Exporter** : un script du produit appelle l'application **en process** (le `TestClient` de
+   FastAPI, aucun réseau, aucun navigateur) pour chaque route déclarée et écrit la réponse HTML
+   dans `<dossier>/<locale>/<route>/index.html` — la locale par défaut sans préfixe, les autres
+   préfixées (`out/en/pricing/index.html`).
+3. **Désigner le dossier** : `FORGE_TESTS_I18N_BUILD=out`. Le dossier d'export est un artefact : le
+   produit le régénère avant l'audit et ne le versionne pas (`.gitignore`).
+
+Le pan juge alors, sur ce dossier, la parité de routes et de navigation et la langue du contenu,
+comme sur un build statique. L'export est le **produit** de la forge du site, pas de cette forge :
+elle ne monte pas l'application et n'écrit rien chez l'audité (G-1).
+
+### Une traduction dont la source a changé (TF-2670)
+
+Une page traduite à partir d'une source qui a changé depuis est bien formée, servie, et fausse :
+aucune arborescence ne le montre. Le produit déclare, pour chaque traduction, sa **source** et
+l'**empreinte** qu'avait cette source quand la traduction a été faite, dans un fichier JSON versionné
+désigné par `FORGE_TESTS_I18N_PEREMPTION` :
+
+```json
+{"traductions": [
+  {"traduction": "contenu/en/tarifs.md", "source": "contenu/fr/tarifs.md",
+   "empreinte": "<sha256 de la source au moment de la traduction>"}
+]}
+```
+
+Les chemins sont relatifs à la racine auditée ; un chemin qui en sort n'est pas lu. L'empreinte se
+calcule par `python -m forge_tests.peremption_i18n contenu/fr/tarifs.md`, fins de ligne
+normalisées (un dépôt extrait sous Windows ne périme pas tout d'un coup). Le pan recalcule
+l'empreinte de chaque source : si elle diffère, constat `i18n:peremption:<traduction>` qui nomme la
+source et les deux empreintes ; une source ou une traduction introuvable en est un aussi. On
+re-scelle en retraduisant, puis en recopiant l'empreinte. Le contrôle dit que la source a changé,
+**jamais** que la traduction est fausse : une virgule corrigée la périme aussi, et le projet juge,
+d'un geste, qu'elle dit toujours la même chose. Rien de déclaré, rien de jugé, et le rapport le dit.
+
+## Lecture du SQL — filtrer avant de découper
+
+Un `;` posé **dans un commentaire** de migration fabriquait une instruction qui n'avait jamais
+existé : jamais envoyée au moteur, donc jamais retrouvée dans le relevé de la sonde, donc
+migration déclarée non exercée. Un `FAIL` à tort, produit par le lecteur et non par le projet
+audité (constaté en production sur `0004_catalogues.sql`). Symétriquement, une **vraie**
+instruction précédée d'un commentaire de tête était rejetée en bloc.
+
+`forge_tests/sql.py` est désormais la source unique : commentaires `--` et `/* */` retirés
+**avant** le découpage, littéraux `'…'` et identifiants `"…"` préservés (un `;` ou un `--` dans
+une chaîne ne coupe rien et ne masque rien). Les quatre lecteurs SQL du dépôt en dépendent :
+l'adaptateur `migrations` (instructions et objets annoncés), l'adaptateur `data` (inventaire des
+tables, contraintes, index, triggers — une table mise en commentaire n'entre plus à
+l'inventaire) et la sonde `verifier_schema.py` qui rejoue les migrations sur base neuve. Depuis
+TF-2012, la fabrique de données en dépend aussi : son lecteur de schéma (`schema_sql.py`) et sa
+sonde de chargement (`sondes/charger_jeu.py`) découpent les migrations par ce même module.
+
+**Limite déclarée** : un `;` ou un `--` placé dans un littéral **dollar-quoté** (`$$…$$`, corps
+de fonction PL/pgSQL) ou dans une chaîne à échappement backslash (`E'…\'…'`) reste hors de
+portée — l'instruction serait coupée au mauvais endroit.
+
+## Prérequis
+
+**Sur la machine**
+
+- `uv` et Python ≥ 3.11 ; `uv sync` installe Playwright et Pillow, indispensables aux pans
+  `accessibilite` et `visuel` (sans eux les deux pans répondent « front non servi »).
+- Navigateur Playwright : `uv run playwright install chromium`.
+- `node` / `npx` pour le pan `front` (la suite e2e du projet est lancée telle quelle).
+- Les oracles de `quality-oracles` dans `<socle-factory>/skills/quality-oracles/scripts/`
+  (`oracle-a11y.py`, `oracle-visual-diff.py`, oracles de sécurité). Racine surchargeable par
+  `FORGE_TESTS_ORACLES`.
+- Docker seulement pour rejouer la recette des bancs (leur suite monte un PostgreSQL éphémère).
+- Un arbre de travail neuf (`git worktree add`, clone) n'a pas les préalables des bancs : `.venv` du
+  back, `node_modules` et `dist` du front (TF-2467). Une commande unique, hors ligne, les prépare,
+  depuis la racine du dépôt : `uv run --frozen --offline python recette/preparer_arbre.py`
+  (`--verifier` liste ce qui manque sans rien modifier). Sans eux, la recette rend « PRÉREQUIS
+  ABSENT » et ne prononce pas S-01 (code 3) ; elle ne le déclare plus « NON TENU ».
+
+**Dans le projet ANALYSÉ**
+
+- Un environnement Python en `<projet>/backend/.venv` ou `<projet>/.venv`.
+- **`coverage` installé dans cet environnement** : c'est l'outil du projet qui fait foi, pas
+  celui de Forge Tests. Son absence ne produit plus « suite non exécutée » mais le motif
+  explicite *« coverage absent du venv du projet — installer coverage dans … »*.
+  Correctif : `uv pip install coverage` (ou l'équivalent) depuis `<projet>/backend`.
+- Pour le pan `front` : `<projet>/frontend/node_modules` installé et une suite Playwright.
+
+## Structure attendue du projet cible
+
+```
+<projet>/
+  backend/
+    .venv/            environnement du projet (coverage + pytest dedans)
+    app/              code applicatif — main.py, batch.py, importer.py, models.py…
+    tests/            suite du projet
+    migrations/       *.sql (sens aller / retour / rejeu)
+  frontend/
+    src/routes.jsx    ou src/routes/*.tsx (convention TanStack Router)
+    src/**            data-testid="…" = éléments interactifs inventoriés
+    tests/            suite Playwright
+    node_modules/
+```
+
+Rien de tout cela n'est obligatoire : chaque élément manquant produit un pan **non couvert et
+motivé**, jamais un vert par défaut.
+
+## Matrice des droits exécutable et recette multi-profils (TF-0343 / TF-0342)
+
+**Un produit à rôles n'est pas vérifiable sous une identité unique.** Produit-01 a passé un audit
+complet le 12/08 : *pan qualif 8/8, ratio 1,00, zéro finding · suite e2e 10/10 verte* — le tout
+sous **une** identité qui se désignait elle-même approbateur. Le cas nominal du cahier (« un
+approbateur décide, le suivant est sollicité ») n'avait donc jamais été exécuté. Le trou n'a pas
+été trouvé par l'outillage mais par une question humaine, cinq jours plus tard. La première
+recette inter-profils a révélé un **défaut produit réel** — `canDecide` ne vérifie pas le tour,
+l'IHM invite un approbateur hors tour à une action vouée au 409 — plus deux défauts d'ergonomie.
+
+**Et une suite organisée par service ne peut pas dire ce qu'elle ne couvre pas.** Les 10 actions
+× 4 profils du cahier étaient couvertes, dispersées dans 13 fichiers. Deux cases manquaient : le
+profil « en copie » n'était jamais testé en lecture, et aucun admin n'était instancié sur une
+décision — la règle « l'admin ne décide pas à la place d'un approbateur » était vraie *par
+construction* et prouvée par rien.
+
+**Le patron : une action × un profil = une cellule = une assertion**, dans UN fichier dédié.
+La grille se déclare, le fichier se **dérive** :
+
+```jsonc
+// <projet>/forge/matrice-droits.json — une DÉCLARATION du projet (lui seul connaît son contrat)
+{
+  "profils": ["demandeur", "approbateur", "en copie", "admin"],
+  "actions": [
+    {"nom": "decider", "methode": "POST", "route": "/api/demandes/{id}/decision", "mute": true,
+     "attendu": {"approbateur": 200, "demandeur": 403, "en copie": 403, "admin": 403}},
+    {"nom": "relancer", "methode": "POST", "route": "/api/demandes/{id}/relance",
+     "attendu": {"demandeur": 200, "approbateur": 403, "en copie": 403, "admin": 200},
+     "non_tenues": ["demandeur", "admin"]}
+  ]
+}
+```
+
+`--generer <dossier>` y dépose `test_matrice_droits.py`, hors du projet (G-1). Trois propriétés
+portées par le patron, pas par la vigilance :
+
+- **la grille est le produit cartésien** — on énumère d'abord les cases, on regarde ensuite ce
+  que le contrat en dit. Une case absente du contrat sort **nommée**, jamais omise ;
+- **les cellules non tenues sont en `xfail(strict=True)`** — jamais commentées : le jour du
+  correctif, XPASS fait échouer le test et **force** à retirer le marqueur. Un écart commenté,
+  lui, survit à son correctif ;
+- **une cellule `mute` reçoit un objet neuf** — c'est le piège 3 de TF-0344 (l'approbation du
+  profil N ouvrait le tour du profil N+1, qui rendait 201 au lieu de 409) rendu **structurel**.
+  C'est le seul des trois pièges qu'aucune revue statique ne sait voir.
+
+*Coût mesuré sur Produit-01 : 15 tests, ~340 lignes, 2 écarts rendus exécutables, 13 cellules
+vertes.*
+
+Dès qu'une matrice déclare des rôles, le pan `qualif` exige deux choses, et les constate sinon :
+**autant d'identités outillées que de rôles** (`FORGE_TESTS_QUALIF_STORAGE_STATES`) et **au moins
+un test où deux identités coexistent** — rejouer le même parcours sous N profils l'un après
+l'autre ne montre jamais ce qu'un profil *voit* pendant qu'un autre *agit*.
+
+**Une garde se prouve des deux côtés** (TF-2197) : une action dont le contrat n'affirme que des succès (aucun profil refusé en 401, 403 ou 404) n'a pas de contre-épreuve, une action qui n'affirme que des refus n'a pas de cas positif ; les deux sont des constats du pan `qualif`. Une action volontairement ouverte à tous se déclare `"sans_garde": "<motif>"`.
+
+## Revue statique de la suite — les faux verts avant de les payer (TF-0344 / TF-0345)
+
+Trois faux verts le même jour, sur la même campagne, aucun vu par un oracle. Deux sont
+détectables **sans rien exécuter** — et c'est décisif : un projet dont la suite ne peut pas
+tourner est justement celui où un faux vert dort le plus longtemps. Le pan `front` les porte.
+
+| Piège | Règle | Ce qu'il a coûté |
+|---|---|---|
+| **absence sans présence** | toute assertion d'absence est précédée d'une assertion de **présence** sur le même écran | `toHaveCount(0)` passe sur une page en chargement : vert en isolation, rouge en exécution complète |
+| **motif satisfait par le déclencheur** | aucun motif d'assertion ne doit pouvoir être satisfait par le **déclencheur** de l'action qu'il vérifie | `getByText(/Refused\|Refus/i)` matchait le bouton « Refuse » : instabilité 1 run sur 2, 30 s de timeout par occurrence, **3,6 min → 36 s** après correction. Le même défaut dormait dans un spec vert depuis le 12/08 |
+| **cellule mutante sur objet partagé** | toute cellule dont le succès **mute** l'état exige un objet neuf | 201 au lieu de 409 — faux échec. **Non détectable statiquement** : déclaré non jugé ici, rendu structurel par la matrice des droits |
+| **donnée de test recopiée** (TF-0345) | une donnée partagée se **référence** (module dédié importé) et se **valide à la génération** | 80 caractères perdus dans la recopie d'un PNG base64 de 3316 : signature PNG intacte, taille plausible, **4 tests en timeout** et un diagnostic égaré vers la chaîne de conversion |
+| **préfixe dont l'extension est un chemin valide** (TF-0396) | quand un parcours affirme un lien, une action ou une redirection par `toContain`, le chemin affirmé ne doit pas être le préfixe d'un autre chemin valide du même corpus de specs : la cible s'affirme **exacte** (égalité, ou ensemble énuméré) | `toContain("/.auth/logout")` vert sur le comportement défectueux, `/.auth/logout` (compte Microsoft entier) et `/.auth/logout/complete` (application seule) partageant ce préfixe : trouvé par un humain qui a cliqué |
+| **assertion présente chez la suite sœur, absente ici** (TF-0395) | un chemin applicatif affirmé par une suite sœur (répertoire frère du même dossier de specs) et jamais mentionné ici est signalé comme **trou de couverture** : signal nommé, jamais bloquant, deux variantes pouvant différer légitimement | 13 parcours produits par la bascule EasyAuth sans l'assertion de déconnexion de la suite sœur : le bouton a disparu de l'environnement déployé pendant **trois jours** sous 68 parcours verts |
+| **session fabriquée au lieu d'être jouée** (TF-0593) | dans une recette de bout en bout, une session s'obtient par le **parcours d'entrée réel** du produit ; une valeur composée sur place dans un stockage est **bloquante**, une valeur issue d'un appel est **signalée** | audience du jeton sautée pour les 5 profils de recette, `client_id` faux vivant **neuf jours**, cinq workflows inter-profils en échec au premier passage réel, une demi-journée de diagnostic |
+| **clé de relecture hors du stockage de la session** (TF-0593, corollaire) | la clé qui permet de **relire** une session vit au même endroit que la session : les séparer recrée la divergence qu'on corrige, sous une forme moins visible | le choix de profil vivait dans `sessionStorage`, que le `storageState` de Playwright ne sauvegarde pas : l'application retombait en silence sur son identité nominale, sous `tsc`, `eslint` et 137 tests unitaires verts |
+| **saut conditionnel** (TF-0605) | un saut **conditionnel** (`skipif`, `test.skip(<condition>)`, `pytest.skip(…) if …`) est interdit en intégration continue : ou le préalable est garanti par le harnais, ou son absence est un échec explicite qui nomme ce qui manque ; un saut inconditionnel et motivé reste licite. C'est la seule règle qui lit **aussi les suites Python** | trois tests d'intégration ignorés en silence pendant des mois, noyés dans 364 points ; l'un d'eux existait parce qu'une régression réelle était déjà passée |
+| **boucle d'assertions exécutée zéro fois** (TF-2216) | une boucle `for` / `for…of` / `forEach` qui porte une assertion exige une assertion de **non-vacuité** dans le même test (`toHaveCount(n ≥ 1)`, `toBeGreaterThan(0)`, compteur d'itérations vérifié après la boucle) ; exemption déclarée : `forge-tests: boucle-possiblement-vide — <motif>` | une boucle d'approbation sur zéro carte (bouton filtré caché) : deux tests verts, 0 action approuvée par tour |
+| **attente terminée sans sa condition** (TF-2216) | l'expiration d'une attente bornée (`waitFor…`, `expect.poll`, `expect(…)`) est un **échec** : un `.catch(() => {})` ou un `try { … } catch {}` qui l'avale est un défaut ; exemption déclarée : `forge-tests: attente-optionnelle — <motif>` | une attente sur un libellé jamais servi, expirée en silence : le test continuait comme si la condition était remplie |
+| **traitement attendu sans son résultat** (TF-2270) | un test qui attend la fin d'un traitement (état terminal : `SUCCEEDED`, `COMPLETED`, « Terminé »…) affirme aussi son **résultat** (contenu, compte, égalité), comparé à une **vérité de référence** connue d'avance, et joue sa **contre-épreuve** (un jeu où le résultat attendu diffère doit échouer) ; exemption déclarée : `forge-tests: etat-seul — <motif>` | 34 parcours, 0 assertion sur le contenu d'un constat : seul l'état `SUCCEEDED` était jugé, la vérité du lab relevée à la main par une sonde |
+
+La revue est **textuelle** : un motif construit à l'exécution lui échappe, et les suites Python
+ne sont pas relues, hormis par le saut conditionnel (les trois premiers pièges mesurés sont des idiomes de navigateur). Les deux écarts
+sont déclarés au rapport, jamais tus.
+
+## Une base d'essai se construit depuis la cible, un banc rejoue du réel (TF-2267, TF-2275)
+
+**Règle (TF-2267) : une base d'essai se construit depuis le schéma de la cible (relevé
+`INFORMATION_SCHEMA` ou extraction), jamais depuis le jeu fictif.** *Mesuré le 06/11/2026 chez
+Produit-81 : un script SQL de données validé deux fois sur une base SQL Server jetable (979 lignes
+posées, puis 0) a échoué sur la cible, Msg 544 : `ID_TRADUCTION_LIB` est une colonne d'identité dans
+la base D1, pas dans la base jetable reconstruite d'après le jeu fictif. Un run de chaîne en échec et
+un second lancement.* La forge la joue là où elle prépare une base d'essai : la fabrique de données
+(`uv run python -m forge_tests.fabrique_donnees <projet> --sortie <jeu.sql> --schema-cible
+<releve.json>`, ou `FORGE_TESTS_SCHEMA_CIBLE`) compare le schéma des migrations du projet au relevé
+de la cible, colonne par colonne (table, colonne, nullabilité, identité), et **refuse** avant
+d'écrire quoi que ce soit au premier écart, en le nommant. Sans relevé, le rapport porte
+`schema_origine` : « migrations du projet, NON relevé sur la cible » ; la fabrique ne prétend pas
+avoir comparé. Le relevé est un JSON, une ligne par colonne :
+`{"table": "…", "colonne": "…", "type": "int", "nullable": "NO", "identite": 1}`, tel que le rend
+`SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMNPROPERTY(…, 'IsIdentity') FROM
+INFORMATION_SCHEMA.COLUMNS`. Hors de la fabrique, la règle reste une consigne : tout script de
+données validé sur une base jetable se rejoue sur une base construite d'après ce relevé.
+
+**Règle (TF-2275) : un banc rejoue des réponses réalistes, et rejoue deux fois.** *Mesuré le
+06/11/2026 chez Produit-86 : le premier job réel d'un outil derrière Cloudflare Access a révélé
+quatre défauts (constats recréés à chaque tour, bilan figé, message de tour faux, jetons de la cible
+en clair dans la preuve) que 21 tests unitaires ne voyaient pas, parce que les bancs ne jouaient ni
+deux tours ni une réponse 302 avec cookie.* `forge_tests/reponses_realistes.py` fournit le jeu :
+`servir("acces-302-cookie")` rend un 302 avec `Set-Cookie`, une mire, un jeton dans l'en-tête, la
+requête et le corps ; `servir("deux-tours")` change d'état au tour 2 ; `jetons_visibles(texte)`
+relève les jetons de la cible restés en clair dans ce qu'un outil publie. **Pour une ingestion**
+(lecture des constats d'une cible, reprise d'un rapport, import), `rejouer_deux_fois(ingerer)`
+ingère la même source deux fois et nomme les `doublons`, les constats `recrees` (identifiant
+instable) et les `modifies` : une liste vide partout, sinon l'ingestion recrée ses constats à chaque
+tour.
+
+## Une campagne se termine — définition de fin et journal de boucle (TF-0352 / TF-0353)
+
+**Le trou, et son prix.** Rien dans le contrat de l'étape tests ne disait qu'une campagne
+inclut la **correction** des anomalies remontées ni le **rejeu jusqu'à extinction**. Le verdict
+`PARTIEL` du 12/08 — 121 findings, 127 actions classées — était donc une fin de mandat
+*conforme*, alors que le produit sortait **inchangé**. La preuve par l'inverse, le 17/08 : la
+même stratégie exécutée avec obligation de traiter a fermé **4 anomalies produit** et **3 faux
+verts** (dont un dormant depuis le 12/08), et divisé par six la durée de la suite e2e
+(3,6 min → 36 s).
+
+**Ce que la boucle mesure**, tour par tour, sur cette journée-là :
+
+| tour | anomalies | d'où elles viennent |
+|---|---|---|
+| 1 | 4 | l'audit |
+| 2 | **9** | des correctifs du tour 1 (signature du port de messagerie, diffusion élargie, scission rappel/relance, export passé en 403, confirmation ajoutée) |
+| 3 | 1 | une **course** — la classe la plus coûteuse à retrouver plus tard |
+| 4 | 0 | trois passages verts consécutifs |
+
+**10 anomalies sur 14 (71 %) n'existaient pas au tour 1.** Un mandat qui s'arrête au rapport en manque
+4 sur 4 ; un mandat qui s'arrête après avoir corrigé une fois en laisse 10 sur 14 et rend une
+suite rouge. Une clôture au tour 2 aurait livré la course du tour 3.
+
+**La définition de fin, opposable** (`forge_tests/boucle.py`) — une campagne est TERMINÉE
+quand, et seulement quand :
+
+| | Point | Refusé sinon parce que |
+|---|---|---|
+| a | toutes les portes en exit 0 (`suites`, `lint`, `typage`, `e2e`) | une porte **absente du journal** n'est pas une porte verte : elle est manquante, et c'est dit |
+| b | aucun `xfail` / `test.fail` sans arbitrage humain **daté** | un test désarmé sans décision est une anomalie masquée, pas un écart assumé |
+| c | suite verte sur **N ≥ 2** passages consécutifs | un passage unique ne distingue pas une suite stable d'une instabilité qui n'est pas tombée (mesuré : 1 run sur 2) |
+| d | chaque anomalie **corrigée**, ou portée en écart assumé et **écrit** (qui, quand, pourquoi) | un écart anonyme n'assume rien — même raison qu'une adoption invérifiable (RT-13) |
+| e | le dernier tour **rejoué APRÈS** son dernier correctif | sinon « 0 anomalie » ne dit rien d'autre que « on n'a pas rejoué » : c'est la clôture que TF-0353 interdit |
+
+Tant qu'un point manque, l'étape est `en_cours` — **jamais** `termine_avec_ecarts`.
+
+**Le journal.** Une ligne JSON par tour dans `<projet>/forge/journal-boucle.jsonl`, tenue par
+la campagne — jamais par la forge : un journal écrit par l'outil qu'il juge ne prouverait rien.
+
+```json
+{"tour": 3, "anomalies_entrantes": 1, "corrigees": 1, "nouvelles": 1, "restantes": 0,
+ "dernier_correctif": "2026-08-17T16:00:00+02:00", "dernier_run_suite": "2026-08-17T16:20:00+02:00",
+ "portes": {"suites": 0, "lint": 0, "typage": 0, "e2e": 0},
+ "xfail_non_justifies": 0, "passages_verts_consecutifs": 3, "ecarts_assumes": [],
+ "faux_positifs_contestes": [{"finding": "qualif:effet:/:0:form", "motif": "délégation sur #root"}]}
+```
+
+`faux_positifs_contestes` (TF-1796) : les constats du tour contestés et retenus faux positifs de
+l'outil. Chacun, nommé (`finding`, `motif`), se retranche de `nouvelles` dans la convergence ; une
+entrée anonyme ne retranche rien et sort dans `convergence.contestations_refusees`.
+
+Chaque rapport d'audit porte la section **`boucle`** : elle juge la CAMPAGNE, quand `verdict`
+juge CE run. Les confondre est exactement la faute du 12/08. Journal absent → la section le
+**dit** (`aucun journal de boucle`), elle ne se tait pas.
+
+**Le compteur de tours dit aussi quand s'arrêter pour de bonnes raisons** : une campagne dont
+le tour N révèle autant que le tour N-1 ne converge pas. C'est publié (`convergence.signal`)
+comme un signal à remonter — jamais utilisé pour refuser une clôture qui tient ses cinq points.
+
+## Contrat du projet audité
+
+Ce que Forge Tests **suppose** du projet pour pouvoir le mesurer. Chaque convention ci-dessous
+est appliquée par un adaptateur ; jusqu'ici elles n'étaient découvrables qu'en lisant son code.
+Aucune n'est obligatoire : ce qui manque produit un pan **motivé**, jamais un vert.
+
+### La configuration d'audit vit chez le produit (TF-2161)
+
+Le réglage d'un audit (application ASGI désignée, campagne de mutation demandée, instance de qualif, interpréteur) ne vit plus dans la transcription de la session qui l'a posé. *Mesuré le 04/11/2026 chez Produit-86 : l'audit relancé sans `FORGE_TESTS_APP`, `FORGE_TESTS_MUTATION` ni `FORGE_TESTS_QUALIF_URL` rendait api 0/150, back et qualif en SKIP, contre 144/144 la veille avec ces variables ; la rejouer coûtait 48 minutes.* Le fichier `forge/etapes/tests/audit.env` du produit est lu d'office à l'entrée de l'audit, avant le premier pan. Format de `.env.forge-tests` (`CLE=valeur`, `#` pour un commentaire).
+
+Il est **versionné** : il ne porte aucun secret. Une clé dont le nom désigne un mot de passe, un jeton, un secret, une clé ou un cookie y est **écartée** et le dit (stderr, puis `configuration_audit.cles_secretes_ecartees` au rapport, noms seulement). Les identifiants de démonstration restent dans `.env.forge-tests`, que l'audit protège (TF-0620). Priorité, du plus fort au plus faible : l'environnement de l'opérateur, `.env.forge-tests`, `audit.env`, le `.env` de Forge Tests. Le rapport publie sous `configuration_audit` les fichiers lus et les noms des clés de `audit.env`, jamais une valeur.
+
+**Refus nommé de l'application non désignée.** Sur une application bâtie sur une fabrique (`creer_app()`, `create_app()`, ou toute fonction qui construit un `FastAPI(...)`) sans instance `app` dans `app/main.py`, et sans `FORGE_TESTS_APP` nulle part, le pan `api` **refuse** de mesurer : SKIP, `non_testables` avec le champ `FORGE_TESTS_APP`, et un motif qui cite la fabrique trouvée (`fichier:ligne`), la ligne à recopier (`FORGE_TESTS_APP=app.main:creer_app`) et l'endroit où la ranger. Il ne lance pas la suite pour rendre un 0 % qui accuserait le produit d'un défaut de désignation. Une instance `app` au niveau module, une désignation faite ailleurs ou l'absence de toute fabrique reconnaissable ne sont pas refusées.
+
+### La pile se reconnaît à ses manifestes, pas au nom de son dossier (TF-2222)
+
+*Mesuré le 05/11/2026 chez Produit-81 : front React dans `FRONT/`, back .NET dans `BACK/` — forge-tests cherchait `frontend/node_modules` et un `.venv`, rendait PARTIEL (sortie 3) et émettait 46 constats « destination absente » sur des routes qu'il n'avait pas inventoriées.*
+
+Le front se reconnaît dans cet ordre : `[racines] front` du manifeste `.forge/profile.toml`, puis le dossier `frontend`, puis le premier dossier (profondeur 2, ordre alphabétique fixe) dont le `package.json` déclare une dépendance de front (`react`, `vue`, `svelte`, `next`, `vite`, un routeur…). Un back .NET se reconnaît à ses `*.csproj` : le motif du pan `back` le nomme au lieu de réclamer un `.venv` absent. Quand un front JavaScript est présent mais qu'aucune de ses routes n'a pu être inventoriée, le contrôle « destination absente » du pan `interface` est **suspendu et dit** (un lien n'est pas accusé contre une arborescence que le pan n'a pas su lire).
+
+Limite dite : **aucun adaptateur .NET** n'existe — `dotnet test` n'est pas joué, et les pans qui mesurent un back Python (`api`, `data`, `migrations`, `batch`, `fichiers`, `mutation`, `back`) restent non mesurés sur un back .NET ; le rapport le dit au lieu de parler d'un environnement Python manquant. Les adaptateurs `clavier`, `contraste`, `plancher` et `visuel` citent encore `frontend/` dans la localisation de leurs constats (cosmétique).
+
+### Des scripts Node sans `package.json` (TF-2387)
+
+*Mesuré le 21/09/2026 chez le produit marketing (lot 20261109c) : un produit dont le code est fait de `scripts/*.mjs`, sans `package.json`. L'audit rendait PARTIEL sans inventorier un script ni jouer la suite `node:test` : `modules` vide, `essais.fourni` faux, aucune mention de `scripts/` au rapport, et le non-jugé ne le disait pas — le verdict ne portait pas sur le code du produit, et rien ne l'annonçait.*
+
+Quand `scripts/` porte des `.mjs` et qu'il n'y a pas de `package.json` à la racine, l'audit **inventorie** les scripts (hors fichiers de test), **joue `node --test`** depuis la racine du produit (rapporteurs JUnit et lcov, `--experimental-test-coverage`) et publie la section `scripts_node` du rapport : scripts inventoriés, scripts **exercés** (chargés par au moins un test) et **jamais chargés par un test**, tests rouges. Les essais, test par test, rejoignent la section `essais` (un test sauté rend PARTIEL, TF-2254) ; un test rouge rend `FAIL` quand aucun pan n'est non couvert (même précédence que pour un pan en `FAIL`) ; un délai dépassé (`FORGE_TESTS_DELAI_SCRIPTS_S`, 900 s) se dit `DELAI_DEPASSE` avec son réglage. Sans suite découverte, le non-jugé le dit et nomme chaque script : « ce code n'est PAS couvert, et le verdict ne porte pas sur lui ». Avec un `package.json`, ou sans `scripts/*.mjs`, la section est présente et dit pourquoi elle ne s'applique pas.
+
+Limites dites : la suite du produit est jouée **en place** (comme la suite backend), la lecture seule ne peut pas y être garantie ; seuls les `.mjs` de `scripts/` sont inventoriés ; « exercé » veut dire chargé, pas asserté.
+
+### Un outil Python à modules plats (TF-2173)
+
+Un outil autonome rangé hors de `backend/` — des modules `.py` à la racine et un `tests/` voisin, sans paquet `app` ni `src` — reçoit un verdict au pan `back`. *Mesuré le 03/11/2026 chez Produit-86 (`outils/compteur-foundry`) : pan back non couvrable, `couverture_par_pan` vide, verdict PARTIEL malgré 11 tests verts.* La racine d'exécution est dite **plate** quand aucune déclaration (`FORGE_TESTS_SOURCES`) ni aucun paquet ne se découvre, que la racine porte au moins un module du produit (ni `test_*.py`, ni `conftest.py`, ni `setup.py`) et une suite voisine. Plusieurs sous-dossiers de Python restent ambigus : `FORGE_TESTS_SOURCES` les départage. La couverture se mesure alors sur la racine (`--source=.`, sans l'environnement ni les artefacts) et la mutation ne mute que les modules posés à la racine ; la suite, l'amorçage et l'installation de la racine sont écartés **et nommés** dans `modules[]`. Le pan `back` publie alors, comme surface, ses modules exercés par la suite (seuil `couverture_surface_modules`) : sans elle, une campagne de mutation jouée sur un outil sans route ni formulaire était refusée au rapport (règle conjointe : pas de score de mutation sans couverture de surface). Sans `.venv`, l'interpréteur se désigne par `--python` ou `FORGE_TESTS_PYTHON`.
+
+Limite dite : seuls la couverture d'exécution et le pan `back` lisent la racine plate. Les pans `api`, `batch`, `data` et `fichiers` parcourent « le paquet » en récursif et liraient `.venv/` si on leur rendait la racine ; ils restent sur la découverte par paquet.
+
+### Ce que git ignore n'est pas du produit (TF-1767)
+
+Un dossier que le dépôt ignore (`.gitignore`) sous la racine auditée n'est ni versionné ni
+livré : les pans ne l'inventorient pas. *Mesuré le 15/10/2026 chez Produit-82 : un clone amont
+`vendor-check/`, ignoré par git, avait produit 493 constats sur un autre code.* L'exclusion est
+nominative : le rapport la publie sous `perimetre_exclu_git`. Les noms déjà gérés par la
+politique de chaque pan (`node_modules`, `dist`, `build`…) n'y entrent pas. Pour réclamer un
+dossier ignoré : son nom dans `FORGE_TESTS_INCLURE`.
+
+Le pan `securite` copie le projet avant de le tendre aux oracles délégués : le filtre s'applique à
+cette copie (TF-2654), pour les secrets, le SAST et les manifestes de dépendances. *Mesuré le
+13/11/2026 chez Produit-82 : le rapport déclarait ces dossiers exclus et comptait pourtant 631
+constats bloquants sur 701 dans `vendor-check` (614), des sauvegardes (21), des clients (6) et un
+dossier d'exécution (2).* Les dossiers écartés sont nommés dans le non-jugé du pan.
+
+### Ce que git ne suit pas n'est pas jugé par le pan `prompts` (TF-2118)
+
+Dans un dépôt git, le pan `prompts` n'inventorie que les sources **suivies** (`git ls-files`,
+fichiers ajoutés à l'index compris). *Mesuré le 03/11/2026 chez Produit-86 : trois alias de
+modèles écrits par une autre session dans `outils/compteur-foundry/`, dossier non suivi, avaient
+produit 7 constats bloquants attribués au produit.* Les fichiers non suivis qui porteraient un
+prompt, un corpus, un nom de modèle ou un appel de fournisseur sont **nommés à part** dans le
+`non_juge` du pan (vingt noms au plus, le total toujours dit) et interdisent la preuve « ce
+projet n'appelle aucun modèle ». Hors dépôt git, ou dans un dépôt dont aucun fichier n'est encore
+suivi, le comportement est inchangé. Pour faire juger un fichier : `git add`. Les autres pans
+gardent leur propre parcours de fichiers ; l'aide `exclusions.non_suivi_par_git` est partagée.
+
+### Ce que git ne suit pas n'est jugé par aucun pan de lecture de sources (TF-2134)
+
+La règle de TF-2118 s'étend aux autres pans qui parcourent les fichiers du produit :
+`interface`, `migrations`, `declencheurs`, `domaine`, `revue`, `couverture`, `relecture`,
+`surface_servie` et `i18n` (signes et catalogue de chaînes). Dans un dépôt git, ils ne lisent que
+les sources **suivies** (`exclusions.non_suivi_par_git`) ; un dossier de traductions sans aucun
+fichier suivi n'est pas un signe d'i18n (`exclusions.dossier_sans_fichier_suivi`). Deux lectures
+restent hors du filtre, parce que leur objet n'est presque jamais suivi : le **build servi**
+(`surface_servie.ressources_referencees`) et un catalogue compilé sous `build`, `dist` ou `out`.
+Hors dépôt git, ou dans un dépôt sans fichier suivi, le comportement est inchangé. Contrairement
+au pan `prompts`, ces pans ne nomment pas encore les fichiers écartés dans leur `non_juge`.
+
+### Cycle de vie et provenance de l'instance servie — pans `front`, `qualif`, `accessibilite`, `visuel` (TF-0340 / TF-0341)
+
+Quatre pans exigent une instance **servie**. Le montage reste délégué au projet — lui seul sait ce que « peuplée » veut dire chez lui — mais jusqu'au 18/08 le **démontage** n'était délégué à personne, et le rapport ne disait pas ce qu'il laissait debout.
+
+*Mesuré le 17/08 sur Produit-11 : 3 conteneurs et un réseau laissés en service **2 h 25** après la fin de l'audit, tenant les ports 8091, 8092 et 5544, jusqu'à ce qu'un humain s'en étonne. Et la moitié grave : la topologie avait été bâtie à 10:47, le correctif D-14 écrit après — pendant cette fenêtre, un audit relancé aurait mesuré l'ancien code et publié ses chiffres comme l'état courant.*
+
+La règle tient en une phrase, et le rapport la publie : **la forge démonte ce qu'elle a monté, et publie ce qu'elle laisse debout quand elle ne l'a pas monté.**
+
+| Convention | Effet si elle n'est pas tenue |
+|---|---|
+| `FORGE_TESTS_INSTANCE_DEMONTER` — la commande qui démonte l'instance | l'audit dit ce qu'il laisse debout **et** que rien ne permet de le démonter : c'est cette absence qui a coûté les 2 h 25 |
+| `FORGE_TESTS_INSTANCE_MONTER` — la commande qui la monte | déclarée pour le jour où la forge montera elle-même ; sans elle, la forge ne monte pas et ne démonte donc rien |
+| `FORGE_TESTS_INSTANCE_PROVENANCE` — chemin d'un document disant **de quoi** l'instance a été bâtie | issue `non_determinable`, en disant que c'est le terme **servi** qui manque : rien ne distingue alors une instance fraîche d'une instance périmée |
+
+#### Démonter ne suffit pas : il faut le vérifier (TF-0842)
+
+*Lot Produit-61, 05/09/2026. La commande de démontage déclarée était `taskkill /IM uvicorn.exe`.
+Elle ne tuait rien : un `uvicorn` lancé par `uv run` ne s'appelle pas `uvicorn.exe`, c'est un
+`python.exe` **enfant** de `uv`. Elle rendait la main sans erreur. Une instance — remontée sans
+la clé de session que l'application attend, donc rendant 500 — tenait le port après l'audit.
+Une demi-heure de diagnostic, trois relances.*
+
+**Une commande de démontage qui rend 0 sans démonter est indiscernable d'un démontage réussi.**
+Seul le port le dit :
+
+```bash
+<commande déclarée dans FORGE_TESTS_INSTANCE_DEMONTER>
+uv run python -m forge_tests.instance --verifier-demontage   # 0 libéré · 1 encore tenu · 3 non vérifiable
+```
+
+La sonde porte sur **le** port des URL que cet audit a lui-même déclarées servies
+(`FORGE_TESTS_BASE_URL`, `_QUALIF_URL`, `_API_URL`) — jamais un balayage du poste, qui
+accuserait l'instance d'un voisin. Elle dit qu'un port est **tenu**, jamais **qui** le tient : un
+socket ouvert ne nomme pas son propriétaire sans un droit et un outil que la forge n'a pas. Quand
+il l'est, la consigne nomme le remède mesuré — démonter **par le port** (`npx kill-port <port>`,
+`fuser -k <port>/tcp`, ou `netstat -ano | findstr :<port>` puis `taskkill /PID <pid> /F`).
+
+**Ce qui reste au projet, et c'est déclaré** : la forge ne vérifie pas ce que la commande de
+**montage** transmet à l'instance. Une instance remontée sans ses secrets de session démarre,
+prend le port, et rend 500 au premier appel — indiscernable d'une instance saine tant qu'on ne
+l'interroge pas. `FORGE_TESTS_INSTANCE_MONTER` doit porter l'environnement **complet** de
+l'instance ; le smoke qui suit est ce qui le prouve.
+
+Le format de provenance n'est **pas** propre à cette forge : le scellé `forge-ops/empreinte@1` produit par `ops.mjs deployer|canary` est lu tel quel (mêmes empreintes de fichiers que compare `oracle-ops.mjs --empreinte`, O-7). Un projet qui monte localement déclare la forme légère `forge-tests/instance@1` (`format`, `commit`, `construit_le`, `images[]`).
+
+La section `instance` du rapport est **toujours présente**, même sans instance déclarée — une section qui disparaîtrait serait indiscernable d'une section qui a mesuré et n'a rien trouvé. La confrontation rend les **trois issues** de l'écart servi ↔ versionné (TF-0288), généralisé de la page à l'instance entière : `concordant` · `divergent`, l'écart nommé fichier par fichier et la phrase qui compte (*ce n'est pas le code qui est en retard, c'est l'instance*) · `non_determinable`, en disant **lequel** des deux termes manque. La comparaison n'est pas symétrique, et c'est déclaré : un fichier neuf que l'empreinte ne connaît pas ne déclenche rien.
+
+### Ce qu'une campagne laisse sur l'instance (TF-2661)
+
+*Produit-82, 13/11/2026 : la suite du produit, rejouée à chaque déploiement sur la base réelle de
+la recette, créait organisations et identités sans les effacer — 315 organisations et 465
+identités non marquées, et aucun contrôle ne comparait l'état de l'instance avant et après.*
+
+La forge joue le contrôle ; le **décompte est celui du produit**, seul à savoir ce que sont ses
+objets métier. Il déclare `FORGE_TESTS_INSTANCE_DECOMPTE` : une commande, lancée depuis la racine
+auditée sans interpréteur de commandes, qui imprime un objet JSON d'entiers positifs ou nuls :
+
+```json
+{"organisations": 315, "identites": 465}
+```
+
+La forge la joue **avant le premier pan** et **après le dernier**. Le rapport porte la section
+`residus_instance`, toujours présente, avec quatre issues : `conforme` (deux décomptes identiques) ·
+`residus` (au moins un objet dont le compte a changé : **verdict FAIL**, chaque objet nommé avec son
+compte avant, après et son écart — un objet qui disparaît est un écart comme un objet qui apparaît)
+· `non_mesure` (décompte absent ou illisible, ou instance hébergée sans commande déclarée : le
+motif est publié, le verdict ne change pas) · `sans_objet` (aucune commande et aucune instance
+hébergée : une instance locale se jette avec sa campagne). Un FAIL ne s'invente pas sur une mesure
+manquante, et un silence ne se lit pas « conforme ». L'écart est mesuré sur l'instance, pas attribué :
+un tiers qui y écrit pendant la campagne s'y lirait aussi, et le rapport le dit.
+
+### Application ASGI — pan `api`
+
+| Convention | Effet si elle n'est pas tenue |
+|---|---|
+| L'application est l'**instance module** `app.main:app`, dans `<projet>/backend/app/main.py` | la sonde ASGI ne se greffe sur rien |
+| Sinon, la désigner par `FORGE_TESTS_APP="module:attribut"` — l'attribut peut être l'instance **ou une fabrique** (`app.main:creer_app`) | — |
+| La suite passe par cette application (ou par les applications rendues par la fabrique) | relevé vide |
+
+Quand `FORGE_TESTS_APP` est déclarée, la greffe a lieu **avant** le chargement des
+`conftest.py` : chaque application rendue par la fabrique est instrumentée, y compris quand un
+`tests/conftest.py` importe la fabrique par son nom. Sans déclaration, la greffe reste au
+démarrage de session — importer l'application plus tôt la ferait précéder l'environnement que
+le projet installe lui-même. L'extraction du schéma OpenAPI suit la même désignation et
+**appelle la fabrique sans argument**.
+
+#### L'ordre d'import, et où le rebrancher (TF-0839)
+
+Cette avance a un prix, et il a été payé. *Lot Produit-61, 05/09/2026 : sous audit, la suite du
+projet rendait **1** — un cas attendait `409` et lisait un quota resté figé à `20`, la valeur du
+module au moment de son import, pas celle que le `conftest.py` installe — et le premier audit
+avait **vidé la base de démonstration** servie au même moment, parce que le moteur avait été
+construit sur l'environnement ambiant avant que le conftest ne le rebranche. Jouée seule, la même
+suite passait.* Le framework n'était pas en cause : l'**ordre d'import** l'était.
+
+L'ordre, écrit une fois pour toutes :
+
+| # | Ce qui se passe | Ce qui est déjà figé après |
+|---|---|---|
+| 1 | `pytest` charge ses greffons (`-p sonde_api`) | rien |
+| 2 | **`pytest_load_initial_conftests`** — la sonde importe le module désigné par `FORGE_TESTS_APP` | tout ce que ce module évalue **à l'import** : moteur de base, session, réglages, constantes lues dans l'environnement |
+| 3 | `conftest.py` de la racine, puis des dossiers `test*` | les rebranchements du projet — s'ils passent par une variable d'environnement lue au pas 2, ils arrivent **trop tard** |
+| 4 | `pytest_sessionstart`, puis les tests | — |
+
+Un projet est concerné dès que son module d'application **exécute** quelque chose à l'import :
+`engine = create_engine(os.environ["DATABASE_URL"])`, `QUOTA = int(os.getenv("QUOTA", 20))`,
+un client tiers construit au niveau module. Il ne l'est pas si tout cela vit dans une fabrique.
+
+**Le point de rebranchement**, et c'est une variable, pas une consigne :
+
+| `FORGE_TESTS_APP_GREFFE` | Greffe | Ce qu'on gagne, ce qu'on perd |
+|---|---|---|
+| absente ou `conftests` (**défaut**) | pas 2 — avant les conftests | la fabrique est instrumentée, donc le pan `api` mesure ; l'application précède l'environnement du projet |
+| `session` | pas 4 — après les conftests | la suite du projet redevient celle qu'il joue seul ; le relevé perd les applications rendues par une **fabrique** (une instance module, elle, reste vue) |
+
+Deux remèdes existent donc, et ils ne s'excluent pas : déclarer `FORGE_TESTS_APP_GREFFE=session`
+dans `.env.forge-tests` — l'audit dit alors ce qu'il ne mesure pas —, ou déplacer chez le projet
+ce qui est évalué à l'import vers une fabrique, ce qui rend les deux ordres équivalents. Le
+second est le seul qui rende le pan `api` pleinement mesurable ; le premier est immédiat.
+
+**Garde à part, et elle reste entière** : la base sur laquelle la suite tourne est décidée par
+l'environnement que le projet fournit. Forge Tests transmet l'environnement ambiant et
+`.env.forge-tests` au sous-processus — une variable de connexion qui y pointe une base **servie**
+la fait auditer. `.env.forge-tests` ne porte que des cibles jetables.
+
+Une suite qui finit **verte** avec un relevé **vide** produit un avertissement explicite —
+finding `sonde-muette:api` (sévérité `signale`) et entrée `non_juge` — parce qu'un « 0 %
+couvert » est alors plus probablement une sonde aveugle qu'une suite qui n'appelle rien.
+
+Codes de retour :
+
+- l'inventaire des codes vient des `responses` du **schéma OpenAPI** que l'application produit
+  elle-même — donc du `status_code=` du décorateur et des `responses={…}` explicites ;
+- le `422` que FastAPI ajoute d'office n'est retenu que s'il est écrit **à la main** dans le
+  décorateur ;
+- un `400` ou `409` déclaré qu'aucun `raise HTTPException(status_code=…)` du handler ne peut
+  lever est une **divergence bloquante** ;
+- un code **émis** pendant la suite mais absent de la déclaration est une divergence `signale` ;
+- **aucune assertion de test n'est lue** : seul le couple réellement émis compte.
+
+#### Où la garde doit être écrite pour être reconnue (RT-9)
+
+L'analyse ne lisait que le `raise … status_code=<littéral>` écrit **dans le corps de la
+route**. Un produit qui factorise son refus dans un helper (`_refuser_doublon()` levant le 409)
+voyait donc son 409 déclaré « jamais levé » — deux passes de correction sur produit réel avant
+de retrouver la forme attendue : l'outil imposait un style d'écriture au lieu de lire le
+comportement. Depuis, **un niveau d'appel est résolu**.
+
+| Forme de la garde | Reconnue ? |
+|---|---|
+| `raise HTTPException(status_code=409, …)` dans la route | oui |
+| `_refuser_doublon()` — helper du **même module**, appelé **par son nom simple**, dont le corps lève avec un `status_code` **constant** | **oui (RT-9)** |
+| helper qui appelle lui-même un autre helper (deux niveaux) | non |
+| helper **importé** d'un autre module | non |
+| appel par attribut : `self.refuser()`, `service.refuser()` | non |
+| `status_code` calculé (variable, expression, table de correspondance) | non |
+
+Les quatre dernières lignes sont la **contrainte résiduelle**, déclarée aussi au registre de
+dette : dans ces cas le code déclaré paraîtra « jamais levé ». Le remède côté projet est
+d'écrire la levée dans la route, ou dans un helper local appelé par son nom.
+
+### Le nombre orphelin — et pourquoi il est livré ÉTEINT (TF-0665)
+
+Sur une page de profil d'un produit servi, la capacité était annoncée à **23 personnes** dans
+la méta-description et à **30** dans l'introduction — *sur la même page* —, quand la donnée du
+dépôt en donne **22** pour les trois hébergements que ce profil sélectionne. **23 ne correspond
+à aucune source du dépôt** : ni juste, ni recopié de travers. Il n'a pas d'origine.
+
+**Trois contrôles livrés le manquent tous, chacun pour sa raison** — et c'est ce qui fait de
+celui-ci un contrôle d'une autre nature :
+
+| Contrôle | Pourquoi il ne le voit pas |
+|---|---|
+| cohérence interlangue | les sept langues disent 23, unanimement |
+| cohérence interne (TF-0663) | « personnes » n'est ni une distance ni une durée — borne **déclarée** |
+| nombres confrontés à la donnée (TF-0644) | ne juge que les **pivots déclarés au glossaire** ; la capacité n'en est pas un |
+
+Les trois lisent un catalogue et comparent. Celui-ci **recalcule depuis la donnée** : pour un
+champ numérique, il rend la valeur par enregistrement, la **somme**, le **compte**, le **min**,
+le **max** — et surtout la **somme sur chaque sélection déclarée**. Sur le cas fondateur la
+table vaut `2, 6, 8, 10, 22, 30` : **22 y est** (les trois hébergements du profil), **23 n'y est
+pas**. Sans les sélections, 22 lui-même deviendrait orphelin — c'est le point dur de l'item, et
+il a son propre cas de test.
+
+#### La précision est MESURÉE, et c'est elle qui décide de la forme du contrôle
+
+Corpus réel d'un produit servi : **4 886 chaînes, 7 locales**, données du dépôt lues.
+
+| Version | Ce qu'elle juge | Accusations | Défauts trouvés | Précision |
+|---|---|---|---|---|
+| naïve | tout nombre absent littéralement de la donnée | **405** | 0 | **0 %** |
+| bornée | nombre suivi d'un nom, hors heures / années / prix | **67** | 0 | **0 %** |
+| **ciblée** | nombre attaché à un **dénombrable DÉCLARÉ** | **6** | 0 | **0 %** |
+
+*Un contrôle qui accuse à côté ne se publie pas.* Les trois sont à précision nulle, mais elles
+n'échouent pas de la même façon. La naïve accuse des heures (« de 11 à **22** Uhr »), des prix
+(« dont € **50** de caution ») et des faits éditoriaux tiers (« l'aquarium et ses **600**
+espèces ») : elle est **refusée**, pas remise à plus tard. La ciblée n'accuse plus que **six
+chaînes, qui sont le même fait dans six locales** : « Grande pièce de vie avec espace repas
+(**12** personnes) » — un **dénombrable homonyme**, 12 places à table et non 12 couchages.
+
+**Ce qui manque pour le rendre bloquant, dit précisément** : le discriminant n'est ni le nombre
+ni le nom commun, c'est **le sujet que le nom qualifie**. Il faudrait que la déclaration porte
+la **portée** du dénombrable. C'est l'entrée `orphelins-002` du registre de dette, en `todo` —
+la seule à outiller ; les autres sont des limites assumées, chacune avec son motif.
+
+**Conséquence câblée** : le contrôle vit derrière **`FORGE_TESTS_ORPHELINS=1`, absent par
+défaut** (loi transverse n° 2). Sans le drapeau il compte, mesure et **déclare** ses candidats
+en `non_juge`, avec la précision mesurée et le seuil de publication bloquante (80 %) ; il
+n'émet aucun finding. Avec le drapeau, les candidats sortent en `signale`, jamais bloquants.
+Ce qu'il ne fait dans aucun des deux cas : se taire.
+
+| Variable | Défaut | Effet |
+|---|---|---|
+| `FORGE_TESTS_DENOMBRABLES` | `docs/projet/DENOMBRABLES.json` | `{"<nom>": {"champ": "capMax", "termes": {"fr": "personnes", …}, "selections": {"seminaire": ["familial", …]}}}`. Absente, le contrôle **ne juge rien** et le dit |
+| `FORGE_TESTS_DONNEES` | *(aucune)* | fichiers de données du produit, séparés par une virgule (globs admis). **Déclarés, jamais devinés** : un fichier oublié ne rend pas ce contrôle muet, il le rend **accusateur** |
+| `FORGE_TESTS_ORPHELINS` | absente | fait sortir les candidats en findings `signale` au lieu de `non_juge` |
+
+### Trois motifs légitimes d'écran de création (TF-0708, TF-0843)
+
+Une exigence d'interface imposait à **tous** les écrans le motif « formulaire replié toujours
+présent » — un `<details>` et le `data-cible` qui le vise. Le motif est bon quand le formulaire
+est **court et unique** ; il devient **nuisible** dès qu'il porte des **branches exclusives**,
+car le repli masque la contradiction au lieu de la résoudre. Le test a dû être **assoupli**
+pour laisser passer une refonte qui corrigeait une ergonomie réelle — *un test qu'on assouplit
+pour livrer une amélioration vise le mauvais invariant.*
+
+Ce qui doit tenir n'est pas « ce motif-ci partout » mais « la création a une **forme
+déclarée** ». Trois formes sont légitimes, et le pan `interface` les admet toutes les trois :
+
+| Motif | Marque dans le gabarit | Quand c'est le bon |
+|---|---|---|
+| **formulaire replié** | `<details>` **et** `data-cible` | création **simple** : formulaire court, sans branche, ouvert sans quitter la liste |
+| **panneau adressable** | une destination portant `?nouveau=…` (paramètre déclarable par `FORGE_TESTS_PARAM_CREATION`) | tâche **à branches exclusives** : chaque branche a son adresse, donc son état partageable et son retour arrière |
+| **page dédiée** (TF-0843) | l'affordance qui **annonce** la création est le contrôle qui **soumet** un `<form>` de la page (`<button>` ou `<input type=submit>` **dedans**) | le formulaire **est** la page : inscription, création de compte, assistant en pleine page |
+
+**Le critère de choix** — *le formulaire porte-t-il des branches exclusives ?* — n'est pas
+tranché par la forge : elle ne sait pas si deux champs s'excluent, et c'est précisément pour
+cela qu'elle admet les trois formes. Elle refuse **l'absence des trois** : un écran qui annonce
+une création sans en porter la forme laisse l'utilisateur devant une promesse sans lieu.
+
+**Pourquoi la troisième a été ajoutée, et ce qu'elle a coûté d'être absente.** *Lot Produit-61,
+05/09/2026 : `inscription.html`, dont le formulaire EST la page, recevait « création sans
+motif » — elle ne porte ni `<details>` (rien à replier : on y est déjà) ni `?nouveau=` (rien à
+adresser : la page a sa propre URL). Et quand le projet déclarait le panneau adressable pour
+satisfaire ce contrôle, l'oracle `oracle-panneau-tache` de forge-design (PA6) le **refusait** à
+son tour, faute de déclencheur dans le document — le déclencheur, sur une page dédiée, est le
+lien qui a amené l'utilisateur ici, et il vit sur une autre page. Deux contrôles justes, et une
+action `manuelle_dev` qu'**aucune modification du gabarit** ne pouvait solder.* Un écart
+qu'aucun geste ne peut fermer n'est pas une exigence, c'est une impasse — et c'est le même
+défaut que TF-0708 avait déjà payé sous une autre forme.
+
+La distinction est mécanique : sur un écran de liste, le « Nouveau lot » est **hors** du
+formulaire — il ouvre un panneau, et l'écran doit alors porter (a) ou (b) ; sur une page dédiée,
+le « Créer mon compte » est **dans** le formulaire — il l'envoie. Une page de liste qui porte une
+barre de recherche n'est donc pas requalifiée : son affordance de création est dehors.
+Le finding est `signale`, classé `manuelle_dev` / `design` — un arbitrage de conception ne se
+dérive pas.
+
+**Le déclencheur est borné, et les bornes sont MESURÉES.** L'annonce se lit sur le **texte des
+affordances** (`<button>`, `<a>`, `<summary>`), dans un libellé de **4 mots au plus** dont
+l'annonce est dans les **2 premiers**. Sans ces bornes, la version naïve passée sur un corpus
+réel de **220 gabarits** rendait **7 accusations, les 7 fausses** — toutes sur « Open the
+booking engine in a **new** tab ». Avec elles, sur le même corpus : **0 accusation**. Un écran
+dont la création est annoncée par une icône seule, un libellé long ou un composant compilé
+n'est **pas** jugé ici, et c'est déclaré en `non_juge`.
+
+> Un projet dont **aucun** gabarit n'annonce de création le **dit** au rapport. « Le contrôle
+> ne s'applique à rien » et « le contrôle a rendu vert » ne sont pas la même phrase.
+
+#### Le constat statique se croise avec la mesure dynamique (TF-0728)
+
+Les quatre lignes ci-dessus sont des **limites de lecture**, et une lecture peut se tromper
+contre un **fait**. Mesuré sur une campagne du 31/08/2026 : ce contrôle publiait **4
+divergences** sur des codes 400 neufs, et les **4 couples opération × code étaient exercés
+dynamiquement par le pan `api` de la même campagne** (483/483). Le rapport se contredisait
+d'une section à l'autre, et coûtait **4 faux écarts à analyser à la main par campagne**.
+
+**La règle, et elle n'est pas symétrique.** La mesure dynamique est un fait constaté — la sonde
+a vu la réponse partir. L'analyse statique est une lecture, dont les limites sont déjà
+déclarées. Quand les deux se contredisent, **c'est la lecture qui plie** : un couple opération
+× code exercé pendant la suite se publie **« confirmé dynamiquement »**, nommé couple par
+couple en `non_juge`, jamais en écart. Un code que **ni** la garde statique **ni** la suite
+n'a produit **reste un écart**.
+
+**La borne de cette confirmation est déclarée avec elle** : elle établit que le code *sort* de
+l'application, pas que la garde du projet le lève — un code produit par le cadre (validation,
+middleware) confirmerait de la même façon. Elle écarte une contradiction du rapport, elle ne
+prouve pas la garde. Le silence aurait été le mauvais remède : il aurait retiré du rapport
+quatre codes dont on sait désormais quelque chose de **plus**.
+
+Fixture à double sens : `tests/test_tf_0728_croisement_statique_dynamique.py` — 4 statiques ×
+4 exercées → 0 écart et 4 confirmations ; une divergence non exercée reste un écart.
+
+#### Ce qui n'est pas une route (RT-10)
+
+Les montages — `app.mount("/static", StaticFiles(…))`, sous-application ASGI — sont **exclus du
+contrôle de divergence**. Un montage n'a pas de décorateur, donc pas de `responses=`, et
+FastAPI n'offre aucun moyen d'en déclarer un : le finding « code émis absent de `responses=` »
+y était **structurellement incorrigeable** côté produit (constaté sur `GET /static/app.js`).
+Les codes d'un montage sont réputés `200` (fichier servi) et `404` (fichier absent) — c'est le
+comportement documenté de Starlette, pas une promesse du projet. Les préfixes exclus sont
+**nommés en `non_juge`** au rapport ; une vraie route dont le chemin commence par les mêmes
+lettres (`/statistiques` face au montage `/static`) n'est **pas** exclue.
+
+### Couche SQL observable — pans `data` et `migrations`
+
+Deux points d'observation, dans cet ordre :
+
+| Point | Ce qu'il relève |
+|---|---|
+| SQLAlchemy (`before_cursor_execute`, `handle_error`) | instructions **et** violations de contrainte |
+| Repli `sqlite3` stdlib (`Connection.set_trace_callback`) | instructions seulement |
+
+Le repli couvre les backends écrits sans ORM. Il s'arme en enveloppant `sqlite3.connect` dans
+le processus de test — **aucun fichier du projet n'est modifié** — et exclut la base de
+`coverage`. Sa limite est déclarée : sans violation captée, **les contraintes ne sont pas
+attribuables** sur un projet sans SQLAlchemy ; tables, index et triggers, eux, sont mesurés.
+
+Si **ni** SQLAlchemy **ni** le repli ne voient passer d'instruction, le rapport le dit :
+*« projet sans couche SQL observable — … : pans data/migrations non mesurables »*. Et quand des
+instructions sont observées sans qu'il y ait de surface à inventorier, le motif le dit aussi,
+avec le nombre d'instructions vues et le point d'observation utilisé.
+
+### Migrations
+
+- Fichiers `<projet>/backend/migrations/*.sql`, au format `-- +migrate Up` / `-- +migrate Down`.
+- Trois sens par migration, **tous mesurés pendant la suite** : `aller` (toutes les instructions
+  de la section Up envoyées au moteur au moins une fois), `rejeu` (les mêmes envoyées **deux**
+  fois), `retour` (section Down envoyée au moins une fois).
+- Une migration sans section `-- +migrate Down` est une **divergence bloquante**.
+- Alembic (`backend/app/alembic/versions`, `backend/alembic/versions`, `alembic/versions`) est
+  **inventorié** et ses `downgrade` vides sont détectés, mais l'exercice n'est mesuré que pour
+  les `.sql` : une suite Alembic sort à 0 % exercé. **Écart connu, pas un verdict.**
+- L'effet réel (« l'objet annoncé existe-t-il après application ? ») est vérifié en rejouant les
+  sections Up sur une base neuve, ce qui exige `sqlalchemy` + `testcontainers` **dans le venv du
+  projet** et **Docker**. Sans eux : *« schéma réel non introspectable »*, et les divergences
+  sont jugées sur le texte des migrations.
+
+### Contraintes de données
+
+Une contrainte est réputée exercée **quand la suite la fait violer** — pas quand un test la
+mentionne. Ce qui suppose des contraintes **nommées**, car l'attribution passe par le message
+du moteur :
+
+| Moteur | Attribution |
+|---|---|
+| PostgreSQL | toute contrainte nommée (y compris clé étrangère) est attribuée directement |
+| SQLite — `CHECK` | le moteur rapporte le **nom** : une contrainte anonyme n'est pas attribuable |
+| SQLite — `NOT NULL` | rapporté en `table.colonne`, attribué à la colonne |
+| SQLite — `UNIQUE` | rapporté en `table.colonne`, attribué à la contrainte dont le **nom contient à la fois la table et la colonne** — d'où la forme `uq_<table>_<colonne>` / `ck_<table>_<colonne>` |
+| SQLite — clé étrangère | **non attribuable** : le moteur ne nomme pas la contrainte violée |
+
+Tables, index et triggers sont exercés si une instruction envoyée au moteur les **nomme**.
+Une contrainte déclarée dans l'ORM (`UniqueConstraint` / `CheckConstraint` / `ForeignKey` avec
+`name="…"` dans `backend/app/models.py`) mais absente des migrations est une **divergence
+bloquante** : le code croit la base protégée, la base ne l'est pas.
+
+### Ordre des tests dans la suite
+
+Le relevé d'instructions SQL est borné, pour ne pas croître sans limite sur une grosse suite :
+au plus **trois passages** par instruction identique (le seuil le plus exigeant est « vue deux
+fois », pour le rejeu), et les instructions **non structurantes** sont bornées aux 4 000
+dernières. Le DDL (`CREATE`, `ALTER`, `DROP`, `TRUNCATE`) n'est **jamais évincé** : une migration
+exercée tôt dans la suite reste visible quel que soit le volume de requêtes qui la suit.
+
+Contrainte résiduelle assumée : une section de migration qui contient du **DML** (`INSERT`,
+`UPDATE`, `DELETE`) et qui s'exécute avant plus de 4 000 autres instructions non structurantes
+peut sortir de la fenêtre — la section entière compte alors pour non exercée. Placer les tests
+de migrations tôt ne suffit pas ; c'est le volume qui SUIT qui décide.
+
+### Autres pans
+
+| Pan | Conventions appliquées | Seuil |
+|---|---|---|
+| `front` | routes dans `frontend/src/routes.jsx` (`path: "…"`) ou convention TanStack `frontend/src/routes/**.tsx` ; éléments interactifs = attributs `data-testid="…"` **statiques** dans `src/**.{jsx,tsx}` ; exercé = trace Playwright (navigations et sélecteurs `data-testid`) | 90 % |
+| `interface` | gabarits `.html/.htm/.jinja/.jinja2/.j2/.twig/.ejs/.hbs` hors artefacts ; « exercé » = **câblé** (gestionnaire, destination ou identifiant cité dans le JS) — voir « Contrôle statique de l'interface » | 100 % |
+| `batch` | branches dérivées de l'AST de `backend/app/batch.py` (à défaut, inventaire de `backend/app/worker/*.py` — mais **la mesure ne porte que sur `batch.py`**) ; codes de rejet = littéraux de la forme `XXX-YYY` en majuscules | 90 % |
+| `fichiers` | chemins de parsing dérivés de l'AST de `backend/app/importer.py` | 100 % |
+| `back` | mutation réelle : altération de **tous** les modules de `backend/app` (récursif, `services/` et `fournisseurs/` compris), relance de `tests`, échantillon de 3 mutants par module (paramétrable, déclaré au rapport) ; inventaire `modules[]` | 70 % global **et** 50 % par module métier |
+| `qualif` | instance **servie et peuplée** déclarée par `FORGE_TESTS_QUALIF_URL` ; routes découvertes par les liens depuis la racine — voir « Pan `qualif` » | 100 % |
+| `securite` | oracles `quality-oracles` présents sur la machine ; leurs `non_juge` sont repris tels quels | — |
+| `prompts` | **statique et gratuit — aucun appel modèle, aucun réseau** : prompts adressables (`*.prompt`, dossiers `prompts/`, `gabarits/`, `SKILL.md`, constantes Python `*PROMPT*`), modèles nommés dans une chaîne littérale ou une clé `modele:`, corpus de cas (`evals/`, `*.eval.jsonl`, `cas.json`). « Exercé » = **cité par au moins un cas versionné** ; un modèle désigné par un alias mouvant (`*-latest`, `gpt-4o`) au lieu d'une version épinglée `nom-AAAAMMJJ` est un finding `modele-non-epingle` ; un corpus déclaré mais introuvable rend son prompt `non_testable` ; un fichier de test (`test_*.py`, `*_test.py`, `*.test.*`, `*.spec.*`, `__tests__/`) qui appelle le fournisseur LLM réel (`api.openai.com`, `.openai.azure.com`, `generativelanguage.googleapis.com`, `OpenAI(`, `AzureOpenAI(`, `GoogleGenAI(`, `genai.Client(`) sans aucun double dans le fichier ni dans une configuration voisine (`conftest.py`, `vitest.setup.*`…) est un finding `appel-fournisseur-llm-reel-dans-un-test` (TF-2110), avec fichier et ligne | 100 % |
+| `accessibilite`, `visuel` | front **servi** : `FORGE_TESTS_BASE_URL`, ou build local présent dans `frontend/dist` plus `npx` et un navigateur Playwright ; un golden absent produit un SKIP motivé, jamais une référence créée pendant le run **Stabilité (TF-2313)** : pour `accessibilite`, la capture écrite pour `oracle-a11y` attend la fin des animations et transitions CSS finies, 5 s au plus (animation sans fin ou en pause ignorée) ; un plafond atteint est dit au non-jugé, route par route. Le pan `visuel` n'attend pas : son rendu reste pris tel quel | — |
+| `contraste` | front **servi** ; contraste WCAG AA (4.5:1, 3:1 pour le texte large) calculé sur les **styles RÉELLEMENT rendus** (`render_page.py` du socle factory-page-html chargé et évalué dans la page vivante, jamais un fichier relu) **Stabilité (TF-2313)** : le rendu est lu une fois les animations et transitions CSS FINIES terminées, 5 s au plus (`document.getAnimations()`, animation sans fin ou en pause ignorée) ; un plafond atteint est dit au non-jugé, route par route. Fait : 1,53:1 mesuré sur un toast de 12 px au milieu de son fondu de 0,25 s, 7,16:1 affiché (Produit-84, 09/11/2026) | — |
+| `clavier` | front **servi** ; trois mesures à l'état initial de chaque route, par tabulation RÉELLE : focus **visible** (K1), absence de **piège** de focus (K2), lien d'**évitement** en première tabulation (K3) | — |
+| `plancher` | front **servi** ; débordement (V1), chevauchement (V4) et largeur de colonne (L2) mesurés sur le RENDU SERVI, via le même socle que `contraste` — la mesure tourne déjà pour `contraste`, ce pan lit ce qu'elle rendait et jetait | — |
+| `i18n` | **build servi** (dossier de pages) déclaré par `FORGE_TESTS_I18N_BUILD` ou découvert (`out/`, `dist/`, `_site/`…) ; locales = préfixes de route ISO 639-1 réellement servis — voir « Pan `i18n` » | 100 % |
+| `workers` | **statique** (TF-1998) : gestionnaires d'un Worker Cloudflare tirés de la configuration Wrangler de la racine (`wrangler.json`, `wrangler.jsonc`, `wrangler.toml`) et de son module `main` — `fetch`, `scheduled` (aussi impliqué par `triggers.crons`), `queue` (aussi par `queues.consumers`), `email`, `tail`, classes Durable Object et Workflows définis dans ce Worker. « Exercé » = **dispatché** par un test qui tourne dans le runtime Workers : suite Vitest avec `cloudflareTest()` de `@cloudflare/vitest-plugin` (ou l'ancien `@cloudflare/vitest-pool-workers`), ou fichier qui ouvre `createTestHarness`. Sans configuration Wrangler : sans objet | 100 % |
+| `supabase` | **statique** (TF-2008) : tables des schémas exposés (`[api] schemas` de `supabase/config.toml`, à défaut `public` et `graphql_public`) créées par `supabase/migrations/*.sql`. « Exercé » = **cité par un test pgTAP** de `supabase/tests/` qui adopte un rôle de l'API (`set local role authenticated`, `request.jwt.claim`, `tests.authenticate_as`). Depuis TF-2046, une table est aussi exercée quand un fichier sous un dossier `tests/` l'**appelle par l'API** (`/rest/v1/<table>`, `from_("<table>")` en Python ou `.from("<table>")` de supabase-js, commentaires et docstrings exclus ; `Array.from`, `Buffer.from`, `Object.from` et les autres faux amis connus sont écartés, TF-2060), ou quand le produit la déclare dans `FORGE_TESTS_SUPABASE_TABLES_EXERCEES` AVEC un chemin de preuve lisible dans le projet (liste `table=chemin` ou `schéma.table=chemin`, comme `forge/constats-contestes.jsonl` ; publiée au rapport comme non vérifiée, et une déclaration sans chemin lisible est refusée en le disant : la table ne compte pas comme exercée, TF-2060). Constats `rls-absente` (table exposée sans RLS active à l'issue des migrations) et `realtime-rls-reactivee` (migration qui réactive la RLS de `realtime.messages`, refusée en 42501). Sans migration Supabase : sans objet | 100 % |
+| `parcours-personas` | **statique** (TF-2123) : un parcours de bout en bout PAR persona déclaré. Personas lus, jamais devinés : clés `personas` et `roles` d'`EXIGENCES.json` (`FORGE_TESTS_EXIGENCES`, sinon `EXIGENCES.json`, `forge/EXIGENCES.json` ou `forge/etapes/conception/EXIGENCES.json` — convention de cette forge, le schéma du référentiel ne les définit pas), `profils` de `forge/matrice-droits.json`, comptes par rôle de `FORGE_TESTS_QUALIF_STORAGE_STATES`. « Exercé » = **cité** par au moins un fichier de test qui pilote un navigateur (Playwright, Cypress, Selenium, Puppeteer) et y navigue, par son nom de fichier ou dans son texte ; un persona qu'aucun parcours ne cite est un constat nommé. **Jeu contre l'instance servie** (TF-2123, suite) : quand une instance est déclarée (`FORGE_TESTS_QUALIF_URL`, à défaut `FORGE_TESTS_BASE_URL`) et que le rôle du persona a un compte (`FORGE_TESTS_QUALIF_STORAGE_STATES`, `role=chemin`), le pan **joue** les routes que son parcours navigue (littéraux de `goto`, `visit`), sous les cookies et le jeton (`access_token` du stockage local) du compte, **en GET seulement** — et une route dont le nom porte une action (fermer la session, supprimer, réinitialiser) n'est pas jouée mais nommée, un GET n'étant sûr que par convention. Un élément `joue:<persona>` s'ajoute au ratio ; il échoue sur un refus 401/403, une route en erreur ou un renvoi vers la mire, constat nommé avec la route. Sans instance, sans compte pour un rôle, compte illisible ou instance injoignable : le persona n'est **pas joué**, le rapport le dit, ni succès ni échec du produit. Le jeu ne clique pas, ne remplit aucun formulaire et n'exécute aucun JavaScript. **Suite du 06/11/2026** (retours Produit-86) : un code que le test porteur **affirme** pour une route (404 d'une adresse inconnue) n'est pas compté en défaut (TF-2204) ; dès que deux personas sont déclarés, l'élément `parcours-croise` exige un parcours qui **cite deux personas** (TF-2197), et un parcours dont **tous les tests peuvent être sautés** sous condition (`test.skip(!URL)`, `skipif`) n'exerce personne ; la clé `parcours` d'`EXIGENCES.json` (un nom, ou `{"nom", "roles"}`) ouvre une case `parcours:<parcours>@<rôle>` par rôle, exercée par un e2e qui cite le parcours **et** le rôle (TF-2207) ; sur `FORGE_TESTS_PARCOURS_MUTANTS=1` (instance déclarée modifiable), les appels mutants à adresse littérale du parcours sont **rejoués** sous l'identité du persona, puis sans identité (contre-épreuve : refusé, sinon la garde n'existe pas), élément `mute:<persona>` (TF-2208). **Enchaînement entre profils** (TF-2208, reste) : la clé `enchainements` d'`EXIGENCES.json` (convention de cette forge, comme `personas` et `parcours`) déclare des étapes `{persona, methode, route, corps, capture, attendu, codes, refuse_a}` ; `capture` (`{"mission": "id"}`) retient une valeur de la réponse JSON de l'étape, et `{mission}` dans l'adresse ou le corps d'une étape suivante est remplacé par la valeur RENDUE (l'opérateur prépare, l'approbateur valide l'identifiant créé, l'agent agit, l'opérateur voit). Chaque étape est rejouée sous l'identité de son persona ; un changement d'état reçoit la contre-épreuve sans identité, `refuse_a` ajoute la contre-épreuve par profil, `attendu` juge ce que le dernier profil voit. Même opt-in que ci-dessus ; le premier écart arrête l'enchaînement et compte les étapes non jouées ; élément `enchaine:<clé>`. Une déclaration invalide, un compte manquant ou l'absence d'opt-in rendent l'enchaînement **non rejoué et nommé**, jamais un échec du produit. Les appels dont l'adresse est **construite à l'exécution dans le test du produit** (`${id}`, concaténation) ne sont pas lisibles dans le source : le rapport les nomme sans les rejouer, et les rejouer sans trace d'exécution passe par leur déclaration. Sans persona déclaré : sans objet | 100 % |
+| `reglages-plateforme` | **lecture** (TF-2229, décision D-178 (a) du 06/11/2026) : chaque réglage de plateforme que le produit EXIGE est lu en campagne et comparé à l'attendu du registre des réglages sûrs par défaut du pilot, relié à l'exigence qui le porte. Réglages exigés lus, jamais devinés : la clé `reglage_plateforme` d'une exigence d'`EXIGENCES.json` (texte du réglage du registre, ou objet `{"plateforme", "reglage", "decision"}` — convention de cette forge). Registre : `FORGE_TESTS_REGISTRE_REGLAGES`, sinon `<FORGE_ROOT>/factory-pilot/references/REGLAGES-SURS-PAR-DEFAUT.json` ; la recette en porte une COPIE de fixture (`fixtures/reglages-plateforme/`), jamais une dépendance au fichier du pilot. La lecture joue la commande `cmd_lire` du registre, **en lecture seule** (une commande qui écrit est refusée), les secrets (`$NOM`) pris dans l'environnement ou `.env.forge-tests` et jamais publiés. Branche `defaut` : l'état lu vaut l'`attendu` du registre ; constat `reglage-plateforme-hors-attendu`, action : rejouer `cmd_appliquer`. Branche `decision` : l'exigence consigne `decision` (`choix` = `applique` ou `ecart-accepte`, `valeur_decidee`, `motif`) ; l'écart accepté est vérifié **tel que décidé**, une décision absente est un écart nu ; constat `reglage-decide-non-tenu`. Un secret absent, une lecture en échec ou un attendu non mécanisable (plages, seuils) sont **nommés au non-jugé**, jamais un succès. Sans exigence de réglage : sans objet | 100 % |
+
+La suite backend est lancée depuis `<projet>/backend` avec `coverage run --branch
+--source=app,tests` : le paquet `app` doit être importable depuis ce dossier.
+
+## Variables d'environnement
+
+Lues dans `<projet>/.env.forge-tests` (privé, non versionné), puis dans `<projet>/forge/etapes/tests/audit.env` (versionné avec le produit, **sans secret** — voir « La configuration d'audit vit chez le produit »), puis dans le `.env` de Forge Tests (gitignoré, jamais journalisé). Une variable déjà posée dans l'environnement n'est jamais écrasée : l'opérateur prime sur les trois fichiers. Modèle : `.env.exemple`.
+
+| Variable | Rôle |
+|---|---|
+| `FORGE_TESTS_APP` | désignation `module:attribut` de l'application ASGI auditée (défaut `app.main:app`). L'attribut peut être une **fabrique** — voir « Contrat du projet audité ». Lue par la sonde API **et** par l'extraction du schéma OpenAPI |
+| `FORGE_TESTS_PYTHON` | interpréteur qui lance la suite du projet (couverture, mutation) : le projet n'a pas de `.venv`, ou c'est un outil autonome (TF-2173). Un nom nu est cherché dans le `PATH`, un chemin relatif se lit depuis la racine auditée. Désigné et introuvable : le pan le dit et **n'utilise pas un autre interpréteur**. L'option `--python` pose cette variable |
+| `FORGE_TESTS_APP_GREFFE` | **où** la sonde greffe l'application désignée : `conftests` (défaut, avant les `conftest.py` — seul instant utile pour une fabrique) ou `session` (après, l'ordre d'avant toute désignation). À passer à `session` quand l'import précoce fige un réglage ou une connexion que le projet rebranche dans son `conftest.py` — voir « L'ordre d'import, et où le rebrancher » (TF-0839) |
+| `FORGE_TESTS_BASE_URL` | instance **servie** à auditer (recette, préproduction). Utilisée pour le rendu des pans `accessibilite` et `visuel`, et exportée en `BASE_URL` vers la suite e2e — sans quoi celle-ci retombe sur son `localhost` et audite un serveur de développement local au lieu de la cible |
+| `FORGE_TESTS_API_URL` | API délivrant le jeton d'authentification |
+| `FORGE_TESTS_LOGIN` / `FORGE_TESTS_PASSWORD` | compte de **lecture** dédié ; sans jeton, toutes les routes protégées redirigent vers la mire et l'audit ne mesure qu'une page |
+| `FORGE_TESTS_LOGIN_PATH` | point d'authentification si le projet s'écarte de la convention FastAPI |
+| `FORGE_TESTS_SANS_EXECUTION=1` | inventaire seul, sans exécuter la suite du projet — la non-mesure est déclarée |
+| `FORGE_TESTS_ORACLES` | racine des scripts d'oracles |
+| `FORGE_TESTS_PROMPTS_CORPUS` | racine d'un corpus de cas (questions / réponses attendues) qui vit **hors** du dépôt audité — champ publié par le pan `prompts` quand un prompt déclare un corpus introuvable |
+| `FORGE_TESTS_MUTANTS_PAR_MODULE` | profondeur de mutation par module (défaut `3`) — le **périmètre** reste total, seule la profondeur est échantillonnée, et le taux est publié au rapport |
+| `FORGE_TESTS_MUTATION_PLAFOND` | garde-fou global du nombre de mutants joués (défaut `400`) ; s'il mord, il est déclaré |
+| `FORGE_TESTS_MUTATION_EXCLUT` | motifs `fnmatch` de modules à exclure du périmètre (`app/fournisseurs/*`) — chaque exclusion est **nommée avec son motif** dans `modules[]`, jamais silencieuse |
+| `FORGE_TESTS_QUALIF_URL` | instance **servie et peuplée** parcourue par le pan `qualif` (à défaut, `FORGE_TESTS_BASE_URL` — donc à vérifier avant d'auditer un autre projet que celui que `.env` décrit) |
+| `FORGE_TESTS_QUALIF_LOGIN` / `_PASSWORD` | compte du pan `qualif` (à défaut `FORGE_TESTS_LOGIN` / `_PASSWORD`) |
+| `FORGE_TESTS_QUALIF_CONNEXION` | route de la mire si elle n'est ni `/connexion` ni `/login` |
+| `FORGE_TESTS_QUALIF_STORAGE_STATE` / `_BEARER` | session ouverte **ailleurs** (storage state Playwright, en-tête `Authorization`) pour une instance derrière un IdP d'entreprise |
+| `FORGE_TESTS_QUALIF_STORAGE_STATES` | `role=chemin` (virgule) : **N sessions étiquetées**, un contexte par rôle, couverture **par rôle** au rapport — voir « Pan `qualif` » |
+| `FORGE_TESTS_QUALIF_ROUTES` | routes d'amorce du parcours (virgule) — celles qu'aucun lien n'atteint |
+| `FORGE_TESTS_QUALIF_MARQUEURS` | JSON `{"/route": "marqueur métier"}` ; à défaut le titre de la page |
+| `FORGE_TESTS_QUALIF_PLAFOND` | nombre maximal de routes visitées (défaut `40`) |
+| `FORGE_TESTS_QUALIF_EFFETS` | `1` : le pan **clique** chaque affordance sur une page rechargée et n'appelle `exercé` que ce dont l'effet a été observé (navigation, onglet, titre, DOM). Absente : rien n'est cliqué, et ce qui est seulement câblé est publié comme tel (TF-0876). Une instance peuplée est **écrite** par ces clics |
+| `FORGE_TESTS_QUALIF_EFFETS_PLAFOND` | nombre maximal d'affordances observées par page (défaut `25`) — chaque observation recharge la page ; au-delà, le rapport le dit |
+| `FORGE_TESTS_QUALIF_REFUS` | routes d'atterrissage de refus d'autorisation propres au produit (virgule) — voir « Pan `qualif` » |
+| `FORGE_TESTS_I18N_BUILD` | dossier du **build servi** lu par le pan `i18n` (l'arborescence de pages telle que le visiteur la reçoit). À défaut, le pan cherche `out/`, `dist/`, `build/`, `_site/`, `site/`, `www/`, `public/` sous la racine, puis un `index.html` à la racine elle-même. Aucun réseau, aucun navigateur |
+| `FORGE_TESTS_SERP_BORNES` | fichier JSON des bornes du **dimensionnement SERP** (TF-1318) : `{"source": "…", "verifie_le": "AAAA-MM-JJ", "bornes": {"title": {"max": 60}, "description": {"max": 155}}, "par_locale": {"de": {"title": {"max": 65}}}}` — `min` admis, `par_locale` facultatif (clé `defaut` pour la locale sans préfixe). Absent : rien n'est jugé, et le rapport le dit. Sans `source` ni `verifie_le` : refusé, non opposable. Les valeurs de l'exemple illustrent la forme, elles ne sont pas une recommandation |
+| `FORGE_TESTS_EXIGENCES` | chemin d'un `EXIGENCES.json` : les cas des cahiers y sont rattachés, **avec leur provenance** (`declare` ou `lexical`). Absent, le cahier le déclare en tête et dérive de la seule surface. Un chemin qui n'existe pas est un **refus**, pas un silence |
+| `FORGE_TESTS_PRODUIT` | nom du produit dans les noms de fichiers des livrables. À défaut : le champ `projet` du référentiel d'exigences, puis le nom du dossier audité |
+| `FORGE_TESTS_PLAYWRIGHT_TRACE` | mode `--trace` imposé à la suite e2e (`on`, `off`, `retain-on-failure`…) — à défaut, le mode déjà réglé dans le `playwright.config` du projet est respecté (rien n'est passé en ligne de commande), sinon replié sur `on`. Utile pour désactiver la trace si son écriture bloque sur un poste (TF-0132) — la couverture front devient alors non mesurable, déclarée telle. Lue dans `.env.forge-tests` comme les autres ; le motif du pan front nomme la source de la valeur retenue (TF-1673) |
+| `FORGE_TESTS_DELAI_BACKEND_S` | délai, en secondes, de la suite backend lancée sous coverage (défaut `900`). Dépassé, les pans qui lisent la suite rendent `DELAI_DEPASSE` (TF-2311) ; le motif donne le délai, la durée atteinte et ce réglage ; une valeur illisible laisse le défaut et le dit (TF-1675) |
+| `FORGE_TESTS_DELAI_FRONT_S` | délai, en secondes, de la suite e2e Playwright du front (défaut `900`). Dépassé, le pan `front` rend `DELAI_DEPASSE` (TF-2389), même motif et même action de réglage que le backend ; une valeur illisible laisse le défaut et le dit |
+| `FORGE_TESTS_DELAI_MIGRATIONS_S` | délai, en secondes, du rejeu des migrations sur base neuve (défaut `900`). Dépassé, les pans `migrations` et `data` rendent `DELAI_DEPASSE` au lieu du `PASS` de leur couverture (TF-2389) ; une valeur illisible laisse le défaut et le dit |
+
+## La 404 personnalisée par langue — preuve du contrôle M-9 (TF-0803)
+
+Le patron **P-2** du pilot (`references\PATRONS-EPROUVES.md`, TF-0802) fait de la 404
+personnalisée par langue un standard d'office, et le contrôle **M-9** de `ETAPE-MEP.md` le juge au
+passage en production — **sur preuve** : « la sortie du contrôle exécutable du produit ». Tant que
+ce contrôle appartient au produit, chaque produit le réécrit, ou n'en a pas et **ne peut pas
+prouver M-9**. Le fait fondateur : un site multilingue a servi le 404 nu de son serveur de
+fichiers — page blanche, sans menu ni langue — en production **du 25/08 au 01/09/2026**, vu par
+l'exploitant et par aucun contrôle.
+
+```bash
+uv run python recette/quatre_cent_quatre.py https://preprod.exemple --prefixes fr,en,nl
+uv run python recette/quatre_cent_quatre.py https://preprod.exemple --prefixes fr,en     --langue-par-defaut fr --sitemap /sitemap.xml --sortie preuve-m9.json
+```
+
+Deux paramètres suffisent — **la liste des préfixes de langue** et **l'URL de préproduction** ;
+tout le reste est optionnel et **déclaré** (`--langue-par-defaut` pour la racine sans préfixe,
+`--marqueur-menu` pour un site sans `<nav>`, `--page-404` pour une page d'erreur à chercher au
+sitemap, `--sortie` pour la pièce jointe au dossier de MEP). L'adresse sondée est **fixe**
+(`sonde-404-forge-tests`) : une preuve de MEP se rejoue à l'identique.
+
+| Cas joué (termes de M-9) | Ce qui est mesuré | Le refus qu'il prononce |
+|---|---|---|
+| (a) adresse inconnue sous chaque préfixe | statut 404, page HTML, `<html lang>` égal au préfixe, menu **complet** face à la page de référence du préfixe | **200 → soft-404 indexable** · 404 nu sur une page · mauvaise langue · liens de menu manquants (**nommés**) |
+| (b) `noindex` + absence du sitemap | meta robots **ou** en-tête `X-Robots-Tag` ; aucune adresse sondée ni page 404 déclarée au sitemap | page d'erreur sans `noindex` · sitemap qui liste une adresse rendant 404 |
+| (c) ressource non-HTML inconnue | `.png` et `.js` inconnus rendent un **404 nu** | page HTML servie à la place d'un 404 nu |
+
+**Le piège mesuré est nommé, pas deviné.** Une réponse **pendue** (code 000) sort en échec avec
+son motif : envelopper `writeHead` sans envelopper `write()` fait partir le corps nu du serveur
+avant les en-têtes différés. Sans ce motif, un code 000 se lit comme un incident réseau et la
+cause se cherche dans l'infrastructure au lieu du code.
+
+**Codes de sortie** : `0` les cas de M-9 sont joués et tenus · `1` défaut mesuré · `2` **je ne peux
+pas mesurer** (instance injoignable, aucun préfixe fourni). **Une mesure partielle n'est jamais un
+PASS** : un seul cas `NON_MESURABLE` fait basculer le verdict global — un verdict qu'on ne peut pas
+prononcer et qu'on tait passe pour un verdict tenu.
+
+**Ce qu'elle ne mesure pas, et le dit** dans le champ `non_mesure` de sa sortie : la
+*déclaration* de l'exclusion du sitemap dans l'oracle SEO du produit (M-9 b, seconde moitié), qui
+vit dans le dépôt du produit et non dans une réponse HTTP ; et le « même gabarit » quand la page
+de référence ne porte ni `<nav>` ni marqueur déclaré — alors le cas sort `NON_MESURABLE`, jamais
+`PASS`.
+
+**Double sens prouvé** (contrat TF-0679) : `tests/test_tf_0803_404_par_langue.py` éprouve le
+jugement en fonction **pure**, puis monte **sept serveurs HTTP locaux** sur port libre — un
+conforme et six qui portent chacun un refus (200 sur adresse inconnue, 404 nu, HTML sur une image,
+`noindex` absent, 404 unique pour toutes les langues, sitemap fautif, réponse pendue). Aucun site
+réel, aucun appel sortant : `127.0.0.1` et rien d'autre. Ces tests sont joués par la section
+`unitaire` de la recette, donc **sous S-01**.
+
+## Une suite jouée par la chaîne, ou déclarée hors portée (TF-1043, 14/09/2026)
+
+Étude d'opportunité « socle de la chaîne » (20260914a, décidée le 14/09/2026, option O2).
+Mesure fondatrice (Produit-11, RT-62, 11/09/2026) : **deux tests sont restés ROUGES SIX JOURS
+DURANT UNE RÉOUVERTURE DE FAILLE P0**, sans qu'aucun contrôle du socle ne le remonte — la
+chaîne avait cessé de jouer une suite présente sur le dépôt, et une suite qui n'échoue plus
+parce qu'elle ne tourne plus se lit exactement comme une suite qui passe.
+
+Deux règles, dont une mécanisée :
+
+1. **(mécanisée)** Toute suite de tests présente dans le dépôt (sous les `testpaths` déclarés)
+   est jouée par la chaîne, ou déclarée **HORS PORTÉE** avec son motif et sa date — jamais
+   silencieusement absente du rapport d'exécution.
+2. **(écrite, non mécanisée dans ce lot)** Un correctif de sécurité qui retire une donnée
+   d'une interface publique **cite les tests qui la lisaient** — la classe
+   `correctif-de-securite-laisse-un-test-muet` proposée par le candidat trouve sa recette
+   naturelle ici, mais son mécanisme suppose de confronter un DIFF à une liste de tests
+   couvrant l'interface touchée, nature différente de la règle 1 (état du dépôt, jamais un
+   différentiel de commit) : remise au registre comme candidature distincte.
+
+```bash
+uv run python -m forge_tests.chaine <racine-du-projet-audité>
+# attendu, dépôt sain : « chaine : PASS — chaque suite présente est jouée ou déclarée hors portée »
+# attendu, suite orpheline : exit 1 + une ligne par fichier NOMMÉ, jamais un total anonyme
+```
+
+Déclarer une suite hors portée (assumé, pas oublié) : une ligne dans les dix premières du
+fichier, `# hors-chaine (id), AAAA-MM-JJ : motif` — même grammaire (identifiant, date, motif)
+que le reste du socle.
+
+Limites déclarées (`forge_tests.chaine.NON_JUGE`) : la CI HÉBERGÉE n'est pas interrogée
+directement (l'hypothèse est qu'elle invoque la même commande que la collecte locale rejouée
+ici — angle mort partagé avec TF-1017) ; un test COLLECTÉ mais marqué `pytest.mark.skip` sans
+motif daté n'est pas vu (classe voisine, pas celle mesurée par RT-62) ; sans `testpaths`
+déclaré au `pyproject.toml` audité, le périmètre supposé est `tests/`.
+
+## Fabrique de données — un jeu chargeable, jugé par un chargement réel (TF-2012, 29/10/2026)
+
+La spec du noyau déclarait cinq capacités d'adaptateur ; la quatrième, **fabrique de données**
+(« fixtures, seeding, teardown, cas limites »), n'était qu'une ligne de son tableau. Le CDC le
+constatait dès le cadrage (C4 : « Aucune fabrique de données n'existe »). Le jeu des livrables
+n'en tenait pas lieu : un JSON pour les cahiers, chargé dans aucune base. **La capacité 4 est
+désormais écrite.** `forge_tests/fabrique_donnees.py` fabrique un fichier d'INSERT depuis le
+schéma que construisent les migrations SQL du projet, puis le juge en le chargeant sur une base
+PostgreSQL éphémère.
+
+```bash
+uv run python -m forge_tests.fabrique_donnees <projet> --sortie <hors-projet>/jeu.sql
+uv run python -m forge_tests.fabrique_donnees <projet> --sortie <hors-projet>/jeu.sql \
+    --graine 42 --volume 20 --volume-table commande=200 --json
+```
+
+| Option | Effet |
+|---|---|
+| `--sortie <fichier.sql>` | obligatoire, **hors du projet** : dedans, refus G-1 en code 4 et rien n'est écrit |
+| `--graine <n>` | graine des tirages (défaut 1) : même schéma, même graine, mêmes volumes, **même octet** |
+| `--volume <n>`, `--volume-table TABLE=N` | lignes par table (défaut 10), puis par table nommée ; une table inconnue du schéma est refusée |
+| `--python <interpréteur>` | celui qui porte `testcontainers` et `psycopg` ; à défaut, le venv du projet, puis celui de la forge |
+| `--sans-chargement` | écrit le jeu sans le juger : verdict `NON_JUGE`, code 3 |
+| `--json` | rapport machine complet sur stdout ; les messages partent sur stderr |
+
+**Ce qui est lu.** Les sections `-- +migrate Up` de `<racine>/migrations/*.sql`, dans l'ordre des
+fichiers, par les fonctions de l'adaptateur `migrations` et le découpage de `forge_tests.sql`
+(`forge_tests/schema_sql.py`). Le lecteur en tire les tables, les colonnes et leurs types, les
+`NOT NULL`, les clés primaires et étrangères (de colonne, de table ou posées par `ALTER TABLE`),
+les `UNIQUE` et index uniques, les types `ENUM` et les domaines. Il traduit en valeurs les `CHECK`
+de forme reconnue : `IN`, `= ANY (ARRAY[…])`, comparaison à une borne, `BETWEEN`, longueur,
+`IS NOT NULL`, relation d'ordre entre deux colonnes, `OU` d'égalités. Un `ALTER`, un `DROP` ou un
+`RENAME` comptent comme le moteur les comptera.
+
+**Ce qui est produit.** Une instruction par ligne, rejouable par `psql -v ON_ERROR_STOP=1 -f`. Les
+tables suivent l'ordre des clés étrangères ; un cycle se rompt sur une clé nullable, et le rapport
+le dit. Les identités reçoivent des valeurs explicites (`OVERRIDING SYSTEM VALUE` quand il le
+faut) et les séquences sont recalées en fin de fichier. Le jeu porte des **cas limites** tous
+valides : bornes basses et longueurs maximales à la première ligne, `NULL` admis à la deuxième,
+bornes hautes à la troisième. Le rapport les déclare table par table.
+
+**Synthétique, et prouvé tel avant écriture.** Les valeurs viennent du vocabulaire fermé de
+`livrables/jeux.py`, et les courriels vivent sous `exemple.test`. Les seules valeurs reprises du
+projet sont celles que son schéma **impose** (`CHECK … IN`, type énuméré). Toutes passent par le
+garde-fou de `jeux.py`, réutilisé et non recopié (`jeux.verifier`). Un refus lève
+`DonneeNonSynthetique` : code 2, **rien n'est écrit**, et le message nomme la vérification qui
+imposait la valeur. C'est la décision (c) du cadrage : synthétiques uniquement.
+
+**Jugé par exécution.** Une base `postgres:16-alpine` est montée par `testcontainers` (sonde
+`forge_tests/sondes/charger_jeu.py`), les migrations Up y sont rejouées, puis le jeu. Chaque
+instruction passe sous un point de sauvegarde, si bien que chaque rejet est **nommé** par le
+moteur (contrainte, code SQLSTATE). Les lignes de chaque table sont comptées avant et après. La
+base est détruite à la sortie.
+
+| Verdict | Code | Ce qu'il affirme |
+|---|---|---|
+| `PASS` | 0 | jeu chargé, 0 rejet, toutes les lignes présentes, volume tenu |
+| `FAIL` | 1 | au moins un rejet, nommé, ou une ligne absente après chargement |
+| `REFUSE`, `ERREUR` | 2 | garde-fou synthétique (rien n'est écrit), aucun schéma lisible, migrations non rejouables sur base neuve |
+| `PARTIEL` | 3 | chargé sans rejet, mais une table n'a pas reçu son volume (unicité intenable, parent absent), motif nommé |
+| `NON_EXECUTABLE`, `NON_JUGE` | 3 | base non montée ici (démon injoignable, avec le marqueur `PRÉALABLE D ENVIRONNEMENT ABSENT` et sa preuve ; `testcontainers` absent), ou chargement non demandé : **jamais un vert** |
+| `REFUS_G1` | 4 | sortie désignée dans le projet audité |
+
+**Ce qui n'est pas jugé**, repris tel quel en `non_juge` et au registre de dette (domaines
+`fabrique-donnees` et `schema-sql`) :
+
+- **Alembic** : un schéma versionné par Alembic, ou par un ORM sans migrations SQL, n'est pas lu.
+  La fabrique le dit, compte les versions Alembic trouvées et ne fabrique rien ;
+- **moteurs autres que PostgreSQL** : SQLite, MySQL ou SQL Server reçoivent un jeu dont le
+  chargement n'est pas jugé pour leur moteur ;
+- un `CHECK` hors des formes reconnues (expression régulière, fonction) est **nommé** au
+  rapport, pas traduit : seul le chargement réel le juge ;
+- déclencheurs, règles, politiques RLS, contraintes `EXCLUDE` et lignes insérées par les
+  migrations ne sont pas modélisés : seul le chargement en juge l'effet ;
+- **teardown** : aucun script de retrait n'est produit pour une base durable. Seule la base
+  éphémère du jugement est créée puis détruite ;
+- le jeu dit la forme d'une donnée valide, pas la sémantique métier d'une colonne.
+
+Bancs à double sens sous `fixtures/fabrique-donnees/`. `vert` (clés simples, composées et
+réflexives, `ENUM`, identité, `CHECK` de bornes, de liste, de longueur et de relation) se charge
+sans un rejet. `rouge-violation` (une référence contrainte par expression régulière) doit être
+rejeté au chargement, contrainte nommée. `rouge-courriel` (un schéma qui impose une adresse sous
+un domaine non réservé) doit être refusé avant écriture. Ils sont joués par
+`tests/test_tf_2012_fabrique_donnees.py`, donc par la section `unitaire` de la recette, sous
+S-01. Les tests qui montent une base exigent Docker et l'interpréteur des bancs historiques
+(`uv sync --directory fixtures/banc-vert/backend`) ; sans eux, ils sortent en SKIP nommé.
+
+## Recette et dette
+
+```bash
+uv run python recette/verifier_corpus.py   # critère de sortie S-01 — exit 0 attendu
+uv run python recette/verifier_corpus.py --section sql qualification   # une poignée de secondes
+uv run pytest                              # suite unitaire du dépôt (jouée aussi par la recette)
+uv run python recette/precision_generateur.py
+uv run python -m forge_tests.dette             # régénère registre-dette.json depuis le code
+uv run python -m forge_tests.dette --verifier  # exit 1 si le registre committé a divergé
+```
+
+La recette rejoue le framework sur la paire de bancs de `fixtures/` : **chacune** des entrées de
+`CORPUS` (`recette/verifier_corpus.py` — la liste est la seule source du compte, et la recette
+l'imprime au verdict) doit produire un finding **nommé** par SON propre défaut planté au banc
+rouge, le banc vert aucun finding bloquant.
+
+Deux choses dépendent du poste ou du calendrier, et la recette les dit au lieu de les subir
+(TF-2392). La section `unitaire` joue **un `pytest` par fichier de test**, plusieurs à la fois
+(`RECETTE_PROCESSUS_UNITAIRE`, défaut : la moitié des cœurs, entre 2 et 8), sous un délai global
+`RECETTE_DELAI_UNITAIRE_S` (défaut 1 800 s) ; mesuré le 10/11/2026 sur un poste partagé : 1 951 s
+en un seul processus (le délai fixe de 600 s était dépassé et la section n'était pas prononcée),
+395 s à 535 s en parallèle, mêmes 2 089 tests. Un délai dépassé rend `DELAI_DEPASSE`, nomme les
+fichiers interrompus et le réglage, et la section échoue quand même : un délai n'est pas un vert.
+Le banc vert épingle des versions (`fixtures/banc-vert/backend/uv.lock`) que la base d'avis
+publique continue d'enrichir : quand ses bloquants sont des avis `securite:sca`, la recette nomme
+les paquets et la commande qui remonte le verrou (`uv lock --upgrade-package …`), sans rien
+atténuer. Le 10/11/2026, `certifi` 2026.7.22 → 2026.10.23 et `urllib3` 2.7.0 → 2.8.0 ont ramené le
+pan `securite` du banc vert de 5 bloquants à 0. Une base d'avis figée (`oracle-sca --osv-fige`) a
+été essayée et écartée : en mode figé l'oracle demande la version de la plage du `package.json`
+(`vite ^5.4.8`), juge tout avis OSV sans filtre de sévérité, et même répondu sur les versions du
+`package-lock.json` il restait 4 avis publiés avant le gel (`vite` 5.4.21 ×3, `react-router-dom`
+6.30.4 ×1). **Ces 4 avis n'étaient pas un écart de l'oracle, mais un angle mort du pan**
+(TF-2403, 12/11/2026) : le pan ne remettait aux oracles que la racine d'exécution (`backend/`),
+et le front, rangé à côté avec son `package.json` et son verrou, n'était ni lu ni cité — un audit
+de sécurité vert sur des avis connus. `oracle-sca` reçoit désormais les **manifestes** de toute la
+racine du projet (`package.json`, `package-lock.json`, `requirements.txt`, `uv.lock`,
+`poetry.lock`, copiés sans les dossiers de dépendances), `sast` et `secrets` gardent la racine
+d'exécution ; le `non_juge` nomme les manifestes remis, et un finding SCA se localise sur le
+chemin réel du manifeste. Rejoué sur le banc vert, le pan rendait alors un bloquant npm ; le verrou
+du front est remonté à son tour (`vite` ^6.4.6, `react-router-dom` ^7.18.5, `nanoid` et
+`source-map-js` par `npm audit fix` : 0 avis, suite Playwright du banc 5/5).
+
+Le pan `qualif` juge une application **en service** : il ne pourrait donc pas être exercé par
+un banc de fichiers, comme les autres pans. La recette **sert elle-même** `fixtures/banc-*/
+qualif-web/` sur un port libre (serveur de la bibliothèque standard) et déclare l'URL au pan.
+Le serveur est réel, le navigateur est réel, les erreurs console et les 404 sont réels — seul
+le *peuplement* est écrit en dur dans les pages du banc, parce que peupler une application est
+la responsabilité du projet audité, pas du framework. Les défauts plantés côté rouge : lien
+vers une page absente (404), trace d'exception rendue dans une page qui répond 200, page sans
+aucun marqueur de contenu, erreur console au chargement, bouton sans le moindre écouteur.
+
+Elle ajoute six vérifications **sur pièces**, pour des mécanismes qu'aucun banc ne peut
+exercer : le lecteur SQL (`;` dans un commentaire, en fin de ligne commentée, dans un bloc,
+dans un littéral — RT-8) ; la qualification des non-testables (variable absente citée par une
+trace, refus de compter une variable pourtant fournie — RT-6) ; l'analyse des divergences
+(garde déportée dans un helper local, montage `StaticFiles` exclu — RT-9 / RT-10) ; les
+chemins de couverture des pans non couverts (A-5), qu'aucun banc n'exerce puisque tous les
+pans y sont couverts ; la relecture des rapports **antérieurs** à A-5 par `--reprendre` ; et la
+restauration byte-exacte après mutation (G-1, fichier en LF et en CRLF). Sans elles, ces
+mécanismes pourraient pourrir sans que rien ne le dise. La recette empreinte en outre les
+sources des deux bancs en SHA-256 **avant et après** l'audit : aucun octet ne doit bouger.
+
+Quatre vérifications portent sur les **livrables**, et chacune a sa contrepartie rouge — un
+contrôle qu'on ne voit jamais échouer ne contrôle rien :
+
+| Vérification | Le vert | Le rouge qui prouve qu'elle discrimine |
+|---|---|---|
+| `actions[]` | ≥ 1 action par catégorie **et** par étape cible ; tout finding en porte exactement une | une classe de finding **inventée** sort un défaut d'auditeur (`etape_cible: forge`), jamais un finding sans suite |
+| jeux de données | un jeu produit par la forge passe le garde-fou ; un courriel du domaine réservé aussi | courriel de domaine réel, clé `sk-…`, jeton GitHub, JWT, empreinte hexadécimale, URL à identifiants, valeur du `.env` du projet — **six refus** |
+| cahiers | sceau valide, deux runs identiques au sha256, chaque élément inventorié présent, douze chapitres dérivés | une édition manuelle d'un caractère est trahie par le sceau ; un élément non testable sort **nommé** en « non couvert » avec le champ à fournir ; un dépôt dans le projet audité est refusé (G-1) |
+| dashboard | totaux égaux au rapport, aucune ressource distante, deux thèmes, six onglets, `check_html.py` **PASS**, et la critique d'implémentation de forge-design (`run-oracles-design.mjs` : slop, tokens, mouvement, bascule sombre) **PASS** sur deux pages dont une porte les trois badges de déclaration (TF-2101) | un total volontairement faussé et un total retiré sont tous deux détectés ; une valeur de jeton dans la page lève avant écriture ; sept écarts d'origine (bandeau latéral, blanc pur, emoji, couleur en dur, espacement hors 4pt, mouvement non révoqué, palette sombre absente) réinjectés dans une page verte font chacun échouer leur oracle pour leur règle |
+
+Le contrôle des totaux relit ce qui est **affiché** (`data-total="<clé>"`), pas une variable
+interne : un dashboard peut mentir sans que le code qui l'a produit ait tort.
+
+### `--section` — payer le prix de ce qu'on vérifie
+
+La recette entière coûte **3 minutes** sur une machine de développement, et ce prix est celui
+des **audits des bancs** (mutation, navigateur, conteneur) — les contrôles sur pièces, eux,
+coûtent quelques centièmes. Un correctif d'une ligne au lecteur SQL payait donc trois minutes
+pour vérifier une seconde de code, ce qui a un effet mesurable : on rejoue moins souvent.
+
+`--section <nom> [...]` ne joue que les sections demandées, et **n'audite que les bancs dont
+elles ont besoin** :
+
+| Sélection | Bancs audités | Durée mesurée (09/08) |
+|---|---|---|
+| aucune (recette entière) | rouge + vert | **181 s** |
+| les 8 sections sur pièces (`sql qualification dette divergences chemins lecture-seule actions jeux`) | aucun | **1 s** |
+| `cahiers` ou `dashboard` | rouge seul | **100 s** |
+| `corpus` | rouge + vert | ~180 s |
+
+Sections : `corpus`, `unitaire`, `lint`, `sql`, `qualification`, `dette`, `divergences`,
+`chemins`, `lecture-seule`, `actions`, `jeux`, `cahiers`, `dashboard` — **treize**, autant que
+le verdict en exige (`--help` les liste avec leur coût).
+
+**Une recette partielle ne prononce jamais S-01.** Elle sort `RECETTE PARTIELLE — S-01 NON
+PRONONCÉ` en nommant les sections non jouées : un « vert » sur trois sections et un silence sur
+toutes les autres serait exactement le mensonge que le sélecteur rendrait facile. Le critère de
+sortie reste la recette entière ; le sélecteur sert la boucle de correction, pas le verdict.
+
+### S-01 — ce que le critère couvre, et où il en est (mesuré le 03/09/2026)
+
+**Ce que S-01 affirme, exactement** : « la forge attrape ce qu'elle doit, et se tait sur ce qui
+va bien ». Deux moitiés, et les deux sont opposables — chacune des entrées de `CORPUS` produit
+au banc **rouge** un finding *nommé* par SON propre défaut (pas un total, pas un défaut voisin :
+préfixe **et** classe), et le banc **vert** ne lève **aucun finding bloquant**. Autour de ce
+cœur, douze sections sur pièces : suite unitaire, linter, lecteur SQL, qualification, registre de
+dette, divergences, chemins de couverture, restauration byte-exacte, `actions[]`, jeux de
+données, cahiers, dashboard. **Les treize doivent être vertes** ; une seule rouge, et S-01 est
+NON TENU.
+
+**Un verdict qu'on ne peut pas prononcer et qu'on tait passe pour un verdict tenu.** Cette
+section existe pour que cela n'arrive plus : elle porte l'état MESURÉ, pas l'intention.
+
+| Ce qui empêchait S-01 | Depuis | Mesure | État |
+|---|---|---|---|
+| `corpus` : banc rouge **21/23** — H-08 (assertions permissives) et A-3 (seuil de mutation par module) manquants | 01/09, livraison de D-34 : le pan `mutation` cessait de se jouer par défaut, et la recette qui attend ses constats ne les voyait plus | 23/23 après que la recette **demande** la campagne sur ses propres bancs | **fermé** (TF-0763) |
+| `corpus` : banc vert **3 findings bloquants** sur 5 routes | l'arrivée du pan `clavier` : K2 identifiait l'élément focalisé par sa FORME (`button`), jamais par son identité — trois boutons frères se lisaient « la tabulation n'avance plus » | 60 % de bruit sur un bloquant WCAG ; **0 bloquant** après que la clé devienne le chemin DOM | **fermé** (TF-0763) |
+| verdict REFUSÉ, « arbre instable » | la recette dépose légitimement chez ses bancs ce qu'elle prescrit (`.gitignore` de TF-0620, marqueur de campagne de D-34, `forge/avancement.jsonl`) — TF-0294 les voyait apparaître PENDANT la recette | 2 fichiers, puis 2 autres ; verdict rendu après ignorance bornée aux bancs | **fermé** (TF-0763) |
+| `lint` : **100** constats `ruff` (69 × E501, 12 × E741, 7 × I001, …) | non daté — **antérieur** à la campagne du 02/09 : 101 constats mesurés sur l'arbre de `623a618`. Cause réelle : la dépendance était déclarée `ruff>=0.5` et la version installée `0.16.1` | **115** constats sous 0.5.7, **100** sous 0.16.1, sur le MÊME arbre (17 `UP038` retirés en amont, 2 `UP031` apparus) ; **0** après solde, `ruff` épinglé `==0.16.1` | **fermé** (TF-0785, 03/09) |
+| `dashboard` : les oracles de charte du socle sortent en code 1 — `check_html.py` **L17** et `render_page.py` | non daté — mesuré rouge à `77ffbac` **avant** toute correction de TF-0763. Ces oracles vivent **hors du dépôt** (`<socle-factory>/skills/factory-page-html/`) et leur jeu de règles a bougé PENDANT la session du 02/09 : **L25** et l'échec de `render_page` sont apparus entre deux exécutions, sans qu'un octet du dépôt ne change | **L25 fermé** le 02/09 · **L17 : 196 → 0** (les lignes de détail portent un `id` et leur bouton les vise par `aria-controls`) · **`render_page` : FAIL → PASS** (22 px d'écart entre les commandes de deux chemins de lecteur à 768 px, tolérance 2 px) | **fermé** (TF-0786, 03/09) |
+
+**Donc, au 03/09/2026 : S-01 est TENU** — les treize sections sont vertes, `recette/verifier_corpus.py`
+entière rend le code 0. Les deux causes restantes du 02/09 étaient **la même** : un verdict rendu
+par un outil dont la version n'est pas épinglée mesure le poste, pas le dépôt. Ce qui a changé le
+02/09 n'était pas le verdict mais sa **lisibilité** ; ce qui change le 03/09 est le verdict, et
+la doctrine ci-dessous existe pour qu'il ne redevienne pas illisible.
+
+#### Un outil non épinglé ne rend pas un verdict (TF-0785 / TF-0786, 03/09/2026)
+
+Deux sections de la recette appelaient un outil sans épingler ce qu'elles appelaient, et les deux
+en sont mortes de la même façon — **le même dépôt rendait vert sur un poste et rouge sur l'autre,
+sans qu'un octet n'ait changé** :
+
+- **`lint`** jouait `ruff`, déclaré `ruff>=0.5`, installé en `0.16.1`. Mesure du 03/09 : **115
+  constats sous 0.5.7, 100 sous 0.16.1**. `ruff` est désormais épinglé à une **version exacte**
+  (`pyproject.toml` + `uv.lock`), la section **DIT la version qu'elle a jouée**, et une
+  déclaration qui n'épingle pas (`>=`, `~=`, une fourchette, ou l'absence de déclaration) est
+  elle-même un **ÉCHEC** de la section — pas un avertissement.
+- **`dashboard`** joue `check_html.py` et `render_page.py` depuis `~/.claude/skills/`. Leur jeu
+  de règles est passé de `4b9b6179fb57` à `c16177d42a88` (31 → 36 règles, 14 → 18 familles)
+  **pendant** la session du 02/09. La section **CONSIGNE désormais l'identité des oracles joués**
+  — l'empreinte publiée par `check_html.py --version-regles`, celle dérivée de
+  `render_page.py --familles` — et la compare à celle du run précédent
+  (`recette/.empreintes-oracles.json`, ignoré par git). Deux empreintes différentes rendent les
+  deux rapports **NON COMPARABLES**, et la recette le dit au lieu de laisser lire une régression
+  là où il n'y a qu'une montée de version.
+
+Cette identité n'est pas un contrôle et ne fait pas échouer la section : c'est une **consigne**.
+La faire échouer rendrait la recette rouge à chaque montée de version du socle — le taire ferait
+lire deux rapports incomparables comme deux mesures du même objet. La forge garde en outre ses
+propres règles **sans dépendre du skill installé** : le contrôle de pré-génération (§2 bis) juge
+désormais lui-même que toute ligne de détail porte un `id` visé par un `aria-controls`
+(`L17-detail-identifie`, `L17-detail-cible`) et que les commandes des chemins de lecteur sont
+collées au bas de leur carte (`L26bis-actions-alignees`). Bruit mesuré de ces trois règles sur
+les **33** documents HTML versionnés du dépôt : **0 accusation**.
+
+*Ce que la recette dit désormais d'elle-même* : les findings **bloquants** du banc vert sont
+listés un par un, avec leur pan, leur classe et leur message — comme les `signale` l'étaient
+déjà. Un « 3 finding(s) bloquant(s) » sans nom ne s'instruit pas : il oblige à rejouer l'audit à
+la main hors recette pour savoir lesquels, et c'est ce qui a laissé ce rouge vivre un mois.
+
+Elle exige un venv sous `fixtures/banc-*/backend` (`uv sync --directory
+fixtures/banc-rouge/backend`), les dépendances des fronts (`npm ci` puis `npm run build` dans
+`fixtures/banc-*/frontend`), un navigateur Playwright et Docker. Elle neutralise
+`FORGE_TESTS_BASE_URL` : elle porte sur les bancs locaux, jamais sur l'instance de l'opérateur.
+
+**Dans un arbre de travail neuf** (`git worktree add`, clone), ces préalables manquent, et la
+recette le dit au lieu de s'accuser (TF-2402, 12/11/2026). Mesuré sur `955454a` : sans `.venv` des
+bancs, sans `node_modules` ni `dist`, la section `corpus` rendait 13 défauts « MANQUE » sur 23,
+des régressions annoncées là où la mesure n'avait pas eu lieu, et le banc vert sortait PARTIEL à
+0 bloquant sans une ligne pour l'expliquer (front, api, data, migrations, batch, fichiers, back,
+accessibilité, contraste, clavier, visuel et plancher n'avaient pas de mesure). Les trois
+préalables portent désormais le marqueur `PRÉALABLE D ENVIRONNEMENT ABSENT` dans le motif du pan (celui de TF-0299) :
+`.venv` absent (api, data, migrations, batch, fichiers, back), `node_modules` absent (front),
+`dist`, `node_modules` ou `npx` absent (accessibilité, contraste, clavier, plancher, visuel). La
+recette écrit alors `[NON MESURABLE]` avec le préalable et la commande qui le crée (`uv sync`,
+`npm ci`, `npm run build`), déclare le « 0 bloquant » du banc vert PARTIEL, et ne prononce pas
+S-01 (code 3 quand le reste est vert). Un front qui a tous ses préalables et ne répond pas garde son motif générique : l'absoudre serait
+le défaut inverse. La section `cahiers` ne lit plus `USERPROFILE` comme une valeur de configuration
+du projet : le nom contient `USER`, sa valeur préfixe tout chemin absolu d'un arbre posé sous le
+dossier personnel, et le jeu de données dérivé du rapport (qui cite ces chemins) était refusé par
+le garde-fou (`DonneeNonSynthetique`). La liste des variables de session exemptées est fermée.
+
+`registre-dette.json` est **régénéré depuis le code** : les `non_juge` déclarés par le noyau,
+le risque, l'exécution et les adaptateurs y deviennent des entrées à statut. Ne pas éditer les
+énoncés à la main, seulement les statuts, les preuves et les notes.
+
+| Statut | Ce qu'il affirme |
+|---|---|
+| `todo` | à outiller |
+| `assume` | limite acceptée et déclarée pour toujours |
+| `ok` | **comblée** — le champ `preuve` nomme le test ou le contrôle de recette qui la tient. Sans `preuve`, le statut est **refusé** |
+| `retiree` | l'énoncé a disparu du code, sans preuve. Posé par la machine, et **ce n'est pas une fermeture** |
+
+Deux règles de sémantique, posées après le constat du 08/08 — 89 entrées, **zéro** fermeture,
+27 « résolues » qui n'étaient que des phrases réécrites :
+
+- **l'identifiant est stable et découplé de l'énoncé.** Il valait `<domaine>-<sha8(énoncé)>` :
+  reformuler une phrase fabriquait une entrée neuve en `todo` et faisait passer l'ancienne pour
+  comblée. Il vaut désormais `<domaine>-<rang>`, attribué une fois et conservé. Un énoncé
+  reformulé garde son identité, son statut et sa note — le rapprochement se fait sur la
+  ressemblance (≥ 70 % dans le même domaine) et il est **déclaré** à la régénération ;
+- **la synchronisation est vérifiée en recette.** Régénéré à la main, le registre n'est pas
+  régénéré : la dette du jour se lirait dans un fichier qui décrit le code d'avant-hier.
+  `--verifier` compare le fichier committé à la projection du code et **échoue** — il ne
+  signale pas. Ses deux contreparties rouges (registre amputé, `ok` sans preuve) sont jouées
+  par la recette.
+
+## Architecture
+
+**Noyau universel mince + adaptateurs par écosystème.** Le noyau porte le modèle de risque,
+la traçabilité test → risque, les critères d'arrêt et le reporting ; il ne connaît aucune
+technologie. Les adaptateurs portent la profondeur d'exécution, par couple pan × technologie.
+
+Un pan sans adaptateur produit un diagnostic **partiel explicitement marqué** — jamais un vert
+global qui masquerait le trou.
+
+**Loi d'admission** : *un adaptateur qui ne sait pas énumérer sa surface n'est pas un
+adaptateur.* Admission conditionnée à une paire de fixtures — projet à défaut planté qui doit
+être détecté, projet sain qui ne doit pas être signalé.
+
+## Documents de conception
+
+| Document | Contenu |
+|---|---|
+| `docs/Factory - CDC Forge - Framework Tests - 20260802a.md` | Le CDC de cadrage : 7 sections, verdicts de frontière, 11 seuils chiffrés, plan phasé, journal des décisions |
+| `docs/Factory - Corpus Forge - Fiches de defauts - 20260802a.md` | Le banc d'essai, sa surface de référence, et les 8 défauts à y planter |
+| `docs/Factory - Spec Forge - Noyau et contrat adaptateur - 20260802a.md` | Contrat d'adaptateur, référentiel de tests versionné, format du rapport |
+| `docs/Factory - Spec Forge - Correctif V1 manifeste opposable - 20260802a.md` | Le correctif appliqué en amont à `factory-saas-forge` pour que ce dépôt soit constructible |
+| `docs/Factory - Prompt Forge - Framework Tests Cadrage - 20260731a.md` | Le prompt de cadrage d'origine |
+
+## Rapport avec factory-saas-forge
+
+Forge Tests est un **produit autonome**, pas un module du conducteur — c'est ce qui lui permet
+de s'appliquer à n'importe quel projet, construit ou non avec la forge. La SaaS Forge l'invoque
+comme n'importe quel outil de son gate code.
+
+L'échange va dans les deux sens. Le gate code du conducteur conclut aujourd'hui `passed` sur le
+seul code de sortie de la commande de test du projet. Une suite qui n'exerce que la page
+d'accueil renvoie 0. La SaaS Forge est donc, en l'état, exposée au défaut fondateur sur tout ce
+qu'elle produit — et Forge Tests est la réponse à cette exposition.
+
+## État du harnais
+
+Deux filets, et ils ne mesurent pas la même chose :
+
+- **la recette du corpus** éprouve le framework *par exécution*, sur une paire de bancs. C'est
+  elle qui prononce le critère de sortie S-01 ;
+- **la suite unitaire** (`tests/`, `uv run pytest`) porte sur les **bords** que les bancs
+  n'exercent pas : littéral SQL non fermé, variable de configuration citée mais fournie, action
+  d'une classe de finding inconnue. Elle couvre aujourd'hui les trois modules dont dépend tout
+  le reste — `sql.py` (les quatre lecteurs SQL du dépôt en dépendent), `qualification.py` (ce
+  qu'on demande à un humain de fournir) et `actions.py` (à qui l'audit adresse son travail).
+
+**Ce qui reste sans suite unitaire est nommé, jamais tu** : `noyau.py`, `reprise.py`,
+`execution.py`, `invariants.py`, les adaptateurs et les livrables n'ont pour filet que la
+recette. C'est un écart connu, pas un vert.
+
+La suite est jouée **par la recette** (section `unitaire`) : une suite unitaire qu'aucune
+vérification ne lance serait exactement l'écart qu'elle est censée combler.
+
+## Garde-fous
+
+- **Lecture seule par défaut sur le code analysé.** Les artefacts produits par Forge Tests
+  (relevé `coverage`, traces et captures Playwright) sont écrits dans un dossier temporaire
+  **hors du projet**, jamais dans son arbre.
+- Trois écritures restent **déclarées, pas masquées** : la configuration Playwright d'un
+  projet peut démarrer son propre `webServer`, qui écrit chez lui (build, code généré) ; le
+  pan mutation modifie le source du projet le temps d'un mutant avant de le **restaurer** ; le
+  pan visuel dépose ses captures et ses goldens dans `<projet>/.visuel/` — par conception, un
+  golden est une référence **versionnée avec le projet**, pas un artefact jetable.
+- **La restauration après mutation est byte-exacte, fins de ligne comprises.** Le 2026-08-06,
+  le premier audit à périmètre total a laissé **23 fichiers source du produit modifiés** : la
+  mutation était bien défaite, mais la restauration passait par `Path.write_text`, qui traduit
+  `\n` en `os.linesep` — les modules en LF revenaient en CRLF. Une lecture seule qui réécrit
+  les fins de ligne n'est pas une lecture seule. L'écart avait dormi depuis l'origine parce que
+  le périmètre d'avant A-1 ne touchait que huit modules déjà convertis en CRLF par un audit
+  antérieur. L'écriture et la restauration passent désormais par un point unique **en octets**,
+  et la restauration est **vérifiée** avant d'être déclarée. La recette le contrôle sur pièces
+  (fichier en LF *et* en CRLF, avec un témoin qui montre que l'ancien chemin altérait le
+  premier) et empreinte en SHA-256 les sources des deux bancs avant et après chaque audit.
+- Le pan visuel ne crée plus `<projet>/.visuel/` quand le projet **n'a aucune route** à
+  capturer : un projet purement API, ou dont le front est servi par le backend, se voyait créer
+  un dossier vide dans son arbre pour un pan qui allait conclure `SKIP`.
+- **Les deux recettes neutralisent `FORGE_TESTS_BASE_URL`.** `precision_generateur.py` ne le
+  faisait pas : le lancer capturait le DOM de l'instance cliente décrite par le `.env` de
+  l'opérateur et l'écrivait dans `fixtures/banc-*/.visuel/`. Un outil qui pollue ses propres
+  bancs de référence perd la seule chose qui rend ses verdicts comparables.
+- Un délai dépassé, un outil absent ou une suite rouge **dégradent le pan concerné avec son
+  motif** — jamais l'audit entier, jamais en silence.
+- Interdiction d'assouplir une assertion pour faire passer un test rouge
+- Boucle de correction bornée à 3 itérations, puis livraison avec les écarts résiduels nommés
+- Aucune donnée de production non anonymisée dans les jeux d'essai
+- L'autonomie porte sur le diagnostic, pas sur l'écriture dans le code d'autrui
+
+---
+
+*Factory · 2026*

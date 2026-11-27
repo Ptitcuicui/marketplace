@@ -1,0 +1,1231 @@
+# Changelog — AuditCore core
+
+Versionnement SemVer (PADR-0005) : MAJEUR = rupture de schéma / retrait de contrôle ·
+MINEUR = nouveaux contrôles/ADR · PATCH = corrections. Chaque release liste les standards
+sources mis à jour.
+
+## [Non publié]
+
+### Corrigé
+- **Les canevas Markdown de fiche et de banc de preuves ne portent plus de trou que FS1 ne lit pas** (16/11/2026, TF-2592,
+  récidive de TF-2582) — FS1 ne lit que les `{{…}}` de 80 caractères au plus ; TF-2582 avait ramené le trou du squelette HTML
+  dans cette borne, pas ceux des canevas. Mesuré avant correction (trous de plus de 80 caractères entre `{{` et `}}`) : 6 dans
+  `fiche-securite.template.md`, 7 dans `fiche-securite.template.en.md`, 1 dans `banc-de-preuves.template.md`, soit 14 (le
+  constat de l'agent du lot au en annonçait 16, dont 8 en français : non reproduit, 6 mesurés). Une fiche rédigée depuis le
+  canevas qui laissait l'un d'eux en place rendait PASS. Chaque trou est raccourci à 80 caractères au plus en gardant sa clé
+  (parité FR/EN tenue) ; la consigne qui dépassait la borne passe dans un commentaire HTML `<!-- … -->` de la même cellule, sans
+  perte. Le gabarit fiche passe à 1.1.1 (canevas FR/EN, `GABARIT_VERSION` de `tools/build-fiche.mjs`), le banc à 1.0.1,
+  `gabarits-versions.json` réenregistré par `verifier-gabarits --maj`. Trois cas dans `tests/oracles/fiche-securite.test.mjs`
+  (un par canevas) : pour chaque trou, le canevas est instancié avec tous les autres trous remplis et celui-là laissé en place,
+  FS1 doit rendre FAIL (rouge avant : 6, 7 et 1 trous passaient ; vert après : 0) ; un quatrième cas vérifie que le canevas
+  entièrement rempli reste accepté (FS1 PASS). FS1 est inchangé.
+- **Une fiche complète sans `business_owner` est refusée par FS1** (15/11/2026, TF-2582) — FS1 ne lit que les `{{…}}` de 80
+  caractères au plus ; le trou `{{BUSINESS_OWNER — qui VALIDE la mise à disposition ; si c'est le porteur lui-même, l'écrire : le
+  dire est le contrôle}}` de `tools/build-fiche.mjs` en portait 116 (seul trou du squelette au-delà de la borne, 1 sur 32,
+  mesuré). Reproduit avant correction : fiche complète sans `business_owner`, 1 occurrence de `BUSINESS_OWNER` dans le HTML, FS1
+  « 0 placeholder résiduel », verdict PASS. Le trou tient maintenant en 49 caractères (`{{BUSINESS_OWNER — qui VALIDE la mise à
+  disposition}}`) et la consigne sur le porteur qui valide lui-même reste visible HORS du trou. FS1 est inchangé. Deux cas dans
+  `tests/oracles/fiche-securite.test.mjs`, rouges sur le `build-fiche` d'avant et verts sur le nouveau : fiche complète sans
+  `business_owner` (FS1 FAIL, verdict FAIL ; avec, PASS) et squelette dont chaque trou tient en 80 caractères et que FS1 compte en
+  entier (31 lus sur 32 avant, 32 sur 32 après).
+- **Le plancher de `js-yaml` passe à `^5.4.1`** (15/11/2026, TF-2568) — TF-2539 avait fermé les 14 alertes par le verrou seul
+  (js-yaml 5.5.0) ; `package.json` gardait `^5.2.1`, plage qui admet 5.2.1 (avis GHSA-pm4m-ph32-ghv5, ≤ 5.2.1) et 5.4.0 (avis
+  GHSA-r3ph-w7gj-g6xm, ≤ 5.4.0) : une installation qui garde un verrou ancien ou sans verrou pouvait reprendre une version
+  vulnérable. 5.4.1 est la première version qu'aucun des deux avis ne vise (mesuré : `npm audit` sur 5.4.0 rend 1 avis, sur 5.4.1
+  rend 0). Le plancher est relevé dans `package.json` et dans la déclaration racine de `package-lock.json` (sans quoi `npm ci`
+  refuse un verrou en désaccord) ; le verrou reste à 5.5.0. Essai : plancher `^5.2.1` sur un verrou à 5.2.1 → 1 avis haut ;
+  plancher `^5.4.1` sur le même verrou → réécrit en 5.5.0, 0 avis. `npm audit` du dépôt : 0.
+- **FS12 joue sur la fiche rendue par `tools/build-fiche.mjs`** (15/11/2026, TF-2567) — TF-2536 avait posé la ligne « Version
+  déployée » dans le canevas Markdown, mais le squelette HTML du générateur ne la portait pas : sur toute fiche rendue, FS12
+  rendait SKIP (« aucune version citée »), mesuré avant correction. `build-fiche` rend maintenant la ligne `Version déployée` à
+  l'Identification, depuis la donnée `version_deployee` (trou `{{VERSION_DEPLOYEE …}}` à compléter sinon, refusé par FS1 : le
+  trou tient en moins de 80 caractères, au-delà FS1 ne le lit plus). Une fiche complète SANS `version_deployee` n'est donc plus
+  diffusable : à compléter. La ligne coûtant une ligne de tableau, le squelette débordait sur 2 pages A4 (P3) : marge haute des
+  `h2` à l'impression de 7 à 4 px (6 px ne suffisait pas). Trois cas dans `tests/oracles/fiche-securite.test.mjs`, rouges sur
+  le `build-fiche` d'avant et verts sur le nouveau : fiche rendue à jour (FS12 PASS), fiche rendue périmée (FS12 FAIL), squelette
+  qui porte la ligne et fiche sans version refusée par FS1 ; les deux listes de données des fiches complètes du test portent
+  `version_deployee`.
+- **Les 14 alertes de dépendances de l'hébergeur sont fermées** (14/11/2026, TF-2539 part forge-audit) — toutes sur le
+  `package-lock.json` racine, toutes sur des dépendances réelles (12 sur `fast-uri`, transitive d'ajv, 3.1.3 ; 2 sur `js-yaml`,
+  5.2.1), aucune sur une fixture : les `package.json` de `tests/fixtures/` n'ont pas de verrou. Verrou mis à jour sur `fast-uri`
+  3.1.9 et `js-yaml` 5.5.0 (`package.json` inchangé, ses plages admettaient déjà ces versions) ; `npm audit` : 14 avis avant, 0 après.
+- **Le rapport POC-to-Prod déclare `color-scheme` en CSS pour chaque thème** (14/11/2026, relevé en rejouant la recette pour
+  TF-2515 : 14/17 sur main) — `run-oracles-design` (forge-design, SC4 de `oracle-surcouche`, TF-2384) refusait le rapport rendu :
+  la balise `<meta name="color-scheme">` annonce ce que la page supporte, elle ne suit pas la bascule. Le gabarit
+  `deliverables/templates/rapport-audit-poc-to-prod.template.html` pose `color-scheme:light` à son bloc `:root`, et `cssSombre`
+  (`tools/rapport-poc-to-prod.mjs`) pose `color-scheme:dark` au bloc `:root[data-theme="dark"]`. Cela faisait tomber la porte de
+  rendu et 10 cas de la batterie des oracles. Deux cas dans `tests/oracles/rapport-design.test.mjs` : la déclaration présente
+  (statique), et la même page privée de ses deux déclarations refusée pour SC4 (exécuté). Le gabarit passe à la version 1.0.2
+  (`gabarits-versions.json` réenregistré par `verifier-gabarits --maj`, TF-1820).
+- **F10 de `tools/verifier-forme-rapport.mjs` reconnaît « à confirmer »** (13/11/2026, TF-2496 du pilot) — la frontière ASCII
+  `\bà` ne voyait jamais « à » comme un caractère de mot : « 1.2 à confirmer » n'était pas relevé comme estimation, et
+  « voilà confirmer » l'était. Frontière Unicode `(?<![\wà-ÿ])à`, deux sens rejoués ; oracle-pieges-regex du pilot ne relève
+  plus cette ligne.
+
+### Changé
+- **TF-2536 (part forge-audit) — le canevas de fiche sécurité pose la ligne « Version déployée »** (14/11/2026) — FS12 (TF-2419)
+  compare la version que la fiche cite à la dernière étiquette déployée, mais aucun canevas ne posait cette ligne : sur une fiche
+  née du canevas, FS12 rendait SKIP (« aucune version citée »), donc inerte. `fiche-securite.template.md` (« Version déployée »)
+  et `fiche-securite.template.en.md` (« Deployed version ») reçoivent la ligne `projet.version_deployee` à l'Identification,
+  que FS12 lit ; le gabarit passe à la version 1.1.0 (canevas FR/EN, `GABARIT_VERSION` de `tools/build-fiche.mjs`,
+  `gabarits-versions.json` réenregistré par `verifier-gabarits --maj`, TF-1820 ; parité FR/EN tenue). Deux cas dans
+  `tests/oracles/fiche-securite.test.mjs` (FR et EN) : la ligne du canevas est lue comme version citée, le canevas privé de sa
+  ligne n'en cite aucune. Reste hors de ce dépôt : la chaîne de qualification du pilot doit passer `--etiquette-deployee`.
+- **TF-2515 — le canevas « modèle de données » est re-vendoré sur factory-forge-agents 8f6820a7** (14/11/2026) — la source
+  (`factory-schemas/assets/template-modele-donnees.html`) a changé le 10 et le 12/11/2026 et `verifier-heritage` rendait DÉRIVE
+  sur main (empreinte enregistrée `575b1f3ffca3…`, calculée `d992d6602e5f…`). Diff 3254b81→8f6820a7 relu en entier : trois hunks,
+  tous hors de ce que le module reprend (`color-scheme` du bloc `:root` et du bloc sombre de la page, marque du footer en
+  gabarit). `tools/canevas-modele-donnees.mjs` est donc inchangé ; `HERITAGE.json` reçoit l'empreinte, les octets normalisés,
+  `source_version`, la date et le delta déclaré.
+- **Re-vendorage du canevas « modèle de données » sur factory-forge-agents 3254b81** (06/11/2026, suite du constat de dérive
+  levé pendant la campagne du 06/11/2026) — la source (`factory-schemas/assets/template-modele-donnees.html`) a changé le
+  06/11/2026 (TF-2263) et `verifier-heritage` rendait DÉRIVE (empreinte enregistrée `88780574c41e…`, calculée `575b1f3ffca3…`).
+  Diff 49611f7→3254b81 relu en entier : seule la part vendorée change, l'emoji « 🔒 » de `renderDbSchema` et de `renderDbLegend`
+  devient l'icône SVG `ic-pii` du canevas ; le thème clair par défaut, la bascule de thème, les jetons de focus et la police de
+  marque déclarée sont hors de ce que le module reprend. `tools/canevas-modele-donnees.mjs` mis à jour, `HERITAGE.json` aussi
+  (empreinte, octets normalisés, `source_version`, date, delta déclaré). Recette : 17 étapes sur 17 vertes.
+
+### Ajouté
+- **TF-2419 — règle FS12 de `oracles/verifier-fiche-securite.mjs` : la version que la fiche cite est la dernière étiquette
+  déployée** (14/11/2026, décision R-58 du 10/11/2026 ; retour Produit-84 du 10/11/2026) — la fiche CDC-SEC-HPR-20261104a citait
+  v1.10.0 alors que v1.13.0 était qualifiée et servie : jointe telle quelle à un courriel du référent sécurité, elle a dû être
+  réémise (16 champs sur 29 changés), et FS1 à FS11, qui jugent la forme, ne pouvaient pas le voir. La chaîne de qualification
+  donne l'étiquette par `--etiquette-deployee <x.y.z>` ; FS12 la compare à la version lue sur la ligne « Version déployée »,
+  « Version de l'application » ou « Projet / application ». Citée antérieure ou postérieure : FAIL ; deux versions citées :
+  FAIL ; aucune version citée : SKIP motivé ; aucune étiquette donnée : FS12 n'est pas jouée et le dit dans `non_juge`
+  (aucun constat, le verdict des fiches existantes est inchangé). Étiquette qui n'est pas une version : erreur d'usage (exit 2).
+  Auto-test 26/26 (cinq cas neufs), cinq cas dans `tests/oracles/fiche-securite.test.mjs`. Reste à câbler : l'appel par la
+  chaîne de qualification du pilot, et un champ « Version déployée » au canevas de la fiche.
+- **TF-2231 — les profils contrôlent Always Use HTTPS et la MFA des membres d'organisation, et l'écart accepté d'un réglage classé
+  décision s'écrit : pas d'écart nu** (06/11/2026, décision humaine D-178 (a) du 06/11/2026 ; spécification : étude « Sécurité par
+  défaut de bout en bout » du 06/11/2026, sections 3 à 5 et son registre JSON de 9 réglages) — l'audit relisait déjà le TLS imposé, la
+  protection à la poussée, Dependabot, la branche protégée et HSTS, mais aucun contrôle ne portait Always Use HTTPS, CTL-D03-01 ne
+  visait que la MFA des utilisateurs de l'application, et un réglage que le porteur avait choisi de ne pas poser ressortait comme
+  un écart sans histoire. Profil cloudflare 1.1.0 : le binding de CTL-D02-06 lit `settings/always_use_https` (attendu `on`, source
+  C23) ; profil supabase 1.3.0 : le binding de CTL-D03-01 lit `mfa_enabled` de chaque membre de l'organisation et demande la capture de
+  l'obligation (source S24, lue le 06/11/2026 : offres Pro, Team et Enterprise, aucune route d'API pour poser ni lire l'obligation) ;
+  profil github 1.1.0. Chaque binding qui instancie un réglage du registre le dit (`reglage_registre`, champ facultatif : l'URL
+  de source de l'entrée), et l'`evidence` de ceux que le registre classe « décision » (MFA d'organisation, restauration à la minute,
+  protection à la poussée, branche protégée) exige l'écart accepté écrit : option retenue, motif, décideur, date. Nouveau
+  `tools/verifier-reglages-plateforme.mjs` : RG1 (registre bien formé), RG2 (chaque entrée dont la plateforme a un profil est
+  revendiquée par un binding), RG3 (la clause de l'écart accepté dans l'`evidence` d'un réglage décision) ; en mode `--ecarts`,
+  RG4 (le réglage lu existe au registre), RG5 (un réglage décision non conforme sans écart accepté complet est un écart nu), RG6 (un
+  réglage défaut non conforme ne s'accepte pas : il rouvre un retour vers la forge qui crée). Le registre se lit au chemin du pilot
+  (`references/REGLAGES-SURS-PAR-DEFAUT.json` sous `$FORGE_ROOT/factory-pilot`, sinon le parent de ce dépôt) ; la recette porte une
+  COPIE (`tests/fixtures/reglages-sures-par-defaut.json`, identique à l'étude) et ne dépend pas du fichier réel. Sans registre, le
+  mode profils dit « non jugé » (0), le mode écarts sort 2. Ce que l'outil ne juge pas : la fidélité de la commande d'un binding à
+  `cmd_lire`, l'état d'une plateforme (aucun appel réseau), la sincérité d'un motif. Banc `tests/oracles/reglages-plateforme.test.mjs`
+  (17 tests, nommé à la CI, plus l'auto-test à 13 cas et deux étapes du workflow) : 6 rouges sur les profils d'avant, tous verts après.
+- **TF-2261 — `build-rapport --copie-output <dossier>` dépose le rendu et ses compagnons dans output/ du produit, range
+  l'indice précédent sous old/, et un contrôle refuse un output/ en retard sur l'espace d'audit** (06/11/2026, RT-52 du retour
+  Produit-84 du 06/11/2026) — le 05/11/2026 à 11:47, le rapport 20261104b était rendu sous l'espace d'audit seulement, et
+  output/05-audits/ du produit a gardé 20261104a jusqu'au 06/11 à 10:15, relevé par le porteur : forge-tests dépose déjà dans
+  output/ (`--copie-output`, TF-1808), build-rapport n'avait aucun équivalent. Nouveau `tools/copie-output.mjs` :
+  `deposerCopie` copie le rendu, `.remediation-actions.yaml` et `.controles-evalues.json`, puis range sous `old/` chaque
+  indice précédent de la même famille (nom sans jour+lettre) ; jamais d'écrasement (contenu différent, indice rangé différent,
+  indice plus récent déjà déposé : refus, sortie 1, RIEN d'écrit) ; `node tools/copie-output.mjs --verifier <dossier-du-rendu>
+  <output-du-produit>` refuse (1) un output/ dont une famille est absente ou en retard sur l'espace d'audit et nomme le
+  fichier. Le contrôle ne lit que le niveau du dossier (pas `old/`, pas les rubriques de l'espace) et les trois suffixes du
+  rendu : les autres pièces d'un espace d'audit (fiche sécurité, présentation) ne sont pas jugées. L'espace créé par
+  `init-audit-workspace` range ses archives sous `output/Old/` ; le rangement du dépôt suit la décision : `old/`. Banc
+  `tests/oracles/copie-output-rapport.test.mjs` (16 tests, nommé à la CI) : 16 rouges sans le module, 16 verts après, le remède
+  du message (`--copie-output`) joué et suivi d'un contrôle vert.
+- **TF-2262 — la forme POC-to-Prod déclare ses 6 cartes de synthèse, et sa porte refuse une carte hors liste ou une carte du
+  modèle absente** (06/11/2026, RT-53 du retour Produit-84 du 06/11/2026) — le 05/11/2026 à 11:47, `verifier-forme-rapport`
+  rendait « forme POC-to-Prod conforme (F0–F17) » sur un rapport à 17 cartes de synthèse alors que le modèle en porte 6, et le
+  moteur affichait la clé de donnée brute (« fonctionnelle ») au lieu de l'étiquette du modèle. `tools/rapport-poc-to-prod.mjs`
+  exporte `CARTES_SYNTHESE` (clé, étiquette française et anglaise, dans l'ordre du modèle : Synthèse Fonctionnelle, Synthèse
+  Technique, Synthèse Audit, Audit · Ce qui bloque, Audit · Par où commencer, Audit · Limites de l'audit) ; le moteur affiche
+  l'étiquette et porte la clé en `data-carte` ; la règle F18 de `tools/verifier-forme-rapport.mjs` (19 contrôles, F0–F18) lit
+  cette liste et refuse, chacune nommée, une carte hors liste et une carte du modèle absente. Les clés des trois cartes
+  `audit_bloque`, `audit_commencer`, `audit_limites` sont posées ici : le retour nomme les étiquettes, pas les clés (à confirmer
+  chez le produit). Les fixtures `rapport-data-valid.json` et `rapport-data-riche.json` portent les 6 cartes. Banc
+  `tests/oracles/rapport-forme-poc-to-prod.test.mjs` : 5 tests TF-2262 et 1 test TF-2145 mis à jour rouges sur le dépôt d'avant
+  (copie de `b03baaf`), verts après ; l'auto-test de la porte compte 2 mutations F18 de plus.
+- **TF-2144 — la mobilisation d'AuditCore exige la porte du standard publié par le client quand il existe** (05/11/2026,
+  RT-44 du retour Produit-84 du 04/11/2026, moitié forge-audit ; la moitié pilot est le routage) — un audit complet avait été
+  rendu deux fois par le moteur générique, avec un tenant fabriqué, alors que le client publiait son standard (prompt,
+  modèle, tenant, porte) ; sa porte, jouée ensuite en une commande, a refusé (5 anomalies bloquantes) ce que les deux portes
+  de ce dépôt déclaraient diffusable. Le tenant peut désormais DÉCLARER ce standard (`standard_client.porte`, option
+  `arguments` avec `{rapport}`, schéma `core/schemas/tenant.schema.json`) ; `tools/verifier-standard-client.mjs` et l'option
+  `--tenant` de `verifier-rapport-html.mjs` jouent cette porte (`node <porte> <rapport>`, code 0 = conforme) et rendent le
+  rapport NON diffusable si elle le refuse (relais de sa sortie, borne de 40 lignes dite) ; une porte déclarée introuvable
+  est une erreur (2), jamais un « sans objet » ; sans déclaration, la sortie le DIT (« aucun standard client déclaré »),
+  et `build-rapport` le rappelle à chaque rendu. `docs/MANUEL-IA-ONBOARDING.md`, étape 2 bis : chercher le standard du
+  client avant de fabriquer un tenant. Banc `tests/oracles/standard-client.test.mjs` : 12 tests, 12 rouges sur le dépôt
+  d'avant (worktree à cbe658e), 12 verts après. Les portes du banc sont des fixtures écrites par le banc ; la vraie porte
+  d'un client n'est pas dans ce dépôt, et le contrat d'appel `node <porte> <rapport.html>` n'est pas vérifié sur elle.
+- **TF-2145 — la forme du rapport d'audit POC-to-Prod devient le rendu par défaut** (05/11/2026, décision humaine
+  D-171 (a) du 04/11/2026 : « Logiquement le format générique de la Factory, ce n'est pas celui généré. ») — gabarit
+  agnostique `deliverables/templates/rapport-audit-poc-to-prod.template.html` (`gd-rapport-audit-poc-to-prod` 1.0.0,
+  suivi par `verifier-gabarits`) : la forme de référence (rapport d'audit POC-to-Prod de Produit-68, 24/09/2026, et son
+  modèle à champs) reprise en STRUCTURE, moteur et style, sans aucune donnée ni marque — en-tête et bascule de thème,
+  bloc titre, bandeau du verdict, cartes de synthèse, KPI et radar, contrôle qualité, bascule des vues (rapport d'audit
+  par famille et dimension avec matrice de traçabilité règles × constats × actions, reprise applicative, toutes les
+  règles, plan de remédiation, tests, analyses, composants, méthode et lecture), plan auto-porté, pleine largeur. Les
+  couleurs passent par une couche sémantique dérivée des jetons du thème du tenant ; la palette sombre est dérivée en
+  littéraux de ces mêmes jetons (oracle-tokens T4, oracle-bascule B-T4) ; libellés en français et en anglais.
+  `tools/rapport-poc-to-prod.mjs` fait la correspondance rapport-data.json → forme (règles et réponses, constats,
+  actions, plan `buildPlan`, reprise, tests, analyses, composants, `db_schema`, `architecture`) et fait rendre les vues
+  par le MOTEUR DU GABARIT, exécuté sans navigateur : le fichier porte son rendu initial complet (lisible sans script,
+  imprimable, jugeable par les portes statiques), de façon déterministe ; ce qui n'a pas de source est déclaré au
+  manifeste d'écarts (introductions de famille calculées, note pour l'autorité absente des données…). Les règles de
+  cohérence du plan (TF-0624 / TF-0625) sont prises à la source dans `rapport-engine.mjs`, jamais recopiées.
+  `tools/schema-architecture.mjs` trace le schéma d'architecture par ports et voies propres (couloirs latéraux pour
+  les liens longs, titres de bande en gouttière, passe de réparation) et le MESURE sur le SVG rendu : 0 flèche qui
+  traverse un nœud non extrémité, 0 paire de flèches confondues sur les fixtures valide et riche et sur une architecture
+  dense de 16 nœuds et 41 flèches ; un rouge construit prouve que la mesure mord. `tools/verifier-forme-rapport.mjs`
+  est la porte de conformité de la forme, agnostique, sur le modèle de la porte de format de la forme de référence
+  (F0–F16 : forme déclarée, champs non remplis, compilation, dimensions du référentiel, familles, réponses, moteur
+  piloté mode par mode, auto-test hérité, contenu écrit, versions, inventaires, plan intègre, schéma mesuré, bascule,
+  pleine largeur, chiffres affichés) ; auto-test à double sens 20/20 ; jouée par `verifier-rapport-html` dès qu'un rendu
+  déclare la forme, et par la CI. Banc `tests/oracles/rapport-forme-poc-to-prod.test.mjs` : 15 tests.
+
+### Changé
+- **TF-2145 — `build-rapport.mjs` rend par défaut la forme POC-to-Prod** ; `--forme vues` rend l'ancien rendu par
+  vues (`rapport-engine.mjs`) pendant la transition — même plan, même `remediation-actions.yaml`, mêmes contrôles
+  évalués ; la CI rend aussi cette forme et la passe à `verifier-rapport-html`. La présentation à l'autorité
+  (`build-slides.mjs`) et la règle P6 de `verifier-presentation.mjs` tracent le schéma par le nouveau module (TF-2142 :
+  pas de second schéma divergent). `verifier-gabarits.mjs` et le contrôle TF-1752 couvrent aussi les gabarits
+  `.template.html`, et TF-1752 joue les deux formes. `rapport-engine.mjs` exporte `faviconDataUri`,
+  `adapterCanevasCss` et `adapterCanevasHtml` (aucun changement de comportement).
+
+### Corrigé
+- **TF-2169 — le kit autonome rend la forme par défaut, et le marqueur du schéma ne dépend plus de la langue** (05/11/2026,
+  RU-10 du retour Produit-84, suite de TF-2145 et de TF-2131) — après 28aa645, `build-rapport-standalone.mjs` (kit d'audit)
+  rendait encore l'ancien rendu par vues et importait `./canevas-modele-donnees.mjs`, que le kit ne livre pas :
+  `ERR_MODULE_NOT_FOUND` hors du dépôt (masqué par un banc qui copiait ce voisin à côté de l'autonome). `tools/build-kit.mjs`
+  empaquette désormais les cinq modules de la forme POC-to-Prod dans un fichier unique, chacun dans sa fonction, avec le
+  gabarit HTML et le bloc de cohérence du plan en constantes ; un motif attendu qui manque dans une source LÈVE à la
+  fabrication du kit. L'autonome, extrait SEUL hors du dépôt, rend le même fichier que `build-rapport`, octet pour octet
+  (français et anglais), et ce fichier passe `verifier-rapport-html` et `verifier-forme-rapport`. Le schéma d'architecture
+  porte `data-schema="architecture"`, que les portes lisent (`verifier-rapport-html`, F13 et mutations de
+  `verifier-forme-rapport`) ; son `aria-label` suit la langue du rendu (« Architecture diagram » en anglais) au lieu
+  d'être exigé en français par la porte. Le rendu par vues porte le même marqueur. Banc
+  `tests/oracles/kit-rapport-autonome.test.mjs` : 4 tests, 4 rouges avant correctif, 4 verts après (dont une fixture rouge :
+  un schéma sans marqueur est refusé par les deux portes ; une verte : seul le libellé change de langue). Le banc
+  `outils-option-fichier` ne copie plus le voisin à côté de l'autonome.
+- **TF-2145 — le rapport est rendu avec le thème COURANT, jamais avec un `theme.css` périmé laissé en cache**
+  (05/11/2026, constat de TF-2139) — `build-rapport.mjs` relisait `theme/theme.css` dès qu'il existait, sans le comparer
+  au générateur : sur un espace d'audit réel, un cache produit avant le `.brand` en jetons gardait `#1b2733` et `#fff` en
+  dur, et le rapport rendu échouait à oracle-tokens (T1, 2 écarts durs, mesuré le 04/11 ; 9 oracles sur 9 verts avec le
+  thème régénéré). `build-theme.mjs` sépare le calcul (`construireTheme`, sans écriture) de l'écriture (`genererTheme`,
+  inchangé) ; `build-rapport.mjs` rend avec le thème calculé, dans les deux formes, n'écrit le cache que s'il manque
+  (comportement d'avant) et DIT un cache périmé sans le réécrire — un dossier de tenant tenu en lecture seule le reste.
+  Banc : 2 tests à double sens dans `tests/oracles/rapport-forme-poc-to-prod.test.mjs` (rouge rejoué avec l'ancien
+  `build-rapport.mjs` : 0/1).
+- **TF-2145 — la forme POC-to-Prod tient l'écran de 390 à 3 840 px, et sa porte le juge (F17)** (05/11/2026) — mesuré
+  sur un rendu d'audit réel (référentiel complet, 185 règles) par `render_page.py` du socle de page, aux six largeurs, thèmes
+  clair et sombre : FAIL, deux familles bloquantes. V15 à chaque largeur : l'en-tête masqué des cartes de synthèse
+  gardait des `th` de la taille de leur texte, posés sur les cartes ; ils prennent la boîte d'1 px du masquage. V1 à
+  390 px : bandeau du verdict sans retour à la ligne, chemin de fichier insécable, matrice de traçabilité de 748 px.
+  Le bandeau passe à la ligne, un `code` se coupe, et sous 900 px la matrice et les listes se replient en cartes (socle
+  de page, composants §6) : chaque cellule porte `data-label`, le nom de sa colonne, et les boutons de tri restent en
+  barre. La liste perd son plancher de 920 px et ses en-têtes passent à la ligne ; dans le rapport, le schéma
+  d'architecture se réduit à son cadre (la présentation garde son plancher). Après : `render_page` PASS aux six
+  largeurs dans les deux thèmes, 0 bloquant (les avertissements V4 du canevas vendoré sont inchangés) ; une sonde de
+  session hors dépôt, sur chaque vue et chaque dimension ouverte à 390, 768, 901, 1 280 et 1 920 px, relève 0
+  débordement, 0 en-tête posé, 0 erreur JS. Gabarit 1.0.1. `verifier-forme-rapport.mjs` gagne F17 (cellule sans
+  `data-label`, règle de repli absente), avec deux mutations rouges : auto-test 22/22. Le bandeau dit « N actions au
+  plan de remédiation » au lieu de « N plan de remédiation », et « Verdict prononcé par : … ». Banc
+  `verifier-rapport-html.test.mjs` : la mutation TF-1737 de la ligne de composant tolère l'étiquette de cellule et
+  prouve qu'elle a eu lieu ; l'assertion est inchangée.
+- **TF-2139 — le rapport HTML rendu passe les oracles de design de la forge design, et la porte de rendu les
+  joue** (04/11/2026, RU-6) — `run-oracles-design` rendait FAIL sur le rapport du moteur : oracle-slop 11
+  écarts durs (bandeaux latéraux `border-left` de 3 et 4 px sur `.verdict` et `.constat`, huit accents
+  « néon » #ede9fe #c4b5fd #dbeafe… de la palette du schéma, un emoji « 🔒 »), oracle-tokens 77 (35 couleurs
+  en dur, 42 espacements hors de l'échelle 4pt) — mesuré le 04/11 sur le rapport de la fixture riche. La
+  feuille de style du moteur (`RAPPORT_CSS`, exportée) ne porte plus aucune couleur littérale : le blanc des
+  aplats est `--on-accent`, les six familles de teinte du schéma d'architecture s'appuient sur les jetons du
+  thème (`FAMILLES_TEINTE` : accent, std, maj, bloq, fatal, muted) par `color-mix` avec `--panel`, et le thème
+  généré (`build-theme.mjs`) expose `--brand-bg` et `--on-brand` au lieu d'un `#1A1A2E` en dur dans
+  `.brand` ; les cadres `.verdict` et `.constat` n'ont plus de liseré latéral ; marges, remplissages et
+  écarts sont des multiples de 4 px. Le canevas du schéma de base de données, copie conforme (HERITAGE.json),
+  n'est pas modifié : le moteur l'ADAPTE à l'assemblage (palette `--c-*` dérivée, blanc des badges, aplats
+  et traits SVG de la légende passés en `var(--c-…)`, emoji remplacé par l'icône SVG `ico-pii`) — la dérive de
+  la source reste mesurable. Le marquage PII du dictionnaire des tables devient `PII <svg class="ico-pii">` ;
+  le gate de rendu, la CI et le banc `verifier-rapport-html.test.mjs` suivent le marqueur, avec la même exigence.
+  Branchement : `tools/oracles-design.mjs` résout `forge-design` (option `--design-root`, variable
+  `FORGE_DESIGN_ROOT`, dépôt voisin `../factory-forge-design`) et joue `run-oracles-design.mjs` ;
+  `verifier-rapport-html.mjs` l'appelle en dernier, sur un rapport déjà vert — FAIL d'un oracle = rapport non
+  diffusable, racine donnée introuvable = erreur 2, rien de trouvé (runner de CI) = « NON JUGÉ » dit tout haut,
+  jamais un PASS ; `--sans-oracles-design` est le refus explicite, dit de la même façon. La présentation
+  (`build-slides.mjs`) reprend les jetons dérivés. Banc `tests/oracles/rapport-design.test.mjs` : 14 tests, 14
+  rouges avant correctif (couleurs, bandeaux, emoji, espacements, oracle exécuté, branchement), 14 verts après
+  — les deux rapports (valide et riche) rendent PASS à `run-oracles-design`. Constat : `build-rapport.mjs`
+  réutilise un `theme/theme.css` déjà généré sans le comparer au générateur — après ce changement de
+  `build-theme.mjs`, un cache de thème antérieur garde l'ancien `.brand` en dur jusqu'à sa régénération.
+- **TF-2131 — la valeur d'une option de fichier n'est plus prise pour un fichier quand elle commence par
+  « - »** (04/11/2026, suite de TF-2105 et TF-2089) — `node tools/build-catalogue.mjs <tenant> --out --dry-run`
+  écrivait un fichier littéralement nommé « --dry-run » (mesuré le 04/11 dans un dossier vide) ; des lectures d'option du dépôt
+  (`process.argv[indexOf('--out') + 1]`, `flag()`, `opt()`) n'en refusaient aucune.
+  `valeurDossierOuUsage` de `tools/lib.mjs` prend un paramètre `genre` (« dossier » par défaut, message de
+  TF-2105 inchangé) et `valeurFichierOuUsage` le nomme pour les fichiers : refus motivé + usage, sortie 2, rien
+  de créé, valeur absente comprise. Appliqué à `build-banc`, `build-catalogue`, `build-referentiel`,
+  `build-fiche` (`--data`, `--out`), `build-rapport` et `build-slides` (`--tenant`, `--out`),
+  `init-audit-workspace` (`--tenant`), `merge-packs` (`--baseline`, `--pack`, `--authority`, `--tenant`,
+  `--out`), `importer-doctrine` (`--ecart`, `--out`, `--ecarts-md`), `verifier-rapport` (`--tenant`),
+  `verifier-referentiel` (`--dimensions`, `--doctrine`, `--out`, `--type`). Les outils et oracles autoportants,
+  embarqués dans le kit sans import du dépôt, recopient la règle en ligne : `verifier-remediation` (`--status`,
+  et `--init -x` n'est plus pris pour un nom de fichier), `fiche-en-pdf` (`--out`, `--navigateur`,
+  `--delai-port`, `--pages-max`), douze oracles de `oracles/` (`smoke-parcours`, qui sort 3 comme pour tout son
+  usage, `verifier-couverture-fonctionnelle`, `verifier-dependances-env`, `verifier-modele-semantique`,
+  `verifier-rapport-pbir`, `verifier-roundtrip`, `verifier-schema-modele`, `verifier-pdf`, `verifier-fiche-securite`,
+  `verifier-migrations`, `maj-versions`, `decouvrir-oracles`) et le rendu de rapport autonome que `build-kit`
+  livre. Banc `tests/oracles/outils-option-fichier.test.mjs` : 75 tests, 63 rouges avant correctif (chacun des
+  32 couples outil × option de la table, joué avec `--dry-run`, `-x` et sans valeur) et 12 verts (8 témoins où
+  une vraie valeur reste honorée, le contrôle de couverture de la table, 3 refus déjà levés par un autre
+  chemin), 75 verts après. Hors périmètre, constaté : l'autonome `build-rapport-standalone.mjs` du kit importe
+  `./canevas-modele-donnees.mjs`, que le kit ne livre pas — il lève `ERR_MODULE_NOT_FOUND` hors du dépôt.
+- **TF-2142 — la présentation à l'autorité de décision tient ses 8 diapositives, dit la vérité du rapport, et
+  un oracle la juge** (04/11/2026, RU-8) — `build-slides.mjs` filtrait `severite === 'critique'`, hors du
+  vocabulaire du référentiel (Fatal / Bloquant / Majeur / Standard) : « Aucun constat critique » s'affichait sur
+  un NO-GO ; il lisait le plan dans `data.actions` au lieu de `buildPlan` (les règles non conformes en
+  manquaient) ; il rendait 5 diapositives pour 8 au gabarit `presentation-autorite.template.md` (schéma
+  d'architecture, contexte et contacts absents). Les risques majeurs sont désormais les constats Fatal puis
+  Bloquant (`constatsGraves`, `critique` gardé comme alias hérité), le plan est celui de `buildPlan` réparti par
+  mode d'activation, le schéma est celui du rapport (`renderArchi` et `ARCHI_CSS` exportés, un seul rendu), les
+  huit diapositives suivent le gabarit, lu à l'exécution. Classe « générateur de livrable sans oracle » : nouvel
+  oracle `tools/verifier-presentation.mjs` (P1-P8 : nombre, ordre et titres du gabarit, placeholders, verdict
+  et bloquants recalculés depuis les données, risques majeurs, schéma identique au rapport, modes d'activation
+  totalisant le plan, contacts ; ce qui n'est pas jugé faute d'entrée est dit « non jugé »), joué par
+  `build-slides.mjs` sur sa propre sortie et par la CI (nouvelle étape). Banc
+  `tests/oracles/presentation-autorite.test.mjs` : 11 tests sur 12 rouges avant correctif, 12 verts après.
+- **TF-2138 — un rapport qui ne remplit pas `rapport-audit.template.md` n'est plus « diffusable »** (04/11/2026,
+  RU-5, voisin de TF-1001) — `verifier-rapport` et `verifier-rapport-html` rendaient exit 0 sur un rapport sans
+  cartes de synthèse, sans périmètre D00, sans architecture, sans section tests/analyses/composants et sans
+  verdict de gate ; vider `actions` pour passer le refus des redites (TF-0624) laissait vide le plan d'action de
+  chaque dimension. Contrôle de complétude, bloquant, bloc par bloc, sur la donnée (`gate.verdict` dans GO / GO
+  SOUS RÉSERVE / NO-GO, `syntheses.fonctionnelle|technique|audit`, résumé de D00, `architecture.nodes`, au
+  moins une matière parmi tests / analyses / composants) et sur le rendu (tableau de synthèse, section D00
+  rédigée, schéma d'architecture, vue « Données analysées »). Mode « action par constat » : une dimension qui
+  porte un écart (constat, règle non conforme ou partielle) exige une action ; l'action se rattache à un
+  constat (`constat_ref`) et nomme les règles qu'elle couvre (`couvre`), que `buildPlan` n'ouvre alors plus en
+  seconde action — le plan non vide ne retombe pas dans la redite. `couvre` est un déclaratif vérifié (règle
+  inconnue, conforme, déjà couverte, constat_ref absent ou introuvable : refus). Fixtures versionnées
+  (`valide`, `riche`, `titre-duplique`, `db-schema-invalid`) complétées (l'action de D05 porte l'identifiant explicite `REM-D05-090`, pour que la règle non conforme garde
+  `REM-D05-001` dont `remediation.test.mjs` dépend), les deux rouges gardent leur seul défaut. Banc `tests/oracles/rapport-completude-gabarit.test.mjs` : 12 tests sur 16 rouges avant correctif, 16
+  verts après (les 4 témoins verts — rapport complet, dimension sans écart, redite sans `couvre`, fixtures —
+  passaient avant et après). Non couvert : `verifier-rapport-standalone.mjs` du kit client reste sans ce contrôle.
+- **TF-2140 — la synthèse du rapport ne range plus une dimension off parmi les bloquants et nomme les
+  règles à évaluer** (04/11/2026, RU-7) — deux défauts relevés sur un rapport réel : D14 (off, sans score)
+  était comptée bloquante (suite de TF-2143, qui ne traitait que le null : une dimension off de criticité
+  Fatal ou notée bas l'était encore) ; la carte « Règles instruites » concluait « … le reste est conforme »
+  alors que le reste mêlait cinq règles à évaluer et cinq conformes. `estBloquant` exclut toute dimension
+  `applicability: 'off'` (rapport, auto-test embarqué, présentation) ; la carte nomme chaque état en
+  français et en anglais — conformes, non conformes, partielles, sans objet, à évaluer — et ne fond plus
+  rien dans « conforme ». Banc `tests/oracles/synthese-off-et-a-evaluer.test.mjs` : 4 tests sur 4 rouges
+  avant correctif (KPI à 3 pour 1 ; « le reste est conforme » sur 5 conformes + 5 à évaluer), 4 verts après.
+- **TF-2143 — un score null n'est plus compté bloquant** (04/11/2026, RU-9) — en JavaScript `null <= 2`
+  vaut true : `rapport-engine.mjs` et `build-slides.mjs` comptaient bloquante toute dimension sans score
+  (« off »), et le verdict de porte basculait. Mesuré sur le jeu d'une campagne du 04/11 : 16 bloquants
+  annoncés pour 15 réels, la 16e étant D14 (off, null). Prédicats `aUnScore` / `estBloquant` exportés de
+  `rapport-engine.mjs` (un score est un nombre, `typeof`, avant tout seuil), repris par la présentation ;
+  le score global ne compte plus un null pour un zéro ; `verifier-rapport.mjs` refuse un score textuel
+  (`'2' >= 1` se coerçait) autant que null sur une dimension instruite. Banc
+  `tests/oracles/score-null-bloquant.test.mjs` : 4 tests sur 4 rouges avant correctif (16 pour 15 ;
+  `['D05','D13','D14']` pour `['D05']` ; moyenne de présentation 3.8 pour 4.0 ; score `'2'` accepté), 4 verts
+  après, sens vert compris (un score 2 compte, off + null reste accepté).
+- **TF-2106 — un kit de `deliverables/generated/` qui embarque une copie périmée d'un outil fait échouer
+  la recette** (04/11/2026) — les kits emportent des COPIES de `fiche-en-pdf.mjs`,
+  `verifier-remediation.mjs`, des oracles de `oracles/`, des schémas, et génèrent l'init d'espace d'audit
+  et les deux autonomes de rapport ; aucun contrôle ne comparait la copie à sa source après TF-2086 à
+  TF-2089. Nouveau `tests/oracles/kits-embarques-a-jour.test.mjs` : (1) comparateur à double sens sur un
+  vrai kit fabriqué à l'instant (frais conforme ; copie périmée, oracle absent, copie obsolète nommés ;
+  fins de ligne et entrées non embarquées sans écart) ; (2) le générateur livre bien chaque oracle de
+  `oracles/` et des copies identiques à leurs sources ; (3) état réel : le dernier kit de chaque sorte
+  est comparé à un kit fabriqué à l'instant — le tenant « ACME » étant porté par l'exemple et par la
+  fixture minimale de la CI, une copie est à jour si elle égale celle d'au moins un des deux. Sans kit
+  sur le poste (dossier ignoré par git, runner neuf), le contrôle se déclare SKIP motivé. Remesure du
+  04/11 avant régénération : le dernier kit de chaque sorte (`20261103n`) était déjà conforme, les
+  verifier rejoués depuis TF-2089 les ayant refabriqués ; le contrôle rend rouge sur le kit
+  `20260902d` (11 écarts : 3 oracles absents ; périmés : 4 fichiers d'`oracles/`, 1 schéma,
+  `fiche-en-pdf.mjs`, l'init autonome et le rendu de rapport autonome). Kits régénérés par `node tools/build-kit.mjs … --kind both`.
+- **TF-2105 — la valeur de `--out` n'est plus prise pour un dossier quand elle commence par « - »**
+  (04/11/2026, variante de TF-2089) — `node tools/build-kit.mjs <tenant> --out --dry-run` et `node
+  tools/build-theme.mjs <tenant> --out --dry-run` créaient un dossier nommé « --dry-run » et y rendaient
+  leur sortie (mesuré le 04/11 dans un dossier vide). `tools/forge-adapter.mjs <actions> --out --dry-run`
+  ne créait rien, parce que `--dry-run` y restait honoré, mais `--out -x` sans dry-run aurait écrit
+  `-x/_bmad-output/…` ; une valeur absente (`--out` en dernier) levait une exception brute. Facteur
+  commun `valeurDossierOuUsage` dans `tools/lib.mjs`, appliqué aux trois seuls outils dont `--out` est un
+  dossier créé : refus motivé + usage, sortie 2, rien de créé. Les `--out <fichier>` des autres outils
+  nomment un fichier et restent hors garde. Recette `tests/oracles/outils-option-dossier.test.mjs` :
+  3 tests sur 6 rouges avant correctif, 6 verts après, joués dans un dossier vide, sens vert compris.
+- **TF-2104 — sept fichiers de `tests/oracles/` rejoignent la batterie de la CI, et un contrôle
+  ferme la dérive** (04/11/2026) — `build-kit-compliance-fiche`, `ci-workflow-labels`, `gitattributes`,
+  `methode-audit-capture`, `onboarding-doc`, `rapport-socle-page` et `verifier-schema-modele` ne figuraient
+  pas dans l'étape « Batterie des oracles » de `.github/workflows/ci.yml` : verts en local (remesuré le
+  04/11, 7 fichiers sur 7 passent sur `617c025`, aucun neutralisé), ils ne tournaient jamais sur le
+  runner. Nouveau `tests/oracles/batterie-ci-complete.test.mjs` : il échoue, en nommant le fichier, quand
+  un `*.test.mjs` de `tests/oracles/` n'est pas dans la commande `node --test` du workflow (un nom cité
+  dans un commentaire ne compte pas). Rouge avant correction (8 absents : les 7 plus lui-même), vert
+  après ; quatre fixtures sur racine factice (verte, absent, commentaire, préfixe de nom).
+- **TF-2112 — `tools/verifier-profils.mjs` : P12 refuse un identifiant en clair dans une commande de
+  profil, P13 un appel de modèle sans accord du client** (03/11/2026, décision D-163 (a)) — le contrôle
+  CTL-D14-04 du profil azure postait un appel facturé au déploiement Azure OpenAI du client avec
+  `-H "api-key: <key>"`, et aucun contrôle ne lisait les `verification_command`. Relevé du jour : 21
+  commandes écrivaient un identifiant dans la ligne (azure 11, elastic 10), donc dans l'historique du
+  shell. P12 exige une variable d'environnement (`--admin-password`, `--storage-key`, `--token`,
+  en-têtes `api-key:` et `Authorization:`, `curl -u`, identifiants d'URL, paramètre `key=`) et ne
+  reprend jamais la valeur trouvée ; P13 exige la mention de l'accord avant l'appel à Azure OpenAI,
+  OpenAI, Gemini, Vertex AI, Anthropic, Mistral, Cohere ou Bedrock. Profil azure 1.3.0 : CTL-D14-04 ne
+  poste qu'après avoir constaté `input/00 - Cadrage/* - Accord appel IA - *` et lit
+  `AZURE_OPENAI_API_KEY` ; 8 commandes `az postgres flexible-server execute` lisent
+  `AZURE_PG_ADMIN_PASSWORD`, CTL-D01-15 `AZURE_SQL_ADMIN_PASSWORD` et `AZURE_STORAGE_KEY`, CTL-D08-05
+  `SONAR_TOKEN`. Profil elastic 1.1.0 : 10 commandes lisent `ELASTIC_USER` et `ELASTIC_PASSWORD`.
+  Preuves à double sens : fixtures `rouge/secret-en-ligne` (état d'avant) et `vert/commandes-gardees`
+  (remède joué), et 24 cas de commandes dans l'auto-test (23 écarts avant la réécriture des profils,
+  0 après).
+- **TF-2089 — `tools/init-audit-workspace.mjs` ne prend plus une option pour le dossier cible**
+  (03/11/2026, récidive de TF-1181) — `node tools/init-audit-workspace.mjs --help` avait créé un dossier
+  nommé « --help » (avec ses `.gitkeep` et son README) dans le dépôt au lieu d'afficher l'usage. Facteur
+  commun `dossierCibleOuUsage` dans `tools/lib.mjs` : `--help` et `-h` disent l'usage (sortie 0), toute
+  autre option est refusée avec son motif (sortie 2), rien n'est créé. La version autonome
+  `init-audit-workspace-standalone.mjs`, écrite dans le kit d'audit par `tools/build-kit.mjs` (autoportante,
+  elle ne peut rien importer), porte la même règle. Ce sont les deux seuls outils de `tools/` à prendre un
+  dossier cible positionnel. Recette : `tests/oracles/outils-dossier-cible.test.mjs` (5 tests, joués dans un
+  dossier vide pour qu'une création sauvage se voie), ajoutée à la batterie du workflow.
+- **TF-2088 — `tools/fiche-en-pdf.mjs` essaie les autres moteurs avant de rendre le code 3**
+  (03/11/2026, récidive de TF-1408) — Edge, premier de la liste, pouvait ne jamais annoncer son port
+  (30 s, sortie 3) alors que Chrome, présent, aurait imprimé en quelques secondes ; TF-1408 avait classé
+  le cas en « non vérifié » sans essayer les moteurs suivants. `lancerAvecRepli` essaie les moteurs
+  trouvés (`trouverNavigateurs`) dans l'ordre, un profil jetable chacun, tue celui qui n'a pas répondu
+  et dit chaque abandon sur la sortie d'erreur ; le code 3 n'est rendu qu'après les avoir tous essayés
+  (message listant ceux essayés). `imprimer`, `mesurer`, la ligne de commande et l'auto-test en
+  profitent ; un moteur choisi (`--navigateur`, `FORGE_NAVIGATEUR`) reste le seul essayé. Recette :
+  6 tests dans `fiche-en-pdf-port-bloque.test.mjs` (lanceur simulé : premier moteur muet puis repli,
+  binaire inexécutable, tous muets, aucun lancé, choix explicite), fichier ajouté à la batterie du
+  workflow (il n'y figurait pas).
+- **TF-2087 — `oracles/verifier-fiche-securite.mjs` juge la fiche de l'environnement qu'elle porte,
+  pas seulement DEV** (03/11/2026) — la regex de référence n'admettait que `<TRI>-SEC-DEV-…` et FS4 ne
+  cherchait que « DEV » : une fiche HPR bien formée (`CDC-SEC-HPR-20261030a`) rendait FS3 et FS4 FAIL.
+  `RE_REF` admet DEV, HPR et PRD ; l'environnement se lit dans le nom du fichier, à défaut dans la
+  référence de l'en-tête, à défaut DEV (cas historique) ; FS3 refuse un nom et une référence qui
+  annoncent deux environnements ; FS4 cherche la ligne de lien de l'environnement jugé (un lien DEV ne
+  tient pas lieu de lien HPR, un lien de pré-production ne tient pas lieu de lien de production).
+  Recette à double sens (3 tests, fiche HPR verte, fiche DEV toujours juste, PRD) et 2 cas ajoutés à
+  l'auto-test de l'oracle (19 → 21).
+- **TF-2086 — `oracles/verifier-fiche-securite.mjs` juge le modèle de fiche à intitulés en `th.k` et
+  `td.k`** (03/11/2026) — sur le modèle d'un produit, une fiche complète rendait FS4 FAIL, FS5 SKIP et
+  FS8, FS10, FS11 FAIL. FS4 prenait la première ligne dont l'intitulé contient « Dev » (« Dev-team / run »,
+  sans URL) au lieu de la ligne qui porte l'URL ; FS5 ne lisait pas `th.<classe>{width:…}` et se taisait
+  en SKIP ; les intitulés en `<td class="k">` étaient invisibles pour FS8, FS10 et FS11. Les lignes
+  « intitulé · valeur » se lisent désormais qu'elles soient en `th` ou en `td.k`, FS4 retient la ligne
+  de l'environnement qui porte une URL, FS5 accepte `th.<classe>` et les listes de sélecteurs. Recette
+  à double sens ajoutée à `tests/oracles/fiche-securite.test.mjs` (4 tests) et 3 cas à l'auto-test de
+  l'oracle (16 → 19).
+
+## [1.22.0] — 2026-10-29
+
+> **MINEUR** au sens de PADR-0005 : un profil technologique s'ajoute, sans rupture de schéma ni retrait de contrôle.
+
+### Ajouté
+- **TF-2004 — profil `github`** (29/10/2026) — `profiles/github/` (README.md + bindings.json, version
+  1.0.0) instancie 7 contrôles core sur un produit dont le code vit dans un dépôt GitHub, jugés en
+  lecture seule sur les fichiers du dépôt et sur des lectures d'API jouées par le porteur, chaque
+  commande écrivant `gh api --method GET` (gh passe en POST dès qu'un paramètre est donné) :
+  CTL-D09-06 (branche par défaut protégée par ruleset ou règle de branche, revue exigée, CODEOWNERS
+  valide, contournements d'administrateur et `bypass_actors` justifiés), CTL-D03-02 (secret scanning
+  et push protection actifs, 0 alerte ouverte, contournements qualifiés, scan de l'historique par la
+  CI maintenu : un secret de partenaire n'apparaît pas dans les alertes du dépôt), CTL-D02-03 (alertes
+  Dependabot, plan daté pour chaque alerte critique ou haute), CTL-D02-12 (correctifs Dependabot actifs
+  et non suspendus, `dependabot.yml`, délai de correction mesuré sur 3 mois), CTL-D02-08 (code
+  scanning ; le DAST reste hors de GitHub et plafonne le verdict à « partiel » sans outil), CTL-D09-03
+  (portes de fusion : règle `code_scanning`, résolution des alertes de secrets, revue des dépendances
+  en statut requis), CTL-D12-10 (`SECURITY.md` et signalement privé de vulnérabilité, entrée de la
+  procédure seulement). 23 sources lues le 2026-10-29 (docs.github.com et le manuel de `gh api`),
+  citées par binding. Le README dit ce qui dépend de la visibilité du dépôt et de l'offre du compte :
+  en dépôt privé, code scanning, secret scanning et push protection exigent GitHub Code Security ou
+  GitHub Secret Protection. Câblage comme les autres profils : arborescence du README, exemple de
+  `profiles[]` de `docs/ONBOARDING-ENTRANTS.md`, instanciation `profil:github` de l'ADR0505 (FR et EN).
+  « GitHub » figurait déjà dans la liste N1 de `tools/lint-agnostic.mjs`.
+
+## [1.21.0] — 2026-10-29
+
+> **MINEUR** au sens de PADR-0005 : un contrôle s'ajoute au core (184 → 185), sans rupture de schéma
+> ni retrait de contrôle.
+
+### Ajouté
+- **TF-2014 — CTL-D09-09, aucune donnée personnelle de production en clair hors production** (29/10/2026,
+  décision R-58, option a) — la règle n'existait qu'en conséquence : ADR0506 (« jeu de données
+  représentatif mais non sensible pour les environnements amont »), une ligne de doctrine, et CTL-D16-04,
+  qui classe les colonnes personnelles sans juger leur présence hors production. Aucun contrôle
+  opposable ne refusait la donnée personnelle de production en clair dans une base de recette. Le
+  contrôle (D09, Fatal, `blocking`, profils `light` et `complet`, source ADR0506, renvoi à CTL-D16-04
+  pour l'identification des colonnes) exige que chaque base hors production (développement,
+  qualification, recette, démonstration) déclare la source de ses données, jeu synthétique ou extrait
+  de production anonymisé et contrôlé, et ne contienne aucune donnée personnelle de production en
+  clair. Une pseudonymisation (hachage, table de correspondance, clé) laisse une donnée personnelle et
+  ne vaut pas anonymisation. Le contrôle ne tranche pas l'admission d'un extrait anonymisé (décision
+  D-91 du porteur, en attente) : il reste valable quelle qu'en soit l'issue, le tenant pouvant durcir.
+  Version anglaise dans `core/controls-en/D09.json`, packs `controls-core-v1(.en).json` régénérés par
+  `tools/assemble-core.mjs`, `derived_controls` d'ADR0506 (FR et EN) réconciliés ; le corps de l'ADR
+  n'est pas modifié.
+- **Profils `azure` 1.2.0 et `supabase` 1.2.0** — CTL-D09-09 y est instancié. Azure : étiquette
+  `source_donnees` par base hors production, et le masquage dynamique d'Azure SQL, qui ne change pas la
+  donnée stockée, n'est pas une preuve d'anonymisation. Supabase : un projet par environnement, registre
+  des environnements, `seed.sql` et exports versionnés ; sources S1 et S10 déjà lues, aucune page ajoutée.
+- **`tests/oracles/controle-donnees-hors-production.test.mjs`** — recette à double sens du contrôle
+  (1 vert, 14 rouges) : schéma, source ADR0506, renvoi à CTL-D16-04, source déclarée, clause de
+  pseudonymisation, neutralité vis-à-vis de D-91, parité FR/EN, packs non périmés, miroirs d'ADR0506,
+  instanciations. Jouée par la CI.
+
+## [1.20.0] — 2026-10-28
+
+> **MINEUR** au sens de PADR-0005 : un profil technologique s'ajoute, sans rupture de schéma ni retrait de contrôle.
+
+### Ajouté
+- **TF-1996 (part audit) — profil `cloudflare`** (28/10/2026) — `profiles/cloudflare/` (README.md +
+  bindings.json, version 1.0.0) instancie 7 contrôles core sur un produit dont la zone, la périphérie
+  ou l'hébergement des pages sont chez Cloudflare, jugés sur artefacts exportés (fichier `_headers`,
+  configuration Wrangler, code Terraform, code des formulaires) et sur des lectures d'API en lecture
+  seule jouées par le porteur, sans connexion de l'audit à un compte : CTL-D02-10 (mode SSL/TLS
+  « Full (strict) » constaté par zone), CTL-D02-06 (HSTS et `_headers`, avec la limite des réponses
+  produites par un Worker), CTL-D02-01 (règles personnalisées du WAF, aucune ressource de Firewall
+  Rules, retirées depuis le 2025-06-15), CTL-D02-04 (Turnstile sur les formulaires publics, jeton
+  validé côté serveur par Siteverify), CTL-D03-01 (Access devant la préproduction et les URL de
+  prévisualisation), CTL-D03-06 (jetons d'API à portée minimale, pas de clé globale), CTL-D02-14
+  (statut de proxy conforme au service, messagerie en DNS seul). Chaque binding cite ses pages
+  sources (champ `sources[]`, 22 pages de developers.cloudflare.com lues le 2026-10-28). Le contrôle
+  « aucun enregistrement de messagerie proxifié » du cadrage est reformulé : la documentation dit
+  qu'un MX ou un TXT est toujours en DNS seul, le contrôle porte donc sur les A, AAAA et CNAME de
+  messagerie. Câblage comme les autres profils : arborescence du README, exemple de `profiles[]` de
+  `docs/ONBOARDING-ENTRANTS.md`, instanciation `profil:cloudflare` de l'ADR0303 (FR et EN), nom
+  ajouté à la liste N1 de `tools/lint-agnostic.mjs`.
+- **TF-2006 — profil `supabase` 1.1.0** (28/10/2026) — 8 contrôles s'ajoutent aux 7 du 16/10, écartés
+  alors faute de page source et dotés d'une page lue le 2026-10-28 (13 sources S11 à S23, dont la
+  spécification OpenAPI de l'API de gestion) : CTL-D03-01 (MFA, politique RLS restrictive `aal2`),
+  CTL-D02-05 (`jwt_expiry`, rotation des jetons de rafraîchissement, durée de session), CTL-D02-04
+  (limites de débit d'Auth), CTL-D01-12 (`verify_jwt = false` des Edge Functions, registre de
+  dérogations), CTL-D01-04 (`site_url` et URL de redirection par environnement), CTL-D06-02 (SMTP
+  propre, quota d'envoi), CTL-D02-12 (advisors de sécurité et de performance), CTL-D01-14 (retrait des
+  suites TLS 1.2 en mode CBC annoncé pour le 10/11/2026 au plus tôt). Cinq de ces rattachements sont des
+  hypothèses de lecture que le README du profil déclare, le cœur n'ayant pas de contrôle propre.
+- **`tools/verifier-profils.mjs` : règle P11** — le README d'un profil qui déclare `sources[]` doit
+  citer chaque contrôle lié, lister chaque source avec son URL et annoncer le bon nombre de contrôles.
+  Le profil `supabase` étendu à 15 contrôles annonçait encore 7 et ne citait aucun des 8 nouveaux :
+  la règle l'a rendu rouge (22 écarts) avant la mise à jour du README, puis vert. Fixture rouge
+  `tests/fixtures/profils/rouge/readme-perime/` (P11 seul), et le README de la fixture verte `demo`
+  cite désormais son contrôle et sa source ; l'auto-test attend P11 parmi les codes rouges.
+
+## [1.19.0] — 2026-10-16
+
+> **MINEUR** au sens de PADR-0005 : un profil technologique et un contrôle des profils s'ajoutent,
+> sans rupture de schéma ni retrait de contrôle. La version fige aussi les entrées accumulées dans
+> « [Non publié] » depuis 1.18.0, listées ci-dessous telles qu'elles avaient été écrites.
+
+### Ajouté
+- **Profil `supabase`** (16/10/2026) — `profiles/supabase/` (README.md + bindings.json, version
+  1.0.0) instancie 7 contrôles core sur un produit adossé à Supabase, jugés sur artefacts exportés
+  (DDL de `supabase db dump`, `supabase/config.toml`, migrations, bundle client) sans connexion à un
+  projet vivant : CTL-D03-05 (RLS sur toute table des schémas exposés), CTL-D03-02 et CTL-D03-09
+  (clé `sb_secret_` et JWT `service_role` absents du dépôt et du client, `SUPABASE_SECRET_KEY`
+  jamais sous préfixe public), CTL-D15-08 (politiques sur `storage.objects`, bucket public
+  justifié), CTL-D02-10 (réglages d'authentification déclarés et justifiés, aucun seuil inventé),
+  CTL-D16-09 (plan, PITR ou export planifié, test de restauration), CTL-D02-14 (sorties archivées
+  de `network-restrictions get` et `ssl-enforcement get`). Chaque binding cite ses sources
+  officielles lues le 2026-10-16 (champ `sources[]`, URL et date déclarées en tête du fichier).
+  Profil câblé comme les autres : arborescence du README, exemple de `profiles[]` de
+  `docs/ONBOARDING-ENTRANTS.md`, instanciation `profil:supabase` de l'ADR0611 (FR et EN), nom
+  ajouté à la liste N1 de `tools/lint-agnostic.mjs`.
+- **`tools/verifier-profils.mjs`** — aucun contrôle ne jugeait les profils que `build-banc.mjs`
+  charge. Il juge chaque `profiles/<clé>/bindings.json` : nom = dossier, version SemVer, quatre
+  champs remplis, contrôle connu du core (`manual[]` compris), contrôle lié une seule fois, README
+  présent, sources déclarées et citées quand le profil en porte, profil nommé au README racine, et
+  profil réellement chargé : `build-banc.mjs`, lancé sur un tenant jetable qui ne déclare que lui,
+  doit rendre autant d'instanciations que le profil a de bindings. Auto-test à double sens sur
+  `tests/fixtures/profils/` (rouge : 7 écarts sur P1, P4 à P8 ; verte : 0), câblé dans
+  `.github/workflows/ci.yml` (job `batterie`), donc joué par `npm test`.
+
+- **TF-1820** (décision humaine du 15/10/2026, D-1 a) — **la version d'un gabarit monte quand son contenu change, et la recette le joue.** Depuis TF-1752 les 14 gabarits de livrables rendent leur couple identifiant + version, que les produits reportent dans leurs lots de retours (R-46) ; aucun contrôle ne jouait l'incrément, le couple pouvait mentir. `deliverables/templates/gabarits-versions.json` associe à chaque gabarit sa version et l'empreinte de son contenu hors ligne de version ; `node tools/verifier-gabarits.mjs` échoue en nommant le gabarit si le contenu change sans montée de version, `--maj` enregistre la référence (et refuse un contenu changé sans version supérieure). Ne juge pas le moteur du rapport (`RAPPORT_GABARIT_VERSION`, à incrémenter à la main). Recette à double sens : `tests/oracles/version-gabarit.test.mjs`, ajoutée à la batterie de la CI donc jouée par `npm test`.
+
+- **TF-1395** (décision humaine du 13/10/2026, option a de la fiche) — **un réglage d'infrastructure
+  se juge sur l'état servi, pas sur le code qui le décrit.** Le 24/09/2026, une règle
+  d'authentification fédérée d'un produit a été jugée « alignée » sur `infra/appservice.tf:35`, alors
+  que l'état servi n'avait pas le réglage `clientSecretSettingName` exigé par la documentation de
+  l'éditeur, que la redirection partait en `response_type=id_token` (flux implicite) et que le
+  justificatif était posé sur l'identité système ; sans relecture de l'état servi, ce modèle aurait
+  été recopié par les autres produits. La méthode (`docs/MANUEL-ENTREPRISE.md`, étape 2) prescrit
+  désormais de relire le réglage servi, de citer dans la preuve le code ET la sortie servie
+  horodatée, et de plafonner le verdict à « partiel » (preuve « état servi non lu ») quand l'état
+  servi n'est pas lisible. Règle de méthode opposable aux missions à venir, sans blocage mécanique :
+  aucun champ de la donnée d'audit ne porte encore « état servi lu ». Recette à double sens :
+  `tests/oracles/methode-etat-servi.test.mjs`, ajoutée à la batterie de la CI.
+
+- **TF-1387** (décision humaine du 13/10/2026, option b de la fiche) — **l'audit déclare qu'il ne
+  chiffre pas l'effort.** Le schéma du plan de remédiation déclarait un champ `effort` que la chaîne
+  ne remplissait jamais : 159 actions sur 159 sans effort sur le plan d'un produit audité en
+  septembre, et une présentation obligée d'ajouter sa propre cotation hors de l'audit, au statut
+  d'hypothèse. Le champ reste facultatif ; la légende du rapport (français et anglais), la méthode
+  (`docs/MANUEL-ENTREPRISE.md`, étape 3) et la description du champ dans
+  `core/schemas/remediation-actions.schema.json` disent désormais que l'effort n'est renseigné que
+  si la mission l'a saisi, et que sa cotation relève du plan d'amélioration. `RES` est exporté de
+  `tools/rapport-engine.mjs` pour que la recette lise la légende. Recette à double sens :
+  `tests/oracles/effort-non-chiffre.test.mjs`, ajoutée à la batterie de la CI.
+
+- **TF-1319** (décision humaine D-13 (a) du 23/09/2026, temps 2 du verdict O3 de l'étude du pilot
+  du 19/08 sur le méta-oracle d'enclenchement) — **`oracles/decouvrir-oracles.mjs` : la liste des
+  oracles de la forge, lue sur le disque, au contrat commun du parc `factory/decouverte-oracles@1`.**
+  Le juge d'enclenchement du pilot l'appelle pour confronter ce que la forge porte aux verdicts
+  consignés au ledger d'un run. Mesuré avant : `oracles/` porte 12 scripts, le tableau de son README
+  en décrit 9, la CI en nomme 2 — trois listes écrites à la main, aucune complète. La règle est le
+  DOSSIER (premier niveau d'`oracles/`), pas un préfixe de nom ; les `verifier-*` de `tools/`, qui
+  jugent les livrables, sont laissés dehors et nommés au `non_juge`. Recette à double sens :
+  `tests/oracles/decouvrir-oracles.test.mjs`, ajoutée à la batterie de la CI.
+
+- **TF-1235** (mandat humain du 22/09/2026 sur les verdicts d'opportunité favorables, rang 1) —
+  **le schéma des actions de remédiation devient un CONTRAT D'INTERFACE versionné (1.1.0), et le
+  rapport exporte son COMPAGNON : la liste des contrôles évalués.** Le schéma
+  `core/schemas/remediation-actions.schema.json` n'était déclaré nulle part comme consommable par un
+  tiers ; il porte désormais `x-contrat` — version, clés de jonction (`control_ref`, `finding_ref`),
+  règle d'évolution, consommateurs. Et `tools/build-rapport.mjs` écrit, à côté du YAML,
+  `<rapport>.controles-evalues.json` (schéma `core/schemas/controles-evalues.schema.json`) : chaque
+  règle de la donnée avec sa dimension et son verdict, même `audit_ref` que le YAML. *Le plan dit ce
+  qui échoue ; rien ne disait ce qui a été joué* — un écart absent du plan était indiscernable d'un
+  contrôle jamais évalué, et c'est pourtant cette liste qui trace la frontière entre une remédiation
+  (écart à une norme, citée par son identifiant) et une amélioration (écart à une ambition). Une règle
+  sans verdict sort en `a_evaluer`, terme du vocabulaire fermé de `build-kit.mjs`, jamais omise.
+
+- **TF-0940** (part forge-audit, décision humaine D-4 (b) du 20/09/2026 — **étape 0**) — **le chemin
+  ERD du moteur de rapport entre sous contrôle automatique.** Mesuré avant : `rapport-data-valid.json`,
+  la fixture jouée par la CI, ne porte AUCUN `db_schema` ; `rapport-data-riche.json`, la seule qui en
+  porte un, n'était consommée par personne (zéro occurrence dans tout le dépôt). Le schéma de base de
+  données et son dictionnaire se rendaient donc sans juge — et le contrôle de cohérence
+  ERD/dictionnaire de `verifier-rapport-html.mjs` ne s'exerçait sur rien. La fixture riche est bâtie
+  et **jugée par le gate de rendu** au même titre que l'autre, avec deux assertions neutres au moteur
+  (la vue « Architecture & BDD » existe, le marquage PII est présent) : elles survivent à la bascule
+  de moteur qui suit, et c'est le « avant » qu'aucune bascule n'avait.
+
+### Corrigé
+- **TF-1752** (lot Produit-76 du 25/09/2026, RA-3) — **chaque document du kit rend son gabarit et sa
+  version.** `grep -io "gd-[a-z0-9-]*"` ne rendait rien sur le rapport d'audit ni sur la fiche
+  sécurité remis, et la règle R-46 du pilot fait reporter ce couple dans les lots de retours. Le
+  rapport généré porte en pied `Gabarit : gd-rapport-audit-auditcore · version du gabarit 1.0.0`
+  (`RAPPORT_GABARIT_ID`, `RAPPORT_GABARIT_VERSION` de `tools/rapport-engine.mjs`), et les 14
+  gabarits de livrables de `deliverables/templates/` le portent sous leur titre, variante anglaise
+  comprise. Forme du marqueur G4 d'`oracle-gabarits-documents.mjs` du pilot. Les prompts et le skill
+  de conformité, consignes adressées à un agent, en sont exclus et le test le déclare. Mesure
+  rejouée : 21 fichiers sur 21 sans le couple avant, 15 sur 15 livrables avec le couple après.
+  Recette : `tests/oracles/identite-gabarit.test.mjs`, ajoutée à la batterie de la CI.
+- **TF-1737** (lot Produit-76 du 25/08/2026, mandat du 15/10/2026) — **une pré-version PEP 440 n'est
+  plus rendue en version actuelle.** `oracles/maj-versions.mjs` ne reconnaissait que les pré-versions
+  npm à tiret : rejoué le 15/10/2026 sur `httpx==0.27.0`, il rendait `1.0.dev6` et
+  `prerelease_ignorees: 0` ; il rend `0.28.1`, `prerelease_ignorees: 1` et nomme la pré-version
+  écartée (`prerelease_ecartee`). Les formes `aN`, `bN`, `rcN`, `.devN` et un segment local `+…` sont
+  reconnues ; `.postN` reste une version finale (PEP 440). Le check 10 de
+  `tools/verifier-rapport-html.mjs` refuse une version actuelle qui est une pré-version, avec le
+  prédicat même du producteur. Recettes : `tests/oracles/maj-versions.test.mjs`,
+  `tests/oracles/verifier-rapport-html.test.mjs`.
+- **TF-1738** (lot Produit-76 du 25/08/2026) — **la porte de rendu du rapport juge le titre unique et
+  les jetons `:root` du socle HTML.** Le modèle du kit client en violait deux règles bloquantes ;
+  le rapport généré par AuditCore les tient (`check_html.py` PASS le 15/10/2026), et
+  `tools/verifier-rapport-html.mjs` sort désormais 1 sur deux `<h1>` ou sans `:root` de jetons.
+- **TF-1751** (lot Produit-76 du 25/09/2026) — **le surlignage « à remplir » de la fiche sécurité se
+  décide à la génération.** Une valeur écrite ne reçoit jamais `span.ph`, et la légende qui explique
+  le surlignage ne sort que s'il reste un champ à remplir : une fiche complète ne porte aucun
+  `span.ph` dans son source (1 avant, 0 après), sans script de dépouillement au chargement. Recette :
+  `tests/oracles/fiche-securite.test.mjs`.
+- **TF-1351** (décision humaine D-51 (a) du 02/10/2026, option (b) de la fiche) — **le Compliance
+  Pack livre désormais la fiche sécurité directement dans le format que son imprimeur accepte.**
+  Le défaut initialement rapporté (« le PDF A4 n'est produit par aucune étape ») était déjà réfuté
+  par une relecture antérieure — `tools/build-fiche.mjs` tire bien un PDF A4 à chaque passe. Mesuré
+  avant, le reste confirmé : le Compliance Pack (part du projet audité) ne livrait la fiche qu'en
+  `fiche-securite.template.md`, aux côtés de `fiche-en-pdf.mjs` — qui n'accepte QUE du `.html`
+  (`node fiche-en-pdf.mjs <fiche.html>`) — sans aucun outil, dans le kit, pour passer du `.md` au
+  `.html` ; et la méthodologie (§4 « Livrables attendus », §5 « Outils du kit », FR et EN) ne
+  nommait nulle part le PDF ni `fiche-en-pdf.mjs`. Le squelette HTML (`--sans-pdf`, déjà produit
+  pour le Kit Audit) est maintenant AUSSI ajouté au Compliance Pack (`tools/build-kit.mjs`), à côté
+  du canevas `.md` gardé comme référence lisible ; le LISEZMOI du pack nomme les deux ; §4/§5 des
+  deux méthodologies nomment désormais `fiche-en-pdf.mjs`. Parité FR/EN vérifiée (clés `{{…}}`
+  inchangées). Recette : `tests/oracles/build-kit-compliance-fiche.test.mjs` (lecteur ZIP minimal,
+  double sens sur la présence du `.html` et la mention documentaire) — 197 tests, 196 pass, 1 skip
+  motivé, exit 0.
+
+- **TF-1345 / TF-1346** (décision humaine D-51 (a) du 02/10/2026, option (a) des deux fiches) —
+  **`oracles/maj-versions.mjs` lit désormais les espaces de travail d'un monorepo, et ne classe plus
+  à tort une dépendance EOL comme « migrable vers un majeur supporté » quand la cible connue reste
+  dans le même majeur.** Mesuré avant (TF-1345) : lancé à la racine, le script ne lisait que son
+  propre `package.json` — un monorepo de 49 composants réels n'en rendait que 8, les dépendances des
+  espaces de travail (`backend/`, `frontend/`) disparaissant purement et simplement de l'inventaire
+  (ni directes, ni transitives). Le champ `workspaces` (tableau, ou `{ packages: [...] }`) est
+  désormais résolu (`resolveWorkspaceDirs`, motifs « chemin exact » et « un niveau de joker ») et
+  chaque manifeste d'espace lu, ses dépendances ajoutées en DIRECT et résolues via le verrou RACINE
+  (npm/yarn hoistent). Mesuré avant (TF-1346), cas réel confirmé sur le message npm authentique de
+  `supertest` (« Please upgrade to supertest v7.1.3+, see release notes at … ») : le remplaçant
+  extrait rendait « release » (mot générique capté après le mot-clé « see », le premier rencontré
+  dans le texte) au lieu de « 7.1.3+ » ; et `successorFromDeprecation` matchait le mot-clé « use » À
+  L'INTÉRIEUR d'un autre mot (« disuse ») faute de borne de mot, captant le mot suivant sans aucun
+  rapport (ex. « of »). Un motif « upgrade to X vY+ » est tenté en premier, les mots-clés sont
+  bordés par `\b`, et une courte liste de mots génériques (release, notes, here, of…) ne peut plus
+  être rendue comme remplaçant. Par ailleurs, `reco_eol` ne promet plus « migrer vers un majeur
+  supporté » quand la cible stable connue reste dans le même majeur que l'installé (pg classé ainsi
+  à tort) — le driver reste réel et actionnable, seul le texte de la recommandation change.
+  Recette : fixture `tests/fixtures/oracles/monorepo/` (racine + deux espaces `packages/*`) et neuf
+  cas neufs dans `tests/oracles/maj-versions.test.mjs` (workspaces, extraction du remplaçant sur le
+  cas réel supertest, mots génériques, mot-clé imbriqué, reco_eol même-majeur) — 195 tests, 194 pass,
+  1 skip motivé, exit 0.
+
+- **TF-1332** (part forge-audit, décision humaine D-19 (a) du 26/09/2026) — **`oracles/README.md`
+  n'affirme plus de compte de tests écrit à la main.** Mesuré avant : la section « Preuve »
+  affichait « 41 tests » alors que la batterie en comptait 162 (mesuré le 26/09/2026 : `node
+  --test tests/oracles/*.test.mjs` → 162 tests, 161 pass, 1 skip motivé par l'absence de moteur
+  d'impression, 0 fail, exit 0) — la même dérive que celle déjà réglée sur le titre du tableau
+  (TF-1246) : un compte écrit à la main ne bouge pas au prochain fichier de test ajouté. Le
+  paragraphe renvoie désormais à la commande dont le résumé fait foi, sans nombre à tenir à jour.
+  Hors périmètre de cet item, laissé en l'état et porté au rapport de campagne : le libellé de
+  l'étape `oracles` dans `.github/workflows/ci.yml` nomme lui aussi « 162 tests » en dur — un
+  second compte écrit à la main, du même genre, mais hors du README d'oracles/.
+
+- **TF-1207 / TF-1235** (22/09/2026) — **la dimension D17 n'était rattachée nulle part.** Quatre
+  expressions de `tools/rapport-engine.mjs` et le motif d'identifiant du schéma bornaient les
+  dimensions à `D(0\d|1[0-6])`, soit D00 à D16, quand le référentiel en porte dix-huit et que la
+  donnée d'audit les déclare toutes. Mesuré sur le moteur d'avant : une action de la dimension D17
+  recevait `REM-NR-D17`, sortait du YAML par `non_projete` et comptait parmi les actions « non
+  rattachées » du rapport — pour une dimension parfaitement valide. La validité se lit désormais
+  dans `data.dimensions` (`dimensionsConnues`, `estIdActionRattache`) et le motif du schéma admet
+  toute dimension `Dnn` : *une borne numérique écrite dans un motif est un second domicile du
+  référentiel, et elle dérive à la première dimension ajoutée*. Élargissement compatible : tout
+  identifiant valide en 1.0.0 le reste. N'est PAS modifié, et à dessein : le texte de
+  `tools/importer-doctrine.mjs` qui cite `D00`–`D16` décrit la RÉFÉRENCE importée, qui s'arrête bien
+  à D16 — D17 est un ajout local « sans source dans la référence » (`doctrine-ecarts.md`).
+  Recette : quatre cas neufs dans `tests/oracles/remediation.test.mjs`, chacun avec son jumeau
+  rouge (D17 projetée / dimension non déclarée rejetée ; schéma admet D17 / refuse `REM-D1-001` ;
+  export conforme / verdict hors vocabulaire refusé) — 20/20.
+
+### Changé
+- **TF-0940** (part forge-audit, décision humaine D-4 (b) du 20/09/2026 — **bascule**) — **le rapport
+  d'audit CONSOMME le canevas qui fait foi ; `renderERD` n'est plus un moteur, c'est un appel.** Deux
+  moteurs de schéma de base de données coexistaient : le canevas du skill `factory-schemas` (cartes
+  HTML + calque SVG, badges PK/UK/FK/NN, arêtes ancrées colonne à colonne, mise à l'échelle) et un
+  `renderERD` en SVG pur écrit dans `rapport-engine.mjs`, plus pauvre, qui se déclarait lui-même
+  « non faisant foi » depuis `ae3dfd8`. **Déclarer ne suffisait pas** : le rapport rendait toujours le
+  moteur pauvre. Il rend désormais le canevas.
+  - **Copie conforme, pas import** (`tools/canevas-modele-donnees.mjs`) : les scripts d'AuditCore sont
+    embarqués dans le kit remis au projet audité, qui n'a aucun dépôt frère sous la main — une
+    dépendance d'exécution était exclue. La copie est **déclarée** dans `HERITAGE.json` (source,
+    version du skill, empreinte sha256) et sa dérive est mesurée par `tools/verifier-heritage.mjs`,
+    qui compare quand le dépôt frère est là et se déclare **SKIP nommé** quand il ne l'est pas —
+    toujours le cas d'un runner. Un dépôt absent n'est pas un rouge d'environnement. **L'empreinte est
+    normalisée** (fins de ligne ramenées à LF, bloc de polices base64 exclu) : sous Windows avec
+    `core.autocrlf=true` et sans `.gitattributes`, une empreinte brute aurait crié à la dérive au
+    premier passage du fichier par un outil local. L'auto-test le prouve — même contenu en CRLF, même
+    empreinte — et joue la dérive dans les deux sens sans aucun dépôt frère.
+  - **Deux deltas de copie seulement, déclarés** : `CSSV` lit un jeton du module au lieu d'appeler
+    `getComputedStyle` (le rendu se fait côté Node, il n'y a pas de document) ; `fitSchema` vérifie que
+    son hôte expose `querySelector` avant de l'appeler (le gate du rapport exécute le moteur dans un
+    DOM minimal qui ne l'expose pas — un garde d'hôte, jamais un assouplissement).
+  - **Contrat de données étendu**, volet A de la décision : `db_schema` accueille `role`, `style`,
+    `card`, `tip` (plus `engine` pour le nom accessible du dessin), **tous facultatifs**. Un audit qui
+    ne les renseigne pas reste rendable, et le repli est **déclaré, jamais deviné** — une table sans
+    `style` est rendue sans liseré de couleur et son infobulle dit « classification non renseignée ».
+    Un `style` hors palette est en revanche **refusé** par `tools/verifier-rapport.mjs` : ramené
+    silencieusement au neutre, il ferait croire à une classification que personne n'a faite. Le champ
+    `label` d'une relation, que le moteur remplacé n'a jamais lu, alimente désormais l'infobulle.
+  - **Ce que le rapport garde** : son dictionnaire en **tableau filtrable**. Le canevas le rend en
+    cartes ; au-delà de 8 lignes le gate du rapport exige un tableau qui se trie et se filtre (RL-5).
+    Prendre les cartes aurait échangé un moteur de dessin contre une régression de restitution.
+  - **Le contrôle de cohérence schéma↔dictionnaire a changé de marquage, pas de force** :
+    `verifier-rapport-html.mjs` regarde `db-card` au lieu de `erd-t`, et une fixture rouge sur un
+    rapport riche réellement généré exige toujours l'exit 1 quand le marquage PII disparaît.
+  - Mesures : batterie des oracles **141 → 151 tests** ; recette locale **12 → 13 étapes**, toutes
+    vertes. Rapport de démonstration jugé avant et après par `verifier-rapport-html.mjs` (exit 0 des
+    deux côtés) et par les contrôles de page du socle installé — **21 bloquants statiques avant, 21
+    après, identiques ; 124 bloquants de rendu avant, 124 après, identiques en nature et en nombre** :
+    aucune régression, et aucun des bloquants préexistants ne touche le schéma.
+
+- **TF-1183** (part forge-audit, reste déclaré de TF-1175 / RF-21 (2), 20/09/2026) — **la forme
+  native des expressions PBIR est jugée**, par `oracles/verifier-rapport-pbir.mjs`. C'était le
+  reste : le 17/09, 29 contrôles PASS sur un rapport Power BI qui ne rendait AUCUN visuel, parce
+  qu'aucun contrôle ne lisait le fichier de RAPPORT — `verifier-modele-semantique.mjs` lit le
+  MODÈLE (TMDL) et nommait le `*.Report` comme non jugé, ce qui était honnête mais laissait le
+  défaut passer. Quatre règles, chacune nommant le contrôle AuditCore qu'elle mécanise :
+  **PB1** toute référence de source est résoluble (CTL-D08-01) — deux sens : un
+  `SourceRef: { Source: alias }` dont l'alias n'est déclaré par aucun `From` en portée est
+  bloquant, et un `SourceRef` portant à la fois `Entity` et `Name` l'est aussi, parce que c'est la
+  forme d'une ENTRÉE DE `From` recopiée à la place d'une référence de source — le défaut réel du
+  17/09 ; un `SourceRef: { Entity }` seul reste licite, sinon la règle condamnerait la forme émise
+  par Power BI Desktop et ne serait que du bruit. **PB2** les alias d'un `From` sont uniques
+  (CTL-D08-01). **PB3** aucune projection `active: false` (CTL-D05-10) : le champ est déclaré dans
+  la requête et ne parvient jamais au lecteur. **PB4** chaque colonne d'un visuel tabulaire porte
+  son en-tête dans `columnProperties` (CTL-D11-01, majeur) : sans lui, le lecteur d'écran reçoit le
+  nom technique du champ. Chaque constat est localisé fichier + pointeur JSON. Recette PBIP-native :
+  elle se joue sur les fichiers du dépôt, sans publication, sans capacité de service, avant fusion.
+  Fixtures à double sens (`tests/fixtures/oracles/rapport-pbir/{verte,rouge}`) — et surtout, la
+  fixture du défaut RÉEL déposée par TF-1175 (`modele-semantique/projet-pbip/Exemple.Report/`),
+  que personne ne lisait, sort désormais BLOQUANT. Le profil `powerbi` lie CTL-D08-01 (nouveau
+  binding) et étend CTL-D11-01 — 10 → 11 contrôles liés, profil 1.1.0 → 1.2.0. Batterie des
+  oracles 135 → 141 tests. Périmètre inchangé sur le rendu : cet oracle juge la FORME, son OK ne
+  vaut pas davantage « livrable vérifié », et il le déclare avec le geste qui reste dû.
+
+- **TF-1175** (part forge-audit, retour Produit-62 RF-21, 17/09/2026) — **un OK de
+  `oracles/verifier-modele-semantique.mjs` ne se lit plus « livrable vérifié ».** Le 17/09, un
+  projet Power BI généré a passé 22 contrôles de recette et 7 contrôles d'audit, a été publié sur
+  GO humain, et ne rendait AUCUN visuel : la référence de source de chaque requête visuelle était
+  invalide (`SourceRef: {Entity, Name}` au lieu de `SourceRef: {Source: alias}`), le service
+  acceptait le fichier, et l'export PDF sortait 943 octets et 0 caractère après 560 s. 29 contrôles
+  PASS sur un livrable invisible, deux jours de mandat et deux diagnostics faux. Aucun contrôle qui
+  LIT le fichier ne voit ce défaut. L'oracle déclare désormais le RENDU en `non_juge`, en TÊTE de
+  liste, NOMME les rapports (`*.Report`) du projet PBIP qu'il laisse de côté — et seulement quand
+  ils existent, rien n'est deviné — et imprime le geste manquant avec sa ligne de verdict (publier,
+  `ExportTo` PDF, TÉLÉCHARGER le fichier, le rendre en image, juger durée / octets / texte extrait
+  par page / libellés d'erreur du service). Aucun verdict ni code de sortie n'est modifié : le
+  périmètre de l'oracle était légitime, c'est sa réserve qui manquait. Fixture à double sens
+  (`tests/fixtures/oracles/modele-semantique/projet-pbip/`) : un projet dont le modèle est
+  irréprochable et dont le rapport porte le défaut réel recopié — l'oracle rend OK, et c'est le
+  texte de sa réserve qui est jugé. 3 → 5 tests. Périmètre : la part forge-audit du retour ; l'oracle
+  de rendu proposé en (1) revient à forge-data, la règle de forme PBIR (2) n'est pas outillée ici.
+
+- **TF-1020** (17/09/2026) — **la police du corps voyage désormais DANS le livrable.** Le thème
+  porte ses `@font-face` incorporés en base64 (`assets/polices/`, Roboto sous SIL OFL 1.1, licence
+  et provenance jointes) : aucun téléchargement au rendu, aucun fichier à côté, le HTML reste
+  autoportant. Défaut d'origine (run de CI 34581219111, 11/09) : la pile `--font-body`
+  (`system-ui, Segoe UI, Roboto, Arial`) ne nommait que des polices DU POSTE ; la fiche sécurité
+  tenait sur une page sous Windows et sortait sur DEUX sur le runner Linux, où son propre juge P3
+  la refusait — neuvième publication rouge d'affilée, invisible depuis la machine qui produit.
+  La famille déclarée est `AuditCore Sans` et non `Roboto` : mesuré ici, un poste sans Roboto
+  installé rend quand même `font-family:Roboto` à 0,12 px près de la face incorporée, si bien
+  qu'aucune fixture ne pouvait plus prouver laquelle servait. Sous un nom qu'aucun poste ne
+  possède, la mesure tranche. Un tenant qui déclare sa propre pile garde la main (TF-1000) ;
+  `tools/verifier.mjs` DIT alors que son tirage redevient dépendant du poste, et dit aussi la face
+  embarquée — la seule condition de sa liste qui soit redevenue rejouable. Fixtures à double sens
+  dans `tools/build-theme.mjs --self-test` (5/5), `tests/oracles/recette-environnement.test.mjs`
+  (23 tests) et un cas de banc qui MESURE dans le moteur d'impression que la face résolue est bien
+  l'incorporée (`tests/oracles/fiche-securite.test.mjs`, 13 tests). Reste hors de portée de ce
+  poste : la preuve sur un vrai runner Linux, qui demande une publication humaine.
+
+- **TF-1102** (constat né en clôturant TF-1089, décidé sous mandat le 14/09/2026) — les DEUX autres
+  champs du bloc doctrinal TF-0563 (« Restriction d'accès effective », « Comptes externes / invités
+  en portée ») restaient sans règle après TF-1089, qui n'avait couvert que « Population
+  effectivement admise » (FS8). Les trois champs existent pour la MÊME raison (3 128 comptes
+  invités admis sans que la fiche le dise) : aucun n'est plus optionnel que les deux autres.
+  Règles sœurs FS10 et FS11 ajoutées à `oracles/verifier-fiche-securite.mjs` (factorisées avec FS8
+  dans un helper commun `champDuBloc`, bilingue FR/EN comme FS8) ; les deux champs rendus par
+  `tools/build-fiche.mjs` (section 5 · Exposition). Fixtures rouges dédiées (une ligne SUPPRIMÉE par
+  règle), self-test 14/14 → 16/16. La fiche complète (5 champs du bloc, tous remplis) tient
+  toujours sur UNE page A4 — prouvé par le test bout en bout réel (impression Edge + relecture PDF,
+  `tests/oracles/fiche-securite.test.mjs`), sans retente supplémentaire du rythme vertical au-delà
+  de celle déjà faite pour TF-1089.
+
+- **TF-1095** (restes archivés TF-0690, TF-0702, relevé P-2 du 14/09/2026) — la fiche sécurité rend
+  désormais VISIBLEMENT son gabarit et sa version en pied de page (`Gabarit :
+  gd-fiche-securite-auditcore · version du gabarit 1.0.0`, `tools/build-fiche.mjs`), même
+  convention que la règle G4 d'`oracle-gabarits-documents.mjs` du pilot. Défaut d'origine (TF-0690,
+  Produit-11, 27/08) : « ni gd-fiche-securite, ni version » — une instance périmée était invisible
+  sur l'artefact, sans registre pour la dater, y compris reçue par courriel hors de tout dépôt.
+  Règle FS9 ajoutée à `oracles/verifier-fiche-securite.mjs` : une fiche qui ne rend pas ce couple
+  est refusée. Fixture rouge dédiée, self-test 13/13 → 14/14. AUCUNE option `--gabarit` ajoutée à
+  `build-fiche.mjs` — la proposition originale de TF-0702 (accepter un gabarit HTML fourni par le
+  produit, une porte de sortie qui aurait contourné la cause plutôt que la mesurer) a été
+  délibérément écartée au profit de la mesure, conformément au dossier de campagne du 14/09
+  (« remplacer --gabarit par une mesure »).
+
+- **TF-1089** — `oracles/verifier-fiche-securite.mjs` : nouvelle règle FS8, la présence ET le
+  remplissage du champ « Population effectivement admise » (TF-0563, l'incident des 3 128 comptes
+  invités admis sans que la fiche le dise). Mesuré le 14/09/2026 (preuve de couverture P-1) : une
+  instance remplie SANS ce champ rendait déjà PASS sur FS1 à FS7 — ni le contrôle des placeholders
+  (FS1) ni celui des 8 sections (FS2) ne voient une LIGNE de champ supprimée à l'intérieur d'une
+  section par ailleurs complète. Fixtures à double sens : ligne absente (FAIL) et ligne présente
+  mais vide (FAIL), self-test 11/11 → 13/13.
+  **Écart constaté en le faisant** : `tools/build-fiche.mjs` (le seul générateur dont la sortie est
+  réellement jugée par cet oracle, `tests/oracles/fiche-securite.test.mjs`) n'avait JAMAIS reçu ce
+  champ — seul `deliverables/templates/fiche-securite.template.md` (le canevas markdown des kits
+  client, TF-0563/d8bb934) l'avait. Sans corriger aussi le générateur, FS8 aurait rendu invérifiable
+  toute fiche produite par cette forge. Champ `population_admise` ajouté à la section « 5 ·
+  Exposition » ; rythme vertical du tirage retendu (une ligne de table de plus suffisait à faire
+  déborder sur une 2e page — mesuré et corrigé localement, `tests/oracles/fiche-securite.test.mjs`
+  « TF-0700 — bout en bout », toujours 1 page).
+
+- **TF-1020 (diagnostic, NON CLOS)** — `tools/verifier.mjs` mesure désormais, dans les deux sens,
+  quelles polices de la pile `--font-body` du tenant de référence sont réellement présentes sur le
+  poste qui rejoue la recette (`policesPresentes`, fichier standard par plateforme, jamais deviné).
+  Fait qui motive cette mesure : le job `oracles (ubuntu-latest)` refuse la fiche sécurité sur P3
+  (2 pages pour 1 maximum, run 34581219111 du 11/09) alors que `oracles (windows-latest)` la rend
+  `ok` — la pile `system-ui, Segoe UI, Roboto, Arial` n'a AUCUNE police nommée installée sur ce
+  runner Linux, le navigateur y retombe sur DejaVu Sans (plus large) et le tirage déborde. Mesuré
+  ICI (poste Windows) : Segoe UI et Arial présentes, **Roboto absente même sur ce poste** — la
+  cause n'est donc pas hypothétique. LE CORRECTIF (police embarquée en `@font-face`, ou
+  `fonts-roboto` installée dans `.github/workflows/ci.yml` job `oracles`) N'EST PAS APPLIQUÉ ici :
+  aucun runner Linux disponible sur ce poste pour en prouver l'effet, aucun fichier de police
+  librement licencié disponible localement à embarquer sans deviner — appliquer l'un ou l'autre
+  sans preuve locale serait exactement le défaut que TF-1017 a coûté trois versions à corriger.
+  Fixtures à double sens (présente/absente/non mesurable) dans
+  `tests/oracles/recette-environnement.test.mjs` (+3, 127 → 130 tests, nombre mis à jour dans
+  `.github/workflows/ci.yml`).
+
+### Corrigé
+- **TF-1001** — `tools/verifier-rapport.mjs` : six champs que `rapport-engine.mjs` sait rendre
+  (`projet`, `date`, `indice`, `auditeur`, `syntheses`, `reprise`) pouvaient rester vides sans
+  qu'aucune porte machine ne le dise — le rapport les affichait blancs/« — », le plan de
+  remédiation embarqué portait `date: null`, et le manifeste d'écarts du rapport déclarait déjà
+  deux absences que personne ne lisait. Portés en AVERTISSEMENT nommé (non bloquant : légitimement
+  absents pour certains audits). Ajout d'une règle BLOQUANTE distincte : un `projet`/`titre` qui
+  répète le libellé de document que le moteur ajoute déjà (« Rapport d'audit ») dédouble le titre
+  rendu (mesuré : `Factory - Rapport d'audit - Rapport d'audit - Produit-61`) — refusé. Fixture
+  rouge dédiée `tests/fixtures/rapport-data-titre-duplique.json`, câblée dans le job `batterie`
+  aux côtés des fixtures valide/invalide existantes ; `STR` exporté de `rapport-engine.mjs` pour
+  partager les libellés FR/EN entre moteur et vérificateur (source unique, pas de chaîne dupliquée).
+
+- **TF-1000** — `tools/build-theme.mjs` : la typographie d'un DESIGN.md (reliquat de scaffold,
+  potentiellement la charte d'exemple fictive livrée avec la forge) écrasait silencieusement une
+  `branding.typography` pourtant déclarée EXPLICITEMENT dans `tenant.yaml` — un rapport client a
+  été rendu dans la police d'un tenant fictif. Priorité inversée pour la typographie (le tenant
+  déclaré l'emporte, DESIGN.md ne comble que ce qui manque) ; auto-test à double sens
+  `node tools/build-theme.mjs --self-test`, câblé dans `.github/workflows/ci.yml` (job `batterie`).
+  Mesuré sur le tenant `exemple` : `--font-body` passe de `system-ui, Segoe UI, Roboto, Arial,
+  sans-serif` (DESIGN.md fictif) à `system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif`
+  (déclaration réelle du tenant).
+
+## [1.18.0] — 2026-09-11
+
+> **MINEUR** au sens de PADR-0005 : cette version apporte de NOUVEAUX contrôles — portes machine de
+> la fiche sécurité, parité FR/EN des gabarits, cohérence du plan de remédiation, couverture
+> `couverte_par`, oracle de modèle sémantique, recette qui rejoue la CI — sans rupture de schéma ni
+> retrait de contrôle. Numéro choisi en suite du dernier repère posé, `v1.17.0` (18/08/2026).
+>
+> **RATTRAPAGE DE JOURNAL (TF-1016).** Le journal dormait. La section « [Non publié] » était ouverte
+> depuis le **14/08**, le dernier enregistrement la touchant date du **15/08** (`e979c0f`), et
+> **onze** enregistrements touchant `tools/`, `core/` et `oracles/` se sont empilés derrière **sans
+> une ligne** — jusqu'au 10/09. Chacun est **nommé ci-dessous** (empreinte courte + objet) ; aucun
+> n'est résumé par un « divers ». Deux constats sont consignés avec eux, parce qu'ils expliquent la
+> dérive plutôt que de la masquer :
+>
+> 1. les repères `v1.8.0` → `v1.17.0` (14/08 → 18/08) ont été posés **sans entrée de journal** ; ce
+>    rattrapage ne les reconstitue pas — il reprend le fil à partir du dernier enregistrement
+>    journalisé (`e979c0f`) et couvre tout ce qui suit ;
+> 2. `package.json` déclarait encore `1.0.0` sous des repères allant jusqu'à `v1.17.0`. Il est aligné
+>    sur **1.18.0** par cette version.
+>
+> **CE QUI EMPÊCHE LA RÉCIDIVE** : la recette porte désormais une règle de journal. Au-delà de
+> `PLAFOND_ENREGISTREMENTS_SANS_JOURNAL` (constante nommée, **5**) enregistrements touchant `tools/`,
+> `core/` ou `oracles/` depuis la dernière modification de `CHANGELOG.md`, `node tools/verifier.mjs`
+> sort **ROUGE** et **NOMME** les enregistrements à rattraper. Un journal qui dort ne se signale
+> jamais lui-même : il fallait une règle qui le réveille.
+>
+> Le contenu qui était sous « [Non publié] — 2026-08-14 » (qualifié PATCH) est figé ici, sans
+> retouche, sous « Contenu de la section « [Non publié] » du 14/08 ».
+
+### Ajouté
+- **Pack de doctrine par dimension** (TF-1014, 11/09) : `core/dimensions/doctrine.yaml` (17 dimensions, 152 thèmes, 109 types de preuve, 131 livrables, 17 barèmes) versé mécaniquement par `tools/importer-doctrine.mjs` depuis une extraction de référence pseudonymisée (garde-fou de noms interdits, appariement par identifiant seul), écarts consignés dans `core/dimensions/doctrine-ecarts.md` ; schéma `core/schemas/doctrine.schema.json` ; rendu par `tools/build-referentiel.mjs` (bloc périmètre / preuves / livrables / barème, pack facultatif) ; juge `tools/verifier-referentiel.mjs` (une dimension applicable sans doctrine est incomplète) avec fixtures rouge/verte (`tests/oracles/verifier-referentiel.test.mjs`, 5 tests).
+- **Neuf ADR et neuf contrôles dérivés** (TF-1014) : ADR0307, ADR0510, ADR0623 à ADR0627, ADR0629, ADR0709 (FR et EN), marqués `a_completer` là où la source ne cite aucune norme ; contrôles CTL-D02-14, D09-08, D05-17, D05-18, D16-10, D16-11, D15-10, D15-11, D01-16 — 175 → 184 contrôles, 75 → 84 ADR, `invariants.json` inchangé.
+
+- **`bffcc52`** (23/08) — *fiche sécurité : les DEUX formats dans la même passe, et le PDF est RELU*
+  (TF-0506). Nouvel oracle `oracles/verifier-pdf.mjs` : le tirage est **relu dans le fichier**
+  (P1 intégrité, P2 format, P3 pagination, P4 fraîcheur) au lieu d'être cru sur le retour de la
+  commande — le piège du 22/08, un PDF verrouillé par une visionneuse et un ancien tirage revalidé.
+  `tools/build-fiche.mjs` rend les deux formats dans la même passe.
+- **`d8bb934`** (24/08) — *fiche-securite : le canevas demande QUI est admis et ce qu'un engagement
+  engage — et la parité FR/EN cesse d'être une confiance*. Nouvel oracle
+  `oracles/verifier-parite-gabarits.mjs` (TF-0563) : un champ présent d'un seul côté est un champ
+  absent, et c'est la génération qui échoue.
+- **`1d8b57b`** (24/08) — *TF-0553 : `npm test` rejoue la CI en la LISANT — et les deux ensembles
+  étaient disjoints DANS LES DEUX SENS*. Nouvel outil `tools/verifier.mjs` : il lit
+  `.github/workflows/*.yml` et rejoue ses blocs `run:`, au lieu de tenir une liste recopiée qui
+  dérive au premier ajout.
+- **`bfe6d6f`** (25/08) — *la porte machine juge désormais la COHÉRENCE du plan, pas seulement sa
+  forme* (`tools/rapport-engine.mjs`, +77 lignes de contrôle).
+- **`8c90381`** (02/09) — *le PDF de la fiche sécurité est IMPRIMÉ, et il a enfin une porte*
+  (TF-0700, TF-0701). Nouveaux `oracles/verifier-fiche-securite.mjs` et `tools/fiche-en-pdf.mjs` :
+  le PDF est **imprimé** par le protocole DevTools (drapeau `preferCSSPageSize` mesuré par
+  l'auto-test), jamais capturé ; `tools/build-kit.mjs` distribue l'outil au projet audité.
+- **`03ec225`** (07/09) — *TF-0862 (GO A-26) : `oracles/verifier-modele-semantique.mjs`*. Le modèle
+  sémantique décisionnel est jugé **sur ses fichiers de définition tabulaire**, sans point de
+  terminaison d'interrogation : mesure définie une seule fois, relations non ambiguës, table de
+  dates marquée, mode de stockage déclaré, rôles de sécurité (MS1–MS6). Mécanise `CTL-D16-01/02`,
+  `CTL-D05-02/04/10/13/14`, `CTL-D01-03` ; bindings du profil `powerbi` en 1.1.0 ; recette
+  `node --test` 3/3 câblée en CI.
+- **`53ca664`** (10/09) — *plan de remédiation : une action peut COUVRIR plusieurs règles*
+  (`couverte_par`, D-7 (a)). Moteur de couverture dans `tools/rapport-engine.mjs` (+31) et
+  `tools/verifier-rapport.mjs` (+15), avec sa porte `tests/oracles/couverture-plan.test.mjs` : la
+  batterie d'oracles passe de **94 à 101 tests**.
+- **TF-1017** (11/09) — *la recette rejoue l'ENVIRONNEMENT de la CI, plus seulement ses étapes*.
+  `tools/verifier.mjs` pose `CI=true` sur chaque étape rejouée, lit et pose les blocs `env:` du YAML
+  aux **trois** niveaux (workflow, job, étape — l'étape l'emportant sur le job, le job sur le
+  workflow), et **DIT** chaque condition qu'il ne peut pas reproduire, une ligne `[non rejouable] …`
+  par condition : plateformes de la matrice, actions `uses:`, version de Node imposée, valeurs
+  `${{ … }}` résolues côté serveur, moteur d'impression, accès réseau aux registres. Le fait
+  fondateur, mesuré le 10/09 : **huit exécutions rouges d'affilée** du 24/08 au 10/09 pendant que la
+  recette locale rendait vert. Fixtures à double sens : `tests/oracles/recette-environnement.test.mjs`
+  (18 tests) et les décisions pures de `tests/verdicts.mjs`.
+- **TF-1016** (11/09) — *règle de journal dans la recette* : `PLAFOND_ENREGISTREMENTS_SANS_JOURNAL`,
+  `CHEMINS_JOURNALISES`, `verdictJournal()` et `releveJournal()` dans `tools/verifier.mjs`, avec
+  fixtures à double sens (au plafond → vert ; plafond + 1 → rouge, les enregistrements nommés ;
+  journal en cours d'écriture → vert).
+
+### Modifié
+
+- **`01bf62b`** (21/08) — *TF-0438 : gardes de chiffre sur quatre assertions numériques*
+  (`tools/verifier-rapport-html.mjs`).
+- **`b1c7899`** (22/08) — *build-fiche : un livrable ne naît plus dans le dépôt de la forge, et il
+  porte sa marque* (TF-0505, `tools/build-fiche.mjs`).
+- **`14543d0`** (23/08) — *les générateurs de page ADHÈRENT au contrôle des promesses de commentaire*
+  (choix humain « 1c ») : une classe ou un attribut nommé dans un commentaire de ces fichiers doit
+  exister dans leur code. Signataires : `build-catalogue`, `build-fiche`, `build-referentiel`,
+  `build-slides`, `build-theme`, `rapport-engine`. Adhésion volontaire par fichier, chacun joué
+  avant signature.
+- **`0a172f3`** (02/09) — *la fiche cesse de réserver un tiers de page à ses intitulés, et son NOM
+  porte enfin un indice* (TF-0697, TF-0693) : `tools/build-fiche.mjs` refondu, nouvel outil
+  `tools/allouer-indice.mjs`.
+- **TF-1017** (11/09) — `tests/oracles/verifier-pdf.test.mjs` : le test **déclare** sa dépendance au
+  moteur d'impression au lieu de la deviner. Il re-listait lui-même six chemins de navigateurs quand
+  `tools/fiche-en-pdf.mjs` en cherche dix ; il demande maintenant à l'outil (`trouverNavigateur`) et,
+  surtout, lit la **sortie** de l'outil — code 3 + motif écrit = dépendance absente, donc **SKIP
+  motivé sur tous les runners**. Verdict inchangé quand le moteur d'impression est là.
+  `.github/workflows/ci.yml` : la batterie d'oracles est recomptée en la JOUANT — **104 tests**
+  avant ce lot, **122** après (le nom de l'étape annonçait encore 101, périmé de trois depuis
+  `03ec225` ; un intitulé qui compte à la main dérive, exactement comme une liste d'étapes recopiée).
+
+### Corrigé
+
+- **TF-1017** (11/09) — `tests/oracles/maj-versions.test.mjs` : le volet EOL n'a plus **qu'un seul
+  verdict par situation**. Il portait un `IN_CI` qui transformait un SKIP en ÉCHEC — « aucun
+  composant à statut de fraîcheur » sautait le test en local et le faisait échouer en intégration
+  continue, sur une hypothèse écrite en clair dans le message (« registre injoignable ? »). L'une des
+  deux causes des huit exécutions rouges. Mesuré le 11/09, l'hypothèse était **fausse** : le registre
+  répond, et l'absence de composant à statut de fraîcheur vient de la fixture elle-même (ses deux
+  composants sortent en `reco_correctif` et `reco_deprecie`). La situation vaut désormais **SKIP
+  motivé partout**, le motif écrit avec ce qui a été MESURÉ — nombre de composants, statuts observés,
+  composants non vérifiés — et non avec une cause supposée. Ce qui reste jugé partout, et qui est le
+  vrai contrôle (défaut 4) : dès qu'un composant porte un statut de fraîcheur, `eol_non_verifies`
+  doit être ≥ 1 et aucun de ces composants ne doit être présenté comme vérifié côté EOL.
+
+### Contenu de la section « [Non publié] » du 14/08, figé ici
+
+> Repris sans retouche, note d'origine comprise. La qualification **PATCH** de cette note vaut pour
+> ce seul contenu ; la version 1.18.0 est MINEURE du fait des contrôles ajoutés listés plus haut.
+
+> Numéro de version à figer à la release. **PATCH** au sens de PADR-0005 : corrections de
+> citations et complétion d'un corpus de traduction — aucun contrôle ajouté ni retiré, aucun
+> schéma touché.
+
+#### Corrigé
+- **Migration des citations `standards[]` vers ASVS 5.0.0** (TF-0221, PADR-0010). Les 22
+  citations `OWASP ASVS 5.0 — Vxx` employaient la numérotation de chapitres d'**ASVS 4.0.x** :
+  **21 réécrites** vers leur cible 5.0.0 réelle, **1 supprimée** (`CTL-D02-01` — 4.0.3 V1
+  n'a aucun successeur en 5.0.0), **0 laissée** en 4.0.x. Chaque cible est suivie *exigence par
+  exigence* dans le fichier officiel `mapping_v4.0.3_to_v5.0.0.yml`, jamais par translation de
+  chapitre : une exigence éclatée donne une **citation multiple**. Quatre citations étaient
+  **fausses dans les deux versions** (`ADR0303` TLS, `ADR0305`, `ADR0706` et `CTL-D02-04`
+  limitation de débit) — corrigées **et** signalées comme erronées dans le corps de l'ADR
+  porteur (FR et EN). Détail par classe et preuves :
+  `docs/CORRESPONDANCE-ASVS-4.0.x-5.0.0.md` §6, `docs/MAPPING-CONTROLES-ASVS.md` §7 bis.
+  Contrôles porteurs d'une citation ASVS : 10 → **9**.
+
+#### Ajouté
+- **Le rapport d'audit se lit par VUES** — doctrine « restitution lisible » portée dans le
+  moteur de rendu (TF-0235 volet P4, référentiel `REFERENTIEL-RESTITUTION.md` de forge-design,
+  famille `rapport`). Le livrable, c'est le GÉNÉRATEUR : la refonte entre dans
+  `tools/rapport-engine.mjs` et `tools/verifier-rapport-html.mjs`, jamais dans un HTML produit.
+  Les onglets à plat deviennent **7 vues naviguées**, une question par vue, servant trois
+  lecteurs nommés — commanditaire, metteur en œuvre, expert : *Synthèse · Plan d'action ·
+  Constats par dimension · Toutes les règles · Architecture & BDD · Données analysées ·
+  Méthode & lecture*. Une vue sans donnée n'existe pas et son absence se **déclare**.
+  Composants du référentiel : `<body data-restitution="rapport">` ; navigation `[data-vue]`
+  tenant aussi le rôle de sommaire du socle (annonce `.toc-d`) ; **routeur à ancres** — un
+  renvoi vers `#D05` ouvre la vue qui contient D05 avant d'y défiler, sans quoi les 22 liens
+  internes du rapport seraient des affordances mortes ; **4 KPI complets** (valeur, définition,
+  repère de lecture, lien d'action) là où trois chiffres s'affichaient nus ; **2 figures à
+  question interrogative** (répartition par famille, répartition des verdicts, segments
+  juxtaposés et jamais superposés) ; **chemins d'entrée par lecteur** ; **manifeste d'écarts
+  calculé** sur l'état réel de la mission — « aucun écart » se déclare aussi.
+  **Iso-contenu strict, mesuré** : aucune valeur des données d'audit n'est perdue (relevé
+  jeton à jeton sur les deux fixtures) ; le générique — barèmes de score, définitions des
+  verdicts, des criticités et des priorités, provenance — quitte les onglets pour vivre **une
+  seule fois** en vue Méthode, où les chiffres y renvoient par `aria-describedby`. Deux
+  reformulations assumées : la colonne « Note » du dictionnaire ERD devient « Remarque »
+  (ce n'est pas une colonne calculée), et la légende ERD cite ses mots-clés SQL en `<code>`.
+- **Tableaux longs exploitables** : au-delà de 8 lignes, tout tableau du rapport porte le
+  composant de filtres de colonne du socle (asset vendoré `tools/table-filters.mjs`,
+  checklist G1-G6 : `data-filterable`, `id`, `<thead>`, compteur `aria-live`, réaffichage des
+  lignes filtrées à l'impression) et une recherche libre qui **se compose** avec les filtres
+  au lieu de les écraser. Un tableau qui ne doit pas être filtré porte son motif — sans motif,
+  ce n'est pas une exemption.
+- **Le gate de rendu contrôle le contrat de restitution** (`verifier-rapport-html.mjs`) avec la
+  même exigence de preuve que le reste : famille déclarée, KPI complets et reliés à leur repère,
+  **appariement exact sommaire ↔ vues** (une vue sans entrée de sommaire est un chapitre perdu,
+  une entrée sans section un lien mort — les deux font échouer la génération), figures
+  interrogatives, chemins de lecteur, manifeste non vide, câblage des tableaux longs. Le moteur
+  est toujours COMPILÉ puis EXÉCUTÉ, et **chaque vue déclarée est pilotée** comme au clic.
+  Batterie des oracles : 55 → **62 tests**, chaque règle nouvelle ayant sa fixture rouge.
+- **Corpus EN complété, pack anglais de nouveau émis** (TF-0220, PADR-0011) :
+  `core/controls-en/D17.json` créé (4 contrôles de gouvernance IA) et `CTL-D07-08`/`CTL-D07-09`
+  ajoutés à `core/controls-en/D07.json`. `assemble-core.mjs` refusait d'émettre
+  `controls-core-v1.en.json` depuis l'ajout de D17 (169/175) : les **deux packs sortent à
+  nouveau** (175 FR + 175 EN), parité FR/EN vérifiée contrôle à contrôle.
+
+## [1.7.0] — 2026-08-12
+
+> TF-0110 : gouvernance IA, policy-as-code, réalignement FinOps, pilier soutenabilité.
+
+### Ajouté
+- **Dimension `D17 · Gouvernance IA`** (18e dimension, famille `securite`) : classification du
+  risque des systèmes IA, dérive de modèle, supervision humaine, documentation de conformité
+  (ISO/IEC 42001, NIST AI RMF, EU AI Act) — `ADR0109`, 4 contrôles `CTL-D17-01..04` (PADR-0009,
+  évolution additive, MINEURE). `control.schema.json`/`tenant.schema.json` étendent leur regex de
+  dimension (`D00`–`D16` → `D00`–`D17`).
+- **`CTL-D07-08`** (maturité FinOps Crawl/Walk/Run par capacité et par périmètre de dépense) et
+  **`CTL-D07-09`** (impact environnemental des décisions d'hébergement, extension qualitative du
+  pilier soutenabilité — `ADR0110`) : 175 contrôles au total.
+- **Démonstrateur policy-as-code** (`profiles/policy-as-code/`) : 3 règles Rego (OPA/conftest)
+  sur un sous-ensemble de contrôles (`CTL-D07-01`, `CTL-D07-04`, `CTL-D02-11`), fixtures IaC
+  verte/rouge, exécutées via `conftest` (preuve, pas de migration du corpus).
+
+### Modifié
+- `ADR0107` (gouvernance des coûts) réaligné sur le FinOps Framework 2025/2026 (Scopes,
+  Domaines/Capacités, Personas, maturité Crawl/Walk/Run par capacité) — les contrôles existants
+  `CTL-D07-01..07` restent inchangés.
+- `tools/assemble-core.mjs` : le nombre de dimensions n'est plus codé en dur, il se lit dans
+  `dimensions.yaml` (évite la dérive documentaire signalée par TF-0113).
+
+## [1.6.0] — 2026-07-15
+
+> Découplage produit/tenant (RAF-027..030) : AuditCore devient un dépôt autonome
+> (`factory-forge-auditcore`, nommé `factory-auditcore` à la date de cette release) qui ne
+> connaît AUCUN tenant réel — l'espace de l'engagement
+> historique (overlay, mapping, baseline d'iso-test, plan, registre) vit dans le dépôt client.
+
+### Ajouté
+- **Tenant `exemple`** (`config/tenants/exemple/`, ACME 100 % fictif) : base d'onboarding
+  documentée — valide, kits compliance (8 entrées) + audit (32 entrées) générables.
+- **Golden-test synthétique** (`tests/test-golden-buckets.mjs`, 9 assertions) : buckets
+  `binding_authorities` + bascule de juridiction prouvés en CI sur `tests/fixtures/pack-fixture.json`
+  (10 contraintes fictives) — plus aucune dépendance à un tenant réel dans la batterie.
+- **Lint agnosticité v2** : niveau N0 repo-wide — aucun nom de tenant réel toléré dans le
+  dépôt produit (gate CI, termes construits par concaténation pour rester auto-vérifiable).
+
+### Modifié
+- `merge-packs.mjs` : `--derive-pack` et `--iso-test` exigent `--baseline/--pack/--tenant`
+  en flags (plus aucun défaut pointant un tenant) ; l'alias historique de dérivation du pack
+  du tenant de référence est retiré. L'iso-comportement 91/91 se rejoue dans le dépôt de l'engagement.
+- Fixtures `rapport-data-*.json` : tenant fictif ACME.
+- Documentation produit neutralisée : les exemples pointent le tenant `exemple` ;
+  le tenant historique n'est plus nommé (« tenant de référence »).
+
+### Retiré
+- `config/tenants/<tenant-réel>/` (overlay, packs, mapping 91→core, thème) — déplacé dans
+  le dépôt d'engagement (`tenants/`), avec `STATUS`, `KIT-PARITE`, `RESTE-A-FAIRE`,
+  `SEPARATION-PRODUIT-TENANT` (docs d'engagement) ; `deliverables/generated/` purgé (RAF-028).
+
+## [1.5.0] — 2026-07-12
+
+> Exécution des catégories A, C, D, E du registre RESTE-A-FAIRE (B — étapes humaines — inchangée).
+
+### Ajouté
+- **Domaine 09 · UX & Accessibilité** (PADR-0008) : OPTIONNEL → évolution MINEURE (00–08 requis,
+  09 permis) ; ADR0901/0902 rédigés, contrôles D11/D13-05 rattachés — **couverture 73/73 ADRs**.
+- **8 ADRs** (RAF-007/008) : incident (ADR0210), vulnérabilités (ADR0211), gouvernance sécurité
+  (ADR0212), notification de violation (ADR0213), réversibilité (ADR0108), souveraineté (ADR0612),
+  accessibilité (ADR0901), gouvernance UX (ADR0902) + **7 contrôles dérivés** (162 → 169).
+- **Juridictions** (RAF-011) : champ `jurisdiction` (12 contrôles D04 « eu »), manifestes
+  `profiles/jurisdictions/` (eu + démo), fusion → `sans_objet` motivé hors juridiction active
+  (prouvé dans les deux sens) ; contrôle AI Act art. 26-27 (RAF-009, CTL-D04-11).
+- **Moteur v1.5** (RAF-005) : ERD BDD (bandes, PII 🔒, FK/références logiques, dictionnaire) +
+  schéma d'architecture auto-layout (barycentre) — onglet « Architecture & BDD » ; hérités par
+  les kits standalone. **Double gate de rendu** (RAF-006) : `verifier-rapport-html.mjs`.
+- **Générateurs** : `build-referentiel` (M4, 310 Ko consultable), `build-slides` (M6, 5 diapos),
+  `build-fiche` (M9, 8 sections) + gabarit `methodologie.template.md` (M1) — kit audit **32 entrées** ;
+  **PARITÉ 15/15 avec le kit tenant.**
+- **i18n EN** (RAF-012) : corpus traduit (73 ADRs `adr-en/`, 169 contrôles `controls-en/` →
+  pack `controls-core-v1.en.json` émis, 5 gabarits `.en`), moteur bilingue (STR), labels EN
+  (17 dimensions + 6 familles), sélection automatique par `tenant.language` — **kit anglais
+  prouvé E2E 6/6** (ACME en).
+- **CI** (RAF-019) : `.github/workflows/ci.yml` — lint agnosticité + batterie complète en gate.
+- **Gouvernance** (RAF-017) : `docs/GOUVERNANCE-STANDARDS.md` (checklist semestrielle, revue n°1).
+- **Bindings azure étendus** (RAF-010) : couverture élargie au-delà des 42 Fatal/Bloquant.
+
+### Modifié / hygiène
+- Graphe de connaissance ré-étendu (RAF-021) : 901 → **1 064 nœuds**, 53 communautés.
+- `rtk trust` appliqué (RAF-020) ; zip doublon supprimé, `tools/rtk.zip` conservé documenté (RAF-023).
+- Exclusions E re-vérifiées : DORA-réglementaire, portage 1:1 moteur tenant, retrofit legacy — tracées.
+
+## [1.4.0] — 2026-07-12
+
+### Ajouté
+- **M5 v1** — moteur de rendu du rapport : `tools/rapport-engine.mjs` (fonction pure
+  données+config→HTML : bandeau gate, KPIs calculés, radar SVG par famille, onglets
+  familles→dimensions avec matrice de traçabilité, constats/actions triés, onglet
+  « Toutes les règles » filtrable, reprise, impression) + CLI `build-rapport.mjs` +
+  **variante standalone bakée dans le kit audit** (thème, dimensions, index des 253 règles
+  inlinés — zéro dépendance). Hors v1 (→ v1.5) : ERD BDD, schéma d'architecture auto-layout.
+- **M7** — `tools/build-catalogue.mjs` : catalogue HTML navigable des 65 ADRs (filtre par
+  domaine, recherche, standards et règles dérivées par carte), généré par tenant et
+  **embarqué dans le kit audit**.
+- Kits audit : 27 → **29 entrées** (`build-rapport-standalone.mjs` + `catalogue-adr.html`).
+  **Plus aucun manquant bloquant à la parité** (KIT-PARITE : 10 ✅ · 3 🟠 · 0 ❌ · 1 ⚪).
+- `docs/RESTE-A-FAIRE.md` — registre consolidé du reste-à-faire (26 items RAF-001..026,
+  5 catégories, preuve d'exhaustivité par source) : LE point d'entrée des reprises de session.
+- **Bascule du kit tenant officiel** : kit `20260712a` du tenant de référence (espace engagement) +
+  `Kit Compliance Pack` désormais produits par `build-kit` (RAF-022) ; le kit manuel
+  `20260710i` est archivé dans `output/old/`.
+
+### Corrigé
+- `build-catalogue`/`build-rapport` : le chemin du yaml tenant n'est plus supposé s'appeler
+  `tenant.yaml` (les fixtures/kits marque-blanche à nom libre fonctionnent).
+
+## [1.3.0] — 2026-07-12
+
+### Ajouté
+- **12 contrôles** matérialisant l'intention des ADRs orphelins (EXTENSION-CORPUS §1) :
+  D01 (zonage, tiers de confiance API/fichiers, retrait d'API), D02 (egress), D03 (clients
+  publics sans secret), D05 ×6 (restitution BI : modèle sémantique, source unique,
+  transformations, dimension temps, modes d'accès, certification) — **150 → 162, couverture
+  ADR 65/65, 0 orphelin** ; + 2 rattachements (ADR0805→CTL-D11-05, ADR0602→CTL-D16-03).
+- **M2** `templates/prompt-conduite-audit.template.md` (prompt de conduite générique — parité
+  avec le prompt tenant : règles d'or, 3 phases, sortie `rapport-data.json` + backlog forge).
+- **M3** `templates/prompt-verification-rapport.template.md` (boucle corrective de gate).
+- **M8** `templates/compliance-skill.template.md` + génération substituée par `build-kit`
+  dans les deux kits (0 placeholder).
+
+### Modifié
+- Relabel D05 → « Données, qualité & restitution » (absorbe le domaine BI, recommandation
+  EXTENSION §1) ; renommage `DORA` → `DORA (Accelerate)` (30 occ., lève l'ambiguïté avec le
+  règlement UE 2022/2554) ; kits du tenant de référence `20260712c` (compliance 8 · audit 27 entrées), ACME `b`.
+
+## [1.2.0] — 2026-07-12
+
+### Ajouté
+- **Documentation produit** (`docs/`) : KIT-PARITE (matrice 15/15 vs kit tenant `20260710i`,
+  9 manquants M1–M9, backlog v1.2/v1.3), ONBOARDING-ENTRANTS (27 entrants mappés 1:1 sur le
+  schéma, checklist client), MANUEL-IA-ONBOARDING (runbook 10 étapes, 3 gates + HITL client),
+  MANUEL-ENTREPRISE (parcours complet, non technique), AUDIT-AGNOSTICITE, EXTENSION-CORPUS.
+- **lint-agnostic** (`tools/lint-agnostic.mjs`) : gate CI d'agnosticité du core (denylist N1
+  ~40 termes + motifs N2, frontières Unicode, corps ADRs + champs des contrôles).
+
+### Modifié
+- **Audit d'agnosticité 65/65** : 5 ADRs reformulés (ADR0101 « zonage cloisonné », ADR0103,
+  ADR0201 (retrait produits OSS de l'exemplaire), ADR0502 « délégation d'exploitation
+  maximale » + NIST SP 800-145 en standard, ADR0805 énumération ouverte) — lint 0 finding,
+  iso-test 91/91 maintenu, kits du tenant de référence régénérés (`20260712b`).
+
+## [1.1.0] — 2026-07-12
+
+### Ajouté
+- **build-kit** (`tools/build-kit.mjs`) : kits marque-blanche distribuables en zip par tenant —
+  `--kind compliance` (part du projet audité : contraintes fusionnées, banc de preuves, **vérificateur
+  autonome zéro dépendance**, gabarit fiche sécurité, thème) et `--kind audit` (équipe d'audit :
+  + dimensions, 13 gabarits, schémas, init-workspace autonome). Indice de version quotidien auto (a, b, c…).
+- **ziplib** (`tools/ziplib.mjs`) : écriture ZIP native Node (deflate `node:zlib`, CRC-32), zéro dépendance.
+- Kits générés et vérifiés pour 2 tenants (tenant de référence : compliance 7 entrées + audit 23 ; ACME : compliance 7) —
+  intégrité testée, vérificateur autonome exécuté hors kit avec verdicts corrects.
+
+## [1.0.0] — 2026-07-11
+
+Première release du core générique (exécution du plan [PLAN/](../PLAN/README.md)).
+
+### Ajouté
+- **Modèle 3 couches** core > profil > overlay, décisions PADR-0001…0007.
+- **Corpus ADR core** : ~65 ADR de principe (MADR), 9 domaines, chacun mappé à ≥ 1 standard
+  (ISO/IEC 25010 · 27001/27002:2022 · 27701 · NIST CSF/SSDF/800-63B/800-207 · OWASP ASVS 5.0/SAMM ·
+  CIS · DORA · 12-Factor · SLSA · SemVer · OpenAPI · WCAG 2.2 · RGPD · AI Act · DMBOK · Kimball).
+- **Référentiel de contrôles** : 17 dimensions D00–D16 (6 familles), ~140 contrôles CTL sourcés,
+  applicabilité par type de projet (web-app, api, data, mobile, ml, infra).
+- **Moteurs conservés** du terrain : scoring 1–5 « pas de score sans preuve », criticité 4 niveaux,
+  verdicts 5 états, enforcement 4 niveaux, gates 1a/1b, matrice de traçabilité, banc de preuves.
+- **Schémas** : tenant.yaml, control, remediation-actions (JSON Schema draft-07).
+- **Outils** : validate-config · build-theme · merge-packs (+ test iso 91/91) · verifier-rapport ·
+  init-audit-workspace · forge-adapter (formats forge vérifiés sur le dépôt factory-forge-development,
+  nommé `factory-saas-forge` à la date de cette release).
+- **Profils** : azure, databricks-lakehouse, powerbi, elastic. **Overlay de référence** : le tenant historique (espace engagement depuis 1.6.0).
+
+### Standards sources (état à la release)
+OWASP ASVS 5.0 · WCAG 2.2 · ISO/IEC 27002:2022 · NIST SSDF v1.1 · DORA (Accelerate) ·
+RGPD (2016/679) · AI Act (2024/1689) · SLSA v1.0 · DMBOK v2.

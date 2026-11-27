@@ -1,0 +1,335 @@
+#!/usr/bin/env node
+// AuditCore — build-kit : packe des kits marque-blanche distribuables en zip.
+//   kind=compliance : la part du PROJET AUDITÉ (contraintes fusionnées, banc de preuves,
+//                     vérificateur AUTONOME sans dépendance, gabarit fiche sécurité, thème).
+//   kind=audit      : la part de l'ÉQUIPE QUI CONDUIT L'AUDIT (le kit compliance + dimensions,
+//                     13 gabarits, schémas, init-workspace autonome).
+// Indice de version auto (a, b, c… par jour — règle méthodologie), zip natif (ziplib, zéro dépendance).
+// Usage: node tools/build-kit.mjs <tenant.yaml> [--kind audit|compliance|both] [--out <dir>]
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { ROOT, rel, loadTenant, loadJson, loadYaml, valeurDossierOuUsage } from './lib.mjs';
+import { createZip } from './ziplib.mjs';
+import { coherenceJs, lireGabarit } from './rapport-poc-to-prod.mjs';
+
+const tenantYaml = process.argv[2];
+const USAGE = 'Usage: node tools/build-kit.mjs <tenant.yaml> [--kind audit|compliance|both] [--out <dir>]';
+if (!tenantYaml) { console.error(USAGE); process.exit(2); }
+const kindArg = process.argv.includes('--kind') ? process.argv[process.argv.indexOf('--kind') + 1] : 'both';
+const kinds = kindArg === 'both' ? ['compliance', 'audit'] : [kindArg];
+const { cfg } = loadTenant(tenantYaml);
+const tenant = cfg.tenant.name;
+const slug = tenant.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+// TF-2105 : la valeur de --out est un dossier — une autre option (« --dry-run ») est refusée, pas créée.
+const outArg = valeurDossierOuUsage(process.argv, '--out', USAGE);
+const outDir = outArg !== undefined ? path.resolve(outArg) : rel('deliverables', 'generated', slug);
+fs.mkdirSync(outDir, { recursive: true });
+
+// ── 1. Produits dérivés (réutilise les outils existants, sortie en répertoire temporaire)
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'auditcore-kit-'));
+const run = (args) => execFileSync(process.execPath, args, { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'] });
+run([rel('tools', 'merge-packs.mjs'), path.resolve(tenantYaml), '--out', path.join(tmp, 'merged.json')]);
+run([rel('tools', 'build-banc.mjs'), path.resolve(tenantYaml), '--out', path.join(tmp, 'banc-de-preuves.md')]);
+run([rel('tools', 'build-theme.mjs'), path.resolve(tenantYaml), '--out', path.join(tmp, 'theme')]);
+run([rel('tools', 'build-catalogue.mjs'), path.resolve(tenantYaml), '--out', path.join(tmp, 'catalogue-adr.html')]);
+run([rel('tools', 'build-referentiel.mjs'), path.resolve(tenantYaml), '--out', path.join(tmp, 'referentiel-audit.html')]);
+// `--sans-pdf` ASSUMÉ ici, et c'est le seul endroit où il l'est : ce qui entre dans le kit est le
+// SQUELETTE de la fiche, pas une fiche diffusable — un tirage PDF d'un document plein de
+// placeholders n'a pas de destinataire, et il coûterait un lancement de navigateur à chaque
+// fabrication de kit. Le kit emporte en revanche l'OUTIL d'impression (`fiche-en-pdf.mjs`) : le
+// PDF se tire chez le projet audité, sur la fiche REMPLIE, au moment où elle part. TF-1351 : ce
+// squelette HTML (déjà produit ici pour le Kit Audit) est désormais AUSSI livré au Compliance
+// Pack — sans lui, ce kit ne fournissait que le canevas `.md` et un imprimeur qui n'accepte que
+// du `.html`, sans aucun outil pour passer de l'un à l'autre.
+run([rel('tools', 'build-fiche.mjs'), path.resolve(tenantYaml), '--out', path.join(tmp, 'fiche-securite.html'), '--sans-pdf']);
+const merged = loadJson(path.join(tmp, 'merged.json'));
+
+// ── 2. Vérificateur AUTONOME (dimensions inlinées, zéro import hors node:fs)
+const dims = loadYaml(rel('core', 'dimensions', 'dimensions.yaml')).dimensions.map(d => d.id);
+const verifierStandalone = [
+  '#!/usr/bin/env node',
+  `// Vérificateur de rapport AUTONOME — généré par AuditCore build-kit pour « ${tenant} » (core ${cfg.core_version}).`,
+  '// Gate bloquant avant diffusion. Usage: node verifier-rapport-standalone.mjs <rapport-data.json>',
+  "import fs from 'node:fs';",
+  `const DIMS = ${JSON.stringify(dims)};`,
+  "const VERDICTS = ['conforme', 'partiel', 'non_conforme', 'sans_objet', 'a_evaluer'];",
+  "const file = process.argv[2];",
+  "if (!file) { console.error('Usage: node verifier-rapport-standalone.mjs <rapport-data.json>'); process.exit(2); }",
+  "const raw = fs.readFileSync(file, 'utf-8');",
+  'const data = JSON.parse(raw);',
+  'const errors = [];',
+  "const ph = raw.match(/\\{\\{[^}]+\\}\\}|__TODO__|À COMPLÉTER/g) ?? [];",
+  "if (ph.length) errors.push(`${ph.length} placeholder(s) résiduel(s) — ex: ${ph.slice(0, 3).join(', ')}`);",
+  "const got = (data.dimensions ?? []).map(d => d.id);",
+  'for (const d of DIMS) if (!got.includes(d)) errors.push(`dimension manquante: ${d}`);',
+  'for (const d of data.dimensions ?? []) {',
+  "  if (!(d.score >= 1 && d.score <= 5) && d.applicability !== 'off') errors.push(`${d.id}: score invalide ou absent (${d.score})`);",
+  "  if (d.score !== undefined && !(d.preuves?.length) && d.applicability !== 'off') errors.push(`${d.id}: score sans preuve — interdit (invariant)`);",
+  '}',
+  'for (const r of data.regles ?? []) {',
+  '  if (!VERDICTS.includes(r.verdict)) errors.push(`règle ${r.id}: verdict manquant/invalide (${r.verdict})`);',
+  "  if ((r.verdict === 'sans_objet' || r.verdict === 'a_evaluer') && !r.motif) errors.push(`règle ${r.id}: ${r.verdict} exige un motif`);",
+  '}',
+  "for (const c of data.constats ?? []) if (!c.preuves?.length) errors.push(`constat « ${c.titre} »: aucune preuve`);",
+  "if (/audit précédent|rapport précédent/i.test(raw)) errors.push('auto-portance: référence à un audit antérieur (règle B.1)');",
+  'if (errors.length) {',
+  "  for (const e of errors) console.error(`ERREUR: ${e}`);",
+  '  console.error(`\\n✖ rapport NON diffusable (${errors.length} erreur(s))`);',
+  '  process.exit(1);',
+  '}',
+  `console.log(\`✔ rapport diffusable — \${got.length} dimensions, \${(data.regles ?? []).length} règles — tenant ${tenant}\`);`,
+].join('\n');
+
+// ── 3. init-audit-workspace AUTONOME (nom du tenant inliné)
+const initStandalone = [
+  '#!/usr/bin/env node',
+  `// Espace de travail d'audit — généré par AuditCore build-kit pour « ${tenant} ».`,
+  "import fs from 'node:fs'; import path from 'node:path';",
+  // TF-2089 : un argument qui commence par « - » n'est jamais le dossier cible (--help en a créé un).
+  // Même règle que `dossierCibleOuUsage` (tools/lib.mjs), recopiée ici parce que le kit est autoportant.
+  "const arg = process.argv[2];",
+  "if (arg !== undefined && arg.startsWith('-')) {",
+  "  const aide = arg === '--help' || arg === '-h';",
+  "  if (!aide) console.error(`Argument « ${arg} » refusé comme dossier cible : un argument qui commence par « - » est une option, pas un dossier.`);",
+  "  (aide ? console.log : console.error)('Usage: node init-audit-workspace-standalone.mjs [dossier-cible]');",
+  '  process.exit(aide ? 0 : 2);',
+  '}',
+  "const target = arg ?? '.';",
+  `const T = ${JSON.stringify(tenant)};`,
+  "const INPUT = ['00 - Cadrage', '01 - Code & dépôt', '02 - Architecture & IaC', '03 - Sécurité & secrets', '04 - Données', '05 - Tests & CI-CD', '06 - Observabilité', '07 - Docs & gouvernance'];",
+  "const OUTPUT = [\"00 - Rapport d'audit\", '01 - Fiche Sécurité', '02 - Présentation autorité de décision', '03 - Scans & preuves', '04 - Schémas & annexes', 'Old'];",
+  "for (const d of [...INPUT.map(d => path.join(target, 'input', d)), ...OUTPUT.map(d => path.join(target, 'output', d))]) {",
+  "  fs.mkdirSync(d, { recursive: true });",
+  "  const k = path.join(d, '.gitkeep'); if (!fs.existsSync(k)) fs.writeFileSync(k, '');",
+  '}',
+  "console.log(`✔ espace d'audit ${T} initialisé: ${target}`);",
+].join('\n');
+
+// ── 3ter. Moteur de rendu de rapport AUTONOME (M5) — modules inlinés + config bakée
+// TF-2169 : le kit rend la MÊME forme que `build-rapport` (POC-to-Prod, `rendreRapportPocToProd`), pas l'ancien rendu par
+// vues. Cette forme repose sur cinq modules de tools/ qui s'importent entre eux et sur deux lectures de fichier (le
+// gabarit HTML, le bloc de cohérence du plan lu dans le moteur). Le kit est un fichier unique : `empaquetage` inline les
+// modules DANS L'ORDRE de leurs dépendances, chacun dans sa fonction (aucune collision de noms entre modules), et le
+// gabarit comme le bloc de cohérence partent en constantes. Tout motif attendu qui manque dans une source LÈVE : une
+// source qui change sans que le bundler suive casse la fabrication du kit, jamais le kit chez le client.
+const MODULES_AUTONOME = ['table-filters.mjs', 'canevas-modele-donnees.mjs', 'rapport-engine.mjs', 'schema-architecture.mjs', 'rapport-poc-to-prod.mjs'];
+const LECTURES_REMPLACEES = {
+  'rapport-poc-to-prod.mjs': [
+    ["fs.readFileSync(fichier, 'utf8')", 'GABARIT_EMBARQUE'],
+    ["fs.readFileSync(MOTEUR_LEGACY, 'utf8')", 'MOTEUR_EMBARQUE'],
+  ],
+};
+const identifiantModule = (nom) => '__m_' + nom.replace(/\.mjs$/, '').replace(/[^A-Za-z0-9]/g, '_');
+function empaquetage(noms) {
+  const importsNode = new Set(["import fs from 'node:fs';"]);
+  const blocs = noms.map((nom) => {
+    let src = fs.readFileSync(rel('tools', nom), 'utf-8').replace(/\r\n/g, '\n');
+    for (const [motif, remplacement] of LECTURES_REMPLACEES[nom] ?? []) {
+      if (!src.includes(motif)) throw new Error(`build-kit : ${nom} ne contient plus « ${motif} » — adapter LECTURES_REMPLACEES (le rendu autonome ne lit aucun fichier)`);
+      src = src.split(motif).join(remplacement);
+    }
+    const liaisons = [];
+    src = src.replace(/^import\s+([\s\S]*?)\s+from\s+'([^']+)';\n/gm, (_, nommes, source) => {
+      if (source.startsWith('node:')) { importsNode.add(`import ${nommes} from '${source}';`); return ''; }
+      const voisin = path.basename(source);
+      if (!noms.includes(voisin)) throw new Error(`build-kit : ${nom} importe ${source}, que le rendu autonome n'embarque pas`);
+      liaisons.push(`const ${nommes.replace(/\s+as\s+/g, ': ')} = ${identifiantModule(voisin)};`);
+      return '';
+    });
+    const exportes = [...src.matchAll(/^export\s+(?:async\s+)?(?:const|let|var|function\*?|class)\s+([A-Za-z0-9_$]+)/gm)].map((m) => m[1]);
+    src = src.replace(/^export\s+(?=(?:async\s+)?(?:const|let|var|function|class)\b)/gm, '');
+    if (/^(?:import|export)\s/m.test(src)) throw new Error(`build-kit : ${nom} porte une forme d'import ou d'export que le bundler ne traite pas`);
+    return `const ${identifiantModule(nom)} = (() => {\n${liaisons.join('\n')}\n${src}\nreturn { ${exportes.join(', ')} };\n})();`;
+  });
+  return { importsNode: [...importsNode], blocs };
+}
+const empaquete = empaquetage(MODULES_AUTONOME);
+const kitLang = cfg.tenant.language === 'en' ? 'en' : 'fr';
+const dimsPack = loadYaml(rel('core', 'dimensions', 'dimensions.yaml'));
+const relabelKit = cfg.dimensions?.relabel ?? {};
+const bakedDims = dimsPack.dimensions.map(d => ({ ...d, label: relabelKit[d.id] ?? (kitLang === 'en' ? (d.label_en ?? d.label) : d.label) }));
+const bakedFams = dimsPack.families.map(f => ({ ...f, label: kitLang === 'en' ? (f.label_en ?? f.label) : f.label }));
+const themeCssKit = fs.readFileSync(path.join(tmp, 'theme', 'theme.css'), 'utf-8');
+const cIndex = Object.fromEntries(loadJson(path.join(tmp, 'merged.json')).constraints.map(c => [c.id,
+  { dimension_audit: c.dimension_audit, criticite: c.criticite, bucket: c.bucket, enforcement: c.enforcement, regle: c.regle }]));
+const rapportStandalone = [
+  '#!/usr/bin/env node',
+  `// Rendu de rapport AUTONOME — généré par AuditCore build-kit pour « ${tenant} » (core ${cfg.core_version}).`,
+  '// Usage: node build-rapport-standalone.mjs <rapport-data.json> [--out <fichier.html>]',
+  '// Gate machine AVANT diffusion : node verifier-rapport-standalone.mjs <rapport-data.json>',
+  ...empaquete.importsNode,
+  // TF-2169 : le gabarit HTML de la forme POC-to-Prod et le bloc de cohérence du plan, lus dans le dépôt À LA FABRICATION.
+  `const GABARIT_EMBARQUE=${JSON.stringify(lireGabarit().texte)};`,
+  `const MOTEUR_EMBARQUE=${JSON.stringify(coherenceJs() + 'function auditSelfTest(')};`,
+  ...empaquete.blocs,
+  'const { rendreRapportPocToProd } = __m_rapport_poc_to_prod;',
+  `const TENANT=${JSON.stringify(tenant)}, CORE=${JSON.stringify(String(cfg.core_version))}, SHORT=${JSON.stringify(cfg.tenant.short_code)};`,
+  `const DIMS=${JSON.stringify(bakedDims)}, FAMS=${JSON.stringify(bakedFams)}, LANG=${JSON.stringify(kitLang)};`,
+  `const THEME=${JSON.stringify(themeCssKit)};`,
+  `const CIDX=${JSON.stringify(cIndex)};`,
+  "const file=process.argv[2];",
+  "if(!file){console.error('Usage: node build-rapport-standalone.mjs <rapport-data.json> [--out <fichier.html>]');process.exit(2);}",
+  "const data=JSON.parse(fs.readFileSync(file,'utf-8')); data._constraints_index=CIDX; data._short_code=SHORT;",
+  'const html=rendreRapportPocToProd(data,{tenant:TENANT,dimensions:DIMS,families:FAMS,themeCss:THEME,coreVersion:CORE,lang:LANG}).html;',
+  // TF-2131 : la valeur de --out est un fichier, jamais une autre option (`--out --dry-run` écrivait un fichier nommé
+  // « --dry-run »). Règle de `valeurFichierOuUsage` (tools/lib.mjs) recopiée dans l'autonome : le kit est autoportant.
+  "const oi=process.argv.indexOf('--out'); const ov=oi>-1?process.argv[oi+1]:undefined;",
+  "if(oi>-1&&(ov===undefined||ov.startsWith('-'))){console.error(ov===undefined?'Option --out sans valeur : un fichier est attendu.':'Option --out : « '+ov+' » refusé comme fichier, un argument qui commence par « - » est une option, pas un fichier.');console.error('Usage: node build-rapport-standalone.mjs <rapport-data.json> [--out <fichier.html>]');process.exit(2);}",
+  "const out=oi>-1?ov:'rapport-audit.html';",
+  "fs.writeFileSync(out,html,'utf-8');",
+  "console.log('✔ rapport rendu → '+out+' — gate machine : node verifier-rapport-standalone.mjs '+file);",
+].join('\n');
+
+// ── 3bis. Skill de conformité (M8) — template substitué avec les valeurs tenant
+const skillTplEn = rel('deliverables', 'templates', 'compliance-skill.template.en.md');
+const skillTpl = fs.readFileSync(
+  kitLang === 'en' && fs.existsSync(skillTplEn) ? skillTplEn : rel('deliverables', 'templates', 'compliance-skill.template.md'), 'utf-8');
+const complianceSkill = skillTpl
+  .replace(/\{\{tenant\.name\}\}/g, tenant)
+  .replace(/\{\{core_version\}\}/g, String(cfg.core_version))
+  .replace(/\{\{counts\.total\}\}/g, String(merged.counts.total))
+  .replace(/\{\{counts\.opposable\}\}/g, String(merged.counts.opposable))
+  .replace(/\{\{counts\.informatif\}\}/g, String(merged.counts.informatif))
+  .replace(/\{\{binding_authorities\}\}/g, JSON.stringify(cfg.enforcement?.binding_authorities ?? []))
+  .replace(/\{\{roles\.decision_authority\}\}/g, cfg.roles?.decision_authority ?? "l'autorité de décision");
+
+// ── 4. Indice de version auto (règle méthodologie : a, b, c… par jour, sans écrasement)
+const today = new Date();
+const ymd = `${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, '0')}${String(today.getDate()).padStart(2, '0')}`;
+function nextIndice(prefix) {
+  const re = new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([a-z])\\.zip$`);
+  let max = '';
+  for (const f of fs.readdirSync(outDir)) { const m = f.match(re); if (m && m[1] > max) max = m[1]; }
+  return max ? String.fromCharCode(max.charCodeAt(0) + 1) : 'a';
+}
+
+// ── 5. Assemblage des kits
+const F = (p) => fs.readFileSync(p);
+const results = [];
+for (const kind of kinds) {
+  const kindLabel = kind === 'compliance' ? 'Compliance Pack' : 'Audit';
+  const prefix = `${tenant} - Kit ${kindLabel} - ${ymd}`;
+  const name = `${prefix}${nextIndice(prefix)}`;
+  const entries = [];
+  const add = (n, data) => entries.push({ name: `${name}/${n}`, data });
+  // ECR-01 : les oracles PROJET (contrôles exécutés contre le système audité) partent dans les
+  // DEUX kits — le projet s'en sert pour se prouver conforme, l'auditeur pour l'exercer lui-même.
+  // Autoportants (Node ≥ 18, zéro dépendance) : ils se copient tels quels.
+  const addOracles = () => {
+    const od = rel('oracles');
+    for (const f of fs.readdirSync(od).sort())
+      if (f.endsWith('.mjs') || f.endsWith('.md')) add(`oracles/${f}`, F(path.join(od, f)));
+  };
+
+  const lisezmoiCommon = kitLang === 'en'
+    ? `# ${tenant} — ${kindLabel} Kit — ${name.slice(-9)}
+
+Kit **generated by AuditCore ${cfg.core_version}** (\`tools/build-kit.mjs\`) — do not edit:
+any change goes through a new dated generation. Merge: ${merged.counts.total} rules
+(${merged.counts.opposable} binding / ${merged.counts.informatif} informative), packs:
+${(cfg.constraint_packs ?? []).map(p => `\`${p}\``).join(' · ')}.
+`
+    : `# ${tenant} — Kit ${kindLabel} — ${name.slice(-9)}
+
+Kit **généré par AuditCore ${cfg.core_version}** (\`tools/build-kit.mjs\`) — ne pas éditer :
+toute évolution passe par une régénération datée. Fusion : ${merged.counts.total} contraintes
+(${merged.counts.opposable} opposables / ${merged.counts.informatif} informatives), packs :
+${(cfg.constraint_packs ?? []).map(p => `\`${p}\``).join(' · ')}.
+`;
+  if (kind === 'compliance') {
+    add('LISEZMOI - Compliance Pack.md', lisezmoiCommon + `
+## À qui ce kit est destiné
+Au **projet audité** : équipe de développement, agent IA codeur, pipeline CI.
+
+## Usage
+1. Self-audit : pour chaque contrainte applicable de \`constraints-merged.json\`, émettre
+   \`id · statut (PASS|FAIL|N-A|A-REVOIR) · preuve · dimension_audit\`. **Aucun PASS sans preuve.**
+2. Le \`banc-de-preuves.md\` donne, règle par règle : Actions d'audit · Preuve attendue · Grille de verdict
+   (avec l'instanciation du profil technologique quand elle existe).
+3. Fiche sécurité : compléter \`fiche-securite.html\` (squelette fourni, mêmes 8 sections que
+   \`fiche-securite.template.md\` — livré à côté comme référence lisible). **DEUX sorties** —
+   le \`.html\` complété et le \`.pdf\` de diffusion, ce dernier IMPRIMÉ depuis le HTML par
+   \`node fiche-en-pdf.mjs <fiche.html>\` (jamais capturé) et de MÊME INDICE que lui.
+4. Avant diffusion d'un rapport : \`node verifier-rapport-standalone.mjs <rapport-data.json>\` → exit 0.
+5. Avant diffusion de la fiche sécurité : \`node oracles/verifier-fiche-securite.mjs <fiche.html>\`
+   → exit 0 (porte bloquante, symétrique de celle du rapport — cf. §6 du skill de conformité).
+6. Thème : \`theme/theme.css\` + \`theme/header.html\` (généré depuis la charte ${tenant}).
+`);
+    add('constraints-merged.json', F(path.join(tmp, 'merged.json')));
+    add('banc-de-preuves.md', F(path.join(tmp, 'banc-de-preuves.md')));
+    add('verifier-rapport-standalone.mjs', verifierStandalone);
+    add('compliance-skill.md', complianceSkill);
+    add('fiche-securite.template.md', F(rel('deliverables', 'templates', 'fiche-securite.template.md')));
+    // TF-0700 : le kit fournissait le CANEVAS de la fiche et aucun moyen de produire le format
+    // REELLEMENT DIFFUSE. L'outil d'impression part donc avec lui — sinon le PDF se refait a la
+    // main, et le 24/07 il a ete CAPTURE en image : 0 caractere extractible, muet pour un lecteur
+    // d'ecran, et d'un indice anterieur au HTML depose a cote.
+    add('fiche-en-pdf.mjs', F(rel('tools', 'fiche-en-pdf.mjs')));
+    // TF-1351 : l'outil ci-dessus n'accepte QUE du `.html` (`fiche-en-pdf.mjs <fiche.html>`) — le
+    // seul format fourni jusqu'ici etait le `.md` ci-dessus, sans aucun moyen dans le kit de passer
+    // de l'un a l'autre. Le squelette HTML (memes 8 sections, `--sans-pdf`) est deja produit plus
+    // haut pour le Kit Audit (`tmp/fiche-securite.html`) : on le livre aussi ici, directement dans
+    // le format que l'imprimeur accepte, a cote du canevas .md garde comme reference lisible.
+    add('fiche-securite.html', F(path.join(tmp, 'fiche-securite.html')));
+    add('theme/theme.css', F(path.join(tmp, 'theme', 'theme.css')));
+    add('theme/header.html', F(path.join(tmp, 'theme', 'header.html')));
+    addOracles();
+    // ECR-04 · la porte de clôture part avec le kit : le projet contrôle sa remédiation
+    // depuis le seul rapport HTML qu'on lui a remis, sans export ni outillage supplémentaire.
+    add('verifier-remediation.mjs', F(rel('tools', 'verifier-remediation.mjs')));
+  } else {
+    add('LISEZMOI - Kit Audit.md', lisezmoiCommon + `
+## À qui ce kit est destiné
+À **l'équipe qui conduit l'audit** (auditeur humain ou agent IA). La part du projet audité
+est le kit « Compliance Pack » généré séparément (\`--kind compliance\`).
+
+## Démarrage
+1. \`node init-audit-workspace-standalone.mjs <dossier>\` — échafaude input/00-07, output/00-04, Old/.
+2. Référentiel : \`dimensions.yaml\` (18 dimensions, 6 familles, scoring 1-5, applicabilité par type).
+3. Conduite : gabarits \`templates/\` (rapport, matrices, présentation, go-prod, plan de remédiation…).
+4. Règles impératives : feuille blanche · preuves \`fichier:ligne\` · « pas de score sans preuve » ·
+   ne jamais écraser (Old/) · vérificateur obligatoire avant diffusion.
+5. Remédiation : produire \`remediation-actions.yaml\` (schéma \`schemas/\`) — l'adaptateur forge
+   vit dans AuditCore (\`tools/forge-adapter.mjs\`), hors kit.
+`);
+    add('constraints-merged.json', F(path.join(tmp, 'merged.json')));
+    add('banc-de-preuves.md', F(path.join(tmp, 'banc-de-preuves.md')));
+    add('verifier-rapport-standalone.mjs', verifierStandalone);
+    add('compliance-skill.md', complianceSkill);
+    add('init-audit-workspace-standalone.mjs', initStandalone);
+    add('build-rapport-standalone.mjs', rapportStandalone);
+    add('catalogue-adr.html', F(path.join(tmp, 'catalogue-adr.html')));
+    add('referentiel-audit.html', F(path.join(tmp, 'referentiel-audit.html')));
+    add('fiche-securite.html', F(path.join(tmp, 'fiche-securite.html')));
+    add('fiche-en-pdf.mjs', F(rel('tools', 'fiche-en-pdf.mjs')));
+    add('dimensions.yaml', F(rel('core', 'dimensions', 'dimensions.yaml')));
+    add('theme/theme.css', F(path.join(tmp, 'theme', 'theme.css')));
+    add('theme/header.html', F(path.join(tmp, 'theme', 'header.html')));
+    // RAF-012 : sélection des gabarits par langue — un tenant EN reçoit les .template.en.md
+    // (renommés sans le suffixe), un tenant FR ne reçoit pas les variantes EN.
+    const tplDir = rel('deliverables', 'templates');
+    const allTpl = fs.readdirSync(tplDir).sort();
+    for (const t of allTpl) {
+      if (t.includes('.template.en.')) continue; // variantes traitées via leur base
+      const enVariant = t.replace('.template.', '.template.en.');
+      const useEn = kitLang === 'en' && allTpl.includes(enVariant);
+      add(`templates/${t}`, F(path.join(tplDir, useEn ? enVariant : t)));
+    }
+    add('schemas/control.schema.json', F(rel('core', 'schemas', 'control.schema.json')));
+    add('schemas/remediation-actions.schema.json', F(rel('core', 'schemas', 'remediation-actions.schema.json')));
+    addOracles();
+    // ECR-04 · la porte de clôture part avec le kit : le projet contrôle sa remédiation
+    // depuis le seul rapport HTML qu'on lui a remis, sans export ni outillage supplémentaire.
+    add('verifier-remediation.mjs', F(rel('tools', 'verifier-remediation.mjs')));
+  }
+
+  const zip = createZip(entries);
+  const outPath = path.join(outDir, `${name}.zip`);
+  fs.writeFileSync(outPath, zip);
+  results.push({ kind, outPath, entries: entries.length, bytes: zip.length });
+}
+fs.rmSync(tmp, { recursive: true, force: true });
+for (const r of results)
+  console.log(`✔ kit ${r.kind}: ${r.entries} entrées, ${r.bytes.toLocaleString('fr-FR')} o → ${r.outPath}`);

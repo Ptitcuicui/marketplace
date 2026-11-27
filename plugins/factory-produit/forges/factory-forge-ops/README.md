@@ -1,0 +1,589 @@
+# factory-forge-ops
+
+Forge **exploitation** de l'écosystème Factory — trois verbes : **déployer, exploiter,
+restaurer**. Elle outille l'étape MEP du pilot (staging, bascule, rollback prouvé, journal) ;
+elle ne décide rien : le GO de production reste humain, les portes M de l'étape MEP
+(`ETAPE-MEP.md` du pilot, liste à jour sur ce document) restent la vérité de l'étape.
+Née de TF-0040 (trou prouvé : MEP sans forge, déploiement artisanal).
+
+## Utilisation
+
+Cette forge ne se lance pas seule : la Factory la mobilise quand votre demande en a besoin.
+Ouvrez une session Claude Code dans le dossier de votre projet et collez cette phrase, la même
+pour tous les cas d'usage :
+
+```
+Utilise https://github.com/Ptitcuicui/factory pour ce projet
+```
+
+La Factory installe ce qui manque, cette forge comprise, puis vous demande ce que vous voulez
+obtenir. Détail : [README de la Factory](https://github.com/Ptitcuicui/factory#utiliser-la-factory--une-seule-phrase).
+
+## Catalogue de services
+
+> Section proposée par la campagne « catalogues » du pilot (2026-08-13) — générée depuis
+> la source unique `catalogues/catalogue.jsonl` du pilot (v1.6.0, challengée état de
+> l'art le 12/08/2026). **prouvé** = preuve exécutée ; *déclaré* = méthode documentée seulement.
+
+| Service | Intention (« je veux… ») | Point d'entrée | Statut |
+|---|---|---|---|
+| **Déployer, restaurer, état** | déployer mon produit avec bascule saine et retour arrière prouvé | `node scripts\ops.mjs deployer|restaurer|etat <cible>` | prouvé (experimental) |
+| **Verdicts d'exploitation O-1…O-4** | prouver que mon déploiement est sain et réversible | `node oracles\oracle-ops.mjs <cible> --json-only` | prouvé (experimental) |
+| **Plans cloud plan-first** | préparer un déploiement cloud sans exposer de credential | `node scripts\ops.mjs plan <cible> + oracle O-5` | prouvé (experimental) |
+| **Canary local simulé** | basculer progressivement avec critère de promotion explicite | `node scripts\ops.mjs canary <build> <cible> [--seuils f.json]` | prouvé (experimental) |
+| **Drift O-6 et verdict rollback SLO** | détecter la dérive déclaré↔constaté et savoir quand recommander un retour arrière | `node oracles\oracle-ops.mjs --drift <f> <cible> · --verdict-rollback <mesures> --seuils <f>` | prouvé (experimental) |
+| **Empreinte de déploiement O-7** | savoir si un déploiement passé par ops a dérivé après coup (fichier modifié/ajouté/supprimé en place) | `node oracles\oracle-ops.mjs <cible> --empreinte` | prouvé (experimental) |
+
+Le catalogue consolidé des dix forges vit chez le pilot :
+[factory-pilot/catalogues/CATALOGUES.md](https://github.com/Ptitcuicui/factory/blob/main/catalogues/CATALOGUES.md).
+
+## Quick start
+
+```bash
+# Déployer un build vers une cible d'exploitation (healthcheck AVANT bascule)
+node scripts/ops.mjs deployer <dossier-build> <cible>
+
+# Restaurer la release précédente (re-healthcheck puis bascule arrière journalisée)
+node scripts/ops.mjs restaurer <cible>
+
+# État machine-lisible de la cible
+node scripts/ops.mjs etat <cible>
+
+# Verdict d'exploitation O1-O4 (consommé par l'étape MEP du pilot)
+node oracles/oracle-ops.mjs <cible> [--json-only]
+
+# Plan cloud déterministe (railway | gcp | azure | aws | supabase | cloudflare-workers) — génère, n'exécute jamais
+# Front Workers + base Supabase : ordre des deux plans, variables nommées, URL de redirection -> references/ENCHAINEMENT-PLANS.md
+# supabase (TF-2007) : rejeu des migrations sur base locale vide et dérive (db diff --linked) avant le push, secrets avant
+# les fonctions, une seule voie face à « Deploy to production » de l'intégration GitHub, branching = dépense humaine
+# Plan d'un PRODUIT DATA (databricks-bundle | powerbi-workspace) — même doctrine, publication sur GO humain (TF-0865)
+node scripts/ops.mjs plan <cible> <build> --sortie plan.json
+node oracles/oracle-ops.mjs --plan plan.json   # O-5 : 4 phases, rollback réel, zéro credential
+# Plan azure (TF-2129) : région de repli <REGION_REPLI> déclarée, sonde de capacité AVANT tout groupe et tout réseau.
+# Un SKU listé sans restriction (az vm list-skus) ne prouve pas la capacité : SkuNotAvailable -> G-05 de references/GESTES-EXPLOITATION.md
+node scripts/sonder-capacite.mjs plan --region northeurope --repli francecentral --taille Standard_D2s_v5   # imprime les gestes, n'en exécute aucun
+node scripts/sonder-capacite.mjs juger releve-capacite.json   # exit 0 région prouvée · 1 aucune/pas de repli · 2 non prouvée ; exemple : fixtures/sonder-capacite/verte-bascule-sur-repli.json
+
+# Canary local simulé : paliers de trafic croissants, promotion sur critère de config
+node scripts/ops.mjs canary <dossier-build> <cible> [--seuils seuils-canary.json]
+
+# Réinitialiser une base de développement ou de qualification (TF-2013) : le plan par défaut, rien d'exécuté
+# exemple de déclaration : fixtures/reinitialiser-base/verte.json ; production ou non déclarée : exit 2
+node scripts/ops.mjs reinitialiser-base forge/BASES.json qualif [--sortie plan-base.json]
+node scripts/ops.mjs reinitialiser-base forge/BASES.json qualif --executer   # postgres-docker d'un Docker local seulement
+
+# Oracle O-6 : dérive entre état déclaré (instantané) et état constaté maintenant
+node scripts/ops.mjs etat <cible> --sortie declare.json   # à un instant T
+node oracles/oracle-ops.mjs <cible> --drift declare.json  # plus tard : dérive ?
+
+# Oracle O-7 : empreinte de déploiement — le déployé a-t-il dérivé après coup ?
+# scellée automatiquement par deployer ET par canary (TF-0298), comparée à la demande
+# sur la release COURANTE
+node oracles/oracle-ops.mjs <cible> --empreinte
+
+# Oracle O-18 : révisions actives bornées (N servie + N-1 saine) sur une capture Container Apps
+# (le plan azure porte la borne et l'étape de ménage qui la tient, TF-1638)
+az containerapp revision list --name <app> --resource-group <rg> -o json > revisions.json
+node oracles/oracle-ops.mjs --revisions-actives revisions.json
+
+# Oracle O-19 : sauvegarde des actifs de données critiques (RPO/RTO, restauration exercée ≤ 12 mois)
+# exemple de déclaration : fixtures/o19-sauvegarde/verte.json — porte M-17 de l'étape MEP du pilot
+node oracles/oracle-ops.mjs --sauvegarde forge/etapes/mep/SAUVEGARDE.json
+
+# Oracle O-20 : un conteneur à état garde ses données dans un volume, et sa commande de création est écrite
+# exemple : fixtures/o20-conteneurs-a-etat/verte/ — référentiel des images : references/CONTENEURS-A-ETAT.json
+node oracles/oracle-ops.mjs --conteneurs-a-etat <racine-du-produit> [--composants docs/projet/COMPOSANTS-OPS.md]
+
+# Oracle O-21 : le GO humain d'un déploiement GitHub Actions est l'approbation d'un environnement protégé
+# gabarit : gabarits/workflow-deploiement-production.yml — faits et sources : references/WORKFLOW-DEPLOIEMENT.md
+node oracles/oracle-ops.mjs --workflow-deploiement .github/workflows/deploiement-production.yml [--environnement production] [--protection env.json]
+
+# Oracle O-22 : « en service » d'une tâche planifiée porte la lecture d'une première exécution réelle et sa prochaine échéance
+# exemple : fixtures/o22-mise-en-service-planifiee/verte.md ; --le fixe l'instant de référence (sinon : maintenant)
+node oracles/oracle-ops.mjs --mise-en-service docs/projet/COMPOSANTS-OPS.md [--le "AAAA-MM-JJ HH:MM"]
+
+# Surveillance des échéances (TF-2560, D-108 (b)) : une échéance dépassée sans publication lue = une alerte nommée (exit 1),
+# lancée d'un planificateur AUTRE que celui des tâches surveillées ; aucun appel à une plateforme ; exemples : fixtures/echeances/
+node scripts/surveiller-echeances.mjs controler echeancier.json releve.json --lance-par <planificateur du contrôle> [--le <ISO 8601>]
+
+# Oracle O-23 : un réseau Docker posé par Terraform relève les plages prises et ne dérive pas (TF-2164)
+# gabarit : gabarits/reseau-docker.tf (+ scripts/plages-docker.mjs à copier à côté) — faits : references/RESEAU-ET-FRONTAL-DOCKER.md
+node oracles/oracle-ops.mjs --reseau-docker <pile-terraform-ou-fichier.tf>
+node scripts/plages-docker.mjs choisir [--nom <réseau>] [--base 10.200.0.0/16] [--longueur 24]   # la plage libre, relevée sur le démon
+node scripts/plages-docker.mjs lister                                                             # les plages déjà prises
+
+# Oracle O-24 : un frontal nginx résout son amont à chaque requête, il ne le fige pas au démarrage (TF-2165)
+# gabarit : gabarits/frontal-nginx.conf — faits : references/RESEAU-ET-FRONTAL-DOCKER.md ; exercice réel : FORGE_OPS_EXERCICE_DOCKER=1 node oracles/self-test.mjs
+node oracles/oracle-ops.mjs --frontal-nginx <fichier.conf-ou-dossier-de-configuration>
+
+# Oracle O-25 : les identifiants de test remis à l'humain se recopient sans erreur (TF-2167) — faits : references/IDENTIFIANTS-DE-TEST.md
+# exemple : fixtures/o25-identifiants-test/verte.json ; le remède d'un refus : le générateur commun
+node oracles/oracle-ops.mjs --identifiants-test <identifiants-test.json>
+node scripts/tirer-secret-humain.mjs [--longueur 20] [--nombre 1]   # alphabet sans sosie (0 O 1 l I) ni signe, 20 caractères au moins
+
+# Identifiants de test stables d'un déploiement à l'autre (TF-2166, règle du porteur du 04/11/2026) — scripts/identifiants-test.mjs
+node scripts/identifiants-test.mjs assurer identifiants-test.json --comptes admin,lecteur       # garde l'existant, crée ce qui manque
+node scripts/identifiants-test.mjs verifier identifiants-test.json --commande "<connexion du produit>"   # exit 0 si tous se connectent
+node scripts/identifiants-test.mjs renouveler identifiants-test.json --compte lecteur --demande "<mots de l'humain>"   # le seul geste qui change un mot de passe
+node oracles/oracle-ops.mjs --identifiants-test identifiants-test.json --journal identifiants-test.journal.jsonl
+
+# Version servie (TF-2201) : lire le commit que l'instance sert, au lieu de le reconstituer. Les plans azure et aws passent
+# le commit à l'image (--build-arg COMMIT_SHA=<COMMIT>), gcp par fichier de construction et substitution (gabarits/cloudbuild-commit.yaml,
+# TF-2244), railway par variable de service COMMIT_SHA lue par ARG ; /healthz du produit rend { "commit": "<sha>" }
+node scripts/version-servie.mjs lire https://<instance> --attendu <commit> --sortie version-servie.json   # exit 0 lu · 1 autre version · 2 illisible
+node oracles/oracle-ops.mjs --version-servie version-servie.json --depot <dossier-git> [--attendu <commit>]   # O-26 : un commit du dépôt
+
+# Test de mise en production qui relit l'état servi à sa fin (TF-2308) : le gabarit lit la santé, joue les épreuves, la relit, échoue
+# si le corps de la réponse a changé (un 200 en mode dégradé ne passe pas). Santé à /healthz par défaut, sinon « sante.chemin » du smoke.config.json
+node gabarits/smoke-mise-en-production.mjs --config smoke.config.json --sortie etat-servi.json   # exit 0 identique · 1 état changé · 2 départ illisible
+node oracles/oracle-ops.mjs --etat-servi etat-servi.json                                          # O-30 : relecture présente, après la dernière épreuve, état identique
+
+# Inventaire des composants à jour (TF-2209) : COMPOSANTS-OPS.md comparé aux sorties d'état de la MEP, « prêt » refusé sur un
+# composant présent non inventorié. Exemple : fixtures/o27-inventaire-a-jour/ (verte et périmée, trois sorties d'état)
+terraform state list > etat-terraform.txt ; docker ps --format "{{.Names}}" > etat-docker.txt ; az resource list -g <groupe> -o json > etat-azure.json
+node oracles/oracle-ops.mjs --inventaire-a-jour docs/projet/COMPOSANTS-OPS.md --etat terraform:etat-terraform.txt --etat docker:etat-docker.txt --etat azure:etat-azure.json
+
+# Réglages de plateforme (TF-2230, D-178 (a)) : lus au registre du pilot, comparés à son attendu, bloquant avant la MEP.
+# Le plan supabase (et cloudflare-workers) le prescrit en provision ; `supabase db push` y est dit INCOMPATIBLE avec la restriction réseau depuis un exécuteur hébergé
+node scripts/relever-reglages.mjs Supabase,Cloudflare                                       # liste les lectures, n'exécute rien
+node scripts/relever-reglages.mjs Supabase,Cloudflare --sortie reglages-plateforme.json --executer   # lit chaque réglage, en lecture seule (secrets dans l'environnement)
+node oracles/oracle-ops.mjs --reglages-plateforme reglages-plateforme.json [--ecarts ecarts-acceptes.json]   # O-28 : réglage hors attendu sans décision enregistrée = FAIL
+
+# Convergence d'une pile Terraform (TF-2271) : le plan SUIVANT l'apply est vide, sinon la chaîne est refusée. À placer juste après
+# `terraform apply` ; une ressource que le fournisseur ne change pas sur place se remplace de force (un tour, jamais un conteneur à état)
+node scripts/convergence-terraform.mjs verifier <pile> --sortie plan-apres-apply.json   # exit 0 plan vide · 1 plan non vide · 2 Terraform en échec
+node scripts/convergence-terraform.mjs converger <pile> [--executer]                   # sans --executer, la commande `terraform apply -replace=…` est écrite, rien n'est appliqué
+node oracles/oracle-ops.mjs --convergence plan-apres-apply.json                        # O-29 : un plan non vide refuse la chaîne, une ressource par constat
+
+# Application d'une pile Terraform qui pose des réglages Supabase (TF-2312) : la santé du projet est sondée AVANT l'apply, et l'erreur de santé
+# du fournisseur (« Project Services Unhealthy ») est relancée de façon bornée, jamais une autre erreur. Désactiver realtime reste au produit
+node scripts/appliquer-terraform.mjs <pile> --projet <ref>                              # sans --executer : les gestes sont écrits, rien n'est appelé ni appliqué
+node scripts/appliquer-terraform.mjs <pile> --projet <ref> --executer [--relances 3] [--attente 120]   # exit 0 appliqué · 1 projet malsain · 2 sonde ou Terraform en échec
+node scripts/appliquer-terraform.mjs <pile> --sans-sonde --executer                    # choix écrit : la santé n'est pas lue avant l'apply (SUPABASE_ACCESS_TOKEN sinon)
+# Oracle O-31 (TF-2397) : une chaîne qui pose `supabase_settings` passe par cet outil, jamais par un `terraform apply` direct. L'outil écrit son relevé
+# forge-ops/application@1 par --sortie ; la règle refuse l'apply direct (fichier:ligne, commande de remplacement) et juge le relevé
+node scripts/appliquer-terraform.mjs <pile> --projet <ref> --executer --sortie application.json   # + le relevé de ce qui a été fait, même en cas d'échec
+node oracles/oracle-ops.mjs --application-terraform <racine du dépôt de la chaîne> [--releve application.json]   # exit 0 conforme · 1 apply direct ou relevé refusé · 2 sans objet
+node oracles/oracle-ops.mjs --application-terraform <fichier de chaîne> --racine <dépôt> [--releve application.json]   # un seul fichier de chaîne
+
+# Restauration d'une copie pg_dump dans Supabase (TF-2412, G-07) : le sommaire de la copie porte les privilèges par défaut de supabase_admin,
+# que postgres ne peut pas rejouer (« permission denied to change default privileges ») ; le gabarit les COMMENTE avant `pg_restore --use-list`
+node gabarits/restauration-supabase.mjs plan <copie.dump>                              # écrit les quatre commandes dans l'ordre, n'en exécute aucune
+node gabarits/restauration-supabase.mjs liste sommaire.txt --sortie liste-filtree.txt [--role <autre>]   # exit 0 · les entrées DEFAULT ACL retirées sont nommées
+node gabarits/restauration-supabase.mjs verifier liste-filtree.txt                    # exit 0 conforme · 1 il reste des entrées refusées · 2 texte qui n'est pas un sommaire
+
+# Déploiement Railway SKIPPED par « Wait for CI » que les contrôles relancés au vert ne rattrapent pas (TF-2519, G-08) : l'outil juge un relevé écrit
+# par le run et ÉCRIT le geste (un déploiement neuf du même commit), sans appeler Railway ni GitHub — le geste se joue sous le GO du run
+node scripts/rattraper-railway.mjs juger releve-railway.json [--sortie verdict.json]   # exit 1 rattrapage requis · 0 garde tenue, déjà servi ou en route · 3 autre échec · 2 illisible ; relevé forge-ops/rattrapage-railway@1
+
+# Oracle O-32 (TF-2771) : une version qui touche l'IA ou le courrier passe la porte complète, son smoke appelle le vrai fournisseur et son brouillon d'essai est comparé à son modèle.
+# Le relevé forge-ops/porte-version@1 est écrit par le run depuis ses lectures ; l'oracle n'appelle aucun fournisseur (un appel réel est une dépense humaine, R-29). Fixtures : fixtures/o32-porte-version/
+node oracles/oracle-ops.mjs --porte-version <releve.json> [--json-only]   # exit 0 conforme · 1 porte allégée, smoke simulé ou factice, brouillon non comparé · 2 relevé introuvable (SKIP)
+
+# Le lien Railway dépend de la casse du chemin (TF-2784, G-10) : `railway status` depuis c:\dev\<produit> répond « No linked project found » quand le lien est
+# enregistré sous C:\dev\<produit> ; l'outil écrit le chemin enregistré (il ne lit que les chemins du fichier de liaisons, jamais son jeton), le run lance railway depuis lui
+node scripts/dossier-railway.mjs <dossier> [--config <config.json>] [--casse-insensible]   # exit 0 lié (sortie : le chemin enregistré) · 1 aucun lien (railway link) · 2 usage, fichier illisible ou chemin ambigu
+
+# Verdict « rollback recommandé » : seuils SLO humains vs mesures post-bascule (jamais d'exécution)
+node oracles/oracle-ops.mjs --verdict-rollback mesures.json --seuils seuils-slo.json
+
+# Preuve par le geste : déploiement réel local + rollback + défauts types refusés
+node oracles/self-test.mjs
+# ... plus l'exercice réel de reinitialiser-base sur un conteneur postgres:16-alpine jetable, créé puis détruit
+FORGE_OPS_EXERCICE_DOCKER=1 node oracles/self-test.mjs
+# ... plus l'exercice réel de convergence-terraform (init, apply, plan non vide, remplacement forcé) sur une pile terraform_data, sans réseau
+# ... l'exercice couvre aussi appliquer-terraform (erreur de santé relancée, borne tenue, erreur de validation sans relance)
+FORGE_OPS_EXERCICE_TERRAFORM=1 node oracles/self-test.mjs
+```
+
+## Contrat de la cible
+
+```
+<cible>/
+├── releases/<AAAAMMJJTHHMMSS>/    # une release = un déploiement immuable
+├── empreintes/<AAAAMMJJTHHMMSS>.json  # manifeste scellé au déploiement ou à la promotion canary (chemins + sha256, TF-0288, TF-0298)
+├── COURANT                        # pointeur texte (portable Windows, pas de symlink)
+└── journal.jsonl                  # append-only, contrat ledger (seq croissant depuis 1)
+```
+
+- Une release sans `sante.mjs` (contrat de santé, exit 0 = sain) est **refusée**.
+- **Un `sante.mjs` qui fait une requête pose `process.exitCode`, jamais `process.exit()` juste après** (TF-2699) : sous
+  Windows, `process.exit()` après un `fetch` peut faire tomber node (« Assertion failed: !(handle->flags &
+  UV_HANDLE_CLOSING), file src\win\async.c, line 76 », exit 3221226505 = 0xC0000409), alors que le contrat lancé seul
+  rend 0. `ops.mjs` (`deployer`, `restaurer`, `canary`) et l'oracle O2 distinguent ce **plantage** (code d'exception
+  Windows `>= 0xC0000000`, signal d'effondrement, assertion sur la sortie d'erreur) d'une santé en échec
+  (`scripts/lib-sante.mjs`) : le refus reste, car un contrat qui n'a pas pu répondre ne prouve pas la santé, mais le
+  message dit « contrat de santé PLANTÉ … n'est PAS une santé en échec » et le journal porte
+  `cause: "plantage_contrat_sante"`. Fixtures : `fixtures/app-sante-plantee/` (rouge), `fixtures/app-sante-exitcode/` (verte).
+- Un healthcheck en échec laisse `COURANT` intact : **jamais de bascule sur release malade**.
+- Types d'événements du journal : `deploiement` · `deploiement_refuse` · `restauration` ·
+  `canary_etape` · `canary_promotion` · `canary_annulation` ; et ceux de `reinitialiser-base`
+  (TF-2013), écrits dans le journal posé à côté de la déclaration : `base_reinitialisation_refusee` ·
+  `base_reinitialisation_etape` · `base_reinitialisation` · `base_reinitialisation_echec`.
+- **Cible tenue par une plateforme externe (TF-0844)** : une cible déployée par `plan`
+  (railway, gcp, azure, aws...) ne porte NI `COURANT` NI `journal.jsonl` — la plateforme les
+  tient elle-même. Déclarer un fichier `<cible>/PLATEFORME` (texte, ex. `railway`) pour que
+  `oracle-ops.mjs` rende O1/O3 **SANS_OBJET** au lieu d'un FAIL à tort ; sans ce fichier,
+  l'absence de `COURANT`/`journal.jsonl` reste jugée comme avant (l'oubli n'existe pas — la
+  déclaration est explicite, jamais déduite du nom du dossier).
+- **Cible conteneur Docker : `restaurer` refuse HORS CONTRAT (TF-1805).** La cible par défaut de
+  l'étape MEP du pilot est un conteneur Docker local. `ops.mjs restaurer` ne restaure que des
+  releases de fichiers : sur un dossier sans `COURANT` qui porte un `Dockerfile` ou un fichier
+  compose, il sort en **exit 2** `[OPS HORS CONTRAT]`, nomme le geste manuel et n'écrit rien. Le
+  retour arrière d'un conteneur suit le `ROLLBACK.md` du produit (arrêt de N, image N-1 taguée
+  `<produit>:<run-id>`, healthcheck 200, retour à N : M-4 d'ETAPE-MEP). Restaurer un conteneur
+  n'est pas implémenté ici : les conventions de tag et de service appartiennent au produit.
+- **Un document `.md` passé à `oracle-ops.mjs` se juge comme document (TF-1804).** Seules O9,
+  O12, O13 et O16 le jugent ; O1-O4 ne s'y appliquent pas, et le journal `.ops-journal.jsonl`
+  scelle le verdict du document avec `nature: "document"`.
+
+## Oracles
+
+| Règle | Contrôle |
+|---|---|
+| O1 | `COURANT` pointe une release existante (SANS_OBJET si la cible porte `PLATEFORME` — pointeur tenu par une plateforme externe, ex. railway, TF-0844) |
+| O2 | la release courante repasse son healthcheck (exécution réelle) |
+| O3 | journal intègre : JSON valide, seq strictement croissant depuis 1, types connus (même SANS_OBJET que O1 si `PLATEFORME` est déclaré, TF-0844) |
+| O4 | rollback prouvable : aucune release citée au journal n'est purgée ; pointeur ↔ histoire cohérents |
+| O5 | `--plan <fichier>` : plan cloud complet (4 phases, rollback réel, zéro credential) ; plan `supabase` : rejeu local et contrôle de dérive avant le push, secrets avant les fonctions, voie tranchée face à l'intégration GitHub (TF-2007) |
+| O6 | `--drift <fichier> <cible>` : état déclaré (`etat --sortie`) vs constaté — journal tronqué/réécrit, déploiement furtif |
+| O7 | `<cible> --empreinte` : fichiers de la release courante vs empreinte scellée au déploiement ou à la promotion canary — fichier modifié/supprimé/ajouté en place ; SKIP motivé sans empreinte, ex. déploiement fait hors ops (TF-0288, TF-0298) |
+| O10 | `--manifeste-servi <fichier>` : chaque paquet épinglé par version (`==`) dans un `requirements.txt` SERVI porte au moins une empreinte `--hash=` — une version republiée sous le même numéro entrerait sinon sans être vue (TF-1042) |
+| O18 | `--revisions-actives <fichier.json>` : sur une sortie capturée de `az containerapp revision list -o json`, chaque application ne garde actives que ses révisions servies et une N-1 saine à 0 % ; toute révision en trop est nommée avec sa commande de désactivation (TF-1639) |
+| O19 | `--sauvegarde <declaration.json> [--le AAAA-MM-JJ]` : sur une déclaration `forge-ops/sauvegarde@1`, chaque actif de données critique porte RPO, RTO, mécanisme, fréquence (≤ RPO) et configuration de sauvegarde, et un exercice de restauration réussi depuis ≤ 12 mois, de durée ≤ RTO et d'intégrité constatée ; `actifs: []` exige `aucun_actif_critique` motivé (TF-1212 ; CTL-D05-09, CTL-D12-06, CTL-D16-09 du référentiel d'audit) |
+| O20 | `--conteneurs-a-etat <racine> [--composants <COMPOSANTS-OPS.md>]` : chaque `docker run` et chaque service compose d'une image à état monte un volume nommé ou un dossier de l'hôte sur le chemin exact de ses données ; chaque `docker start` vise un conteneur dont la commande de création est écrite ; la table « Composants à état » déclare volume et commande de création (TF-1986) |
+| O21 | `--workflow-deploiement <fichier.yml> [--environnement <nom>] [--protection <capture.json>]` : un job qui déploie référence un environnement ; le job de production a son GO humain prouvé (job de garde qui lit l'environnement par l'API, ou capture de `gh api …/environments/<nom>`) ; il est couvert par un groupe de concurrence sans `cancel-in-progress: true` ; `id-token: write` ne va qu'à lui (TF-2003) |
+| O22 | `--mise-en-service <COMPOSANTS-OPS.md> [--le "AAAA-MM-JJ HH:MM"]` : une tâche planifiée ou récurrente déclarée « en service » (« actif », « partagé » ou « en service ») porte l'identifiant ou l'URL d'une première exécution réelle lue, la date et l'heure de lecture, postérieure à la date de sa mise en service (`En service depuis`, TF-2560), et sa prochaine échéance ; une échéance dépassée sans lecture plus récente est un constat (D-108 (b)) |
+| O23 | `--reseau-docker <pile Terraform ou fichier.tf>` : chaque `docker_network` à `ipam_config` pose `lifecycle { ignore_changes = [ipam_config] }` et tient son `subnet` d'un relevé des plages prises (`data "external"` qui appelle `scripts/plages-docker.mjs`), jamais d'un CIDR écrit à la main ; gabarit `gabarits/reseau-docker.tf`, faits `references/RESEAU-ET-FRONTAL-DOCKER.md` (TF-2164) |
+| O24 | `--frontal-nginx <fichier.conf ou dossier>` : chaque `proxy_pass`, `fastcgi_pass`, `uwsgi_pass`, `scgi_pass` et `grpc_pass` vers un nom d'hôte passe par une variable, avec un `resolver` qui porte `valid=` ; un groupe `upstream` à serveur nommé porte `resolve` et son resolver dans son bloc ou dans `http` ; gabarit `gabarits/frontal-nginx.conf`, faits `references/RESEAU-ET-FRONTAL-DOCKER.md` (TF-2165, étendu par TF-2177) |
+| O25 | `--identifiants-test <fichier.json> [--journal <journal.jsonl>]` : sur un fichier `forge-ops/identifiants-test@1`, le mot de passe de chaque compte tient en 20 caractères au moins d'un alphabet sans sosie (0 O 1 l I) ni signe ; le constat nomme le compte et la position, jamais la valeur (générateur `scripts/tirer-secret-humain.mjs`, TF-2167). Avec le journal de `scripts/identifiants-test.mjs` : aucun renouvellement sans demande de l'humain, aucune création hors fichier ou compte absent, chaque création ou renouvellement suivi d'une connexion réussie (TF-2166) ; faits `references/IDENTIFIANTS-DE-TEST.md` |
+| O26 | `--version-servie <capture.json> [--depot <dossier git>] [--attendu <commit>]` : la réponse `/healthz` d'une instance porte un champ `commit` de 7 à 40 caractères hexadécimaux, qui est un commit du dépôt et, si le dossier de MEP l'annonce, le commit attendu ; les plans azure et aws passent le commit à l'image (`--build-arg COMMIT_SHA=<COMMIT>`), gcp par `gabarits/cloudbuild-commit.yaml` et la substitution `_COMMIT_SHA`, railway par la variable de service `COMMIT_SHA` lue par `ARG` (TF-2244, d'après les pages de l'éditeur lues le 06/11/2026, non éprouvé par un déploiement réel), et O-5 les refuse sans lui (TF-2201). La capture se prend par `scripts/version-servie.mjs lire` |
+| O27 | `--inventaire-a-jour <COMPOSANTS-OPS.md> --etat <genre>:<fichier> [--etat …]` : chaque composant que les sorties d'état nomment (`terraform state list`, `docker ps`, `az resource list`, export `noms`) figure mot pour mot dans l'inventaire ; un composant présent et non inventorié refuse « prêt » (FAIL) ; sans sortie d'état : SKIP. Le plan azure le rejoue à la MEP (TF-2209) |
+| O28 | `--reglages-plateforme <releve.json> [--registre <fichier>] [--ecarts <fichier>]` : chaque réglage des plateformes déclarées (Supabase, GitHub, Cloudflare) est lu et conforme à l'`attendu` du registre du pilot (`references/REGLAGES-SURS-PAR-DEFAUT.json`, lu par `$FORGE_ROOT`) ; un réglage non lu, en échec de lecture ou hors de son attendu sans décision enregistrée refuse « prêt » avant la MEP ; un écart décidé (`--ecarts` : mots, date, valeur lue acceptée) se vérifie tel que décidé. Le relevé se prend par `scripts/relever-reglages.mjs` (lecture seule) ; le plan `supabase` déclare `supabase db push` incompatible avec la restriction réseau depuis un exécuteur hébergé (TF-2230, D-178 (a)) |
+| O29 | `--convergence <capture>` : la capture du plan pris juste après l'apply (`terraform show -json <plan>` ou la sortie texte de `terraform plan`) est vide ; un plan qui change encore une ressource refuse la chaîne (une ressource par constat, avec ses attributs et `terraform apply -replace='<adresse>'`), une capture illisible aussi. La capture se prend par `scripts/convergence-terraform.mjs verifier <pile>` (TF-2271, lot Produit-86 20261106a RP-44) |
+| O30 | `--etat-servi <releve.json>` : le relevé que prend `gabarits/smoke-mise-en-production.mjs` prouve que l'état servi a été lu avant les épreuves, relu après la dernière, et que le corps de la réponse de santé (`sante.chemin` du gabarit, `/healthz` par défaut) ou les champs déclarés (`sante.champs`) sont identiques ; une relecture absente ou antérieure à la dernière épreuve, un champ changé, une instance muette à la fin sont bloquants, une réponse sans champ comparé est majeure (TF-2308, lot Produit-86 20261109a RP-53) |
+| O31 | `--application-terraform <racine ou fichier de chaîne> [--racine <dépôt>] [--releve <application.json>]` : si une pile de la racine pose `supabase_settings` (directement ou par un module local), aucune chaîne (workflow, script, Makefile) ne l'applique par un `terraform apply` direct (`terraform`, `tofu`, `terragrunt`) : constat bloquant avec fichier:ligne et la commande `scripts/appliquer-terraform.mjs … --executer --sortie` ; une pile qu'on ne sait pas lire est tenue pour concernée ; l'outil appelé avec `--executer` sans `--sortie` est majeur. Le relevé `forge-ops/application@1` que l'outil écrit par `--sortie` prouve l'apply abouti, la santé lue saine avant (ou `--sans-sonde` dit, en information) et des étapes cohérentes avec son verdict ; un projet refusé, une santé persistante ou une erreur sont bloquants. Statuts de santé relus sur la référence de l'API de gestion le 12/11/2026 (TF-2397, suite de TF-2312) |
+| O32 | `--porte-version <releve.json>` : le relevé `forge-ops/porte-version@1` d'une version qui touche une fonction centrale (IA, courrier, et celles que `fonctions_centrales` ajoute) prouve la **porte complète** (audit et qualification nommés, jamais l'oracle léger), un **appel réel** au fournisseur dans le smoke (mode `reel`, clé `reelle`, identifiant d'appel, heure de lecture, statut 2xx : une boîte simulée ou une clé factice est bloquante) et, pour le courrier, la comparaison du **contenu** du brouillon d'essai de l'activation à son modèle, écarts vides ; une version qui ne touche aucune fonction centrale garde la porte allégée ; relevé introuvable : SKIP. Aucun fournisseur n'est appelé (TF-2771, Produit-12, lot 20261122c RS-42) |
+
+`non_juge` déclaré : santé applicative au-delà du healthcheck, GO production (humain),
+supervision continue, secrets/config d'environnement.
+
+## Canary local simulé (TF-0107)
+
+`node scripts/ops.mjs canary <build> <cible> [--seuils fichier.json]` — bascule progressive
+**simulée** entre `COURANT` et un candidat : paliers de trafic croissants (défaut
+`1→5→25→50→100`, override par fichier de config), chaque palier mesuré via le contrat
+`metriques.mjs` de la release et confronté à un **critère de promotion explicite**. Un palier
+rejeté ⇒ abandon (`canary_annulation`), `COURANT` intact. Candidat sans `metriques.mjs` →
+canary refusé (l'oubli n'existe pas — utiliser `deployer`). Tous les paliers franchis ⇒
+empreinte scellée (même fonction, même point du cycle que `deployer` : après critères,
+avant bascule) puis promotion — une cible promue par canary n'est plus SKIP à vie sur O-7
+(TF-0298).
+
+## Verdict « rollback recommandé » (TF-0107, recommandation seule)
+
+`node oracles/oracle-ops.mjs --verdict-rollback <mesures.json> --seuils <fichier.json>` —
+compare des mesures post-bascule à des **seuils SLO fixés par l'humain** (fichier
+obligatoire, aucun défaut implicite). Verdicts : `stable` (exit 0) ·
+`rollback_recommande` (exit 1) · `donnees_insuffisantes` (exit 2). **Ne déclenche jamais de
+rollback** — la bascule arrière reste un geste humain via `ops.mjs restaurer`.
+
+## Réinitialiser une base hors production (TF-2013)
+
+`node scripts/ops.mjs reinitialiser-base <declaration.json> <cible> [--executer] [--sortie plan.json]`
+vide puis reconstruit une base de développement ou de qualification à la demande (décision R-58 (a) du
+29/10/2026). Le trou, mesuré le même jour : aucune forge ne savait le faire ; `restaurer` ne repointe que
+des releases de fichiers, et le plan `supabase` ne pousse que des migrations vers l'avant.
+
+**Par défaut, le verbe rend le plan et n'exécute rien.** Le plan (`forge-ops/reinitialisation-base@1`)
+ordonne quatre étapes : vider, rejouer les migrations, charger les données, vérifier. La vérification
+exige les migrations à jour et un compte de lignes non nul pour chaque table déclarée. `--executer` joue
+le plan, et seulement sur une cible `postgres-docker` d'un démon Docker local, après contrôle du démon, du
+conteneur (démarré) et du port déclaré (publié). La forge ne crée aucun conteneur. Vider supprime puis
+recrée la base depuis la base de maintenance `postgres` : `DROP DATABASE … WITH (FORCE)`, puis
+`CREATE DATABASE`.
+
+**La déclaration** est un fichier du produit au format `forge-ops/bases@1`, dans la posture de la
+déclaration de sauvegarde d'O-19. Exemple complet : `fixtures/reinitialiser-base/verte.json`. Chaque base
+de `bases[]` porte :
+
+| Champ | Contenu |
+|---|---|
+| `nom` | le nom passé en argument `<cible>` |
+| `environnement` | `developpement`, `qualification` ou `production` |
+| `moteur` | `postgres-docker`, `supabase-local`, ou `supabase-distant` (projet lié, `--linked`) |
+| `adresse` | `hote`, `port`, `base`, `utilisateur` (ou `url` sans mot de passe) et `conteneur` ; `project_ref` pour un projet Supabase distant |
+| `migrations` | `commande`, et `verification` dont l'exit 0 atteste les migrations à jour ; postgres-docker seulement, Supabase rejoue `supabase/migrations` |
+| `donnees` | `commande` du produit (seed synthétique ou extrait), `nature` (`synthetique` ou `extrait`), `source` exigée pour un extrait |
+| `verification.tables` | les tables dont le compte de lignes doit être non nul (`schema.table` admis) |
+
+La production se déclare dans `bases[]` (son adresse suffit), ou s'écarte par `aucune_production:
+"<motif>"`. `racine`, facultatif et relatif à la déclaration, est le dossier d'où partent les commandes
+déclarées ; elles reçoivent `PGHOST`, `PGPORT`, `PGDATABASE` et `PGUSER` de la cible, jamais de mot de passe.
+
+**Refus, en plan comme en exécution, chacun journalisé :**
+
+- exit 2 `[OPS HORS CONTRAT]` : déclaration introuvable, illisible ou porteuse d'un mot de passe ; cible
+  absente ; environnement absent, hors vocabulaire ou `production` ; production ni déclarée ni écartée ;
+  cible qui partage le serveur (hôte:port), le conteneur ou le projet Supabase d'une base production ou
+  d'environnement non déclaré ; base de maintenance ; `--executer` sur Supabase, sur un hôte non local,
+  vers un démon Docker distant, sur un conteneur arrêté ou un port non publié ;
+- exit 1 `[OPS REFUS]` : déclaration incomplète ou identifiant SQL non conforme, ou geste exécuté en
+  échec. Une base vidée dont la suite échoue reste vide ou partielle jusqu'au passage suivant, et le
+  message le dit.
+
+Une base dont l'environnement n'est pas dit est traitée comme la production. `localhost`, `127.0.0.1` et
+`::1` désignent le même serveur.
+
+**Supabase : plan seulement dans ce lot.** Chaque commande du plan cite sa page officielle, lue le
+29/10/2026. En local : `supabase start`, puis `supabase db reset --local --no-seed`. Pour un projet
+distant : `supabase link --project-ref <ref>`, puis `supabase db reset --linked --no-seed`. La
+vérification joue `supabase migration list --local` ou `--linked`. `--no-seed` laisse le chargement à la
+commande déclarée. Sur un projet lié, la remise à zéro exécute un script qui supprime « all user created
+entities in the remote database » : elle reste un geste humain sous GO (R-38), comme les autres gestes
+distants de la forge.
+
+**Journal.** `journal.jsonl`, posé à côté de la déclaration, suit le contrat ledger : refus
+(`base_reinitialisation_refusee`), une ligne par étape exécutée (`base_reinitialisation_etape`), réussite
+avec ses comptes (`base_reinitialisation`) ou échec nommé (`base_reinitialisation_echec`). O3 connaît ces
+types ; O4 ne les lit pas.
+
+**Preuve.** `node oracles/self-test.mjs` joue la paire de fixtures : la cible production et la cible non
+déclarée sont refusées en exit 2, et le plan d'une qualification Postgres sort vert. Il rejoue aussi chaque
+remède qu'un refus nomme. L'exercice réel se joue à la demande : `FORGE_OPS_EXERCICE_DOCKER=1 node
+oracles/self-test.mjs` crée un conteneur `postgres:16-alpine` jetable, le réinitialise deux fois, rejoue
+trois échecs types, puis le détruit. Il ne télécharge aucune image.
+
+**Ce qui n'est pas jugé :**
+
+- la vérité de la déclaration : une base déclarée « qualification » qui sert la production passe ;
+- la cible réelle des commandes déclarées : la forge les exécute sans les lire, et la vérification sur la
+  cible fait échouer une commande qui aurait écrit ailleurs, sans l'empêcher d'y avoir écrit ;
+- la qualité des données au-delà des comptes non nuls, et la pseudonymisation d'un extrait, dont seule la
+  source est exigée ;
+- les rôles et les autres bases du serveur, que `DROP DATABASE` ne touche pas ;
+- la portabilité des commandes déclarées : elles passent au shell du poste (`cmd.exe` sous Windows,
+  `/bin/sh` ailleurs), où une même commande peut se lire autrement ;
+- toute exécution Supabase.
+
+## Un conteneur à état garde ses données dans un volume (O-20, TF-1986)
+
+`node oracles/oracle-ops.mjs --conteneurs-a-etat <racine-du-produit> [--composants <COMPOSANTS-OPS.md>]`
+lit les fichiers du produit sans rien exécuter. Le fait qui l'a fait naître, le 24/10/2026 : un conteneur de
+traitement tournait sans volume, et sa commande de création n'était écrite nulle part (le README ne donnait
+que `docker start`). Au redémarrage de Docker, une tâche de 612 photos, à 7 % après 3 h, a été perdue.
+
+Les 3 règles nomment chaque écart à sa ligne :
+
+1. **Le volume, sur le chemin exact des données.** Chaque `docker run` (scripts shell, PowerShell, cmd,
+   sources, code des fichiers Markdown) et chaque service d'un fichier compose dont l'image est à état monte
+   un volume nommé ou un dossier de l'hôte sur le chemin de ses données de travail. Un volume anonyme, un
+   `tmpfs` ou un volume posé ailleurs n'en tiennent pas lieu. Exemple documenté : postgres 17 monté sur
+   `/var/lib/postgresql` « WILL NOT PERSIST », le chemin est `/var/lib/postgresql/data` jusqu'à la 17 et
+   `/var/lib/postgresql` depuis la 18.
+2. **La commande de création est écrite.** Chaque `docker start` ou `docker restart` vise un conteneur créé
+   par un `docker run --name` lu, par un service compose, ou déclaré dans la table.
+3. **La déclaration.** `COMPOSANTS-OPS.md` du produit (par défaut `docs/projet/COMPOSANTS-OPS.md`) porte une
+   table « Composants à état ». Un composant à état lancé sans ligne dans cette table est nommé.
+
+| Colonne | Contenu |
+|---|---|
+| `Composant` | le nom du conteneur (`--name`) ou du service compose |
+| `Image` | facultative ; sert à reconnaître un conteneur sans nom |
+| `Données de travail` | facultative pour une image du référentiel, exigée sinon : le chemin, dans le conteneur, où il écrit |
+| `Volume` | le volume nommé ou le dossier de l'hôte |
+| `Commande de création` | le `docker run` complet, qui doit monter ce volume sur ce chemin, ou `docker compose up -d <service>` |
+
+Une image est reconnue à état par cette table ou par le référentiel daté `references/CONTENEURS-A-ETAT.json`
+(postgres, mysql, mariadb, mongo, redis, opendronemap/nodeodm, lus le 29/10/2026 dans la documentation de
+chaque image). Exemple complet : `fixtures/o20-conteneurs-a-etat/verte/`. Sans composant à état reconnu ni
+déclaration : SKIP, jamais un PASS vide. Un fichier compose que le lecteur refuse (étiquette, clé complexe) rend FAIL,
+jamais un PASS silencieux. Une commande citée ne se lit pas : fichier de test (`*.test.*`, `self-test.*`),
+ligne de commentaire, ou commande au milieu d'une phrase. Une commande commence une ligne, suit un opérateur de
+shell ou un `run:`, ou ouvre une chaîne de code.
+
+**Trois lectures fermées par TF-2657** (lot Produit-82 du 13/11/2026, RT-38) :
+
+- **Plateforme gérée.** Une ligne de la table dont le volume se crée par l'API d'une plateforme (Railway, Cloud Run,
+  Container Apps, App Runner…) est acceptée quand elle nomme la plateforme (colonne `Composant`, `Volume` ou
+  `Commande de création`) et que sa commande de création est un script qui existe parmi les fichiers lus
+  (`python deploy/railway/deployer.py …`) ou la CLI de la plateforme (`railway …`, `gcloud …`). Le volume n'est
+  alors pas confronté au chemin des données : il est dit en info. Un script introuvable, une plateforme non nommée
+  ou une commande « à la main » restent refusés. Fixtures : `fixtures/o20-plateforme-geree/{verte,rouge}`.
+- **Ancres YAML.** Un fichier compose est lu après résolution des ancres (`&`), des alias (`*`) et de la clé de
+  fusion (`<<`) ; la clé écrite dans le service l'emporte sur la fusion. Une expansion en chaîne est coupée à
+  20 000 nœuds. Les étiquettes (`!!str`) et les clés complexes restent refusées. Fixtures : `fixtures/o20-ancres/{verte,rouge}`.
+- **Périmètre exclu par git.** Les fichiers que `.gitignore` exclut (un clone amont en lecture seule, par exemple)
+  ne sont pas lus ; l'exclusion est dite en info. Hors dépôt git, ou git absent, rien n'est écarté.
+
+**Ce qui n'est pas jugé :** le volume des plateformes gérées (Railway, Container Apps, Cloud Run), dont seul le script ou la CLI de création est lu ; une image
+hors référentiel et absente de la table ; une image résolue par une variable ; la vérité du chemin déclaré ;
+une commande construite dynamiquement dans du code ; un conteneur créé hors des fichiers du produit.
+
+## Le GO humain d'un déploiement GitHub Actions est une approbation d'environnement (O-21, TF-2003)
+
+Les plans donnent les commandes ; le gabarit `gabarits/workflow-deploiement-production.yml` donne le workflow
+qui les porte, et O-21 juge ce workflow. Le GO humain (R-38) y est l'approbation de l'environnement
+`production`, comme le pose la décision D-3 (a) du 17/10/2026 (porte M-16 du pilot).
+
+Le piège qui fonde la règle, lu le 29/10/2026 dans la documentation de GitHub : « Running a workflow that
+references an environment that does not exist will create an environment with the referenced name », et cet
+environnement « will not have any protection rules or secrets configured ». Un workflow peut donc nommer
+`production` et déployer sans approbation. Le gabarit ajoute un job `garde-go` qui lit l'environnement par
+l'API, en lecture seule, et échoue sans relecteur requis, sans « Prevent self-review » ou sans restriction
+de branche. Le job de déploiement en dépend : il est alors sauté.
+
+O-21 nomme 4 écarts : un job qui déploie sans environnement (bloquant), un GO ni gardé ni prouvé par la
+capture `--protection` (bloquant), un déploiement sans groupe de concurrence (majeur) ou interruptible par
+`cancel-in-progress: true` (bloquant), et `id-token: write` donné hors du job de production (majeur).
+
+Faits, citations et sources : `references/WORKFLOW-DEPLOIEMENT.md`. Réglages GitHub à poser avant le premier
+run, par un humain : l'environnement `production` avec relecteurs requis, « Prevent self-review » et branches
+de déploiement restreintes. Sur un dépôt privé, ces règles exigent un plan GitHub Team ou Pro ; le plan du
+compte n'est pas mesuré.
+
+**Ce qui n'est pas jugé :** les réglages réels sans capture ; la confiance fédérée côté cloud ; l'épinglage par
+SHA et le secret long d'une action de connexion (WF-2 et WF-5 de forge-websec) ; une garde lue mais neutralisée
+(`|| true`) ; un workflow réutilisable appelé au niveau du job.
+
+## « En service » d'une tâche planifiée se prouve par une exécution lue (O-22, D-108 (b))
+
+`node oracles/oracle-ops.mjs --mise-en-service <COMPOSANTS-OPS.md> [--le "AAAA-MM-JJ HH:MM"]` juge un document,
+sans rien exécuter ni appeler. Le fait qui l'a fait naître, le 21/10/2026 chez un produit : une tâche planifiée
+de publication sur un réseau social a été déclarée « C'est en service » à la mise en service. L'essai avait
+passé. Aucune publication n'a eu lieu du 20 au 25/10, et la vérification prévue à 18 h 45 n'a pas été faite.
+Rien dans la forge n'empêchait la déclaration ni ne signalait l'échéance manquée. Décision humaine D-108 (b)
+du 29/10/2026 : « en service » exige l'identifiant d'une publication lue, et une échéance dépassée alerte.
+
+Une tâche est **désignée** par sa table, jamais devinée de son nom : sous un titre « Tâches planifiées »
+(ou « récurrentes »), par une colonne `Cadence` (ou `Planification`, `Récurrence`) renseignée, ou par une
+colonne `Type` qui dit planifié, récurrent, cron. Quand elle est « en service » (statut « actif » ou
+« partagé » du vocabulaire fermé d'O-15, ou « en service »), sa ligne porte :
+
+| Colonne | Contenu |
+|---|---|
+| `En service depuis` | la date ET l'heure de la mise en service, `AAAA-MM-JJ HH:MM` (`Mise en service le` accepté) ; toute lecture lui est **postérieure** (TF-2560, D-108 (b) du 14/11/2026) : l'identifiant d'une publication lue pendant l'essai, avant la mise en service, n'est pas celui de la tâche en service |
+| `Première exécution lue` | l'identifiant ou l'URL de la publication réelle ; ni « l'essai a passé », ni une date, ni un mot |
+| `Première lecture le` | la date ET l'heure où elle a été lue, `AAAA-MM-JJ HH:MM` (`THH:MM` et `HHhMM` acceptés) |
+| `Prochaine échéance` | l'instant où l'exécution suivante doit être relue ; sans heure, elle vaut la fin de son jour |
+| `Dernière exécution lue`, `Dernière lecture le` | la preuve plus récente, exigée quand l'échéance est passée |
+
+Constats, tous bloquants, un par raison et par tâche : preuve absente, ou un essai (« à blanc », « simulé »)
+sans le mot « réelle » ; lecture sans date, sans heure, illisible ou postérieure à l'instant de référence ;
+**lecture antérieure ou égale à la mise en service**, mise en service absente, sans heure ou illisible ;
+échéance absente ou illisible ; **échéance dépassée sans lecture plus récente qu'elle**, le constat disant
+la lecture la plus récente connue. Une table sans les colonnes de preuve rend un seul constat qui nomme les
+tâches en service et les colonnes. Le remède est dit dans chaque constat : lire l'exécution et dater la
+lecture, ou ramener le statut à « déclaré », la forme honnête d'une tâche dont aucune exécution n'a été lue
+(non jugée). Aucune tâche désignée, ou aucune en service : SKIP, jamais un PASS vide. `--le` fixe l'instant de
+référence, une date seule valant la fin de son jour ; un `--le` illisible rend `donnees_insuffisantes`.
+Exemples : `fixtures/o22-mise-en-service-planifiee/` (`verte.md`, `rouge.md`, `rouge-sans-colonnes.md`,
+`rouge-lecture-avant-mise-en-service.md`).
+
+**Ce qui n'est pas jugé :** la vérité de l'identifiant (un identifiant inventé passe : l'ouvrir reste un geste
+de relecture) ; la mise en service, lue telle que déclarée, sans lecture du planificateur ; une tâche déclarée en
+service hors des tables désignées ; l'échéance, lue telle que déclarée, jamais recalculée depuis la cadence ; le
+fuseau (heure locale du poste) ; **l'alerte au sens d'une notification** : l'oracle rend un constat quand on le
+rejoue, il ne tourne pas à l'échéance — c'est le contrôle ci-dessous qui surveille.
+
+## Une échéance dépassée sans publication lue alerte, depuis un autre planificateur que la tâche (TF-2560, D-108 (b) du 14/11/2026)
+
+`node scripts/surveiller-echeances.mjs controler <echeancier.json> <releve.json> --lance-par <planificateur du contrôle> [--le <ISO 8601>] [--sortie verdict.json]`
+lit deux fichiers que le run écrit, et n'appelle aucune plateforme. L'échéancier `forge-ops/echeancier@1` dit ce que
+chaque tâche doit publier (`nom`, `planificateur`, `delai_min`, `echeances` en ISO 8601 avec fuseau) ; le relevé
+`forge-ops/publications-lues@1` dit ce que le run a lu (`releve_le`, `lectures` : tâche, identifiant ou URL, `publie_le`,
+`lu_le`). Une échéance est **dépassée** quand sa fenêtre (échéance + `delai_min`) est close à l'instant de référence ; elle
+est **honorée** par une lecture valide de la même tâche publiée dans `[échéance − délai, échéance + délai]` (un identifiant
+qui n'en est pas un, ou qui cite un essai, ne compte pas, et se liste en `lectures_ignorees`). Chaque échéance dépassée non
+honorée est une alerte `ECHEANCE-DEPASSEE`, nommée (tâche, échéance, retard en minutes, dernière publication lue).
+
+Exit 0 `a-jour` · 1 `alerte` · 2 entrée illisible ou usage · 3 `releve-anterieur` : une échéance dépassée dont la fenêtre se
+ferme après le relevé, que le relevé ne peut pas juger — jamais un « à jour » par défaut. **Le contrôle ne s'exécute pas
+dans la tâche qu'il contrôle** : `--lance-par` est obligatoire et refusé (exit 2) s'il est le `planificateur` d'une tâche de
+l'échéancier, parce qu'une tâche arrêtée n'exécute plus sa propre surveillance — le fait du 21/10/2026. Aucun défaut
+implicite : `delai_min` obligatoire, fenêtres qui se chevauchent refusées, `--le` illisible refusé.
+Exemples : `fixtures/echeances/` (`echeancier.json` ; relevés vert, rouge sans publication, rouge antérieur). Registre :
+`references/GESTES-EXPLOITATION.md`, G-09.
+
+**Ce qui n'est pas jugé :** la vérité d'un identifiant (le relevé est celui du run) ; `--lance-par` est une déclaration, la
+forge ne voit pas le planificateur du run ; qui lance le contrôle, à quelle cadence, et vers qui va l'alerte (le code 1 et
+les lignes `ALERTE` en sont la matière) sont des décisions de run : la forge ne planifie rien. Les échéances sont celles
+déclarées, jamais recalculées d'une cadence.
+
+## Un travail planifié s'exerce (O-8, TF-0527)
+
+`node oracles/oracle-ops.mjs <racine> --planifie` — toute définition planifiée du dépôt
+(`.github/workflows/`, `azure-pipelines*.yml`, `pipelines/`) doit porter un **mode d'exercice à la
+demande**, distinct de sa cadence : un déclencheur manuel, ou un paramètre d'exécution forcée
+**lu** dans la garde de cadence. Sans lui, le mécanisme ne peut être éprouvé qu'à sa prochaine
+échéance — donc il se découvre cassé au moment précis où l'on compte dessus. Un paramètre déclaré
+et jamais lu affiche une case à cocher qui ne fait rien : même verdict qu'un paramètre absent.
+
+**Un worker qui planifie lui-même se lit aussi (TF-1806).** Une boucle `while True` à intervalles
+`timedelta`, ou une bibliothèque de planification (APScheduler, `schedule`, Celery beat,
+`node-cron`), ne laisse aucun fichier cron. O-8 lit donc aussi les sources `.py`, `.js`, `.mjs`
+et `.ts` du dépôt, à quatre niveaux au plus, hors dépendances, tests et `frontend`. Il ne lit pas
+un mode d'exercice dans du code : il lit sa déclaration, écrite en commentaire ou en docstring du
+fichier qui planifie.
+
+```python
+"""Worker : santé, rafraîchissement planifié, purge.
+exercice_a_la_demande: python -m app.cli executer-tache purge-creditsafe
+exerce_le: 2026-10-15
+"""
+```
+
+Déclaré, le worker compte comme une définition planifiée (PASS, avec la date d'exercice). Sans
+déclaration, O-8 le nomme en avertissement et rend SKIP, jamais « rien à juger ». Mesuré le
+15/10/2026 en lecture seule sur deux produits du parc : deux workers planifiés en code nommés,
+là où O-8 rendait « aucune définition planifiée ».
+
+Les faits d'exploitation constatés (comportements d'outils tiers qu'aucune documentation n'énonce)
+vivent dans `references/GESTES-EXPLOITATION.md`, datés et sourcés.
+
+## M-8 (fraîcheur de MEP) est tenu par O-7, pas par une page unique (TF-1075)
+
+La porte de fraîcheur post-déploiement (règle M-8 de l'étape MEP du pilot) ne doit jamais se
+fonder sur l'empreinte d'une seule page (banc défauts-échappés, livrable E-05 : comparer
+uniquement `site/index.html` déclare « PRODUCTION CONFORME » quand une AUTRE page a changé
+— faux vert mesuré le 26/08/2026, récidive le lendemain sur 70 pages). **O-7 (`--empreinte`)
+tient déjà cette exigence** : il compare l'empreinte de TOUS les fichiers de la release, pas
+seulement l'accueil. La preuve par perturbation (`self-test.mjs`, section M-8) modifie une
+page hors accueil sans toucher l'accueil et vérifie qu'O-7 la voit et la NOMME, quand une
+porte reproduisant le critère d'E-05 (une seule empreinte, une seule page) ne voit rien.
+Reste côté pilot : citer O-7 comme le contrôle exécutable de M-8 dans `ETAPE-MEP.md`
+(document hors périmètre de ce dépôt).
+
+## Manifeste servi épinglé à l'empreinte (O-10, TF-1042)
+
+`node oracles/oracle-ops.mjs --manifeste-servi <requirements.txt>` — mesure fondatrice
+(Produit-11, 11/09/2026) : un `requirements.txt` copié dans l'image servie épinglait 37
+paquets par **version** (`paquet==x.y.z`), aucun par **empreinte** (`--hash=sha256:...`).
+Un numéro de version ne verrouille rien sur un registre qui admet la republication sous le
+même numéro ; seule l'empreinte du contenu le fait — même principe qu'O-7 (déployé = scellé),
+appliqué un cran plus tôt, au manifeste qui construit l'image. Périmètre v0 : format
+`requirements.txt` (pip) uniquement, borné à la mesure fondatrice ; une ligne sans `==` (URL,
+plage, `-r`/`-e`) n'épingle rien et n'est pas jugée.
+
+## Kit Google Ads — import web et relevé en lecture seule (TF-1364)
+
+`node scripts/google-ads/google-ads.mjs import-web | releve | delta | avant-depense` — le
+déploiement de campagnes du Réseau de Recherche par l'écran Importations, sans jamais écrire dans le
+compte : le kit génère le fichier que l'exploitant dépose, et juge un relevé que
+`scripts/google-ads/collecter-compte.py` pose en lecture seule. Né du kit éprouvé chez un produit
+les 21-22/09/2026 (191 lignes acceptées sur 191), rendu générique sur décision humaine D-69 (a) du
+13/10/2026. Les règles apprises y sont des contrôles : colonnes, vocabulaires et colonnes
+obligatoires lus dans les modèles de l'écran ; conformité comparée par contenu ; verdict de
+**diffusion** sur une fenêtre qui inclut aujourd'hui (un relevé lu sur `LAST_30_DAYS` est refusé) ;
+diagnostic d'une diffusion nulle borné à sa mesure ; liste « avant la première dépense ». Recette
+sans réseau : `node scripts/google-ads/google-ads.mjs --self-test`, rejouée par
+`oracles/self-test.mjs`. Mode d'emploi et non-jugé : [scripts/google-ads/README.md](scripts/google-ads/README.md).
+
+## Frontières
+
+Voir [CLAUDE.md](CLAUDE.md) — la forge outille, le pilot orchestre, l'humain donne le GO.
+Invocation par le pilot uniquement ; retours par lots vers `input\` du pilot.
+
+## Prérequis
+
+Node.js ≥ 18. Aucune dépendance externe.

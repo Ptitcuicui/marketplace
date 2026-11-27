@@ -20,13 +20,20 @@ la Factory, sans jamais simuler un verdict.
 Une mallette peut livrer ses forges avec ses skills : le consultant n'a rien à cloner, et la forge
 se met à jour avec la marketplace. `outils/mallettes.json` les déclare dans `forges` ;
 `construire.mjs` les copie sous `plugins/<mallette>/forges/<forge>/`, sans leurs `skills/`,
-`.claude/`, `.github/` ni réglages git.
+`.claude/`, `.github/` ni réglages git (sauf ce que `garder` réclame), et joint les paquets npm de
+production verrouillés quand la forge déclare `dependances_npm`.
 
 | Mallette | Forges embarquées |
 |---|---|
 | `factory-socle` | `factory-pilot`, partie outil seulement (doctrine, oracles, gabarits, scripts, agents hérités) |
+| `factory-produit` | `factory-forge-ops` (le pilot qu'elle lit vient du socle) |
 | `factory-data` | `factory-forge-data`, `factory-forge-observability` |
-| `factory-audit-securite` | `factory-forge-agents-security`, `factory-forge-websec` |
+| `factory-audit-securite` | `factory-forge-agents-security`, `factory-forge-websec`, `factory-forge-audit` (avec `ajv` et `js-yaml`), `factory-forge-tests` |
+| `factory-marketing` | `factory-forge-seo-geo` (sans ses `input/` ni `output/`) |
+
+Ce qui reste à installer sur le poste, sur accord : `uv` pour forge-tests (ses paquets Python
+viennent de `uv.lock`), Chromium pour ses pans accessibilité et visuel, et Playwright pour le rendu
+JS de forge-seo-geo. Sans eux, ces pans se déclarent non jugés, jamais verts ; le reste se joue.
 
 ### Pilot embarqué (mode consultant)
 
@@ -43,10 +50,9 @@ session. Ce que le poste écrit dans le pilot (TODO, retours, ledger) n'est jama
 y ouvre une issue. Un parc complet sur le poste prime toujours, et alors le hook n'écrit rien.
 Dans le chat claude.ai, aucun hook ne tourne : pas de pilot.
 
-Pas encore embarquées : `factory-forge-audit` (paquets npm `ajv` et `js-yaml`),
-`factory-forge-tests` (Playwright et Chromium), `factory-forge-ops` (dépend du pilot),
-`factory-forge-seo-geo` (rendu JS par Playwright en option). Leurs skills demandent toujours la
-forge sur le poste.
+Pas embarquées, parce qu'aucune mallette n'en livre de skill : `factory-forge-conception`,
+`factory-forge-design`, `factory-forge-development`, `factory-forge-organization` et
+`factory-forge-agents` (ses skills sont dans le socle et les mallettes, ses outils restent au parc).
 
 ## Installer (Claude Code)
 

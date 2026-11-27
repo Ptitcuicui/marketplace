@@ -1,0 +1,72 @@
+__pycache__/
+*.py[cod]
+.venv/
+.venv-*/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+dist/
+build/
+*.egg-info/
+propositions/
+node_modules/
+dist/
+test-results/
+playwright-report/
+resultat-playwright.json
+.visuel/*.html
+.visuel/*.jsonl
+# TF-2091 : verrou transitoire de la fenetre de mutation. Pose puis retire pendant l audit ; un
+# verrou qui survit (interruption) signale une mutation inachevee, il ne se committe jamais.
+.forge-tests-mutation-en-cours
+.env
+
+# journaux du hook qualite (TF-0065) : sidecars d'oracles hors depot — les preuves
+# VOULUES vivent versionnees sous forge/ (decision C4), le reste ne se committe pas
+*.oracles.json
+*.oracles-cache.json
+*.oracles-historique.jsonl
+!forge/**/*.oracles.json
+!forge/**/*.oracles-historique.jsonl
+
+# TF-0601 (24/08/2026) — le gabarit de configuration que la RECETTE dépose sur ses propres bancs.
+# `gabarit_env.deposer()` est un acquis de TF-0539 : la forge dépose le fichier qu'elle réclame,
+# au lieu de laisser le projet le reconstituer à la main depuis un rapport de 1,1 Mo. C'est juste,
+# et ça vaut aussi quand le « projet audité » est un banc d'essai de la forge elle-même.
+#
+# Mais le contrôle de stabilité d'arbre (TF-0294) voyait apparaître ces deux fichiers PENDANT la
+# recette et REFUSAIT le verdict — « il n'est ni TENU ni NON TENU ». Mesuré : deux exécutions
+# consécutives, deux refus, la seconde sur un arbre nettoyé à la main juste avant. Sur un arbre
+# parfaitement propre, la recette ne pouvait donc JAMAIS rendre de verdict, et trois familles de
+# contrôles rouges vivaient sous ce refus sans que personne puisse les voir bouger.
+#
+# Le remède est celui que le contrôle documente lui-même : ce que la recette écrit légitimement
+# est IGNORÉ, comme `test-results/` et les caches. La portée est bornée AUX BANCS — chez un vrai
+# produit, le dépôt du gabarit doit rester visible, c'est tout son intérêt.
+fixtures/banc-*/.env.forge-tests.exemple
+
+# TF-0763 (02/09/2026) — MÊME défaut que ci-dessus, sur l'AUTRE fichier que la recette dépose.
+# `gabarit_env.proteger()` (TF-0620) ajoute `.env.forge-tests` au `.gitignore` du projet audité,
+# et CRÉE ce `.gitignore` quand il n'existe pas. Sur les bancs, il n'existait pas : deux fichiers
+# apparaissaient donc PENDANT la recette et TF-0294 refusait le verdict — « ni TENU ni NON TENU »,
+# mesuré sur un arbre propre. La ligne du 24/08 ne couvrait que le gabarit `.exemple` ; celle-ci
+# couvre la protection. Portée bornée aux bancs, pour la même raison : chez un vrai produit, le
+# `.gitignore` que la forge écrit DOIT rester visible et se committer.
+fixtures/banc-*/.gitignore
+
+# TF-0763 (02/09/2026) — MÊME classe encore, sur ce que la CAMPAGNE DE MUTATION note chez le
+# projet audité : `forge/mutation-derniere-campagne.json` (D-34, marqueur de péremption). La
+# recette demande désormais la campagne sur ses deux bancs (la mutation est à la demande pour les
+# produits, obligatoire pour la recette qui la met à l'épreuve) : le marqueur apparaissait donc
+# pendant la recette, et TF-0294 refusait le verdict. Son contenu change à CHAQUE campagne (sha,
+# date, score) — versionné, il serait une instabilité permanente. Portée bornée aux bancs.
+fixtures/banc-*/forge/
+
+# TF-0786 (03/09/2026) — le journal d'empreintes des ORACLES DU SOCLE que la recette joue
+# (`check_html.py`, `render_page.py`, pris dans `~/.claude/skills/`). La recette y consigne
+# l'identité des oracles de son exécution, et la relit au run suivant pour DIRE si les deux
+# rapports sont comparables. Ce fichier décrit donc le POSTE, pas le dépôt : versionné, il
+# changerait à chaque montée de version du skill chez n'importe qui, et le contrôle de
+# stabilité d'arbre TF-0294 refuserait le verdict — exactement le remède déjà appliqué
+# au gabarit de TF-0601.
+recette/.empreintes-oracles.json

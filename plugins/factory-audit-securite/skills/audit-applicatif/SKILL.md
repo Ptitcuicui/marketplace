@@ -13,10 +13,20 @@ README de la forge, qui fait foi.
 
 ## 1. Trouver la forge (jamais simuler)
 
+Dans cet ordre : la forge du poste (`$FORGE_ROOT`, sinon `~/factory`), puis la copie livrée
+avec la mallette `factory-audit-securite` (avec ses paquets npm `ajv` et `js-yaml` : rien à
+installer).
+
 ```bash
 R="${FORGE_ROOT:-$HOME/factory}"; F="$R/factory-forge-audit"
+[ -f "$F/README.md" ] || F="${CLAUDE_PLUGIN_ROOT}/forges/factory-forge-audit"
 test -f "$F/README.md" && echo "forge présente : $F" || echo "forge absente"
+test -d "$F/node_modules/ajv" || echo "paquets npm absents : npm ci dans $F"
 ```
+
+Hors Claude Code, quand `${CLAUDE_PLUGIN_ROOT}` n'est pas remplacé, la copie livrée est dans
+`../../forges/factory-forge-audit` à partir du dossier de ce skill : la chercher là avant de
+conclure à son absence.
 
 Forge absente : le dire tel quel, et proposer la phrase d'usage de la Factory dans le dossier du
 projet (`Utilise https://github.com/Ptitcuicui/factory pour ce projet`), qui installe le parc.

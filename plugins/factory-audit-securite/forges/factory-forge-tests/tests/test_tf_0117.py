@@ -1,0 +1,280 @@
+"""TF-0117 — le dashboard du banc-rouge affichait « NULL » littéral × 24 dans ses cellules.
+
+Constat réel (12/08) : `check_html.py` échoue sur le dashboard produit depuis le rapport du
+banc-rouge — règle L11 du socle (« aucun littéral de langage — null/None/undefined — dans le
+texte visible : une valeur non renseignée doit être traitée par le producteur »).
+
+Sur pièces (recalculé, pas recopié) : les 24 occurrences ne sont PAS des valeurs absentes qui
+ont fuité — `_e()` traite déjà toute valeur manquante en chaîne vide. Ce sont des constats qui
+NOMMENT fidèlement une contrainte SQL du produit audité (`{colonne} NOT NULL : inventorié,
+jamais exercé par la suite`, forgé par `forge_tests.noyau` à partir du libellé posé par
+`forge_tests.adaptateurs.data`). Le mot « NULL » de « NOT NULL » matche la même regex que le
+littéral technique que L11 traque, sans discriminer le contexte — un faux positif de l oracle
+sur du vocabulaire du domaine, pas un défaut de contenu.
+
+Le socle prévoit l échappatoire prévue pour ce cas exact : l attribut `data-litteral-ok`, qui
+dit à L11 « ce mot est cité fidèlement, ce n est pas une valeur non traitée ». Le correctif
+l applique aux TROIS colonnes de texte libre qui portaient les 24 occurrences (le « constat
+mesuré » des chapitres, la « raison mesurée » des échecs, l « attendu » des actions) — jamais
+aux colonnes structurées (état, classe, sévérité…), qui doivent continuer de dénoncer un
+littéral non traité si l une d elles en laissait fuir un demain.
+"""
+
+from __future__ import annotations
+
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+from forge_tests import adoption as _adoption
+from forge_tests.livrables import dashboard as dash
+
+RAPPORT = {
+    "verdict": "FAIL",
+    "seuils": {},
+    "findings": [
+        {
+            "id": "contrainte:email.not_null",
+            "pan": "data",
+            "severite": "signale",
+            "classe": "element-non-exerce",
+            "message": "email NOT NULL : inventorie, jamais exerce par la suite",
+            "localisation": "backend/app/models.py",
+            "risque": 5,
+        }
+    ],
+    "non_testables": [],
+    "pans_non_couverts": [],
+    "actions": [
+        {
+            "finding_ref": "contrainte:email.not_null",
+            "categorie": "manuelle_dev",
+            "etape_cible": "development",
+            "attendu": (
+                "générer un jeu qui viole la contrainte (email NOT NULL : inventorie, "
+                "jamais exerce par la suite)"
+            ),
+        }
+    ],
+}
+CONTEXTE = {
+    "produit": "Preuve TF-0117", "date": "2026-08-12", "rapport_nom": "r.json",
+    "rapport_sha": "0" * 64,
+}
+CHAPITRES = [
+    {
+        "famille": "technique", "code": "T1", "titre": "Contraintes", "pans": ["data"],
+        "decoupe": "table", "elements": 1, "rattaches": 1, "grise": False,
+        "pans_non_couverts": [],
+        "sous_chapitres": [
+            {
+                "libelle": "table t",
+                "elements": [
+                    {
+                        "id": "contrainte:email.not_null", "etat": "non_exerce",
+                        "classe": "element-non-exerce",
+                        "message": "email NOT NULL : inventorie, jamais exerce par la suite",
+                        "risque": 5,
+                    },
+                ],
+            },
+        ],
+    },
+]
+
+
+def test_texte_libre_enveloppe_le_constat_dans_le_garde_de_loracle_socle() -> None:
+    rendu = dash._texte_libre("email NOT NULL : inventorie, jamais exerce par la suite")
+    assert rendu == (
+        "<span data-litteral-ok>email NOT NULL : inventorie, jamais exerce par la suite</span>"
+    )
+
+
+def test_texte_libre_continue_de_vider_une_valeur_absente() -> None:
+    """Non-régression : `_texte_libre` ne doit jamais afficher un littéral pour une VRAIE
+    valeur manquante — il délègue à `_e`, qui rend déjà None en chaîne vide."""
+    assert dash._texte_libre(None) == "<span data-litteral-ok></span>"
+
+
+def test_dashboard_ne_publie_plus_null_hors_du_garde_data_litteral_ok() -> None:
+    """ROUGE implicite : avant le correctif, ces trois colonnes rendaient `_e(...)` seul — le
+    mot « NULL » de « NOT NULL » apparaissait NU dans le texte visible, exactement ce que L11
+    dénonce. Ici, toute occurrence du mot est à l intérieur du garde."""
+    page = dash.construire(RAPPORT, CONTEXTE, CHAPITRES)
+    occurrences = list(re.finditer(r"NULL", page))
+    assert occurrences, "le cas de test n exerce plus le mot NOT NULL — fixture caduque"
+    for match in occurrences:
+        alentours = page[max(0, match.start() - 80) : match.start()]
+        assert "data-litteral-ok" in alentours, (
+            f"« NULL » hors garde : {page[match.start() - 40 : match.start() + 20]!r}"
+        )
+
+
+def test_check_html_pass_sur_un_constat_qui_cite_not_null(tmp_path: Path) -> None:
+    """Preuve exécutée, pas de confiance : l oracle socle réel doit rendre PASS. Reproduit sur
+    pièces le 12/08 : le même contenu, SANS le garde, faisait échouer check_html.py (verdict
+    FAIL, « L11 littéral de langage… « NULL » × 24 »)."""
+    page = dash.construire(RAPPORT, CONTEXTE, CHAPITRES)
+    sortie = tmp_path / "dashboard.html"
+    dash.ecrire(sortie, page, None)
+
+    oracle = Path.home() / ".claude" / "skills" / "factory-page-html" / "scripts" / "check_html.py"
+    if not oracle.exists():
+        return  # DECLARE, jamais contourne — meme convention que verifier_dashboard (recette)
+
+    resultat = subprocess.run(
+        [sys.executable, str(oracle), str(sortie)],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    assert resultat.returncode == 0, (resultat.stdout or "") + (resultat.stderr or "")
+
+
+def test_render_page_pass_aussi_sur_le_meme_dashboard(tmp_path: Path) -> None:
+    """TF-1110 — la recette (verifier_corpus.py, section dashboard) joue check_html.py ET
+    render_page.py sur le même artefact : les deux oracles gardent leur PROPRE périmètre
+    (déclarations de la feuille vs mesure d'un rendu réel), le second ne remplace pas le
+    premier. Ce test complète `test_check_html_pass_sur_...` — le même dashboard doit passer
+    les DEUX, à 390 px où V15 (en-tête de tableau) et V7 se mesurent."""
+    page = dash.construire(RAPPORT, CONTEXTE, CHAPITRES)
+    sortie = tmp_path / "dashboard.html"
+    dash.ecrire(sortie, page, None)
+
+    oracle = (
+        Path.home() / ".claude" / "skills" / "factory-page-html" / "scripts" / "render_page.py"
+    )
+    if not oracle.exists():
+        return  # DECLARE, jamais contourne — meme convention que verifier_dashboard (recette)
+
+    resultat = subprocess.run(
+        [sys.executable, str(oracle), str(sortie), "--widths", "390"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    assert resultat.returncode == 0, (resultat.stdout or "") + (resultat.stderr or "")
+
+
+def test_render_page_detecte_un_entete_de_tableau_pose_sur_sa_ligne(tmp_path: Path) -> None:
+    """Fixture ROUGE de V15 (TF-0901, TF-1110) — preuve que le SENS ROUGE de render_page est
+    réellement exercé, pas seulement son sens vert. Reproduit la classe de défaut exacte
+    mesurée sur le banc rouge (14/09/2026) : un `<thead>` visuellement masqué par
+    `position:absolute; overflow:hidden` SANS `top`/`left` déclarés reste à sa POSITION
+    STATIQUE — ses `<th>`, convertis en `display:block` pour un rendu carte mobile, gardent
+    leur taille NATURELLE (le rognage `overflow:hidden` de l'ancêtre ne réduit jamais la
+    boîte mesurée d'un descendant) et se retrouvent géométriquement là où `<tbody>` vient de
+    remonter — l'en-tête mange sa propre première ligne, AU REPOS, sans aucun défilement.
+
+    TF-2170 (05/11/2026) : un `<thead>` ROGNÉ par `overflow:hidden; clip` ne se voit pas à
+    l'écran, et V15 ne le compte plus. La fixture garde donc la sortie du flux sans son
+    rognage : les `<th>` restent visibles, posés sur la première ligne, le défaut réel.
+    """
+    page = """<!DOCTYPE html>
+<html lang="fr"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Factory — V15 rouge — Socle — 20260914a</title>
+<style>
+  table, thead, tbody, tr, th, td { display:block; width:auto; }
+  thead { position:absolute; white-space:nowrap; }
+  th, td { padding:8px; border:1px solid #ccc; }
+</style></head>
+<body><main><h1>Table</h1>
+<table><thead><tr><th>Colonne</th></tr></thead>
+<tbody><tr><td>Valeur 1</td></tr><tr><td>Valeur 2</td></tr></tbody></table>
+</main></body></html>"""
+    sortie = tmp_path / "v15-rouge.html"
+    sortie.write_text(page, encoding="utf-8")
+
+    oracle = (
+        Path.home() / ".claude" / "skills" / "factory-page-html" / "scripts" / "render_page.py"
+    )
+    if not oracle.exists():
+        return
+
+    resultat = subprocess.run(
+        [sys.executable, str(oracle), str(sortie), "--widths", "600"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    sortie_texte = (resultat.stdout or "") + (resultat.stderr or "")
+    assert resultat.returncode != 0, (
+        "fixture rouge caduque : render_page.py ne signale plus rien sur ce motif — "
+        + sortie_texte
+    )
+    assert "V15" in sortie_texte, sortie_texte
+
+
+def test_render_page_detecte_des_badges_d_etat_indiscernables(tmp_path: Path) -> None:
+    """Fixture ROUGE de V16 (TF-0910, TF-1110) — trois badges d'état sur des fonds `*-fill`
+    pastel (L* 93-97, tous voisins) sont indiscernables entre eux : la mesure porte sur la
+    PAIRE de fonds, jamais sur un badge seul (V2 rendait déjà PASS badge par badge)."""
+    page = """<!DOCTYPE html>
+<html lang="fr"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Factory — V16 rouge — Socle — 20260914a</title>
+<style>
+  .badge { display:inline-block; border-radius:999px; padding:2px 11px; }
+  .b-pass { background:#F2FCF5; }
+  .b-fail { background:#FEF2F2; }
+  .b-part { background:#FFFBEB; }
+</style></head>
+<body><main><h1>Badges</h1>
+<span class="badge b-pass">PASS</span>
+<span class="badge b-fail">FAIL</span>
+<span class="badge b-part">PARTIEL</span>
+</main></body></html>"""
+    sortie = tmp_path / "v16-rouge.html"
+    sortie.write_text(page, encoding="utf-8")
+
+    oracle = (
+        Path.home() / ".claude" / "skills" / "factory-page-html" / "scripts" / "render_page.py"
+    )
+    if not oracle.exists():
+        return
+
+    resultat = subprocess.run(
+        [sys.executable, str(oracle), str(sortie), "--widths", "600"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    sortie_texte = (resultat.stdout or "") + (resultat.stderr or "")
+    assert resultat.returncode != 0, (
+        "fixture rouge caduque : render_page.py ne signale plus rien sur ce motif — "
+        + sortie_texte
+    )
+    assert "V16" in sortie_texte, sortie_texte
+
+
+def test_bouton_cas_derives_structure_le_solde_dynamique_sur_sa_propre_ligne() -> None:
+    """TF-1109 — défaut antérieur à TF-1104 (`_detail_element` existe depuis 506efce, 14/08),
+    non touché par ce correctif. Mesure sur le banc rouge : le suffixe dynamique
+    (`_adoption.libelle_solde`) pousse la légende du bouton « cas dérivés » à 284 caractères
+    en un seul bloc — L3 quater du socle (TF-0935) juge illisible toute légende SANS saut de
+    ligne au-delà de 200 caractères. Fixture ROUGE : un solde NON SOLDÉ avec une adoption
+    refusée reproduit un suffixe de longueur comparable à la mesure du banc rouge.
+    """
+    detail = {
+        "cas": [
+            {"ref": "C0", "titre": "cas 0", "preconditions": "-", "jeu": "-", "etapes": [],
+             "attendu": "-", "exigences": [], "adoption": {"statut": _adoption.REFUSE}},
+            {"ref": "C1", "titre": "cas 1", "preconditions": "-", "jeu": "-", "etapes": [],
+             "attendu": "-", "exigences": []},
+            {"ref": "C2", "titre": "cas 2", "preconditions": "-", "jeu": "-", "etapes": [],
+             "attendu": "-", "exigences": []},
+        ]
+    }
+    bouton, _ = dash._detail_element(detail)
+    m = re.search(r'title="([^"]*)"', bouton, re.S)
+    assert m, "le bouton doit porter un title"
+    titre = m.group(1)
+    lignes = titre.split("\n")
+    # ROUGE implicite : le suffixe dynamique seul dépasse largement les 60 caractères — une
+    # régression qui l aurait raccourci rendrait ce test caduc plutôt que muet.
+    assert len(lignes[-1]) > 60, "fixture caduque : le solde dynamique n est plus assez long"
+    # VERT : le title est STRUCTURÉ (une ligne par objet, dans l idiome de TF-1104) — L3 quater
+    # ne juge illisible qu un title SANS saut de ligne au-delà de 200 caractères ou 2 objets
+    # séparés par « ; »/« · ». Avant le correctif (une seule ligne concaténée par « — »),
+    # cette assertion aurait échoué : la légende entière, fixe + dynamique, tenait sur une
+    # seule ligne de 284 caractères.
+    assert "\n" in titre, (
+        "title non structuré : L3 quater le jugerait illisible au-delà de 200 caractères"
+    )
+    assert lignes[0] == "cas DÉRIVÉS de la surface"
+    assert "déposés hors du projet (G-1)" in lignes[1]
+    assert "NON SOLDÉ" in lignes[2] and "refusée" in lignes[2]

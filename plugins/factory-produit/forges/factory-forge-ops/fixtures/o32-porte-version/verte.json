@@ -1,0 +1,36 @@
+{
+  "format": "forge-ops/porte-version@1",
+  "version": "0.9.0",
+  "fonctions_touchees": ["IA", "courrier", "interface"],
+  "porte": {
+    "niveau": "complete",
+    "audit": "audit de la chaîne IA et courrier, rapport AUDIT-0.9.0 (fixture)",
+    "qualification": "qualification populée sur l'instance de recette, rapport QUALIF-0.9.0 (fixture)"
+  },
+  "smoke": {
+    "fournisseurs": [
+      {
+        "fonction": "ia",
+        "fournisseur": "fournisseur-ia-fictif",
+        "mode": "reel",
+        "cle": "reelle",
+        "appel": { "identifiant": "req_8f2c41d7a09b", "lu_le": "2026-11-22T10:15:00Z", "statut": 200 }
+      },
+      {
+        "fonction": "courrier",
+        "fournisseur": "fournisseur-courrier-fictif",
+        "mode": "reel",
+        "cle": "reelle",
+        "appel": { "identifiant": "msg-4471-b2e9", "lu_le": "2026-11-22T10:16:30Z", "statut": 202 }
+      }
+    ]
+  },
+  "activation": {
+    "brouillon_essai": {
+      "comparaison": "contenu",
+      "modele": "templates/activation.txt",
+      "brouillon": "essai/brouillon-activation.txt",
+      "ecarts": []
+    }
+  }
+}

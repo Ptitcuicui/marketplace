@@ -1,0 +1,1458 @@
+"""Adaptateur Mutation (Python) — second contre-oracle : ce qu on atteint, le vérifie-t-on ?
+
+Mutation réellement exécutée : on altère la source, on relance la suite, on compte les
+survivants. Un mutant survivant est nommé avec sa ligne — jamais un total agrégé seul.
+
+**A-1 (2026-08-06) — le périmètre cesse d être une liste blanche.** Jusqu ici l adaptateur
+lisait `backend/app/*.py` : un `glob` NON récursif. Sur le premier produit réel, cela mutait
+sept modules de socle et ignorait `services/` et `fournisseurs/` — la logique métier, c est-à-
+dire tout ce que l utilisateur voit. Le rapport annonçait « mutation 37/37, score 1,0 » sur un
+produit dont les deux tiers du code n avaient jamais été touchés. Le périmètre est désormais
+l arborescence ENTIÈRE des sources, et toute exclusion est **nominative, motivée, publiée**.
+
+**A-2 — aucun module silencieux.** L adaptateur publie `modules[]` : chaque module source du
+projet avec son état — exercé (lignes/branches couvertes), muté (score), ou **jamais exercé et
+nommé**. C est le principe fondateur de la forge appliqué à l étage du module : on nomme, on
+n agrège pas.
+
+**Budget.** Le coût d une mutation est une exécution de suite par mutant. La couverture de
+PÉRIMÈTRE (quels modules) est totale par défaut ; c est la PROFONDEUR (combien de mutants par
+module) qui est échantillonnée, par `FORGE_TESTS_MUTANTS_PAR_MODULE` (défaut 3). Le choix est
+délibéré : mieux vaut une mesure grossière sur tout le code qu une mesure fine sur un huitième.
+L échantillon est déterministe (indices régulièrement espacés, jamais les N premiers, qui
+seraient tous en tête de fichier) et le taux retenu est DÉCLARÉ au rapport.
+"""
+
+from __future__ import annotations
+
+import ast
+import contextlib
+import fnmatch
+import json
+import os
+import shutil
+import subprocess
+import time
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
+
+from forge_tests import classes, seuils
+from forge_tests.disposition import (
+    est_module_plat,
+    modules_plats,
+    motif_indetermine,
+    paquet_sources,
+    racine_execution,
+    racine_plate,
+)
+from forge_tests.execution import (
+    PREALABLE_ABSENT,
+    motif_indisponibilite,
+    python_designe,
+    resume_fichiers,
+)
+from forge_tests.noyau import Finding, SortieAdaptateur
+from forge_tests.risque import coter
+
+NOM, PAN = "mutation-python", "back"
+SEUIL = seuils.valeur("mutation_globale")
+DOSSIER_SOURCE = Path("backend/app")  # conservé pour mémoire : la racine est DÉCOUVERTE
+SUITE = "tests"
+
+POUR_COUVRIR = (
+    "fournir un environnement Python du projet (`backend/.venv` ou `.venv`, ou l'interpréteur "
+    "désigné par `--python`) avec sa suite verte, et un paquet de sources sous `backend/` — ou "
+    "des modules `.py` à la racine avec un `tests/` voisin (outil autonome, TF-2173) — la mutation "
+    "altère la source puis rejoue la suite, elle ne peut rien mesurer sans l'une ni l'autre"
+)
+
+# Chapitre(s) de cahier de tests que ce pan alimente. Le cahier et le dashboard les
+# DERIVENT du registre : une liste ecrite ailleurs aurait laisse un pan futur invisible.
+# `decoupe` nomme l axe de sous-chapitrage ; un axe inconnu retombe sur « element », et le
+# repli est DECLARE au cahier plutot que silencieux.
+CHAPITRES = (
+    {"code": "T6", "famille": "technique", "titre": "Robustesse de la suite",
+     "decoupe": "module", "axe_cas": "unitaire"},
+)
+
+
+# Dossiers qui ne sont pas du code du projet : les muter mesurerait la suite d un tiers.
+_DOSSIERS_EXCLUS = {
+    "__pycache__", ".venv", "venv", "site-packages", "node_modules", ".git", "migrations",
+    ".mypy_cache", ".ruff_cache", ".pytest_cache", "tests",
+}
+
+_MUTANTS_PAR_MODULE_DEFAUT = 3
+_PLAFOND_DEFAUT = 400
+
+NON_JUGE = [
+    "mutation : les mutants équivalents ne sont pas détectés — un survivant peut être un mutant "
+    "sémantiquement identique à l original",
+    "mutation : opérateurs arithmétiques, de comparaison, booléens, d appartenance, bornes "
+    "numériques et suppression d instruction ; ni permutation d arguments, ni littéraux non "
+    "numériques",
+    "mutation : la profondeur est ECHANTILLONNEE par module (voir `mutation.taux_echantillon` "
+    "au rapport) — un score de module porte sur les mutants JOUES, pas sur tous les mutants "
+    "possibles ; le perimetre, lui, est total et ses exclusions sont nommees",
+    "modules : un module est dit « exerce » des qu une ligne en est couverte — l etre ne dit "
+    "pas qu il soit VERIFIE, c est le role du score de mutation qui l accompagne",
+]
+
+_SUBSTITUTIONS = (("+", "-"), ("-", "+"), ("*", "/"), ("/", "*"))
+_COMPARAISONS = (
+    (" < ", " <= "),
+    (" > ", " >= "),
+    (" == ", " != "),
+    (" != ", " == "),
+    (" <= ", " < "),
+    (" >= ", " > "),
+    (" and ", " or "),
+    (" or ", " and "),
+    (" in ", " not in "),
+    (" is not ", " is "),
+)
+# Litteraux numeriques : decaler une borne revele les tests qui ne verifient que le sens.
+_BORNES = ((" 0", " 1"), (" 1", " 0"), (" 100", " 99"))
+
+
+@dataclass(frozen=True)
+class Mutant:
+    fichier: str  # chemin RELATIF au dossier `backend`, en posix — unique dans le projet
+    ligne: int
+    colonne: int
+    avant: str
+    apres: str
+
+    @property
+    def id(self) -> str:
+        return f"mutant:{self.fichier}:{self.ligne + 1}:{self.avant.strip()}->{self.apres.strip()}"
+
+
+# --- Découverte du périmètre ------------------------------------------------------------------
+def _sans_code_executable(source: Path) -> bool:
+    """Le module ne contient-il QUE des imports, des constantes de ré-export et sa docstring ?
+
+    Un `__init__.py` de paquet est le cas type : le muter produit des mutants équivalents par
+    construction (on ne peut pas « casser » un ré-export) qui feraient chuter le score sans
+    désigner la moindre faiblesse de la suite. L exclusion est décidée sur le CONTENU, pas sur
+    le nom : un `__init__.py` porteur de logique reste dans le périmètre.
+    """
+    try:
+        arbre = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
+    except (SyntaxError, UnicodeDecodeError):
+        return False
+    for noeud in arbre.body:
+        if isinstance(noeud, (ast.Import, ast.ImportFrom, ast.Pass)):
+            continue
+        if isinstance(noeud, ast.Expr) and isinstance(noeud.value, ast.Constant):
+            continue  # docstring ou littéral isolé
+        if isinstance(noeud, (ast.Assign, ast.AnnAssign)):
+            valeur = noeud.value
+            if valeur is None or isinstance(valeur, (ast.Constant, ast.Tuple, ast.List, ast.Set)):
+                continue  # `__all__ = (...)`, `VERSION = "1.2"`
+        return False
+    return True
+
+
+def _exclusions_declarees() -> list[str]:
+    brut = os.environ.get("FORGE_TESTS_MUTATION_EXCLUT", "")
+    return [motif.strip() for motif in brut.split(",") if motif.strip()]
+
+
+def decouvrir(racine: Path, dossier: Path) -> tuple[list[Path], list[dict]]:
+    """Tous les modules Python des sources, et la liste NOMMÉE des exclus avec leur motif.
+
+    `racine` est le dossier `backend` (base des chemins relatifs), `dossier` la racine des
+    sources. La découverte est récursive : `services/`, `fournisseurs/`, adaptateurs compris.
+    """
+    motifs = _exclusions_declarees()
+    retenus: list[Path] = []
+    exclus: list[dict] = []
+    # TF-2173 — racine PLATE (`dossier` est la racine d'exécution elle-même) : seuls les modules
+    # posés à la racine sont des sources. Un `rglob` y lirait `forge/`, `scripts/`, `docs/` ; la
+    # suite, l'amorçage et l'installation de la racine sont écartés et NOMMÉS, jamais tus.
+    plat = dossier == racine
+    for source in sorted(dossier.glob("*.py") if plat else dossier.rglob("*.py")):
+        relatif = source.relative_to(racine).as_posix()
+        if plat and not est_module_plat(source.name):
+            exclus.append(
+                {"module": relatif, "motif": "test ou amorçage de la racine, hors sources"}
+            )
+            continue
+        if any(partie in _DOSSIERS_EXCLUS for partie in source.relative_to(dossier).parts[:-1]):
+            exclus.append({"module": relatif, "motif": "dossier hors sources du projet"})
+            continue
+        vise = next((m for m in motifs if fnmatch.fnmatch(relatif, m)), None)
+        if vise is not None:
+            exclus.append(
+                {
+                    "module": relatif,
+                    "motif": f"exclusion demandée par FORGE_TESTS_MUTATION_EXCLUT={vise!r}",
+                }
+            )
+            continue
+        if _sans_code_executable(source):
+            exclus.append(
+                {
+                    "module": relatif,
+                    "motif": (
+                        "aucune instruction exécutable hors imports, docstring et constantes de "
+                        "ré-export — tout mutant y serait équivalent par construction"
+                    ),
+                }
+            )
+            continue
+        retenus.append(source)
+    return retenus, exclus
+
+
+def _lignes_calculantes(lignes: list[str]) -> list[int]:
+    """Lignes portant du code EXÉCUTABLE, hors docstrings.
+
+    Muter l intérieur d une docstring produit un mutant équivalent par construction, qui
+    survit toujours et fait chuter le score sans rien signaler de vrai.
+    """
+    retenues: list[int] = []
+    dans_docstring = False
+    for i, ligne in enumerate(lignes):
+        nu = ligne.strip()
+        marqueurs = nu.count('"""') + nu.count("'''")
+        if dans_docstring:
+            if marqueurs:
+                dans_docstring = False
+            continue
+        if marqueurs == 1:
+            dans_docstring = True
+            continue
+        if marqueurs >= 2 or not nu or nu.startswith(("#", "from ", "import ", "@")):
+            continue
+        retenues.append(i)
+    return retenues
+
+
+def _zones_litterales(texte: str) -> dict[int, list[tuple[int, int]]]:
+    """Plages de colonnes occupées par des chaînes et des commentaires, par ligne (0-indexée).
+
+    Muter à l intérieur d une chaîne ne mute pas du CODE. Pire : quand la même constante sert
+    au code et au test (« REJ-VIDE », « utf-8 »), le mutant est équivalent par construction et
+    survit toujours — il fait chuter le score sans jamais désigner une faiblesse de la suite.
+
+    **Les f-strings en font partie, et ne le faisaient pas.** Depuis Python 3.12, le texte d une
+    f-string n est plus un jeton `STRING` mais une suite de `FSTRING_MIDDLE` : ce filtre, écrit
+    sous 3.11, ne le reconnaissait plus. Chaque `f"colonnes attendues plat/quantite"` offrait
+    donc un mutant `/` -> `*` qui ne change QUE le libellé d un message — équivalent par
+    construction, survivant garanti. Constaté le 2026-08-06 : c est ce qui donnait 0,00 aux
+    modules `fournisseurs/` d ASD Mail Manager, dont le code est surtout fait de messages, et
+    ce qui rendait leur score illisible au lieu d accuser la suite à juste titre.
+    """
+    import io
+    import tokenize
+
+    # `getattr` : les trois jetons n existent pas sous Python 3.11, où le filtre d origine
+    # suffisait. Le code doit rester juste sur les deux versions, pas sur la plus récente.
+    interdits = {tokenize.STRING, tokenize.COMMENT}
+    for nom in ("FSTRING_START", "FSTRING_MIDDLE", "FSTRING_END"):
+        jeton = getattr(tokenize, nom, None)
+        if jeton is not None:
+            interdits.add(jeton)
+
+    zones: dict[int, list[tuple[int, int]]] = {}
+    try:
+        jetons = list(tokenize.generate_tokens(io.StringIO(texte).readline))
+    except (tokenize.TokenError, IndentationError, SyntaxError):
+        return zones
+    for jeton in jetons:
+        if jeton.type not in interdits:
+            continue
+        (ligne_debut, col_debut), (ligne_fin, col_fin) = jeton.start, jeton.end
+        for ligne in range(ligne_debut, ligne_fin + 1):
+            debut = col_debut if ligne == ligne_debut else 0
+            fin = col_fin if ligne == ligne_fin else 10**6
+            zones.setdefault(ligne - 1, []).append((debut, fin))
+    return zones
+
+
+def generer_mutants(source: Path, nom_court: str) -> list[Mutant]:
+    texte = source.read_text(encoding="utf-8")
+    lignes = texte.splitlines()
+    zones = _zones_litterales(texte)
+
+    def dans_litteral(ligne: int, colonne: int) -> bool:
+        return any(debut <= colonne < fin for debut, fin in zones.get(ligne, ()))
+
+    mutants: list[Mutant] = []
+    for i in _lignes_calculantes(lignes):
+        ligne = lignes[i]
+        for avant, apres in (*_COMPARAISONS, *_BORNES):
+            position = ligne.find(avant)
+            if position >= 0 and not dans_litteral(i, position + 1):
+                mutants.append(Mutant(nom_court, i, position, avant, apres))
+        for j, caractere in enumerate(ligne):
+            if dans_litteral(i, j):
+                continue
+            for avant, apres in _SUBSTITUTIONS:
+                if caractere == avant:
+                    mutants.append(Mutant(nom_court, i, j, avant, apres))
+        # Suppression d instruction : neutraliser un appel dont le retour n est pas utilise.
+        # Un test qui ne verifie que l absence d exception ne le remarque jamais.
+        nu = ligne.strip()
+        if nu.endswith(")") and "=" not in nu and not nu.startswith(("return", "raise", "assert")):
+            indentation = len(ligne) - len(ligne.lstrip())
+            mutants.append(Mutant(nom_court, i, indentation, nu[:1], "pass  # "))
+    return mutants
+
+
+def appliquer(original: str, mutant: Mutant) -> str:
+    """Source du module une fois le mutant posé."""
+    lignes = original.splitlines()
+    ligne = lignes[mutant.ligne]
+    lignes[mutant.ligne] = (
+        ligne[: mutant.colonne] + mutant.apres + ligne[mutant.colonne + len(mutant.avant) :]
+    )
+    return "\n".join(lignes) + "\n"
+
+
+def poser(fichier: Path, texte: str) -> None:
+    """Écrit un mutant SANS traduction de fins de ligne.
+
+    `Path.write_text` passe par `open(mode="w")`, qui traduit `\\n` en `os.linesep` : sur
+    Windows un module en LF ressortait en CRLF. Pour un mutant c est sans conséquence — il ne
+    vit qu une exécution de suite — mais l idiome est le même que celui de la restauration, et
+    c est là qu il faisait des dégâts. Un seul point d écriture, en octets, pour les deux.
+    """
+    fichier.write_bytes(texte.encode("utf-8"))
+
+
+def restaurer(octets: dict[Path, bytes]) -> list[Path]:
+    """Remet chaque fichier dans son état EXACT. Renvoie ceux qu il a fallu réécrire.
+
+    Garde-fou G-1. Le 2026-08-06, un audit d ASD Mail Manager a laissé 23 fichiers source du
+    produit modifiés : la mutation était bien défaite, mais la restauration passait par
+    `write_text` et retournait les fins de ligne LF en CRLF. Une lecture seule qui réécrit les
+    fins de ligne n est pas une lecture seule. L écart était resté invisible tant que le
+    périmètre tenait dans huit modules déjà convertis par un audit antérieur — c est
+    l élargissement du périmètre (A-1) qui l a révélé.
+    """
+    reecrits: list[Path] = []
+    for fichier, contenu in octets.items():
+        try:
+            if fichier.read_bytes() == contenu:
+                continue
+        except OSError:
+            pass
+        fichier.write_bytes(contenu)
+        reecrits.append(fichier)
+    return reecrits
+
+
+# --- TF-2091 : verrou de la fenetre de mutation ----------------------------------------------
+# La mutation altere EN PLACE les sources du projet audite (pose d un mutant, rejeu, restauration).
+# Entre la pose et la restauration, une source porte un code FAUX : une ecriture ou un commit
+# concurrent FIGE le mutant dans le depot (G-1 rompu le temps d un mutant — observe en reel :
+# deux recettes concurrentes qui mutent le meme banc laissaient une source alteree). Le verrou DIT
+# la fenetre ouverte, pour qu un hook pre-commit de la factory refuse de commiter tant qu il existe.
+# Cote LECTURE du verrou (le hook) : hors de ce depot (pilot / forge-ops), signale en escalade.
+VERROU_MUTATION = ".forge-tests-mutation-en-cours"
+
+
+def _poser_verrou_mutation(racine: Path, fichiers: list[Path]) -> Path | None:
+    """Pose a `racine` le verrou de la fenetre de mutation, ou None s il n a pas pu l etre.
+
+    Un verrou qu on ne peut pas poser ne fait pas tomber l audit : il est declare absent (None),
+    et la fenetre reste muette plutot que bloquante. La charge NOMME les fichiers en cours de
+    mutation et PORTE l avertissement « ne pas commiter », pour un hook qui la lit.
+    """
+    chemin = racine / VERROU_MUTATION
+    try:
+        charge = {
+            "pid": os.getpid(),
+            "depuis": datetime.now(UTC).isoformat(timespec="seconds"),
+            "fichiers": sorted(f.relative_to(racine).as_posix() for f in fichiers),
+            "message": "mutation forge-tests en cours — sources alterees par un mutant, "
+            "ne pas commiter",
+        }
+        chemin.write_text(json.dumps(charge, ensure_ascii=False, indent=1), encoding="utf-8")
+    except (OSError, ValueError):
+        return None
+    return chemin
+
+
+def _retirer_verrou_mutation(verrou: Path | None) -> None:
+    """Retire le verrou de mutation, inconditionnellement (meme sur interruption)."""
+    if verrou is not None:
+        with contextlib.suppress(OSError):
+            verrou.unlink()
+
+
+def compilables(original: str, mutants: list[Mutant], nom: str) -> list[Mutant]:
+    """Mutants qui COMPILENT — les seuls dont la survie veuille dire quelque chose.
+
+    Filtrer AVANT d échantillonner, et non après, est ce qui garantit à chaque module son
+    score. La première version tirait trois mutants au hasard régulier puis jetait ceux qui ne
+    compilaient pas : sur le premier produit réel, huit modules — dont `auth.py`, `rbac.py` et
+    `services/courrier.py` — voyaient leurs trois mutants tomber tous les trois, et sortaient
+    SANS SCORE, avec un motif faux (« plafond ou délai ») alors que le plafond n avait pas
+    mordu. Un module de logique métier sans score est exactement le silence que A-1 solde.
+
+    Le coût est nul à l échelle de la mesure : compiler un module prend quelques millisecondes,
+    là où jouer un mutant coûte une exécution complète de la suite.
+    """
+    retenus: list[Mutant] = []
+    for mutant in mutants:
+        try:
+            compile(appliquer(original, mutant), nom, "exec")
+        except (SyntaxError, ValueError):
+            continue
+        retenus.append(mutant)
+    return retenus
+
+
+def echantillonner(mutants: list[Mutant], combien: int) -> list[Mutant]:
+    """`combien` mutants répartis sur TOUT le module, jamais les `combien` premiers.
+
+    Prendre la tête de liste concentrerait l échantillon sur les premières lignes du fichier —
+    imports, constantes, première fonction — et laisserait systématiquement le corps du module
+    non mesuré. L espacement régulier est déterministe : deux audits du même code jouent les
+    mêmes mutants, et un écart de score se lit comme un écart de suite, pas de tirage.
+    """
+    if combien <= 0 or len(mutants) <= combien:
+        return list(mutants)
+    pas = len(mutants) / combien
+    return [mutants[int(i * pas)] for i in range(combien)]
+
+
+def _purger_bytecode(racine: Path) -> None:
+    """Un mutant a la MÊME TAILLE que l original ; si la restauration tombe dans la même
+    seconde, Python réutilise un .pyc périmé et la suite juge un code qui n existe plus."""
+    for cache in racine.rglob("__pycache__"):
+        shutil.rmtree(cache, ignore_errors=True)
+
+
+class InterpreteurInutilisable(RuntimeError):
+    """Le python désigné existe mais ne s exécute pas — venv d un autre système, lien mort,
+    fichier tronqué. TF-0216 : sans cette classe, l `OSError` remontait jusqu au noyau, qui
+    sortait en exit 2 et perdait le rapport ENTIER. Un interpréteur injouable rend un pan non
+    mesurable, il ne fait pas perdre les onze autres."""
+
+
+def _suite_verte(racine: Path, python: Path, cibles: list[str] | None = None) -> bool:
+    """Vert / rouge de la suite, ou de la SELECTION de tests passee en `cibles`.
+
+    `cibles` a None ou vide rejoue la suite entiere — le comportement d avant le palier 1,
+    inchange. Une selection non vide passe les identifiants a pytest a la place du dossier :
+    c est le seul point ou le palier 1 touche l execution, et il ne retire jamais un test
+    d une selection qu il n a pas su calculer (voir `_tests_pour`).
+    """
+    _purger_bytecode(racine)
+    quoi = list(cibles) if cibles else [SUITE]
+    resultat = subprocess.run(
+        [
+            str(python), "-m", "pytest", *quoi, "-q", "--no-header",
+            "-p", "no:cacheprovider", "-p", "no:warnings", "-x",
+        ],
+        cwd=racine,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=600,
+        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+    )
+    return resultat.returncode == 0
+
+
+def _suite_verte_ou_injouable(racine: Path, python: Path) -> bool:
+    """`_suite_verte`, mais un interpréteur qui refuse de démarrer se DÉCLARE au lieu de lever."""
+    try:
+        return _suite_verte(racine, python)
+    except OSError as erreur:  # WinError 193, ENOEXEC, permission refusée…
+        raise InterpreteurInutilisable(
+            f"l interpréteur « {python} » existe mais ne s exécute pas sur ce système "
+            f"({type(erreur).__name__}: {erreur}) — venv construit ailleurs, lien mort ou "
+            "binaire tronqué. Recréer l environnement virtuel du projet, puis rejouer"
+        ) from erreur
+
+
+# --- Palier 1 de la strategie de tests (etude du 01/09/2026) : ne rejouer que les tests qui
+# COUVRENT la ligne mutee ----------------------------------------------------------------------
+#
+# LA CAUSE, etablie par le calcul et lue dans le code. Aucun test n est couteux individuellement
+# (0,38 s au maximum sur le corpus mesure, 0,053 s en moyenne) : c est le NOMBRE DE REJEUX qui
+# fait le cout. Chaque mutant relance la suite ENTIERE — 984 tests sur le produit mesure, pour une
+# poignee qui touchent reellement la ligne alteree. Mesure du 01/09 sur une campagne reelle :
+# 67 min de campagne dont 54 de mutation, 28,2 s par mutant.
+#
+# LE SURCOUT FIXE, la valeur que l etude declarait NON MESUREE et posait en critere d abandon
+# (« si le surcout fixe depasse 10 s, le gain tombe sous un facteur trois et le palier 4 devient
+# prioritaire »). Mesure le 01/09, trois repetitions, memes drapeaux que `_suite_verte`, sur une
+# suite de 1 174 tests : demarrage de l interpreteur + import des plugins + collecte + UN test
+# selectionne = 0,386 s (0,361 / 0,386 / 0,414). Le critere d abandon n est pas atteint, et de
+# loin : le palier tient.
+#
+# CE QUI N ETAIT PAS PROUVE A L ECRITURE, et se declarait plutot que se promettait. La CONDITION
+# DE NON-PERTE de l etude — la campagne ciblee rend EXACTEMENT la meme liste de survivants que la
+# campagne pleine — exige un projet reel dote de `coverage`. Le poste sur lequel ce palier a ete
+# ecrit n en avait pas dans le venv de la forge elle-meme (sans consequence : la mutation joue
+# TOUJOURS dans le venv DU PROJET mute, pas dans celui de la forge). Le blocage reel, mesure le
+# 08/09, etait ailleurs : la suite du seul projet reel disponible sur ce poste (le banc, dont la
+# base se monte par conteneur) ne pouvait pas demarrer, demon de conteneurs arrete.
+#
+# JOUEE LE 14/09/2026 (TF-0748/TF-0749) — la CONDITION DE NON-PERTE EST VERIFIEE une premiere
+# fois. Demon de conteneurs demarre sur ce poste, puis un seul rejeu de
+# `python recette/non_perte_ciblage.py fixtures/banc-vert` : verdict PASS, 12 mutants viables,
+# liste de survivants IDENTIQUE des deux cotes (`mutant:app/main.py:18:0->1`), et la preuve
+# POSITIVE du piege n° 4 est tenue (`ciblage.carte_obtenue` vrai, 10 mutants sur 12 REELLEMENT
+# cibles — ce n est pas une comparaison d une campagne avec elle-meme). Rien n a ete simule.
+# Le ciblage reste neanmoins DERRIERE UN DRAPEAU ABSENT PAR DEFAUT — loi transverse n° 2 :
+# `FORGE_TESTS_MUTATION_CIBLAGE=1`. Une premiere condition tenue sur un banc n est pas le
+# passage en defaut : cette bascule reste une decision humaine distincte, non prise ici.
+#
+# CE QUE LA DECISION D-34 DU 01/09 A CHANGE POUR CE PALIER, le jour meme de son ecriture. La
+# mutation est devenue une campagne A LA DEMANDE, jouee avant une mise en production et non plus
+# a chaque audit : le ciblage n'est donc plus ce qui rend le pan tenable, il ne fait qu'abaisser
+# le prix d'une porte qu'on franchit rarement. La meme decision dit par ailleurs que « tous les
+# tests sont pleinement executes tout le temps » — une phrase qui ferme la selection sur la suite
+# ORDINAIRE et ne dit rien du rejeu d'un mutant. Le ciblage reste donc ECRIT, EPROUVE et ETEINT,
+# et son sort est pose en decision ouverte plutot que tranche ici a la place de l'humain.
+#
+# TRANCHE LE 01/09 — D-36, option (a) : le ciblage RESTE ETEINT et se VERIFIE a la prochaine
+# campagne reelle. « On verifiera » n etant pas un mecanisme, la verification est desormais
+# JOUABLE : `python recette/non_perte_ciblage.py <projet>` joue les deux campagnes sur le meme
+# code et compare les listes de survivants — meme liste aux memes identifiants, ou echec. Le
+# comparateur nomme separement ce qui est PERDU (faux vert : un mutant declare tue par une
+# selection qui n a jamais joue le test qui l aurait tue) et ce qui est AJOUTE (du temps perdu),
+# et rend SANS_OBJET plutot que PASS quand les deux campagnes n ont mute aucun mutant.
+#
+# POURQUOI UNE PASSE DE COUVERTURE DEDIEE, et non la mesure deja produite par `execution.mesurer`.
+# Il faut ici la couverture PAR TEST (quel test touche quelle ligne), que coverage ne produit
+# qu avec `dynamic_context = test_function`. L activer dans la passe partagee changerait la
+# mesure de DOUZE pans pour le besoin d un seul. Une passe dediee coute une execution de suite
+# (52 s sur le produit mesure) contre 54 min de mutation : le rapport est de 1 a 60.
+
+
+def _lire_contextes(donnees: dict) -> dict[str, dict[int, list[str]]]:
+    """La carte { fichier relatif : { ligne (1-based) : [identifiants de test] } }.
+
+    Fonction PURE : elle prend le JSON que `coverage json --show-contexts` publie et n execute
+    rien. C est elle qui porte les deux pieges du format, et c est pour cela qu elle est isolee.
+
+    PIEGE 1 — le contexte porte un SUFFIXE de phase. coverage ecrit `tests/test_x.py::test_y|run`,
+    et aussi `|setup` / `|teardown` pour ce qu une fixture execute. L identifiant utile est ce qui
+    precede la barre ; le garder entier ferait passer a pytest un nodeid inexistant, donc une
+    selection vide, donc un mutant « tue » sans qu aucun test ne l ait vu — un faux vert.
+    PIEGE 2 — le contexte VIDE existe et ne se jette pas par distraction : c est ce qui a ete
+    execute HORS d un test (import du module a la collecte, code de niveau module). Une ligne qui
+    n a que ce contexte-la n a AUCUN test propre ; elle rend une carte sans entree, et l appelant
+    retombe alors sur la suite entiere. C est le choix conservateur, et il est motive : muter une
+    ligne executee a l import peut casser la collecte de toute la suite.
+    """
+    carte: dict[str, dict[int, list[str]]] = {}
+    for chemin, bloc in (donnees.get("files") or {}).items():
+        par_ligne: dict[int, list[str]] = {}
+        for ligne, contextes in (bloc.get("contexts") or {}).items():
+            noms = sorted({c.split("|")[0] for c in (contextes or []) if c.split("|")[0]})
+            if noms:
+                par_ligne[int(ligne)] = noms
+        if par_ligne:
+            carte[Path(chemin).as_posix()] = par_ligne
+    return carte
+
+
+def _tests_pour(
+    carte: dict[str, dict[int, list[str]]] | None, relatif: str, ligne: int
+) -> list[str] | None:
+    """Les tests a rejouer pour un mutant, ou None quand il faut rejouer la suite entiere.
+
+    None n est pas « aucun test » : c est « je ne sais pas », et les deux ne se confondent
+    jamais. Sans carte, ou sur une ligne qu aucun test ne couvre nommement, le comportement
+    d avant le palier est repris tel quel — la suite entiere. Le palier ACCELERE ce qu il sait
+    cibler et ne change RIEN au reste : c est ce qui rend la condition de non-perte tenable.
+    """
+    if carte is None:
+        return None
+    return carte.get(relatif, {}).get(ligne) or None
+
+
+def _carte_tests(
+    racine: Path, python: Path, paquet: Path
+) -> dict[str, dict[int, list[str]]] | None:
+    """Une passe de couverture PAR TEST sur la suite d origine. None si elle n aboutit pas.
+
+    Jouee AVANT la premiere mutation, sur le code intact — la carte d un arbre en cours
+    d alteration ne voudrait rien dire. Un echec (coverage absent, suite rouge, delai depasse)
+    rend None et n arrete rien : la campagne repart en suite entiere, plus lente et identique.
+    """
+    import json
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as temporaire:
+        rc = Path(temporaire) / "contextes.rc"
+        rc.write_text("[run]\ndynamic_context = test_function\n", encoding="utf-8")
+        env = {
+            **os.environ,
+            "PYTHONDONTWRITEBYTECODE": "1",
+            # G-1 (lecture seule) : sans cela coverage depose son `.coverage` DANS le projet.
+            "COVERAGE_FILE": str(Path(temporaire) / ".coverage"),
+        }
+        try:
+            passe = subprocess.run(
+                [
+                    str(python), "-m", "coverage", "run", f"--rcfile={rc}",
+                    f"--source={paquet.name}", "-m", "pytest", SUITE,
+                    "-q", "--no-header", "-p", "no:cacheprovider", "-p", "no:warnings",
+                ],
+                cwd=racine, capture_output=True, text=True, encoding="utf-8",
+                errors="replace", timeout=1800, env=env,
+            )
+            if passe.returncode != 0:
+                return None
+            rapport = subprocess.run(
+                [str(python), "-m", "coverage", "json", f"--rcfile={rc}",
+                 "--show-contexts", "-o", "-", "--quiet"],
+                cwd=racine, capture_output=True, text=True, encoding="utf-8",
+                errors="replace", timeout=600, env=env,
+            )
+            if rapport.returncode != 0:
+                return None
+            return _lire_contextes(json.loads(rapport.stdout))
+        except (OSError, subprocess.TimeoutExpired, ValueError):
+            return None
+
+
+def _ciblage_demande() -> bool:
+    """Loi transverse n° 2 : la voie neuve vit derriere un drapeau ABSENT par defaut, tant que
+    la condition de non-perte de l etude n a pas ete jouee une fois sur un projet reel."""
+    return (os.environ.get("FORGE_TESTS_MUTATION_CIBLAGE") or "").strip() in {"1", "oui", "true"}
+
+
+# --- TF-0744 : LE COUT DU PAN, RECONCILIE AVEC LUI-MEME ---------------------------------------
+#
+# LE DEFAUT PAYE, mesure le 01/09/2026 en instruisant TF-0727. Un rapport de campagne publiait
+# quatre valeurs : 115 mutants, ~54 min de mutation, 67 min de campagne — et « ~37 s par mutant ».
+# Les trois premieres sont coherentes (54 min / 115 = 28,2 s). LA QUATRIEME EST ARITHMETIQUEMENT
+# IMPOSSIBLE : 115 x 37 s = 71 min, soit PLUS que la campagne entiere. Elle n avait pas ete
+# calculee depuis la mesure, elle avait ete ESTIMEE — et l argument de levier d une etude entiere
+# reposait dessus, surevalue d environ 31 %.
+#
+# LA CAUSE DE LA DISPERSION, et c est elle qui rend la moyenne globale trompeuse meme quand elle
+# est juste : `_suite_verte` passe `-x` a pytest. Un mutant TUE s arrete au PREMIER echec ; un
+# mutant SURVIVANT parcourt la suite ENTIERE. Les deux classes n ont donc pas le meme cout, et
+# une moyenne unique les melange. Decomposition mesuree sur la campagne fondatrice : 23
+# survivants a ~52 s (~20 min, 37 % du pan) et 92 tues a ~22 s (~34 min).
+#
+# CONSEQUENCE ACTIONNABLE, et c est la seule lecture utile du pan : le cout se concentre sur les
+# mutants qui SURVIVENT, c est-a-dire ceux qui portent l information. Un levier d optimisation
+# qui vise « le mutant moyen » vise une classe qui n existe pas.
+#
+# LA REGLE, desormais CABLEE : la valeur publiee n est jamais saisie, elle se DERIVE de la duree
+# mesuree du pan (`duree_pan_s / mutants_joues`), et `anomalies_cout` refuse tout bloc dont la
+# valeur publiee, multipliee par le nombre de mutants, depasse la duree du pan.
+
+
+def decomposer_cout(mesures: list[tuple[bool, float]], duree_pan_s: float) -> dict:
+    """Le cout du pan, decompose par CLASSE de mutant. Fonction pure — elle ne mesure rien.
+
+    `mesures` : un couple `(survivant, duree_s)` par mutant JOUE, dans l ordre du plan.
+    `duree_pan_s` : la duree du pan mesuree de bout en bout — elle englobe les mesures et le
+    fixe (suite verte prealable, carte de couverture, restaurations), donc elle leur est
+    superieure ou egale. C est elle qui fait foi pour la valeur publiee : une moyenne calculee
+    sur la seule somme des mutants ferait disparaitre le fixe du rapport.
+    """
+    joues = len(mesures)
+    if not joues:
+        return {
+            "mesure": False,
+            "motif_non_mesure": "aucun mutant joue — pas de cout a decomposer",
+        }
+    survivants = [d for survivant, d in mesures if survivant]
+    tues = [d for survivant, d in mesures if not survivant]
+    somme = sum(d for _, d in mesures)
+
+    def _classe(durees: list[float]) -> dict:
+        return {
+            "mutants": len(durees),
+            "duree_s": round(sum(durees), 1),
+            "moyenne_s": round(sum(durees) / len(durees), 1) if durees else None,
+            # Part du TEMPS DE MUTATION mesure (la somme des mutants), pas de la duree du pan :
+            # les deux classes doivent sommer a 100 %, sinon la part ne se lit pas.
+            "part_du_pan": round(sum(durees) / somme, 4) if somme else None,
+        }
+
+    return {
+        "mesure": True,
+        "duree_pan_s": round(duree_pan_s, 1),
+        "mutants_joues": joues,
+        # DERIVEE, jamais saisie : c est le correctif de TF-0744 a la source.
+        "s_par_mutant": round(duree_pan_s / joues, 1),
+        "duree_mutants_s": round(somme, 1),
+        "fixe_s": round(max(duree_pan_s - somme, 0.0), 1),
+        "decomposition": {"tues": _classe(tues), "survivants": _classe(survivants)},
+        "mecanisme": (
+            "pytest est lance avec `-x` : un mutant TUE s arrete au PREMIER echec, un mutant "
+            "SURVIVANT parcourt la suite ENTIERE. Les deux classes n ont donc pas le meme cout "
+            "et la moyenne globale ne decrit aucun mutant reel — le cout se concentre sur les "
+            "survivants, c est-a-dire sur ceux qui portent l information utile (TF-0744)"
+        ),
+    }
+
+
+#: Tolerance d arrondi, en secondes : `s_par_mutant` est publie au dixieme, donc son produit par
+#: le nombre de mutants peut depasser la duree d au plus un demi-dixieme par mutant.
+_TOLERANCE_ARRONDI_S = 0.05
+
+
+def anomalies_cout(cout: dict) -> list[str]:
+    """L ORACLE de reconciliation : ce que le bloc de cout doit tenir, ou il n est pas publiable.
+
+    Trois refus, et le premier est le defaut fondateur : une valeur par mutant qui, multipliee
+    par le nombre de mutants, depasse la duree mesuree du pan. Rendre la liste VIDE vaut PASS.
+    """
+    if not cout or not cout.get("mesure"):
+        return []
+    anomalies: list[str] = []
+    joues = cout.get("mutants_joues") or 0
+    duree = cout.get("duree_pan_s")
+    par_mutant = cout.get("s_par_mutant")
+    if not isinstance(duree, (int, float)) or not isinstance(par_mutant, (int, float)):
+        return ["cout : duree du pan ou valeur par mutant absente — rien a reconcilier"]
+    if par_mutant * joues > duree + _TOLERANCE_ARRONDI_S * joues:
+        anomalies.append(
+            f"cout : {par_mutant} s par mutant x {joues} mutants = "
+            f"{round(par_mutant * joues, 1)} s, soit PLUS que les {duree} s mesures du pan — "
+            "la valeur publiee ne se reconcilie pas avec la duree (defaut fondateur TF-0744)"
+        )
+    deco = cout.get("decomposition") or {}
+    classes_ = [deco.get("tues") or {}, deco.get("survivants") or {}]
+    total = sum(c.get("mutants") or 0 for c in classes_)
+    if total != joues:
+        anomalies.append(
+            f"cout : la decomposition porte {total} mutant(s) quand le pan en a joue {joues} — "
+            "tues + survivants doit rendre le compte, sinon la part par classe ne se lit pas"
+        )
+    parts = [c.get("part_du_pan") for c in classes_ if c.get("part_du_pan") is not None]
+    if parts and abs(sum(parts) - 1.0) > 0.01:
+        anomalies.append(
+            f"cout : les parts par classe somment a {round(sum(parts), 4)} au lieu de 1 — "
+            "une part qui ne somme pas a 100 % ne dit pas ou va le temps"
+        )
+    return anomalies
+
+
+def _entier_env(nom: str, defaut: int) -> int:
+    brut = (os.environ.get(nom) or "").strip()
+    if not brut.lstrip("-").isdigit():
+        return defaut
+    return int(brut)
+
+
+# --- D-34 (decision humaine du 01/09/2026) — LA MUTATION EST UNE CAMPAGNE A LA DEMANDE --------
+#
+# LA REGLE, mot pour mot : « Tous les tests sont pleinement executes tout le temps, sauf les tests
+# sur les mutants qui sont executes a la demande, lors d un passage en Prod sur proposition de
+# l IA, et uniquement s ils n ont ete executes depuis plusieurs modifications de code. »
+#
+# CE QU ELLE TRANCHE, et ce n est aucune des trois options qui lui etaient proposees. L etude du
+# 01/09 cherchait a rendre la mutation MOINS CHERE ; la decision la rend PLUS RARE. Le raisonnement
+# est plus solide que celui de l etude, et il faut le dire : le cout d une campagne de mutation ne
+# devient un probleme que parce qu on la joue a chaque fois. Joue une fois avant une mise en
+# production, apres plusieurs modifications, 54 minutes ne sont plus un cout — c est le prix d une
+# porte, et une porte se franchit rarement.
+#
+# CE QU ELLE INTERDIT, et c est le versant le plus important : « pleinement executes tout le temps »
+# ferme la porte a toute selection sur la suite ORDINAIRE. Le palier 3 de l etude — ne rejouer que
+# les tests touches par un changement — est donc REFUSE, et il ne se representera pas sous un autre
+# nom. La suite entiere reste la mesure de chaque changement.
+#
+# TROIS CONDITIONS, toutes portees ici :
+#   1. A LA DEMANDE — le pan ne se joue plus par defaut. `FORGE_TESTS_MUTATION=1` le demande.
+#      Sans elle, le pan rend SKIP en DISANT ce qu il n a pas mesure : un pan silencieux et un pan
+#      non demande sont deux choses differentes, et le rapport ne doit jamais les confondre.
+#   2. SUR PROPOSITION DE L IA, au passage en production — la proposition est ce message meme. Un
+#      pan qui se contente de se taire ne propose rien : il faut que le texte du rapport porte la
+#      recommandation, sinon la condition « sur proposition » n a aucun executant.
+#   3. SEULEMENT SI PERIMEE — « depuis plusieurs modifications de code ». La derniere campagne est
+#      NOTEE chez le produit, et le nombre de modifications depuis se COMPTE : commits touchant le
+#      paquet de sources. « Plusieurs » est un mot ; le seuil est un chiffre, il vaut 10 par defaut
+#      et se change par `FORGE_TESTS_MUTATION_PEREMPTION`. Le chiffre est DECLARE au rapport plutot
+#      que cache : un seuil qu on ne lit pas est un seuil qu on ne discute pas.
+#
+# CE QUI N EST PAS MESURABLE SE DIT. Sans depot git, sans campagne anterieure notee, ou si `git`
+# refuse, le compte des modifications est INCONNU — et l inconnu se propose, il ne se tait pas :
+# une campagne dont on ignore l anciennete est traitee comme perimee. Le contraire ferait passer un
+# projet neuf entre les mailles pour toujours.
+
+_PEREMPTION_DEFAUT = 10
+
+
+def _mutation_demandee() -> bool:
+    """Le pan mutation ne se joue que sur demande explicite (D-34)."""
+    return (os.environ.get("FORGE_TESTS_MUTATION") or "").strip() in {"1", "oui", "true"}
+
+
+def _marqueur_campagne(cible: Path) -> Path:
+    """Ou la derniere campagne est notee, chez le produit — a cote de son dossier de run."""
+    return cible / "forge" / "mutation-derniere-campagne.json"
+
+
+def _derniere_campagne(cible: Path) -> dict | None:
+    fichier = _marqueur_campagne(cible)
+    try:
+        return json.loads(fichier.read_text(encoding="utf-8")) if fichier.is_file() else None
+    except (OSError, ValueError):
+        return None
+
+
+def _sha_courant(racine: Path) -> str | None:
+    try:
+        r = subprocess.run(["git", "-C", str(racine), "rev-parse", "HEAD"],
+                           capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", timeout=60)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else None
+
+
+def _modifications_depuis(racine: Path, dossier: Path, sha: str) -> int | None:
+    """Commits touchant le PAQUET DE SOURCES depuis `sha`. None si le compte n est pas mesurable.
+
+    Le perimetre du compte est celui de la mutation elle-meme : un commit qui ne touche que la
+    documentation ou la suite n a pas altere le code que la mutation eprouve, et le compter
+    ferait proposer une campagne pour un changement de README.
+    """
+    try:
+        r = subprocess.run(
+            ["git", "-C", str(racine), "rev-list", "--count", f"{sha}..HEAD", "--", str(dossier)],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if r.returncode != 0:
+        return None
+    brut = r.stdout.strip()
+    return int(brut) if brut.isdigit() else None
+
+
+def _etat_peremption(cible: Path, racine: Path, dossier: Path) -> dict:
+    """L etat de la derniere campagne, le compte des modifications depuis, et la PROPOSITION."""
+    seuil = _entier_env("FORGE_TESTS_MUTATION_PEREMPTION", _PEREMPTION_DEFAUT)
+    derniere = _derniere_campagne(cible)
+    sha = (derniere or {}).get("sha")
+    modifications = _modifications_depuis(racine, dossier, sha) if sha else None
+    if derniere is None:
+        perimee, pourquoi = True, "aucune campagne anterieure notee chez ce produit"
+    elif modifications is None:
+        perimee, pourquoi = True, (
+            "anciennete NON MESURABLE (pas de depot git, ou reference introuvable) — "
+            "une campagne dont on ignore l age est traitee comme perimee"
+        )
+    elif modifications >= seuil:
+        perimee, pourquoi = True, (
+            f"{modifications} modification(s) du code source depuis la derniere campagne, "
+            f"seuil {seuil}"
+        )
+    else:
+        perimee, pourquoi = False, (
+            f"{modifications} modification(s) du code source depuis la derniere campagne, "
+            f"sous le seuil de {seuil}"
+        )
+    proposition = (
+        "PROPOSITION — jouer la campagne de mutation AVANT ce passage en production : "
+        f"{pourquoi}. Commande : `FORGE_TESTS_MUTATION=1` puis relancer l audit. "
+        "La decision de la jouer est humaine (R-29)."
+        if perimee else
+        f"campagne de mutation NON proposee : {pourquoi}"
+    )
+    return {
+        "regle": "campagne a la demande (decision humaine du 01/09/2026)",
+        "variable": "FORGE_TESTS_MUTATION",
+        "seuil_peremption": seuil,
+        "variable_seuil": "FORGE_TESTS_MUTATION_PEREMPTION",
+        "derniere_campagne": derniere,
+        "modifications_depuis": modifications,
+        "perimee": perimee,
+        "proposition": proposition,
+    }
+
+
+def _noter_campagne(cible: Path, racine: Path, resume: dict) -> str | None:
+    """Note la campagne qui vient d etre jouee. Rend le motif d echec, ou None si c est ecrit.
+
+    Sans cette note, la condition « depuis plusieurs modifications » n a AUCUN point de depart et
+    la troisieme condition de D-34 serait decorative : elle proposerait la campagne a chaque fois.
+    """
+    fichier = _marqueur_campagne(cible)
+    try:
+        fichier.parent.mkdir(parents=True, exist_ok=True)
+        fichier.write_text(json.dumps(resume, ensure_ascii=False, indent=1), encoding="utf-8")
+        return None
+    except OSError as erreur:
+        return f"campagne NON notee ({type(erreur).__name__}) — la prochaine sera proposee a tort"
+
+
+
+def _inventaire_modules(
+    racine: Path,
+    retenus: list[Path],
+    exclus: list[dict],
+    couverture: dict[str, dict] | None,
+    scores: dict[str, dict],
+) -> list[dict]:
+    """A-2 — chaque module source avec son état : exercé, muté, ou jamais exercé et NOMMÉ."""
+    inventaire: list[dict] = []
+    for source in retenus:
+        relatif = source.relative_to(racine).as_posix()
+        mesure = (couverture or {}).get(relatif)
+        entree: dict = {
+            "module": relatif,
+            "categorie": "metier" if seuils.est_metier(source.stem) else "socle",
+            "exclu": None,
+        }
+        if couverture is None:
+            entree["exerce"] = None
+            entree["motif_non_mesure"] = "couverture non mesurable (suite non exécutée)"
+        elif mesure is None:
+            # Le module n apparaît même pas au relevé de coverage : il n a jamais été importé.
+            entree.update(
+                exerce=False, lignes_couvertes=0, lignes_total=None,
+                branches_couvertes=0, branches_total=None,
+                ratio_lignes=0.0, ratio_branches=0.0,
+            )
+        else:
+            lignes_total = mesure["lignes_total"] or 0
+            branches_total = mesure["branches_total"] or 0
+            entree.update(
+                exerce=mesure["lignes_couvertes"] > 0,
+                lignes_couvertes=mesure["lignes_couvertes"],
+                lignes_total=lignes_total,
+                branches_couvertes=mesure["branches_couvertes"],
+                branches_total=branches_total,
+                ratio_lignes=(
+                    round(mesure["lignes_couvertes"] / lignes_total, 4) if lignes_total else 0.0
+                ),
+                ratio_branches=(
+                    round(mesure["branches_couvertes"] / branches_total, 4)
+                    if branches_total
+                    else None
+                ),
+            )
+        entree.update(scores.get(relatif) or {"mute": False, "motif_non_mute": "non joué"})
+        inventaire.append(entree)
+    for entree in exclus:
+        inventaire.append(
+            {
+                "module": entree["module"],
+                "categorie": "exclu",
+                "exclu": entree["motif"],
+                "exerce": None,
+                "mute": False,
+            }
+        )
+    return sorted(inventaire, key=lambda e: e["module"])
+
+
+def _findings_modules(dossier: Path, inventaire: list[dict]) -> list[Finding]:
+    """Un module jamais exercé est NOMMÉ ; un module sous seuil est NOMMÉ avec son seuil."""
+    findings: list[Finding] = []
+    seuil_metier = seuils.valeur("mutation_module_metier")
+    seuil_branches = seuils.valeur("branches_module_exerce")
+    for entree in inventaire:
+        if entree["categorie"] == "exclu":
+            continue
+        chemin = str(dossier.parent / entree["module"])
+        identifiant = f"module-non-exerce:{entree['module']}"
+        if entree.get("exerce") is False:
+            findings.append(
+                Finding(
+                    id=identifiant,
+                    classe=classes.MODULE_NON_EXERCE,
+                    localisation=chemin,
+                    message=(
+                        f"{entree['module']} : module source jamais importé par la suite — "
+                        "aucune ligne couverte, aucun mutant ne peut y être jugé"
+                    ),
+                    risque=coter(PAN, identifiant, chemin),
+                )
+            )
+            continue
+        score = entree.get("score_mutation")
+        if (
+            entree["categorie"] == "metier"
+            and score is not None
+            and score < seuil_metier
+        ):
+            identifiant = f"seuil:mutation-module:{entree['module']}"
+            findings.append(
+                Finding(
+                    id=identifiant,
+                    classe=classes.SEUIL_NON_TENU,
+                    localisation=chemin,
+                    message=(
+                        f"{entree['module']} : score de mutation {score:.0%} sous le seuil "
+                        f"par module de logique métier {seuil_metier:.0%} "
+                        f"({entree.get('tues')}/{entree.get('mutants_viables')} mutants tués)"
+                    ),
+                    severite=seuils.severite("mutation_module_metier"),
+                    risque=coter(PAN, identifiant, chemin),
+                )
+            )
+        ratio = entree.get("ratio_branches")
+        if entree.get("exerce") and ratio is not None and ratio < seuil_branches:
+            identifiant = f"seuil:branches:{entree['module']}"
+            findings.append(
+                Finding(
+                    id=identifiant,
+                    classe=classes.SEUIL_NON_TENU,
+                    localisation=chemin,
+                    message=(
+                        f"{entree['module']} : couverture de branches {ratio:.0%} sous le seuil "
+                        f"par module exercé {seuil_branches:.0%} "
+                        f"({entree.get('branches_couvertes')}/{entree.get('branches_total')})"
+                    ),
+                    severite=seuils.severite("branches_module_exerce"),
+                    risque=coter(PAN, identifiant, chemin),
+                )
+            )
+    return findings
+
+
+def _surface_modules(inventaire: list[dict]) -> dict | None:
+    """La surface d un outil à racine plate : ses modules sources exercés par la suite (TF-2173).
+
+    Constaté en rejouant le cas du lot par la ligne de commande : une campagne jouée sur un outil
+    plat sortait en `REFUSE` (« score de mutation présent sans aucune couverture de surface »).
+    Un outil sans route ni formulaire n a aucun autre pan qui publie une surface. Exercé = au
+    moins une ligne couverte, comme dans l inventaire des modules. Pas de finding ajouté ici :
+    `_findings_modules` nomme déjà chaque module jamais exercé. None s il n y a rien à juger.
+    """
+    modules = [e for e in inventaire if e.get("categorie") != "exclu"]
+    if not modules:
+        return None
+    exerces = sorted(f"module:{e['module']}" for e in modules if e.get("exerce"))
+    manquants = sorted(f"module:{e['module']}" for e in modules if not e.get("exerce"))
+    return {
+        "inventorie": len(modules),
+        "exerce": len(exerces),
+        "ratio": round(len(exerces) / len(modules), 4),
+        "seuil": seuils.valeur("couverture_surface_modules"),
+        "elements_exerces": exerces,
+        "elements_non_exerces": manquants,
+        "entrants_hors_ratio": [],
+    }
+
+
+def analyser(cible: Path) -> SortieAdaptateur:
+    # TF-0216 (RT-2, lot COMPTA) : la racine d exécution est DÉCOUVERTE, plus ancrée en dur sur
+    # `backend\`. Laisser l ancre ici pendant que `paquet_sources` suit la racine découverte
+    # faisait diverger les deux sur un projet à racine plate : `source.relative_to(racine)`
+    # levait, le noyau rattrapait tout en exit 2, et le rapport ENTIER était perdu — strictement
+    # pire que le SKIP d avant. Un correctif qui aggrave le cas qu il vise n en est pas un.
+    racine = racine_execution(cible)
+    dossier = paquet_sources(cible)
+    # TF-2173 — un outil à modules plats n'a pas de paquet `app` ni `src` : la racine est la source.
+    plate = racine_plate(cible) if dossier is None else None
+    if plate is not None:
+        dossier = plate
+    # TF-2173 — l'interpréteur DÉSIGNÉ (`--python`) prime sur le `.venv` de la racine ; désigné et
+    # introuvable, il n'est pas remplacé en silence (`motif_python` est publié au SKIP).
+    python, motif_python = python_designe(cible)
+    if python is None:
+        python = racine / ".venv" / "Scripts" / "python.exe"
+        if not python.exists():
+            python = racine / ".venv" / "bin" / "python"
+    # TF-0402 (RF-4, lot Produit-09) — « écosystème non couvert » et « configuration manquante » ne
+    # sont pas le même verdict, et les confondre coûte double : une configuration réclamée pour
+    # un pan structurellement inatteignable use la crédibilité des actions (TF-0381), et un
+    # SEUIL BLOQUANT sans porteur est, au dashboard, indiscernable d'un seuil tenu — la pire des
+    # deux formes de silence. Un back Node (package.json sans paquet Python) n'est pas un back
+    # mal configuré : cet adaptateur ne sait PAS le muter, et la justification du seuil cite
+    # Stryker (l'outil JS) qui n'est câblé nulle part.
+    if (dossier is None or not dossier.is_dir()) and (racine / "package.json").is_file():
+        return SortieAdaptateur(
+            NOM, PAN, str(cible), "SKIP",
+            non_juge=[
+                *NON_JUGE,
+                "mutation : ÉCOSYSTÈME NON COUVERT — le back de ce projet est Node "
+                f"(`{(racine / 'package.json').as_posix()}`, aucun paquet Python), et cet "
+                "adaptateur ne mute que du Python. Ce n'est PAS une configuration manquante : "
+                "aucune variable ne rendra ce pan mesurable ici. Le seuil BLOQUANT "
+                f"`mutation_globale` ({SEUIL:.2f}) n'a donc AUCUN PORTEUR sur ce projet — sa "
+                "justification cite Stryker, l'outil JS, câblé nulle part (RF-4) : un pan "
+                "mutation JS est le remède, pas une configuration",
+            ],
+        )
+    if dossier is None or not dossier.is_dir():
+        return SortieAdaptateur(
+            NOM, PAN, str(cible), "SKIP",
+            non_juge=[
+                *NON_JUGE,
+                f"mutation : sources du projet non localisables — {motif_indetermine(cible)}",
+            ],
+        )
+
+    retenus, exclus = decouvrir(racine, dossier)
+    par_module = _entier_env("FORGE_TESTS_MUTANTS_PAR_MODULE", _MUTANTS_PAR_MODULE_DEFAUT)
+    plafond = _entier_env("FORGE_TESTS_MUTATION_PLAFOND", _PLAFOND_DEFAUT)
+    non_juge = list(NON_JUGE)
+    if plate is not None:
+        non_juge.append(
+            "mutation : RACINE PLATE (TF-2173) — outil sans paquet `app` ni `src` : "
+            f"{len(modules_plats(plate))} module(s) posé(s) à la racine sont la source "
+            f"({', '.join(m.name for m in modules_plats(plate)[:8])}"
+            f"{' …' if len(modules_plats(plate)) > 8 else ''}), la suite est celle de `tests/`"
+        )
+    if exclus:
+        non_juge.append(
+            "mutation : "
+            + str(len(exclus))
+            + " module(s) EXCLUS du périmètre, chacun nommé avec son motif dans `modules[]` : "
+            + ", ".join(e["module"] for e in exclus)
+        )
+
+    # La couverture se lit AVANT toute mutation : la suite doit être mesurée sur le code
+    # d origine, jamais sur un arbre en cours d altération.
+    couverture = resume_fichiers(cible)
+
+    # D-34 — LA PORTE. Le pan ne se joue plus par defaut ; non demande, il DIT ce qu il n a pas
+    # mesure et PROPOSE la campagne quand elle est perimee. L inventaire des modules est publie
+    # quand meme (principe A-2) : un pan non joue ne doit pas faire disparaitre les modules du
+    # rapport, sinon le silence du pan devient le silence du projet.
+    if not _mutation_demandee():
+        etat = _etat_peremption(cible, racine, dossier)
+        inventaire = _inventaire_modules(racine, retenus, exclus, couverture, {})
+        return SortieAdaptateur(
+            NOM, PAN, str(cible), "SKIP",
+            findings=_findings_modules(dossier, inventaire),
+            non_juge=[
+                *non_juge,
+                "mutation : pan NON JOUE — campagne a la demande depuis la decision humaine du "
+                "01/09/2026 (`FORGE_TESTS_MUTATION=1` pour la demander). Le seuil bloquant "
+                f"`mutation_globale` ({SEUIL:.2f}) n a donc PAS de porteur sur cet audit, et "
+                "aucun score de mutation n est publie : ce n est pas un score de zero.",
+                f"mutation : {etat['proposition']}",
+            ],
+            modules=inventaire,
+            mutation={"a_la_demande": etat},
+        )
+
+    if not python.exists():
+        inventaire = _inventaire_modules(racine, retenus, exclus, couverture, {})
+        return SortieAdaptateur(
+            NOM, PAN, str(cible), "SKIP",
+            findings=_findings_modules(dossier, inventaire),
+            non_juge=[
+                *non_juge,
+                motif_python
+                or f"mutation : aucun environnement Python du projet ({racine / '.venv'}) ; "
+                "pour un outil sans `.venv`, désigner l'interpréteur par `--python`",
+                # TF-2402 : le motif publié au rapport est le DERNIER de la liste. Sans interpréteur
+                # du projet, rien n est muté faute de PRÉALABLE, pas faute de défaut : le
+                # marqueur y est, pour que la recette dise « non mesurable » et non « manque ».
+                f"mutation : {PREALABLE_ABSENT} — {len(retenus)} module(s) inventorié(s), aucun "
+                "muté faute d'interpréteur Python du projet",
+            ],
+            modules=inventaire,
+        )
+
+    # G-1, deux representations DISTINCTES du même fichier, et c est volontaire :
+    #   - `originaux` en TEXTE (fins de ligne normalisees par `read_text`) sert au calcul des
+    #     mutants, exactement comme `generer_mutants` qui lit de la meme facon — les colonnes
+    #     restent alignees ;
+    #   - `octets` est le contenu EXACT du fichier, seul admis pour la restauration.
+    # Restaurer depuis le texte reecrivait `\n` en `\r\n` sur Windows : le 2026-08-06, un audit
+    # d ASD Mail Manager a ainsi modifie 23 fichiers source du produit — mutation restauree,
+    # fins de ligne retournees. Une lecture seule qui reecrit les fins de ligne n est pas une
+    # lecture seule ; l ecart ne se voyait pas tant que le perimetre tenait dans huit modules
+    # deja convertis par un audit precedent.
+    originaux = {f: f.read_text(encoding="utf-8") for f in retenus}
+    octets = {f: f.read_bytes() for f in retenus}
+    plan: list[tuple[Path, Mutant]] = []
+    par_fichier: dict[Path, list[Mutant]] = {}
+    candidats_par_fichier: dict[Path, int] = {}
+    for fichier in retenus:
+        relatif = fichier.relative_to(racine).as_posix()
+        # Viabilite d abord, echantillon ensuite : l inverse laissait des modules entiers sans
+        # score quand leurs trois tires ne compilaient pas (voir `viables`).
+        candidats = compilables(
+            originaux[fichier], generer_mutants(fichier, relatif), str(fichier)
+        )
+        candidats_par_fichier[fichier] = len(candidats)
+        tires = echantillonner(candidats, par_module)
+        par_fichier[fichier] = tires
+        plan.extend((fichier, m) for m in tires)
+    if len(plan) > plafond:
+        non_juge.append(
+            f"mutation : plafond global de {plafond} mutants atteint — "
+            f"{len(plan) - plafond} mutants non joués, score calculé sur le sous-ensemble DÉCLARÉ"
+        )
+        plan = plan[:plafond]
+
+    survivants: list[Mutant] = []
+    viables_par_fichier: dict[Path, int] = {}
+    survivants_par_fichier: dict[Path, list[Mutant]] = {}
+    viables = 0
+    # TF-0748/TF-0749 : le nombre de mutants pour lesquels une SELECTION a reellement ete
+    # calculee. `_tests_pour` rend None des que la carte manque ou que la ligne n a aucun test
+    # nomme, et le rejeu repart alors en suite entiere — silencieusement. Sans ce compteur, une
+    # campagne « ciblee » qui n a rien cible est indiscernable d une campagne pleine, et la
+    # recette de non-perte comparerait deux fois la meme chose en croyant comparer deux
+    # strategies (voir `recette/non_perte_ciblage.py`).
+    cibles = 0
+    interrompu: str | None = None
+    verrou: Path | None = None  # TF-2091 : pose a l entree de la fenetre de mutation, ci-dessous
+    # TF-0744 : un couple (survivant, duree) par mutant JOUE. C est la matiere de la
+    # decomposition tues/survivants — sans elle, la seule valeur publiable serait une moyenne
+    # globale, et une moyenne globale ne decrit aucun mutant reel sous `-x`.
+    mesures: list[tuple[bool, float]] = []
+    debut_pan = time.monotonic()
+    # TF-0096 : la mutation était LE process silencieux d origine (~45 min sans un signal,
+    # run Produit-01 du 11/08). Unité = module ; sous-découpe = mutant k/n dans le module —
+    # une unité qui occupe plus d une fenêtre montre son avancement INTERNE.
+    from forge_tests.avancement import Avancement
+
+    ordre_fichiers = list(dict.fromkeys(f for f, _ in plan))
+    dossier_run = str(cible / "forge") if (cible / "forge").is_dir() else None
+    av = Avancement(
+        dossier_run, unite="module",
+        raf=[f.relative_to(racine).as_posix() for f in ordre_fichiers],
+        libelle=f"mutation de {cible.name} ({len(plan)} mutants)",
+    )
+    try:
+        try:
+            verte = _suite_verte_ou_injouable(racine, python)
+        except InterpreteurInutilisable as injouable:
+            # TF-0216 : ce pan devient non mesurable, les onze autres restent mesurés.
+            inventaire = _inventaire_modules(racine, retenus, exclus, couverture, {})
+            av.final()
+            return SortieAdaptateur(
+                NOM, PAN, str(cible), "SKIP",
+                findings=_findings_modules(dossier, inventaire),
+                non_juge=[*non_juge, f"back : interpréteur injouable — {injouable}"],
+                modules=inventaire,
+            )
+        if not verte:
+            inventaire = _inventaire_modules(racine, retenus, exclus, couverture, {})
+            av.final()
+            # TF-0299 — « suite rouge avant mutation » est FAUX quand la suite n a pas pu
+            # démarrer : le démon de conteneurs injoignable la fait échouer avant le premier
+            # test, et ce pan accusait alors la suite d un projet sain. Le motif déjà DÉCLARÉ par
+            # l exécution (elle a lancé la même suite quelques lignes plus haut, `resume_fichiers`)
+            # porte le préalable manquant : le reprendre ici évite deux diagnostics du même fait.
+            prealable = motif_indisponibilite(cible, "backend", "")
+            return SortieAdaptateur(
+                NOM, PAN, str(cible), "SKIP",
+                findings=_findings_modules(dossier, inventaire),
+                non_juge=[
+                    *non_juge,
+                    f"back : {prealable}"
+                    if PREALABLE_ABSENT in prealable
+                    else "suite rouge avant mutation : score non calculable",
+                ],
+                modules=inventaire,
+            )
+        # Palier 1 — la carte des tests par ligne se calcule ICI : la suite vient d etre
+        # declaree verte, et aucune source n a encore ete alteree.
+        carte_tests = _carte_tests(racine, python, dossier) if _ciblage_demande() else None
+        if _ciblage_demande():
+            non_juge.append(
+                "mutation : CIBLAGE par ligne mutee ACTIF (palier 1, drapeau "
+                "`FORGE_TESTS_MUTATION_CIBLAGE`) — "
+                + ("carte de couverture par test obtenue ; un mutant dont la ligne n est "
+                   "couverte par aucun test nomme rejoue quand meme la suite entiere"
+                   if carte_tests is not None else
+                   "carte NON obtenue (coverage absent, suite rouge ou delai depasse) : la "
+                   "campagne repart en suite entiere, plus lente et identique")
+                + ". La CONDITION DE NON-PERTE de l etude du 01/09 — meme liste de survivants "
+                "que la campagne pleine — n a pas encore ete jouee sur ce projet"
+            )
+        # TF-2091 — fenetre de mutation OUVERTE : a partir d ici une source porte un mutant jusqu
+        # a sa restauration. Le verrou dit la fenetre aux hooks ; il est retire dans le `finally`.
+        verrou = _poser_verrou_mutation(racine, list(octets))
+        fichier_courant: Path | None = None
+        joues_module = 0
+        for fichier, mutant in plan:
+            if fichier != fichier_courant:
+                if fichier_courant is not None:
+                    av.unite_finie(fichier_courant.relative_to(racine).as_posix())
+                fichier_courant = fichier
+                joues_module = 0
+                av.en_cours(fichier.relative_to(racine).as_posix(),
+                            interne=f"mutants 0/{len(par_fichier[fichier])}")
+            mute = appliquer(originaux[fichier], mutant)
+            # Garde-fou : le plan ne contient que des mutants deja compiles par `compilables`.
+            # Le revalider coute quelques millisecondes et interdit qu une regression du filtre
+            # fasse jouer un mutant qui ne compile pas — donc invariablement « tue ».
+            try:
+                compile(mute, str(fichier), "exec")
+            except SyntaxError:
+                continue  # hors du denominateur
+            viables += 1
+            viables_par_fichier[fichier] = viables_par_fichier.get(fichier, 0) + 1
+            poser(fichier, mute)
+            # `mutant.ligne` est 0-based (voir `Mutant.id`), coverage numerote a partir de 1.
+            selection = _tests_pour(carte_tests, mutant.fichier, mutant.ligne + 1)
+            if selection is not None:
+                cibles += 1
+            # TF-0744 : le chrono entoure le REJEU seul — ni la pose du mutant ni la
+            # restauration, qui appartiennent au fixe du pan et non au cout d une classe.
+            depart = time.monotonic()
+            survivant = _suite_verte(racine, python, selection)
+            mesures.append((survivant, time.monotonic() - depart))
+            if survivant:
+                survivants.append(mutant)
+                survivants_par_fichier.setdefault(fichier, []).append(mutant)
+            restaurer({fichier: octets[fichier]})
+            joues_module += 1
+            av.sous_etape(f"mutants {joues_module}/{len(par_fichier[fichier])}")
+        if fichier_courant is not None:
+            av.unite_finie(fichier_courant.relative_to(racine).as_posix())
+    except subprocess.TimeoutExpired:
+        # Un délai dépassé ne doit jamais emporter l audit entier : le pan se DÉCLARE non
+        # mesuré (le `finally` restaure les sources avant toute chose).
+        interrompu = (
+            "mutation : délai dépassé pendant le jeu des mutants — score partiel sur les "
+            f"{viables} mutant(s) déjà joués, les autres pans restent mesurés"
+        )
+    finally:
+        # Restauration a l OCTET PRES, inconditionnelle : c est le garde-fou G-1 lui-meme.
+        restaurer(octets)
+        _retirer_verrou_mutation(verrou)  # TF-2091 : fenetre de mutation fermee
+        _purger_bytecode(racine)
+        av.final()  # TF-0096 : l émission finale part même sur interruption
+    if interrompu:
+        non_juge.append(interrompu)
+
+    scores: dict[str, dict] = {}
+    for fichier in retenus:
+        relatif = fichier.relative_to(racine).as_posix()
+        viables_f = viables_par_fichier.get(fichier, 0)
+        if not viables_f:
+            candidats = candidats_par_fichier.get(fichier, 0)
+            tires = len(par_fichier.get(fichier, []))
+            # Trois causes DISTINCTES d absence de score. Les confondre sous un motif unique
+            # ferait passer un module non mesure pour un module non mesurable — et le second
+            # ne se repare pas, alors que le premier se repare en relancant.
+            if not candidats:
+                motif = (
+                    "aucun mutant compilable — le module ne porte aucune expression mutable "
+                    "sans casser la syntaxe"
+                )
+            elif not tires:
+                motif = f"{candidats} mutant(s) compilable(s), aucun echantillonne"
+            else:
+                motif = (
+                    f"{tires} mutant(s) echantillonne(s) sur {candidats} compilable(s), aucun "
+                    "joue — plafond global atteint ou delai depasse"
+                )
+            scores[relatif] = {"mute": False, "motif_non_mute": motif}
+            continue
+        tues_f = viables_f - len(survivants_par_fichier.get(fichier, []))
+        scores[relatif] = {
+            "mute": True,
+            "mutants_viables": viables_f,
+            "tues": tues_f,
+            "score_mutation": round(tues_f / viables_f, 4),
+            "survivants": [m.id for m in survivants_par_fichier.get(fichier, [])],
+        }
+
+    inventaire = _inventaire_modules(racine, retenus, exclus, couverture, scores)
+    tues = viables - len(survivants)
+    score = tues / viables if viables else 0.0
+    # TF-0744 — le cout du pan se DERIVE de la mesure, et il est reconcilie AVANT publication.
+    # Une anomalie de reconciliation est un defaut de l AUDITEUR : elle se dit au `non_juge`,
+    # comme les autres limites de ce pan, jamais en finding contre le projet.
+    cout = decomposer_cout(mesures, time.monotonic() - debut_pan)
+    for anomalie in anomalies_cout(cout):
+        non_juge.append(f"mutation : {anomalie}")
+    # D-34, troisieme condition — LA CAMPAGNE JOUEE SE NOTE, sinon « depuis plusieurs
+    # modifications de code » n a pas de point de depart et la porte proposerait la campagne a
+    # chaque passage. Le resume note porte le point de reference (le commit) ET le verdict rendu :
+    # c est aussi le corpus auquel une campagne ulterieure se compare.
+    note_campagne = _noter_campagne(cible, racine, {
+        "sha": _sha_courant(racine),
+        "date": datetime.now(UTC).isoformat(timespec="seconds"),
+        "mutants_viables": viables,
+        "tues": tues,
+        "score": round(score, 4),
+        "survivants": [m.id for m in survivants],
+        "paquet_source": (
+            dossier.relative_to(racine).as_posix()
+            if dossier.is_relative_to(racine)
+            else str(dossier)
+        ),
+    })
+    if note_campagne:
+        non_juge.append(f"mutation : {note_campagne}")
+    findings = [
+        Finding(
+            id=m.id,
+            classe=classes.MUTANT_SURVIVANT,
+            localisation=f"{racine / m.fichier}:{m.ligne + 1}",
+            message=f"mutant {m.avant.strip()} -> {m.apres.strip()} non tué : la suite reste verte",
+            severite="signale",
+            risque=coter(PAN, m.id, str(racine / m.fichier)),
+        )
+        for m in survivants
+    ]
+    findings.extend(_findings_modules(dossier, inventaire))
+    if viables and score < SEUIL:
+        findings.append(
+            Finding(
+                id=f"seuil:{PAN}",
+                classe=classes.SEUIL_NON_TENU,
+                localisation=str(cible),
+                message=f"score de mutation {score:.0%} sous le seuil {SEUIL:.0%}",
+                severite=seuils.severite("mutation_globale"),
+                risque=coter(PAN, f"seuil:{PAN}", str(dossier)),
+            )
+        )
+    findings.sort(key=lambda f: f.risque or 0, reverse=True)
+    mutes = [e for e in inventaire if e.get("mute")]
+    bloquants = [f for f in findings if f.severite == "bloquant"]
+    return SortieAdaptateur(
+        adaptateur=NOM,
+        pan=PAN,
+        cible=str(cible),
+        verdict="FAIL" if bloquants else "PASS",
+        findings=findings,
+        non_juge=non_juge,
+        surface=_surface_modules(inventaire) if plate is not None else None,
+        mutation={
+            "mutants_viables": viables,
+            "tues": tues,
+            "score": round(score, 4),
+            "seuil": SEUIL,
+            "modules_inventories": len(retenus),
+            "modules_mutes": len(mutes),
+            "modules_exclus": exclus,
+            "taux_echantillon": {
+                "mutants_par_module": par_module,
+                "plafond_global": plafond,
+                "variable": "FORGE_TESTS_MUTANTS_PAR_MODULE",
+            },
+            "modules": [e["module"] for e in mutes],
+            "score_par_module": {
+                e["module"]: e["score_mutation"] for e in mutes if "score_mutation" in e
+            },
+            "survivants": [m.id for m in survivants],
+            "a_la_demande": {
+                "regle": "campagne a la demande (decision humaine du 01/09/2026)",
+                "demandee_par": "FORGE_TESTS_MUTATION",
+                "notee": note_campagne is None,
+                "motif_non_notee": note_campagne,
+            },
+            "cout": cout,
+            "ciblage": {
+                "actif": _ciblage_demande(),
+                "variable": "FORGE_TESTS_MUTATION_CIBLAGE",
+                "surcout_fixe_mesure_s": 0.386,
+                "non_perte_jouee": False,
+                # TF-0748/TF-0749 : le drapeau DEMANDE le ciblage, il ne prouve pas qu il ait
+                # eu lieu. Ces deux faits-la le prouvent, et ils sont publies parce qu un
+                # lecteur — humain ou recette — ne peut pas les deduire du reste du rapport.
+                "carte_obtenue": carte_tests is not None,
+                "mutants_cibles": cibles,
+            },
+        },
+        modules=inventaire,
+    )

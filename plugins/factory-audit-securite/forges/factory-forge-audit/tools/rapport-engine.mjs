@@ -1,0 +1,1279 @@
+// promesses-verifiees — ce fichier ADHÈRE au contrôle des promesses de commentaire
+// (`oracle-promesses`, règle PR1 du pilot) : une classe ou un attribut nommé dans un commentaire
+// ici DOIT exister dans le code. Un générateur de page est l'endroit où une promesse de prose coûte
+// le plus cher — elle s'y lit comme une garantie de ce que la page contient. Signé le 23/08/2026,
+// choix humain « signer tout ce qui est propre dans les forges » ; joué avant signature, zéro constat.
+//
+// AuditCore — moteur de rendu du rapport d'audit (M5 v1).
+// Fonction PURE : (rapport-data, options) → HTML autonome thémé. Aucune E/S ici —
+// consommée par build-rapport.mjs (repo) et inlinée dans les kits (standalone).
+// v1 : bandeau gate + KPIs, radar par famille (SVG), onglets familles→dimensions
+// (matrice de traçabilité, constats triés, plan d'action trié), onglet « Toutes les
+// règles » filtrable, reprise applicative, impression. Hors v1 (v1.4) : ERD BDD,
+// schéma d'architecture auto-layout.
+//
+// v1.6 — doctrine « RESTITUTION LISIBLE » (forge-design, REFERENTIEL-RESTITUTION.md,
+// campagne TF-0235 volet P4). Le rapport d'audit est de la famille « rapport » : il
+// s'adresse à trois lecteurs — le commanditaire (« quel est l'état, que dois-je
+// décider ? »), le metteur en œuvre (« que faire, dans quel ordre ? »), l'expert
+// (« les verdicts tiennent-ils ? »). Les onglets à plat deviennent des VUES naviguées,
+// une question par vue, avec un routeur à ancres : un renvoi vers #D05 ouvre la vue qui
+// contient D05 avant d'y défiler — sans quoi la moitié des liens du rapport seraient
+// des affordances mortes. Aucun contenu n'est résumé ni supprimé : les blocs changent
+// de conteneur, et ce qui est absent des données se déclare au manifeste d'écarts.
+import { TABLE_FILTERS_JS } from './table-filters.mjs';
+import { adapterDbSchema, renderDbSchema, renderDbLegend, CANEVAS_CSS, CANEVAS_FIT_JS, JETONS } from './canevas-modele-donnees.mjs';
+
+/**
+ * TF-2139 (RU-6, 04/11/2026) — l'emoji « 🔒 » de l'interface (S6 d'oracle-slop : « utiliser une icône SVG dessinée »)
+ * devient une icône SVG, de la couleur du texte qui la porte. Le marquage PII du dictionnaire des tables, que le gate
+ * de rendu exige, est cette icône (`class="ico-pii"`) : le contrôle suit le marquage, il ne disparaît pas.
+ */
+export const ICO_PII = '<svg class="ico-pii" viewBox="0 0 16 16" width="12" height="12" role="img" aria-label="PII"><path d="M5 7V5a3 3 0 0 1 6 0v2h1v7H4V7h1zm1.5 0h3V5a1.5 1.5 0 0 0-3 0v2z"/></svg>';
+
+const SEV = { critique: 0, majeur: 1, mineur: 2 };
+// Seuil du socle (check_html L4 / composant filtres-tableau G1) : au-delà, un tableau
+// se trie et se filtre, ou déclare pourquoi il ne le fait pas.
+const SEUIL_FILTRE = 8;
+const TAG = { urgent: 0, prio: 1, quick: 2, norm: 3 };
+// TF-1752 (lot Produit-76 du 25/09/2026, RA-3) : le rapport REND son gabarit et sa version, sous la
+// forme du marqueur G4 du pilot (`Gabarit : gd-… · version du gabarit x.y.z`), pour que la section
+// R-46 d'un lot de retours se remplisse en lisant le document. Le marqueur reste en français dans un
+// rapport anglais : c'est un repère machine, lu par le même contrôle partout (comme la fiche).
+// Toute évolution de structure du rapport incrémente RAPPORT_GABARIT_VERSION À LA MAIN : le contrôle
+// de TF-1820 (tools/verifier-gabarits.mjs) juge les gabarits de deliverables/templates, PAS ce moteur.
+export const RAPPORT_GABARIT_ID = 'gd-rapport-audit-auditcore';
+export const RAPPORT_GABARIT_VERSION = '1.0.0';
+// i18n du moteur (RAF-012) — self-contained : les kits standalone inlinent ce fichier.
+export const STR = {
+  fr: { rapport: "Rapport d'audit", gate: 'Verdict gate', score: 'Score global', instruites: 'dimensions instruites',
+    bloquants: 'Bloquants', regles: 'Règles instruites', nc: 'non conformes', familles: 'Scores par famille',
+    toutes: 'Toutes les règles', reprise: 'Reprise applicative', schemas: 'Architecture & BDD',
+    regle: 'Règle', verdict: 'Verdict', preuve: 'Preuve / motif', remede: 'Remédiation', constats: 'Constats',
+    plan: "Plan d'action", action: 'Action', effort: 'Effort', dim: 'Dim.', crit: 'Crit.', sans_regle: 'Aucune règle rattachée à cette dimension.',
+    preuves_score: 'Preuves du score', so: 'sans objet', filtrer: 'Filtrer (id, verdict, texte)…', info: 'Information', valeur: 'Valeur', statut: 'Statut',
+    erd: 'Schéma physique (ERD)', archi: 'Architecture logique', table: 'Table', colonnes: 'Colonnes', note: 'Remarque',
+    // Les mots-clés SQL vivent en <code> : cités, ils sont montrés — nus dans une phrase
+    // française, « NULL » est un littéral de langage qui a fuité (socle check_html L11).
+    legende_erd: '<code>*</code> = colonne obligatoire (<code>NOT NULL</code>) · <code>[PK]</code>/<code>[UK]</code>/<code>[FK]</code> = clés · ' + ICO_PII + ' = donnée personnelle · trait plein = clé étrangère appliquée, pointillé = référence logique.',
+    auditeur: 'auditeur', footer: "Rapport auto-portant · « pas de score sans preuve » · généré par AuditCore {v} pour {t} — vérifié par verifier-rapport (gate machine).",
+    rem: 'Plan de remédiation', prio: 'Prio', source: 'Source', critere: 'Critère de clôture',
+    rem_sans_critere: 'action(s) sans critère de clôture — rapport incomplet',
+    rem_intro: "Plan exhaustif et auto-porté : actions des dimensions + règles non conformes. Extractible sans export manuel (verifier-remediation), et projeté en remediation-actions.yaml pour la forge.",
+    tests: 'Tests', analyses: 'Analyses techniques', composants: 'Composants',
+    type: 'Type', portee: 'Portée', resultat: 'Résultat', couverture: 'Couverture',
+    outil: 'Outil', categorie: 'Catégorie', version_utilisee: 'Version utilisée',
+    nom: 'Nom', version_resolue: 'Version résolue', version_actuelle: 'Version actuelle',
+    reco: 'Reco', perimetre: 'Périmètre', moteur_llm: "Moteur d'audit (LLM)" },
+  en: { rapport: 'Audit report', gate: 'Gate verdict', score: 'Overall score', instruites: 'dimensions assessed',
+    bloquants: 'Blockers', regles: 'Rules assessed', nc: 'non-compliant', familles: 'Scores by family',
+    toutes: 'All rules', reprise: 'Handover to operations', schemas: 'Architecture & DB',
+    regle: 'Rule', verdict: 'Verdict', preuve: 'Evidence / reason', remede: 'Remediation', constats: 'Findings',
+    plan: 'Action plan', action: 'Action', effort: 'Effort', dim: 'Dim.', crit: 'Crit.', sans_regle: 'No rule attached to this dimension.',
+    preuves_score: 'Score evidence', so: 'not applicable', filtrer: 'Filter (id, verdict, text)…', info: 'Item', valeur: 'Value', statut: 'Status',
+    erd: 'Physical schema (ERD)', archi: 'Logical architecture', table: 'Table', colonnes: 'Columns', note: 'Remark',
+    legende_erd: '<code>*</code> = mandatory column (<code>NOT NULL</code>) · <code>[PK]</code>/<code>[UK]</code>/<code>[FK]</code> = keys · ' + ICO_PII + ' = personal data · solid = enforced foreign key, dashed = logical reference.',
+    auditeur: 'auditor', footer: 'Self-contained report · "no score without evidence" · generated by AuditCore {v} for {t} — checked by verifier-rapport (machine gate).',
+    rem: 'Remediation plan', prio: 'Prio', source: 'Source', critere: 'Closure criterion',
+    rem_sans_critere: 'action(s) without a closure criterion — incomplete report',
+    rem_intro: 'Exhaustive, self-carried plan: dimension actions + non-compliant rules. Extractable without manual export (verifier-remediation), and projected to remediation-actions.yaml for the forge.',
+    tests: 'Tests', analyses: 'Technical analyses', composants: 'Components',
+    type: 'Type', portee: 'Scope', resultat: 'Result', couverture: 'Coverage',
+    outil: 'Tool', categorie: 'Category', version_utilisee: 'Version used',
+    nom: 'Name', version_resolue: 'Resolved version', version_actuelle: 'Current version',
+    reco: 'Reco', perimetre: 'Scope', moteur_llm: 'Audit engine (LLM)' },
+};
+const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const CRIT_CLASS = { Fatal: 'fatal', Bloquant: 'bloq', Majeur: 'maj', Standard: 'std' };
+
+/**
+ * TF-1276 (02/10/2026) : A2 du socle commun — favicon-lettre en `data:` URI, zéro requête,
+ * initiale du client. Absent, l'onglet porte l'icône générique du navigateur et le rapport se
+ * perd parmi vingt autres. `couleur` reprend `--accent` du thème déjà généré pour ce tenant (une
+ * favicon n'a pas de CSSOM : `var(--accent)` n'y résoudrait rien, la couleur doit être littérale).
+ */
+export function faviconDataUri(lettre, couleur) {
+  const L = (String(lettre || '?').trim().charAt(0) || '?').toUpperCase();
+  const svg = `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'>`
+    + `<rect width='64' height='64' rx='14' fill='${couleur}'/>`
+    + `<text x='32' y='44' font-family='Segoe UI,Roboto,sans-serif' font-size='38' `
+    + `font-weight='700' fill='white' text-anchor='middle'>${L}</text></svg>`;
+  return `data:image/svg+xml,${encodeURIComponent(svg)}`;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Textes de la doctrine « restitution lisible ». Ils ne décrivent JAMAIS une donnée
+// que le rapport n'a pas : les repères de lecture et le manifeste d'écarts sont des
+// fonctions des chiffres réellement calculés, jamais des phrases figées.
+// ─────────────────────────────────────────────────────────────────────────────
+export const RES = {
+  fr: {
+    sommaire: 'Sommaire — une question par vue',
+    apprend: 'Ce que cette vue vous apprend',
+    commencer: 'Par où commencer, selon qui vous êtes',
+    ecarts_t: "Ce que ce rapport ne dit pas — manifeste d'écarts",
+    ecarts_annonce: 'la liste des absences déclarées : ce que ce rapport ne couvre pas',
+    ecarts_apprend: "Ce chapitre liste les absences déclarées : ce qu'aucune donnée ne couvre dans ce rapport, pour que rien ne se devine en silence.",
+    aller_famille: 'Aller directement à une famille de dimensions',
+    v: {
+      synthese: ['Synthèse', "l'état du périmètre, ce qui bloque, par où commencer"],
+      plan: ["Plan d'action", "les actions de remédiation, dans l'ordre de priorité"],
+      dimensions: ['Constats par dimension', 'score, preuves, règles et constats, dimension par dimension'],
+      regles: ['Toutes les règles', 'le référentiel instruit, règle par règle, filtrable'],
+      schemas: ['Architecture & BDD', "les schémas d'architecture et de base de données relevés"],
+      donnees: ['Données analysées', 'tests, outillage exécuté, composants et reprise applicative'],
+      methode: ['Méthode & lecture', 'barèmes, légendes, provenance et limites de ce rapport'],
+    },
+    o: {
+      synthese: "Ce que cette vue vous apprend : le verdict de porte, les chiffres qui le fondent, et le chemin de lecture qui correspond à votre rôle.",
+      plan: "Ce que cette vue vous apprend : les actions de remédiation consolidées — dimensions et règles non conformes réunies —, triées par priorité, chacune avec son critère de clôture.",
+      dimensions: "Ce que cette vue vous apprend : pour chaque dimension auditée, son score, les preuves qui le fondent, les règles instruites, les constats et les actions qui en découlent.",
+      regles: "Ce que cette vue vous apprend : la traçabilité complète du référentiel — chaque règle instruite, son verdict, sa criticité et la preuve sur laquelle le verdict s'appuie.",
+      schemas: "Ce que cette vue vous apprend : l'architecture logique et le schéma physique de la base relevés pendant l'audit, avec le dictionnaire des tables et les données personnelles repérées.",
+      donnees: "Ce que cette vue vous apprend : la matière factuelle de l'audit — tests joués, outillage exécuté avec sa version, composants versionnés, et état de la reprise applicative.",
+      methode: "Ce que cette vue vous apprend : comment ce rapport juge — barèmes des scores, définitions des verdicts et des priorités — et ce qu'il ne peut pas dire.",
+    },
+    q_radar: 'Comment la maturité se répartit-elle entre les familles de dimensions ?',
+    radar_sous: 'Moyenne des scores des dimensions instruites de chaque famille, sur 5.',
+    q_verdicts: 'Comment les règles instruites se répartissent-elles par verdict ?',
+    kpi: {
+      score: ['Score global', 'Moyenne des scores des dimensions instruites, sur une échelle de 0 à 5.',
+        (n, tot) => `${n} dimension(s) instruite(s) sur ${tot} du référentiel — barème des crans en vue Méthode & lecture.`],
+      bloquants: ['Bloquants', 'Dimensions instruites au score inférieur ou égal à 2, ou de criticité Fatal ; une dimension hors périmètre n’en fait jamais partie.',
+        (n, ids) => (n ? `Dimensions concernées : ${ids} — chacune ouvre une action au plan.` : 'Aucune dimension bloquante : le verdict de porte ne tient qu\'aux règles instruites.')],
+      regles: ['Règles instruites', 'Règles du référentiel effectivement instruites sur ce périmètre.',
+        (nc, part, so, ae, conf) => `${conf} conforme(s), ${nc} non conforme(s), ${part} partielle(s), ${so} sans objet motivé, ${ae} à évaluer (non instruites) — chaque état est nommé, aucun n'est fondu dans « conforme ».`],
+      plan: ['Actions de remédiation', 'Actions consolidées : plans des dimensions et règles non conformes réunis.',
+        (u, p) => `${u} urgente(s) et ${p} prioritaire(s) en tête de file — l'ordre de traitement est celui de la vue Plan d'action.`],
+    },
+    a: {
+      dimensions: '→ Le détail par dimension',
+      regles: '→ La traçabilité des règles',
+      plan: "→ Le plan d'action complet",
+      methode: '→ La méthode et les barèmes',
+    },
+    chemins: [
+      ['Commanditaire', "Restez sur cette vue : le verdict, les quatre chiffres et leurs repères suffisent à décider. Passez ensuite au "],
+      ['Metteur en œuvre', 'Allez au '],
+      ['Expert du domaine', 'Commencez par '],
+    ],
+    t: {
+      gate: 'Verdict de la porte 1b pour ce périmètre — définition et calcul en vue Méthode & lecture.',
+      score: 'Score de maturité de la dimension, de 0 à 5 — barème détaillé en vue Méthode & lecture.',
+      criticite: "Criticité de la dimension au sens du référentiel — définition en vue Méthode & lecture.",
+      gate1b: 'Verdict de porte porté par cette dimension — définition en vue Méthode & lecture.',
+      verdict: 'Verdict de la règle : conforme, partiel, non conforme ou sans objet — définitions en vue Méthode & lecture.',
+      priorite: "Priorité de traitement de l'action — définition des quatre crans en vue Méthode & lecture.",
+      severite: 'Sévérité du constat — définition des crans en vue Méthode & lecture.',
+      statut: 'État de la reprise applicative pour cet élément — définition en vue Méthode & lecture.',
+      sans_objet: 'Dimension hors périmètre ou non instruite : elle ne pèse pas dans le score global.',
+    },
+    leg: {
+      mesures: 'Les valeurs chiffrées des tableaux de ce rapport sont reprises telles que produites par la source : « cas passés / cas total » pour un test, pourcentage pour une couverture, version littérale pour un composant. Aucune n\'est recalculée par le rendu.',
+      score: 'Score de maturité par dimension, de 0 (rien en place) à 5 (industrialisé et contrôlé). Le score global est la moyenne arithmétique des seules dimensions instruites : une dimension sans objet ne pèse ni en bien ni en mal.',
+      gate: "Verdict de porte 1b : GO si aucune dimension bloquante ; GO SOUS RÉSERVE si au moins une dimension est bloquante ou en réserve ; NO-GO si une dimension rend un verdict nogo, ou si cinq dimensions ou plus sont bloquantes.",
+      verdicts: "Verdicts d'une règle : conforme (la preuve établit le respect), partiel (respect incomplet, preuve partielle), non conforme (la preuve établit l'écart), sans objet (la règle ne s'applique pas au périmètre, motif obligatoire), à évaluer (non instruite).",
+      priorites: "Priorités du plan : urgent (à traiter avant mise en production), prio (avant la prochaine version), quick (gain rapide à effort faible), norm (fond de file). Elles sont dérivées de la criticité de la source, jamais saisies à la main. L'audit ne chiffre pas l'effort : la colonne Effort n'est renseignée que si la mission l'a saisi, sinon elle affiche « — » ; la cotation d'effort relève du plan d'amélioration.",
+      criticites: 'Criticités du référentiel, du plus grave au moins grave : Fatal, Bloquant, Majeur, Standard. Une règle opposable de criticité Fatal ou Bloquant fait basculer la porte.',
+      preuve: "Règle d'or de la méthode : pas de score sans preuve. Chaque score de dimension cite les éléments constatés qui le fondent ; chaque règle non conforme cite la preuve de l'écart et le critère qui clôturera sa remédiation.",
+    },
+    ex: {
+      regles: (id, v) => `Lecture d'une ligne : la règle ${id} rend le verdict « ${v} » ; la colonne Preuve dit sur quoi ce verdict s'appuie, et la colonne Dim. rattache la règle à sa dimension.`,
+      plan: (id) => `Lecture d'une ligne : l'action ${id} porte sa priorité de traitement, sa source (dimension ou règle) et le critère de clôture qui permettra de la déclarer faite, preuve à l'appui.`,
+      donnees: 'Lecture d\'une ligne : chaque entrée nomme ce qui a été exécuté ou relevé, et la valeur constatée — aucune ligne n\'est une intention, seulement un fait.',
+      dim: 'Lecture d\'une ligne : la règle, son verdict, la preuve qui le fonde, puis la remédiation possible si un écart est constaté.',
+      erd: 'Lecture d\'une ligne : la table, son nombre de colonnes, les colonnes porteuses de données personnelles, puis la note de contexte.',
+    },
+    ec: {
+      aucun: "Aucun écart déclaré : les règles RL-1 à RL-10 du référentiel de restitution sont tenues sur les données de cette mission.",
+      schemas: "Architecture logique et schéma de base de données absents des données d'audit : la vue correspondante n'existe pas plutôt que d'afficher un cadre vide.",
+      donnees: "Aucun test, outillage ni composant déclaré dans les données d'audit : la vue « Données analysées » n'existe pas.",
+      constats: "Aucun constat détaillé fourni : les dimensions n'affichent que leur score, leurs preuves et leurs règles.",
+      constats_orphelins: (n, titres) => `${n} constat(s) rattaché(s) à aucune dimension du référentiel (${titres}) : ils ne s'affichent nulle part dans le rapport — corriger le champ « dimension » des données d'audit.`,
+      syntheses: "Aucune synthèse rédigée transmise avec les données : la vue Synthèse s'en tient aux chiffres calculés.",
+      plan_incomplet: (n) => `${n} action(s) de remédiation sans critère de clôture rédigé : le rapport est incomplet sur ce point et le gate de rendu le refuse.`,
+      non_rattachees: (n, ids) => `${n} action(s) sans dimension de rattachement (${ids}) : visibles au plan, elles sortent du contrat YAML de la forge.`,
+      reprise: "Aucun élément de reprise applicative déclaré : la passation vers l'exploitation n'est pas instruite par ce rapport.",
+      figures: "Une seule figure dans ce rapport : le moteur ne trace que ce dont il a la donnée chiffrée, il ne fabrique pas de graphique d'illustration.",
+    },
+    exempt_syntheses: 'synthèse rédigée à deux colonnes, lue en place et non parcourue',
+    cherche: 'Rechercher dans ce tableau…',
+    lignes: 'lignes affichées',
+    provenance: 'Provenance et traçabilité',
+  },
+  en: {
+    sommaire: 'Contents — one question per view',
+    apprend: 'What this view tells you',
+    commencer: 'Where to start, depending on who you are',
+    ecarts_t: "What this report does not say — gap manifest",
+    ecarts_annonce: 'the list of declared gaps: what this report does not cover',
+    ecarts_apprend: 'This chapter lists the declared gaps: what no data covers in this report, so nothing is left to guess in silence.',
+    aller_famille: 'Jump to a family of dimensions',
+    v: {
+      synthese: ['Summary', 'the state of the scope, what blocks, where to start'],
+      plan: ['Action plan', 'remediation actions, in order of priority'],
+      dimensions: ['Findings by dimension', 'score, evidence, rules and findings, dimension by dimension'],
+      regles: ['All rules', 'the assessed baseline, rule by rule, filterable'],
+      schemas: ['Architecture & DB', 'the architecture and database schemas recorded'],
+      donnees: ['Analysed data', 'tests, executed tooling, components and handover'],
+      methode: ['Method & reading', 'scales, legends, provenance and limits of this report'],
+    },
+    o: {
+      synthese: 'What this view tells you: the gate verdict, the figures behind it, and the reading path that matches your role.',
+      plan: 'What this view tells you: the consolidated remediation actions — dimension plans and non-compliant rules together — sorted by priority, each with its closure criterion.',
+      dimensions: 'What this view tells you: for every assessed dimension, its score, the evidence behind it, the rules assessed, the findings and the resulting actions.',
+      regles: 'What this view tells you: the full traceability of the baseline — every rule assessed, its verdict, its criticality and the evidence the verdict rests on.',
+      schemas: 'What this view tells you: the logical architecture and the physical database schema recorded during the audit, with the table dictionary and the personal data spotted.',
+      donnees: 'What this view tells you: the factual material of the audit — tests run, tooling executed with its version, versioned components, and the state of the handover.',
+      methode: 'What this view tells you: how this report judges — score scales, verdict and priority definitions — and what it cannot say.',
+    },
+    q_radar: 'How is maturity spread across the families of dimensions?',
+    radar_sous: 'Average score of the assessed dimensions of each family, out of 5.',
+    q_verdicts: 'How do the assessed rules break down by verdict?',
+    kpi: {
+      score: ['Overall score', 'Average of the scores of the assessed dimensions, on a 0 to 5 scale.',
+        (n, tot) => `${n} dimension(s) assessed out of ${tot} in the baseline — scale of the steps in the Method & reading view.`],
+      bloquants: ['Blockers', 'Assessed dimensions scoring 2 or below, or of Fatal criticality; a dimension out of scope is never one.',
+        (n, ids) => (n ? `Dimensions concerned: ${ids} — each opens an action in the plan.` : 'No blocking dimension: the gate verdict rests only on the assessed rules.')],
+      regles: ['Rules assessed', 'Baseline rules actually assessed on this scope.',
+        (nc, part, so, ae, conf) => `${conf} compliant, ${nc} non-compliant, ${part} partial, ${so} not applicable with a reason, ${ae} to be assessed (not yet assessed) — every state is named, none is folded into "compliant".`],
+      plan: ['Remediation actions', 'Consolidated actions: dimension plans and non-compliant rules together.',
+        (u, p) => `${u} urgent and ${p} high priority at the head of the queue — the processing order is the one of the Action plan view.`],
+    },
+    a: {
+      dimensions: '→ The detail by dimension',
+      regles: '→ The rule traceability',
+      plan: '→ The full action plan',
+      methode: '→ The method and the scales',
+    },
+    chemins: [
+      ['Sponsor', 'Stay on this view: the verdict, the four figures and their reading cues are enough to decide. Then move on to '],
+      ['Implementer', 'Go to '],
+      ['Domain expert', 'Start with '],
+    ],
+    t: {
+      gate: 'Gate verdict for this scope — definition and computation in the Method & reading view.',
+      score: 'Maturity score of the dimension, from 0 to 5 — detailed scale in the Method & reading view.',
+      criticite: 'Criticality of the dimension in the baseline — definition in the Method & reading view.',
+      gate1b: 'Gate verdict carried by this dimension — definition in the Method & reading view.',
+      verdict: 'Verdict of the rule: compliant, partial, non-compliant or not applicable — definitions in the Method & reading view.',
+      priorite: 'Processing priority of the action — definition of the four steps in the Method & reading view.',
+      severite: 'Severity of the finding — definition of the steps in the Method & reading view.',
+      statut: 'State of the handover for this item — definition in the Method & reading view.',
+      sans_objet: 'Dimension out of scope or not assessed: it does not weigh in the overall score.',
+    },
+    leg: {
+      mesures: 'The figures in the tables of this report are reproduced exactly as produced by the source: "cases passed / total cases" for a test, a percentage for coverage, the literal version for a component. None is recomputed by the renderer.',
+      score: 'Maturity score per dimension, from 0 (nothing in place) to 5 (industrialised and controlled). The overall score is the arithmetic mean of the assessed dimensions only: a dimension marked not applicable weighs neither way.',
+      gate: 'Gate verdict: GO when no dimension blocks; GO WITH RESERVATIONS when at least one dimension blocks or is reserved; NO-GO when a dimension returns a nogo verdict, or when five dimensions or more block.',
+      verdicts: 'Verdicts of a rule: compliant (evidence establishes conformity), partial (incomplete conformity, partial evidence), non-compliant (evidence establishes the gap), not applicable (the rule does not apply to the scope, reason mandatory), to assess (not instructed).',
+      priorites: 'Priorities of the plan: urgent (before going to production), prio (before the next release), quick (fast win at low effort), norm (back of the queue). They derive from the criticality of the source, never typed by hand. The audit does not size effort: the Effort column is filled only when the engagement entered it, otherwise it shows "—"; effort sizing belongs to the improvement plan.',
+      criticites: 'Criticalities of the baseline, from the most to the least severe: Fatal, Blocking, Major, Standard. A binding rule of Fatal or Blocking criticality flips the gate.',
+      preuve: 'Golden rule of the method: no score without evidence. Every dimension score cites the observed items behind it; every non-compliant rule cites the evidence of the gap and the criterion that will close its remediation.',
+    },
+    ex: {
+      regles: (id, v) => `Reading a row: rule ${id} returns the verdict "${v}"; the Evidence column says what the verdict rests on, and the Dim. column ties the rule to its dimension.`,
+      plan: (id) => `Reading a row: action ${id} carries its processing priority, its source (dimension or rule) and the closure criterion that will let it be declared done, with evidence.`,
+      donnees: 'Reading a row: every entry names what was executed or recorded, and the value observed — no row is an intention, only a fact.',
+      dim: 'Reading a row: the rule, its verdict, the evidence behind it, then the possible remediation when a gap is observed.',
+      erd: 'Reading a row: the table, its number of columns, the columns carrying personal data, then the context note.',
+    },
+    ec: {
+      aucun: 'No gap declared: rules RL-1 to RL-10 of the restitution baseline are met on the data of this engagement.',
+      schemas: 'Logical architecture and database schema absent from the audit data: the matching view does not exist rather than showing an empty frame.',
+      donnees: 'No test, tooling or component declared in the audit data: the "Analysed data" view does not exist.',
+      constats: 'No detailed finding provided: dimensions only show their score, their evidence and their rules.',
+      constats_orphelins: (n, titres) => `${n} finding(s) attached to no dimension of the baseline (${titres}): they appear nowhere in the report — fix the "dimension" field of the audit data.`,
+      syntheses: 'No written summary supplied with the data: the Summary view sticks to the computed figures.',
+      plan_incomplet: (n) => `${n} remediation action(s) without a written closure criterion: the report is incomplete on this point and the rendering gate rejects it.`,
+      non_rattachees: (n, ids) => `${n} action(s) without an attached dimension (${ids}): visible in the plan, they fall out of the forge YAML contract.`,
+      reprise: 'No handover item declared: the transfer to operations is not assessed by this report.',
+      figures: 'A single figure in this report: the engine only draws what it has figures for, it does not manufacture illustrative charts.',
+    },
+    exempt_syntheses: 'written two-column summary, read in place and not browsed',
+    cherche: 'Search this table…',
+    lignes: 'rows shown',
+    provenance: 'Provenance and traceability',
+  },
+};
+
+// ── Tableau de données : au-delà du seuil du socle, il porte le câblage du composant
+// « filtres de colonne » (id + thead + compteur aria-live + réaffichage à l'impression),
+// ou une exemption MOTIVÉE. Sans motif ce n'est pas une exemption, c'est un oubli.
+// `aria-describedby` du groupe : la légende de lecture des valeurs chiffrées vit une
+// seule fois, en vue Méthode (règle RL-7), et couvre toutes les cellules du tableau.
+function tableau({ id, thead, tbody, lignes, exemption = '', recherche = '', L }) {
+  const long = lignes >= SEUIL_FILTRE;
+  const attrs = !long ? ''
+    : exemption ? ` data-filterable="off" data-filterable-reason="${esc(exemption)}"`
+      : ' data-filterable';
+  const outils = (long && !exemption)
+    ? `<div class="t-outils">${recherche
+      ? `<input type="search" id="${id}-q" aria-label="${esc(recherche)}" placeholder="${esc(recherche)}" oninput="filtreTableau('${id}-q','${id}')">`
+      : ''}<span class="tf-count" data-tf-count-for="${id}" aria-live="polite">${lignes} ${L.lignes}</span></div>`
+    : '';
+  return `${outils}<table id="${id}"${attrs} aria-describedby="leg-mesures"><thead>${thead}</thead><tbody>${tbody}</tbody></table>`;
+}
+
+/** Badge : une valeur mise en avant porte toujours sa légende (socle check_html L3). */
+const badge = (cls, texte, titre) =>
+  `<span class="badge${cls ? ' ' + cls : ''}" title="${esc(titre)}">${esc(texte)}</span>`;
+
+// ── M5 v1.5 · ERD : data.db_schema = { bandes:[{key,label}], tables:[{id,bande,label,
+//    columns:[{n,t,k(PK|UK|FK),nn,pii,note}]}], relations:[{from,to,enforced,label}] }
+//
+// ── LE CANEVAS FAIT FOI, ET LE RAPPORT LE CONSOMME (TF-0940, décision humaine D-4 (b) du
+//    20/09/2026). Deux moteurs de schéma de base de données ont coexisté : le canevas du skill
+//    factory-schemas (cartes HTML + calque SVG, badges PK/UK/FK/NN, arêtes ancrées colonne à
+//    colonne, mise à l'échelle) et un `renderERD` en SVG pur écrit ici, plus pauvre, qui se
+//    déclarait lui-même « non faisant foi » depuis ae3dfd8. Déclarer ne suffisait pas : le
+//    rapport continuait de rendre le moteur pauvre. `renderERD` n'est plus un moteur, c'est un
+//    APPEL — le dessin et sa légende viennent de la copie conforme `canevas-modele-donnees.mjs`
+//    (déclarée dans HERITAGE.json, dérive mesurée par tools/verifier-heritage.mjs).
+//
+//    CE QUI RESTE AU RAPPORT : le DICTIONNAIRE, en tableau filtrable. Le canevas le rend en
+//    cartes ; le gate du rapport exige au-delà de 8 lignes un tableau qui se trie et se filtre
+//    (RL-5). Prendre les cartes aurait échangé un moteur de dessin contre une régression de
+//    restitution — le rapport garde donc son tableau et ne prend du canevas que le dessin.
+function renderERD(db, L = STR.fr, T = RES.fr) {
+  if (!db?.tables?.length) return '';
+  const dict = db.tables.map(t => `<tr><td><b>${esc(t.label ?? t.id)}</b></td><td>${(t.columns ?? []).length}</td>
+    <td>${(t.columns ?? []).filter(c => c.pii).map(c => `<code>${esc(c.n)}</code>`).join(' ') || '—'}</td>
+    <td class="muted">${esc(t.note ?? '')}</td></tr>`).join('');
+  return `<h3>${L.erd}</h3>
+  <div class="db-schema-hote"><div id="dbSchemaMount" data-rognage-assume="mise a l echelle par fitSchema : la hauteur du conteneur suit le facteur applique, aucun contenu n est masque"><div class="db-scaler">${adapterCanevasHtml(renderDbSchema(adapterDbSchema(db)))}</div></div>
+  ${adapterCanevasHtml(renderDbLegend())}</div>
+  ${db.tables.length >= SEUIL_FILTRE ? `<p class="exemple-lecture muted small">${esc(T.ex.erd)}</p>` : ''}
+  ${tableau({ id: 't-__erd', lignes: db.tables.length, L: T, recherche: T.cherche,
+    thead: `<tr><th>${L.table}</th><th>${L.colonnes}</th><th>PII ${ICO_PII}</th><th>${L.note}</th></tr>`, tbody: dict })}
+  <p class="muted small">${L.legende_erd}</p>`;
+}
+
+// ── TF-2139 (RU-6) · LA COULEUR DU MOTEUR SE DÉRIVE DES JETONS DU TENANT ──────────────────────────────
+// Le moteur portait sa propre palette en dur (18 teintes pastel du schéma d'architecture, blanc des badges) : 35
+// couleurs littérales que oracle-tokens (T1) refuse, et des accents « néon » qu'oracle-slop (S5) relève. Une teinte
+// fixe ne suit pas la charte du tenant. Chaque famille de teinte du schéma s'appuie désormais sur un jeton de
+// gravité ou d'accent du thème (`FAMILLES_TEINTE`), et ses fonds et traits en sont des mélanges avec `--panel`.
+const FAMILLES_TEINTE = { purple: 'bloq', blue: 'accent', teal: 'std', coral: 'fatal', amber: 'maj', gray: 'muted' };
+const melange = (jeton, part) => `color-mix(in srgb,var(--${jeton}) ${part}%,var(--panel))`;
+/** Jetons dérivés du thème du tenant : texte posé sur aplat, fonds doux du canevas, palette `--c-*` du schéma. */
+export const TOKENS_DERIVES_CSS = ':root{--on-accent:var(--panel);--bg-soft:' + melange('bg', 60) + ';--line-soft:' + melange('line', 50) + ';'
+  + Object.entries(FAMILLES_TEINTE).map(([f, t]) => `--c-${f}-bg:${melange(t, 12)};--c-${f}-fg:var(--${t});--c-${f}-stroke:${melange(t, 45)};`).join('')
+  + '}\n';
+/**
+ * Feuille de style du schéma d'architecture (`renderArchi`). Exportée : la présentation à l'autorité (TF-2142)
+ * réutilise TEL QUEL le schéma du rapport — « pas de second schéma divergent » — et doit donc en porter les styles.
+ */
+export const ARCHI_CSS = `/* .erd-band sert au schéma d'ARCHITECTURE (renderArchi) ; les autres classes .erd-* ont disparu
+   avec le moteur ERD en SVG pur remplacé par le canevas (TF-0940). */
+.erd-band{font-size:10px;font-weight:700;letter-spacing:.08em;fill:var(--muted);text-transform:uppercase}
+.a-t{font-weight:700;font-size:12px}.a-s{font-size:10px}
+${Object.keys(FAMILLES_TEINTE).map(f => `.a-${f} rect{fill:var(--c-${f}-bg);stroke:var(--c-${f}-stroke)}.a-${f} text{fill:var(--c-${f}-fg)}`).join('\n')}
+.a-e{fill:none;stroke:var(--muted);stroke-width:1.5}.a-e.dashed{stroke-dasharray:5 3;stroke:${melange('muted', 60)}}.a-e.coral{stroke:var(--fatal)}
+.a-marker{fill:var(--muted)}`;
+
+/**
+ * Le canevas est une copie conforme (HERITAGE.json) : sa feuille de style et son HTML portent des teintes littérales.
+ * Plutôt que de dériver la copie, le moteur les ADAPTE à l'assemblage — la palette `--c-*` du canevas devient celle de
+ * `TOKENS_DERIVES_CSS`, le blanc des badges le jeton `--on-accent`, les aplats inline des légendes et les traits SVG
+ * des références `var(--c-…)` — et la dérive de la source reste mesurable.
+ */
+const JETON_DE_TEINTE = Object.fromEntries(Object.entries(JETONS).map(([k, v]) => [v.toLowerCase(), k]));
+export function adapterCanevasCss(css) {
+  return css
+    .replace(/\.db-schema-hote\s*\{[^}]*\}/, '.db-schema-hote { }')
+    .replace(/background:#1a1a1a;\s*color:#fff;/g, 'background:var(--txt); color:var(--on-accent);')
+    .replace(/color:#fff;/g, 'color:var(--on-accent);');
+}
+export function adapterCanevasHtml(html) {
+  return html
+    .replace(/🔒 ?/g, `${ICO_PII} `)
+    .replace(/style="background:(#[0-9a-fA-F]{6})"/g, (m, c) => (JETON_DE_TEINTE[c.toLowerCase()] ? `style="background:var(${JETON_DE_TEINTE[c.toLowerCase()]})"` : m))
+    .replace(/\b(fill|stroke)="(#[0-9a-fA-F]{6})"/g, (m, attr, c) => (JETON_DE_TEINTE[c.toLowerCase()] ? `style="${attr}:var(${JETON_DE_TEINTE[c.toLowerCase()]})"` : m));
+}
+
+/** La feuille de style propre du rapport (TF-2139 : jetons du thème seulement, échelle 4pt, aucun bandeau latéral). */
+export const RAPPORT_CSS = `.wrap{max-width:clamp(75vw,1680px,92vw);margin:0 auto;padding:24px}h1{font-size:26px;margin:8px 0}
+h2{font-size:20px;margin:16px 0 8px}h3{margin:24px 0 8px}h4{margin:16px 0 8px}h5{margin:16px 0 8px}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.gate{padding:12px 16px;border-radius:8px;font-weight:700;display:inline-block;color:var(--on-accent)}
+.gate.std{background:var(--std)}.gate.maj{background:var(--maj)}.gate.fatal{background:var(--fatal)}
+.muted{color:var(--muted)}.small{font-size:11.5px}
+/* — Vues (référentiel de restitution) : navigation permanente, une question par vue — */
+nav.toc,nav.vues{margin:16px 0 12px;border-bottom:2px solid var(--line);padding-bottom:12px}
+nav.vues .toc-h{display:block;font-weight:700;font-size:12.5px;margin-bottom:8px}
+nav.vues ol{list-style:none;display:flex;flex-wrap:wrap;gap:8px;margin:0;padding:0}
+nav.vues a{display:flex;flex-direction:column;justify-content:center;min-height:44px;border:1px solid var(--line);background:var(--panel);color:var(--txt);border-radius:8px;padding:8px 12px;text-decoration:none;max-width:280px}
+nav.vues a[aria-selected="true"]{background:var(--accent);color:var(--on-accent);border-color:var(--accent)}
+nav.vues .toc-t{font-weight:700;font-size:12.5px}nav.vues .toc-d{font-size:11px;opacity:.85}
+section.vue{display:none}section.vue.active{display:block}
+.objectif,.ch-apprend{color:var(--muted);font-size:13px;margin:8px 0 16px}
+/* Pas de max-width en ch sur ces paragraphes : brider la prose sous 85 % de la largeur
+   disponible laisse une marge droite vide aussi large que le texte (contrôle L2 du rendu). */
+.exemple-lecture{margin:8px 0}
+nav.familles ul{list-style:none;display:flex;flex-wrap:wrap;gap:8px;margin:0 0 16px;padding:0}
+nav.familles a{border:1px solid var(--line);background:var(--panel);border-radius:999px;padding:4px 12px;font-size:12px;text-decoration:none;color:var(--txt)}
+/* TF-2139 : plus de bandeau latéral (border-left épais, S1 d'oracle-slop) — le cadre entier porte l'accent. */
+.verdict{background:var(--panel);border:1px solid var(--accent);border-radius:10px;padding:16px;margin:16px 0}
+.verdict p{margin:0}
+/* — KPI complets (RL-3) : valeur, définition, repère de lecture, action — */
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px;margin:16px 0}
+.kpi{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 16px;display:flex;flex-direction:column;gap:8px}
+.kpi .k-label{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.kpi .k-valeur{font-size:24px;font-weight:700;line-height:1.1}
+.kpi .kpi-d{font-size:12px;color:var(--muted)}
+.kpi .k-repere{font-size:12px;background:var(--bg);border-radius:6px;padding:8px}
+.kpi .k-action{font-size:12px;font-weight:700;color:var(--accent);text-decoration:none}
+figure.graphe{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;margin:0 0 16px}
+figure.graphe figcaption{font-weight:700;margin-bottom:8px;font-size:13px}
+.g-empile{width:100%;height:14px;border-radius:4px;display:block}
+.g-legende{list-style:none;display:flex;flex-wrap:wrap;gap:12px;margin:8px 0 0;padding:0;font-size:12px}
+.g-puce{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px}
+/* TF-1276 (02/10/2026) : V18 du socle commun (render_page.py) refuse une ligne de prose
+   au-delà de 135 caractères — au-delà, l'œil perd le début de la ligne suivante. Avec
+   minmax(260px,1fr), une carte s'étirait jusqu'à environ 1 280 px sur un écran ultra-large
+   (3 items, 3840 px) et une phrase y tenait sur une seule ligne de 261 caractères. Un plafond
+   (420px) garde la carte LISIBLE quelle que soit la largeur de l'écran — auto-fit continue
+   d'ajouter des colonnes, il ne les élargit plus au-delà d'une colonne de lecture. */
+.chemins{list-style:none;display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,420px));gap:8px;margin:0 0 16px;padding:0}
+.chemin{font-size:12.5px;padding:12px;background:var(--panel);border:1px solid var(--line);border-radius:8px}
+.chemin b{display:block;margin-bottom:4px}
+footer.ecarts{margin-top:24px;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;font-size:12.5px}
+footer.ecarts h2{font-size:14px;margin:0 0 8px}
+/* V18 (render_page.py) : au-delà de 135 caractères par ligne peinte, l'œil perd le début de la
+   ligne suivante. footer.ecarts vit dans .wrap, qui s'élargit sur un écran ultra-large
+   (jusqu'à 2 880 px) ; une phrase d'écart déclaré y filait sur une seule ligne de 179
+   caractères. L'unité ch vise directement un NOMBRE DE CARACTÈRES, pas une largeur devinée en px. */
+footer.ecarts ul{margin:0;padding-left:16px;max-width:70ch}
+.pied{margin-top:20px;border-top:1px solid var(--line);padding-top:12px}
+.sep{border:none;border-top:1px solid var(--line);margin:24px 0}
+table{border-collapse:collapse;width:100%;margin:8px 0;background:var(--panel)}th,td{border:1px solid var(--line);padding:8px;font-size:12.5px;text-align:left;vertical-align:top}
+th{background:var(--bg);position:relative}
+.badge{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:0 8px;font-size:11px;margin-left:4px;background:var(--panel)}
+.b-fatal,.v-non_conforme{color:var(--on-accent);background:var(--fatal);border-color:var(--fatal)}.b-bloq{color:var(--on-accent);background:var(--bloq);border-color:var(--bloq)}
+.b-maj,.v-partiel,.t-prio,.st-partial{color:var(--maj);border-color:var(--maj)}.b-std,.v-conforme,.st-ok{color:var(--std);border-color:var(--std)}
+.t-urgent{color:var(--on-accent);background:var(--fatal);border-color:var(--fatal)}.v-sans_objet,.v-a_evaluer,.st-manual{color:var(--muted)}.st-gap{color:var(--fatal);border-color:var(--fatal)}
+.constat{border:1px solid var(--line);padding:8px 12px;margin:8px 0;background:var(--panel)}
+.constat.s-critique{border-color:var(--fatal)}.constat.s-majeur{border-color:var(--maj)}
+.radar{max-width:460px}.rlab{font-size:10.5px;fill:var(--txt)}.ico-pii{fill:currentColor;vertical-align:-1px}
+${ARCHI_CSS}
+/* — Filtres de colonne (composant du socle, G1-G6) + recherche libre — */
+.t-outils{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:12px 0 4px}
+.t-outils input[type=search]{flex:1 1 240px;padding:8px;border:1px solid var(--line);border-radius:8px;font:inherit}
+.tf-count{font-size:11.5px;color:var(--muted)}.tf-count.zero{color:var(--fatal)}
+.tf-btn{border:0;background:none;cursor:pointer;font:inherit;color:var(--muted)}
+.tf-btn[aria-expanded="true"],.tf-btn.tf-on{color:var(--accent)}
+.tf-panel{position:absolute;z-index:10;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:8px;min-width:180px}
+.tf-panel[hidden]{display:none}.tf-opts{max-height:220px;overflow-y:auto;display:block}
+.tf-opts label{display:block;font-size:12px}.tf-actions{display:flex;gap:8px;margin:8px 0}
+.tf-search{width:100%;padding:4px;border:1px solid var(--line);border-radius:6px;font:inherit;font-size:12px}
+tr[data-q-hidden]{display:none!important}
+@media (max-width:720px){.wrap{padding:16px}.kpis{grid-template-columns:1fr}nav.vues a{max-width:none;flex:1 1 100%}}
+@media print{nav.vues,nav.familles,.t-outils{display:none}
+ section.vue{display:block!important}
+ .tf-btn,.tf-panel{display:none!important}
+ tr[data-tf-hidden],tr[data-q-hidden]{display:table-row!important}
+ a{color:inherit;text-decoration:none}}
+`;
+
+// ── M5 v1.5 · Schéma d'architecture : data.architecture = { bandes:[{key,label}],
+//    nodes:[{id,bande,label,sub,style}], edges:[{from,to,style,label}] } — auto-layout barycentre.
+export function renderArchi(arch, L = STR.fr) {
+  if (!arch?.nodes?.length) return '';
+  const bandes = arch.bandes?.length ? arch.bandes : [{ key: '_', label: '' }];
+  const NW = 180, NH = 56, GX = 34, BH = 120, W = 1240;
+  const byBande = bandes.map(b => arch.nodes.filter(n => (n.bande ?? '_') === b.key));
+  const pos = {};
+  byBande.forEach((nodes, bi) => {
+    // barycentre : ordonner selon la position moyenne des voisins de la bande précédente
+    if (bi > 0) {
+      const score = (n) => {
+        const nb = (arch.edges ?? []).filter(e => e.to === n.id || e.from === n.id)
+          .map(e => pos[e.to === n.id ? e.from : e.to]).filter(Boolean);
+        return nb.length ? nb.reduce((s, p) => s + p.x, 0) / nb.length : W / 2;
+      };
+      nodes.sort((a, b) => score(a) - score(b));
+    }
+    const total = nodes.length * NW + (nodes.length - 1) * GX;
+    let x = Math.max(20, (W - total) / 2);
+    for (const n of nodes) { pos[n.id] = { x, y: 40 + bi * BH, w: NW, h: NH }; x += NW + GX; }
+  });
+  const H = 40 + bandes.length * BH;
+  const STYLE = { purple: 'a-purple', blue: 'a-blue', teal: 'a-teal', coral: 'a-coral', amber: 'a-amber', gray: 'a-gray' };
+  const node = (n) => {
+    const p = pos[n.id];
+    return `<g class="${STYLE[n.style] ?? 'a-gray'}"><title>${esc(n.tip ?? n.label)}</title>
+      <rect x="${p.x}" y="${p.y}" width="${p.w}" height="${p.h}" rx="8"/>
+      <text x="${p.x + p.w / 2}" y="${p.y + 24}" text-anchor="middle" class="a-t">${esc(n.label)}</text>
+      <text x="${p.x + p.w / 2}" y="${p.y + 42}" text-anchor="middle" class="a-s">${esc(n.sub ?? '')}</text></g>`;
+  };
+  const edge = (e) => {
+    const a = pos[e.from], b = pos[e.to];
+    if (!a || !b) return '';
+    const x1 = a.x + a.w / 2, y1 = a.y + a.h, x2 = b.x + b.w / 2, y2 = b.y;
+    const d = y2 > y1
+      ? (Math.abs(x1 - x2) < 8 ? `M ${x1} ${y1} L ${x2} ${y2}` : `M ${x1} ${y1} L ${x1} ${(y1 + y2) / 2} L ${x2} ${(y1 + y2) / 2} L ${x2} ${y2}`)
+      : `M ${a.x + a.w} ${a.y + a.h / 2} L ${b.x} ${b.y + b.h / 2}`;
+    return `<path d="${d}" class="a-e${e.style === 'dashed' ? ' dashed' : ''}${e.style === 'coral' ? ' coral' : ''}" marker-end="url(#aArr)">${e.label ? `<title>${esc(e.label)}</title>` : ''}</path>`;
+  };
+  return `<h3>${L.archi}</h3>
+  <div style="overflow-x:auto"><svg viewBox="0 0 ${W} ${H}" style="min-width:900px" role="img" data-schema="architecture" aria-label="Schéma d'architecture">
+    <defs><marker id="aArr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="a-marker"/></marker></defs>
+    ${bandes.map((b, bi) => `<text x="16" y="${34 + bi * BH}" class="erd-band">${esc(b.label)}</text>`).join('')}
+    ${(arch.edges ?? []).map(edge).join('')}${arch.nodes.map(node).join('')}
+  </svg></div>`;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ECR-04/05 — PLAN DE REMÉDIATION consolidé, calculé UNE fois et servi sous trois
+// formes : la vue lisible, le bloc JSON embarqué (le rapport est auto-porteur —
+// le projet n'a aucun export à demander), et le YAML latéral consommé par la forge.
+// Une seule source de calcul : les trois formes ne peuvent pas diverger.
+//
+// Le critère de clôture n'est JAMAIS inventé. Absent des données, il sort en
+// placeholder — le rapport est alors incomplet et le gate de rendu le refuse.
+// ─────────────────────────────────────────────────────────────────────────────
+const PRIO_OF_SEV = { critique: 'urgent', Fatal: 'urgent', majeur: 'prio', Bloquant: 'prio', Majeur: 'prio', mineur: 'norm', Standard: 'norm' };
+const SEV_OF_VERDICT = { non_conforme: 'Bloquant', partiel: 'Majeur' };
+const CRITERE_ABSENT = '{{CRITERE_DE_CLOTURE}}';
+
+// ── UNE DIMENSION VALIDE EST UNE DIMENSION DÉCLARÉE, JAMAIS UNE BORNE ÉCRITE DANS UN MOTIF ──────
+// TF-1207 et TF-1235 (22/09/2026). Quatre expressions de ce fichier et le motif d'identifiant du
+// schéma d'actions bornaient les dimensions à `D(0\d|1[0-6])`, soit D00 à D16. Le référentiel en
+// porte DIX-HUIT, D00 à D17, et la donnée de l'audit les déclare toutes (fixture de référence :
+// 18 dimensions). Conséquence mesurée sur le code : une règle ou une action de la dimension D17
+// ne recevait AUCUNE dimension, son identifiant tombait en « REM-NR-… », elle sortait du YAML
+// par `non_projete` et comptait parmi les actions « non rattachées » du rapport — pour une
+// dimension parfaitement valide. *Une borne numérique recopiée dans un motif est un second domicile
+// du référentiel : elle dérive à la première dimension ajoutée, en silence.* La validité se lit
+// donc dans `data.dimensions` ; faute de référentiel dans la donnée, tout identifiant de la forme
+// `Dnn` est admis, et c'est le gate de rendu qui juge le reste.
+const MOTIF_DIM = /^D\d{2}$/;
+/** L'ensemble des dimensions déclarées par la donnée de l'audit, ou `null` si elle n'en déclare aucune. */
+export function dimensionsConnues(data) {
+  const ids = (data?.dimensions ?? []).map(d => d?.id).filter(id => MOTIF_DIM.test(id ?? ''));
+  return ids.length ? new Set(ids) : null;
+}
+const estDimension = (d, connues) => MOTIF_DIM.test(d ?? '') && (!connues || connues.has(d));
+/** Un identifiant d'action au format du contrat forge, rattaché à une dimension déclarée. */
+export function estIdActionRattache(id, connues) {
+  const m = /^REM-(D\d{2})-\d{3}$/.exec(id ?? '');
+  return Boolean(m) && estDimension(m[1], connues);
+}
+
+/** Dimension d'une règle : métadonnée bakée par la fusion, sinon déduite de l'identifiant. */
+const dimOfRule = (r, index = {}, connues = null) => {
+  const d = (index[r.id]?.dimension_audit ?? r.dimension_audit ?? '').split(' ')[0];
+  if (estDimension(d, connues)) return d;
+  const deduite = r.id.match(/\bD\d{2}\b/)?.[0] ?? null;
+  return estDimension(deduite, connues) ? deduite : null;
+};
+
+export function buildPlan(data) {
+  const index = data._constraints_index ?? {};
+  const connues = dimensionsConnues(data);
+  const brut = [];
+  // 1 · plan d'action des dimensions
+  (data.actions ?? []).forEach((a, i) => {
+    brut.push({
+      dim: estDimension(a.dimension, connues) ? a.dimension : null,
+      id_force: a.id ?? null,
+      action: [a.titre, a.desc].filter(Boolean).join(' — '),
+      titre: a.titre ?? `Action ${i + 1}`,
+      priorite: a.tag ?? 'norm',
+      effort: a.effort ?? '—',
+      severite: a.severite ?? 'Standard',
+      source: a.dimension ?? '—', source_type: 'dimension',
+      verification: a.verification ?? CRITERE_ABSENT,
+      activation: a.activation ?? null,
+      // TF-2138 — mode « action par constat » : l'action nomme les règles qu'elle COUVRE (cf. plus bas).
+      ...(Array.isArray(a.couvre) && a.couvre.length ? { couvre: [...a.couvre] } : {}),
+    });
+  });
+  // 2 · règles non conformes ou partielles — jamais écartées silencieusement
+  //
+  // D-7 (a), décision humaine du 10/09/2026 — UNE ACTION PEUT COUVRIR PLUSIEURS RÈGLES. Le fait
+  // qui l'a imposée : un rapport de référence jugeait 69 ADR, le modèle courant juge 175 règles
+  // dérivées de ces ADR ; en descendant les verdicts, 24 règles non conformes ressortaient derrière
+  // 13 ADR, et le plan portait 18 paires d'actions au TEXTE IDENTIQUE — le contrôle de cohérence
+  // ci-dessous (TF-0624) les refusait à raison comme doubles charges, et il n'existait aucun moyen
+  // de DÉCLARER qu'une seule remédiation répond à plusieurs règles. Une règle porte désormais
+  // `couverte_par: "<id>"` : elle n'engendre pas sa propre action, et l'action de la règle porteuse
+  // NOMME les règles couvertes (`couvre`, colonne Source du plan, `covers` du YAML). Rien n'est
+  // écarté en silence : une règle couverte par une règle absente du plan (conforme, inconnue, ou
+  // elle-même couverte) GARDE sa propre action — la couverture est un déclaratif vérifié par le
+  // gate machine (verifier-rapport.mjs), jamais un effacement.
+  const ecartsRegles = (data.regles ?? []).filter(r => r.verdict === 'non_conforme' || r.verdict === 'partiel');
+  const ecartParId = Object.fromEntries(ecartsRegles.map(r => [r.id, r]));
+  const couvertesPar = new Map();
+  for (const r of ecartsRegles) {
+    const p = r.couverte_par;
+    if (!p || p === r.id || !ecartParId[p] || ecartParId[p].couverte_par) continue;
+    if (!couvertesPar.has(p)) couvertesPar.set(p, []);
+    couvertesPar.get(p).push(r.id);
+  }
+  const estCouverte = (r) => Boolean(r.couverte_par) && (couvertesPar.get(r.couverte_par) ?? []).includes(r.id);
+  // TF-2138 (mode « action par constat ») — une ACTION de dimension peut elle aussi couvrir des règles
+  // (`couvre: [ids]`) : la règle couverte n'ouvre pas sa propre action, sans quoi le plan non vide d'une
+  // dimension redirait, au texte voisin, la remédiation de ses règles (TF-0624). Rien n'est écarté en silence :
+  // l'action NOMME ses règles (colonne Source, `covers` du YAML), y compris celles que sa règle couverte porte
+  // à son tour. Seule une règle en écart se couvre ; le gate machine refuse le reste (verifier-rapport.mjs).
+  const couvertesParAction = new Set();
+  for (const b of brut) {
+    if (b.source_type && b.source_type !== 'dimension') continue;
+    for (const id of [...(b.couvre ?? [])]) {
+      if (!ecartParId[id] || ecartParId[id].couverte_par) { b.couvre = b.couvre.filter(x => x !== id); continue; }
+      couvertesParAction.add(id);
+      for (const sous of couvertesPar.get(id) ?? []) { b.couvre.push(sous); couvertesParAction.add(sous); }
+    }
+  }
+  ecartsRegles.filter(r => !estCouverte(r) && !couvertesParAction.has(r.id)).forEach(r => {
+    const couvre = couvertesPar.get(r.id) ?? [];
+    brut.push({
+      couvre,
+      dim: dimOfRule(r, index, connues),
+      id_force: null,
+      action: r.possible ?? r.remediation ?? `Mettre en conformité ${r.id}`,
+      titre: r.possible ?? r.remediation ?? `Conformité ${r.id}`,
+      priorite: PRIO_OF_SEV[r.criticite ?? index[r.id]?.criticite] ?? (r.verdict === 'non_conforme' ? 'prio' : 'norm'),
+      effort: r.effort ?? '—',
+      severite: r.criticite ?? index[r.id]?.criticite ?? SEV_OF_VERDICT[r.verdict] ?? 'Standard',
+      source: r.id, source_type: 'regle',
+      verification: r.verification_cloture ?? CRITERE_ABSENT,
+      activation: r.activation ?? null,
+    });
+  });
+  // Identifiants stables au format du contrat forge : REM-D<nn>-<nnn>, séquence par dimension.
+  // Une action dont la dimension est indéterminable garde un id explicite « non rattaché » :
+  // elle reste VISIBLE au plan (jamais écartée), et sort du YAML avec une trace (cf. planToActions).
+  const seq = {};
+  const plan = brut.map(b => {
+    let id = b.id_force;
+    if (!id) {
+      if (b.dim) { seq[b.dim] = (seq[b.dim] ?? 0) + 1; id = `${b.dim}-${String(seq[b.dim]).padStart(3, '0')}`; id = `REM-${id}`; }
+      else id = `REM-NR-${b.source}`;
+    }
+    const { dim, id_force, ...reste } = b;
+    return { id, dimension: dim, ...reste };
+  });
+  const ordre = { urgent: 0, prio: 1, quick: 2, norm: 3 };
+  return plan.sort((a, b) => (ordre[a.priorite] ?? 9) - (ordre[b.priorite] ?? 9));
+}
+
+/** Projection du plan vers le contrat `remediation-actions.schema.json` (entrée de la forge). */
+export function planToActions(plan, data, coreVersion) {
+  const SEV_OK = new Set(['Fatal', 'Bloquant', 'Majeur', 'Standard']);
+  const PRIO_OK = new Set(['urgent', 'prio', 'quick', 'norm']);
+  // Le contrat forge impose un identifiant rattaché à une dimension. Une action non rattachée
+  // n'est pas silencieusement supprimée : elle est exclue du YAML et RENDUE dans `non_projete`,
+  // pour que l'écart se voie au lieu de se perdre (garde-fou « pas de troncature muette »).
+  const connues = dimensionsConnues(data);
+  const projetables = plan.filter(a => estIdActionRattache(a.id, connues));
+  const nonProjetees = plan.filter(a => !projetables.includes(a));
+  const doc = {
+    audit_ref: auditRef(data),
+    core_version: String(coreVersion || '0.0.0'),
+    project: { repo: data.projet?.repo ?? 'non renseigné', stack_profile: data.projet?.stack_profile ?? 'none' },
+    actions: projetables.map(a => ({
+      id: a.id,
+      title: a.titre.slice(0, 120),
+      control_ref: a.source_type === 'regle' ? a.source : `dimension:${a.source}`,
+      ...((a.couvre ?? []).length ? { covers: a.couvre } : {}),
+      severity: SEV_OK.has(a.severite) ? a.severite : 'Standard',
+      priority: PRIO_OK.has(a.priorite) ? a.priorite : 'norm',
+      ...(a.effort && a.effort !== '—' ? { effort: a.effort } : {}),
+      // Règle d'honnêteté (PLAN/06 §5) : une activation non déclarée n'est JAMAIS
+      // présumée automatisable — elle retombe en manuel avec un propriétaire à désigner.
+      activation: a.activation ?? {
+        mode: 'manual',
+        reason: "mode d'activation non déclaré par le rapport d'audit — à qualifier avant bascule forge",
+        owner_role: 'à désigner',
+      },
+      verification: { evidence_expected: a.verification },
+      // La forge consomme des stories : toute action activable en forge doit en porter une,
+      // dont le critère d'acceptation EST le critère de clôture (jamais deux vérités).
+      ...(a.activation && a.activation.mode !== 'manual' ? {
+        story: {
+          epic: `Dimension ${a.dimension ?? a.source}`,
+          title: a.titre.slice(0, 120),
+          acceptance: [a.verification],
+        },
+      } : {}),
+    })),
+  };
+  return { doc, nonProjetees };
+}
+
+/**
+ * La référence d'un audit. Elle est COMMUNE au plan d'actions et à la liste des contrôles évalués,
+ * et c'est ce qui les joint : un tiers qui lit les deux fichiers doit pouvoir prouver qu'ils
+ * parlent du même audit sans comparer des chemins de fichiers.
+ */
+export function auditRef(data) {
+  return `${data.projet?.nom ?? data.titre ?? 'audit'} — ${data.date ?? ''}${data.indice ?? ''}`.trim();
+}
+
+/**
+ * TF-1235 (22/09/2026) — LA LISTE DES CONTRÔLES ÉVALUÉS, exportée avec le rapport.
+ *
+ * LE MANQUE QU'ELLE FERME. Le plan d'actions dit ce qui ÉCHOUE ; rien ne disait ce qui a été
+ * JOUÉ. Or la frontière entre une remédiation et une amélioration ne se vérifie que par cette
+ * liste : un constat rattachable à un contrôle ÉVALUÉ est une remédiation, que le plan
+ * d'amélioration cite par son identifiant sans la recopier ; un constat qui ne touche aucun
+ * contrôle évalué peut être une amélioration. Sans la liste, un écart absent du plan d'actions
+ * est indiscernable d'un contrôle jamais évalué — et un tiers qui joint deux plans paie deux fois
+ * le même travail, ou en oublie un.
+ *
+ * CE QU'ELLE REND : chaque règle de la donnée de l'audit, avec sa dimension (même dérivation que
+ * le plan, donc la même borne) et son verdict. Une règle SANS verdict sort en `a_evaluer` — le
+ * terme du vocabulaire fermé de la forge (`VERDICTS` de tools/build-kit.mjs), pas un synonyme
+ * inventé —, dite et comptée : jamais omise, jamais présumée conforme.
+ */
+export function controlesEvalues(data, coreVersion) {
+  const connues = dimensionsConnues(data);
+  const index = data._constraints_index ?? {};
+  const controles = (data.regles ?? []).map(r => ({
+    id: r.id,
+    dimension: dimOfRule(r, index, connues),
+    verdict: r.verdict ?? 'a_evaluer',
+  }));
+  const compte = {};
+  for (const c of controles) compte[c.verdict] = (compte[c.verdict] ?? 0) + 1;
+  return {
+    contrat: 'controles-evalues@1.0.0',
+    audit_ref: auditRef(data),
+    core_version: String(coreVersion || '0.0.0'),
+    total: controles.length,
+    compte,
+    controles,
+  };
+}
+
+/**
+ * TF-2143 (RU-9, 04/11/2026) — un score est un NOMBRE avant d'être comparé à un seuil. En JavaScript
+ * `null <= 2` vaut true : une dimension « off » sans score (D14, mesurée) était comptée bloquante, et le
+ * verdict de porte basculait (16 bloquants annoncés pour 15 réels). Le comparateur ne se fie plus à la
+ * coercition : `typeof` d'abord. Source unique du compte, partagée par le rapport et la présentation.
+ */
+export const aUnScore = (d) => typeof d?.score === 'number' && Number.isFinite(d.score);
+/**
+ * Dimension bloquante : score noté 2 ou moins, ou criticité Fatal (`dimensions.yaml`, scoring.blockers).
+ * TF-2140 (RU-7) : une dimension hors périmètre (`applicability: 'off'`) n'est JAMAIS bloquante — ni par un
+ * score bas, ni par une criticité Fatal héritée : « sans objet » ne pèse ni en bien ni en mal.
+ */
+export const estBloquant = (d) => d?.applicability !== 'off'
+  && ((aUnScore(d) && d.score <= 2) || d?.criticite === 'Fatal' || d?.criticality === 'fatal');
+
+/**
+ * TF-2142 (RU-8, 04/11/2026) — les constats GRAVES, ceux qu'une présentation à l'autorité nomme « risques
+ * majeurs ». Le référentiel gradue Fatal > Bloquant > Majeur > Standard (`dimensions.yaml`, criticites) ;
+ * `build-slides.mjs` filtrait `severite === 'critique'`, un mot qu'il ne contient pas, d'où « Aucun constat
+ * critique » affiché sur un NO-GO. `critique` reste accepté comme alias HÉRITÉ (le vocabulaire de `SEV`
+ * ci-dessus, encore porté par des données d'audit anciennes) et se range avec Fatal. Le Fatal d'abord.
+ */
+export const SEVERITES_GRAVES = ['Fatal', 'critique', 'Bloquant'];
+const RANG_GRAVE = { Fatal: 0, critique: 0, Bloquant: 1 };
+export const constatsGraves = (data) => (data?.constats ?? [])
+  .filter(c => SEVERITES_GRAVES.includes(c.severite))
+  .sort((a, b) => RANG_GRAVE[a.severite] - RANG_GRAVE[b.severite]);
+
+export function renderRapport(data, { tenant, dimensions, families, themeCss = '', coreVersion = '', lang = 'fr' } = {}) {
+  const L = STR[lang] ?? STR.fr;
+  const T = RES[lang] ?? RES.fr;
+  const dims = dimensions ?? [];
+  const famList = families ?? [...new Set(dims.map(d => d.family))].map(k => ({ key: k, label: k }));
+  const byId = Object.fromEntries((data.dimensions ?? []).map(d => [d.id, d]));
+  const scored = dims.map(d => ({ ...d, ...byId[d.id] })).filter(d => byId[d.id]);
+  const applicable = scored.filter(d => d.applicability !== 'off' && aUnScore(d));
+
+  const scoreGlobal = applicable.length
+    ? (applicable.reduce((s, d) => s + d.score, 0) / applicable.length).toFixed(1) : '—';
+  const bloquants = scored.filter(estBloquant);
+  const gate = data.gate?.verdict
+    ?? (scored.some(d => d.gate1b === 'nogo') || bloquants.length >= 5 ? 'NO-GO'
+      : scored.some(d => d.gate1b === 'reserve') || bloquants.length ? 'GO SOUS RÉSERVE' : 'GO');
+  const gateClass = gate === 'GO' ? 'std' : gate === 'NO-GO' ? 'fatal' : 'maj';
+
+  // index des règles (métadonnées bakées depuis la fusion : dimension, criticité, bucket…)
+  const meta = data._constraints_index ?? {};
+  const regles = (data.regles ?? []).map(r => ({ ...meta[r.id], ...r, id: r.id }));
+  const dimOfRegle = (r) => r.dimension_audit?.split(' ')[0] ?? (r.id.match(/CTL-(D\d\d)/)?.[1] ?? '—');
+  const cptVerdict = (v) => regles.filter(r => r.verdict === v).length;
+  const nbConf = cptVerdict('conforme'), nbPartiel = cptVerdict('partiel');
+  const nbNC = cptVerdict('non_conforme'), nbSO = cptVerdict('sans_objet');
+  const nbAutres = regles.length - (nbConf + nbPartiel + nbNC + nbSO);
+  const projet = data.projet?.nom ?? data.titre ?? '';
+
+  // ── ECR-05 · plan de remédiation consolidé, calculé UNE fois et servi à toutes les vues
+  const plan = buildPlan(data);
+  const planIncomplet = plan.filter(a => /\{\{/.test(`${a.action} ${a.verification}`));
+  const nonRattachees = plan.filter(a => !estIdActionRattache(a.id, dimensionsConnues(data)));
+  const urgentes = plan.filter(a => a.priorite === 'urgent').length;
+  const prioritaires = plan.filter(a => a.priorite === 'prio').length;
+
+  // ── radar par famille (SVG hexagone)
+  const famAvg = famList.map(f => {
+    const ds = applicable.filter(d => d.family === f.key);
+    return { ...f, avg: ds.length ? ds.reduce((s, d) => s + d.score, 0) / ds.length : 0 };
+  });
+  const R = 110, CX = 150, CY = 140;
+  const pt = (i, v) => {
+    const a = -Math.PI / 2 + (2 * Math.PI * i) / famAvg.length;
+    return `${(CX + Math.cos(a) * R * (v / 5)).toFixed(1)},${(CY + Math.sin(a) * R * (v / 5)).toFixed(1)}`;
+  };
+  // TF-1276 (02/10/2026) : V4 du socle commun (render_page.py) refuse un chevauchement entre
+  // ÉLÉMENTS FRÈRES — et un radar est fait de polygones CONCENTRIQUES, qui se recouvrent par
+  // CONSTRUCTION du dessin (pas une erreur de mise en page), plus un label d'axe posé juste à
+  // cheval sur l'anneau extérieur. Le SVG n'est pas « de petite taille » (l'exemption automatique
+  // ne s'applique qu'en dessous de 48×48 px rendus) : chaque forme déclare donc la PAIRE,
+  // `data-overlap-ok="<ids des autres formes du radar>"` (TF-1146 — la paire, jamais l'élément
+  // exempté en bloc). Généré, pas recopié à la main : robuste à tout nombre de familles.
+  const radarIds = [...[1, 2, 3, 4, 5].map(v => `radar-anneau-${v}`), 'radar-donnees',
+    ...famAvg.map((_, i) => `radar-lab-${i}`)];
+  const okAvec = (id) => radarIds.filter(x => x !== id).join(' ');
+  const radar = `<svg viewBox="0 0 460 290" class="radar" role="img" aria-label="${esc(L.familles)}">
+    ${[1, 2, 3, 4, 5].map(v => `<polygon id="radar-anneau-${v}" data-overlap-ok="${okAvec(`radar-anneau-${v}`)}" points="${famAvg.map((_, i) => pt(i, v)).join(' ')}" fill="none" stroke="var(--line)" stroke-width="${v === 5 ? 1.2 : 0.6}"/>`).join('')}
+    <polygon id="radar-donnees" data-overlap-ok="${okAvec('radar-donnees')}" points="${famAvg.map((f, i) => pt(i, f.avg)).join(' ')}" fill="var(--accent)" fill-opacity="0.18" stroke="var(--accent)" stroke-width="2"/>
+    ${famAvg.map((f, i) => { const [x, y] = pt(i, 5.65).split(','); return `<text id="radar-lab-${i}" data-overlap-ok="${okAvec(`radar-lab-${i}`)}" x="${x}" y="${y}" text-anchor="middle" class="rlab">${esc(f.label)} · ${f.avg ? f.avg.toFixed(1) : '—'}</text>`; }).join('')}
+  </svg>`;
+  // RL-4 : un graphique énonce la question à laquelle il répond, sinon il n'existe pas.
+  const figRadar = `<figure class="graphe"><figcaption>${esc(T.q_radar)}</figcaption>${radar}
+    <p class="muted small">${esc(T.radar_sous)}</p></figure>`;
+
+  // Répartition des verdicts : barre empilée, segments JUXTAPOSÉS (jamais superposés —
+  // deux rects l'un sur l'autre sont un chevauchement, et rien ne dit lequel est devant).
+  const segs = [['conforme', nbConf, 'var(--std)'], ['partiel', nbPartiel, 'var(--maj)'],
+    ['non_conforme', nbNC, 'var(--fatal)'], ['sans_objet', nbSO, 'var(--muted)'],
+    ['a_evaluer', nbAutres, 'var(--line)']].filter(s => s[1] > 0);
+  const totalSeg = segs.reduce((s, x) => s + x[1], 0);
+  let curseur = 0;
+  const figVerdicts = totalSeg ? `<figure class="graphe"><figcaption>${esc(T.q_verdicts)}</figcaption>
+    <svg class="g-empile" viewBox="0 0 100 8" preserveAspectRatio="none" role="img"
+      aria-label="${esc(segs.map(s => `${s[0]} : ${s[1]}`).join(', '))}">
+      ${segs.map(([, n, c]) => { const w = 100 * n / totalSeg, x = curseur; curseur += w; return `<rect x="${x.toFixed(2)}" y="0" width="${w.toFixed(2)}" height="8" fill="${c}"/>`; }).join('')}
+    </svg>
+    <ul class="g-legende">${segs.map(([k, n, c]) => `<li><span class="g-puce" style="background:${c}" aria-hidden="true"></span><b>${n}</b> ${esc(k)}</li>`).join('')}</ul></figure>` : '';
+
+  // ── section par dimension. Contenu inchangé : les tableaux passent par le composant de
+  //    filtres dès le seuil du socle, et chaque badge porte sa légende (check_html L3).
+  const dimSection = (d) => {
+    const info = byId[d.id] ?? {};
+    const rs = regles.filter(r => dimOfRegle(r) === d.id);
+    const cs = (data.constats ?? []).filter(c => (c.dimension ?? '—') === d.id)
+      .sort((a, b) => (SEV[a.severite] ?? 9) - (SEV[b.severite] ?? 9));
+    const as_ = (data.actions ?? []).filter(a => (a.dimension ?? '—') === d.id)
+      .sort((a, b) => (TAG[a.tag] ?? 9) - (TAG[b.tag] ?? 9));
+    return `<section class="dim" id="${d.id}">
+      <h4>${d.id} — ${esc(d.label)}
+        <span class="badges">${info.score !== undefined ? badge('', `score ${info.score}/5`, T.t.score) : badge('', L.so, T.t.sans_objet)}
+        ${info.criticite ? badge(`b-${CRIT_CLASS[info.criticite] ?? 'std'}`, info.criticite, T.t.criticite) : ''}
+        ${info.gate1b ? badge(`b-${info.gate1b === 'go' ? 'std' : info.gate1b === 'nogo' ? 'fatal' : 'maj'}`, info.gate1b, T.t.gate1b) : ''}</span></h4>
+      ${info.resume ? `<p>${esc(info.resume)}</p>` : ''}
+      ${info.preuves?.length ? `<p class="muted">${L.preuves_score} : ${info.preuves.map(p => `<code>${esc(typeof p === 'string' ? p : p.ref ?? p.desc)}</code>`).join(' · ')}</p>` : ''}
+      ${rs.length ? tableau({
+      id: `t-regles-${esc(d.id)}`, lignes: rs.length, L: T, recherche: T.cherche,
+      thead: `<tr><th>${L.regle}</th><th>${L.verdict}</th><th>${L.preuve}</th><th>${L.remede}</th></tr>`,
+      tbody: rs.map(r => `<tr><td><code>${esc(r.id)}</code><div class="muted small">${esc((r.regle ?? '').slice(0, 90))}</div></td>
+          <td>${badge(`v-${esc(r.verdict)}`, r.verdict ?? '—', T.t.verdict)}</td>
+          <td>${esc(r.preuve ?? r.motif ?? '—')}</td><td>${esc(r.possible ?? r.remediation ?? '—')}</td></tr>`).join(''),
+    }) : `<p class="muted">${L.sans_regle}</p>`}
+      ${cs.length ? `<h5>${L.constats}</h5>${cs.map(c => `<div class="constat s-${esc(c.severite)}"><b>${esc(c.titre)}</b> ${badge('', c.severite ?? '—', T.t.severite)}<br>${esc(c.desc ?? '')}
+        ${(c.preuves ?? []).map(p => `<div class="muted small">↳ ${esc(p.type ?? 'PREUVE')} · <code>${esc(p.ref ?? '')}</code> ${esc(p.desc ?? '')}</div>`).join('')}</div>`).join('')}` : ''}
+      ${as_.length ? `<h5>${L.plan}</h5>${tableau({
+      id: `t-plan-${esc(d.id)}`, lignes: as_.length, L: T, recherche: T.cherche,
+      thead: `<tr><th>${L.prio}</th><th>${L.action}</th><th>${L.effort}</th></tr>`,
+      tbody: as_.map(a => `<tr><td>${badge(`t-${esc(a.tag)}`, a.tag ?? '—', T.t.priorite)}</td><td><b>${esc(a.titre)}</b><div class="muted small">${esc(a.desc ?? '')}</div></td><td>${esc(a.effort ?? '—')}</td></tr>`).join(''),
+    })}` : ''}
+    </section>`;
+  };
+
+  // ── VUE « Constats par dimension » : les familles ne sont plus des onglets frères mais
+  //    des sections d'une même vue, atteignables par ancre (le routeur ouvre la vue).
+  const famAvecDims = famList.filter(f => dims.some(d => d.family === f.key));
+  const famBlocs = famAvecDims.map(f => `<section class="famille" id="fam-${esc(f.key)}">
+    <h3>${esc(f.label)}</h3>${dims.filter(d => d.family === f.key).map(dimSection).join('')}</section>`).join('');
+  const famLiens = famAvecDims.map(f =>
+    `<li><a href="#fam-${esc(f.key)}" title="${esc(T.aller_famille)} : ${esc(f.label)}">${esc(f.label)}</a></li>`).join('');
+  const maxTableDim = Math.max(0, ...dims.map(d => regles.filter(r => dimOfRegle(r) === d.id).length),
+    ...dims.map(d => (data.actions ?? []).filter(a => (a.dimension ?? '—') === d.id).length));
+
+  // ── VUE « Toutes les règles » — traçabilité complète, filtrable
+  const vueRegles = regles.length ? `${regles.length >= SEUIL_FILTRE ? `<p class="exemple-lecture muted small">${esc(T.ex.regles(regles[0].id, regles[0].verdict ?? '—'))}</p>` : ''}
+    ${tableau({
+    id: 'rtable', lignes: regles.length, L: T, recherche: T.cherche,
+    thead: `<tr><th>ID</th><th>${L.dim}</th><th>${L.verdict}</th><th>${L.crit}</th><th>Bucket</th><th>Enforcement</th><th>${L.preuve}</th></tr>`,
+    tbody: regles.map(r => `<tr><td><code>${esc(r.id)}</code></td><td>${esc(dimOfRegle(r))}</td>
+      <td>${badge(`v-${esc(r.verdict)}`, r.verdict ?? '—', T.t.verdict)}</td>
+      <td>${esc(r.criticite ?? '—')}</td><td>${esc(r.bucket ?? '—')}</td><td>${esc(r.enforcement ?? '—')}</td>
+      <td>${esc(r.preuve ?? r.motif ?? '—')}</td></tr>`).join(''),
+  })}` : '';
+
+  // ── VUE « Plan d'action » (ECR-05) — plan consolidé, lisible
+  const vuePlan = plan.length ? `<p class="muted small">${L.rem_intro}${planIncomplet.length ? ` — <b>${planIncomplet.length} ${L.rem_sans_critere}</b>` : ''}</p>
+    ${plan.length >= SEUIL_FILTRE ? `<p class="exemple-lecture muted small">${esc(T.ex.plan(plan[0].id))}</p>` : ''}
+    ${tableau({
+    id: 'remtable', lignes: plan.length, L: T, recherche: T.cherche,
+    thead: `<tr><th>ID</th><th>${L.action}</th><th>${L.prio}</th><th>${L.effort}</th><th>${L.source}</th><th>${L.critere}</th></tr>`,
+    tbody: plan.map(a => `<tr><td><code>${esc(a.id)}</code></td><td>${esc(a.action)}</td>
+      <td>${badge(`t-${esc(a.priorite)}`, a.priorite, T.t.priorite)}</td><td>${esc(a.effort)}</td>
+      <td><code>${esc(a.source)}</code>${(a.couvre ?? []).length ? ` <span class="muted small">(couvre ${esc(a.couvre.join(', '))})</span>` : ''}</td><td>${esc(a.verification)}</td></tr>`).join(''),
+  })}` : '';
+
+  // ── VUE « Données analysées ». Sémantique opposable (règle 18) : ANALYSES = outillage
+  // EXÉCUTÉ (outil + version utilisée + sortie) ; COMPOSANTS = briques VERSIONNÉES.
+  // Une revue humaine n'est ni l'un ni l'autre : elle vit en constat de dimension.
+  const annexe = (key, titre, cols, rows) => rows?.length ? `<h3 id="bloc-${key}">${esc(titre)}</h3>
+    ${tableau({
+    id: `t-${key}`, lignes: rows.length, L: T, recherche: T.cherche,
+    thead: `<tr>${cols.map(c => `<th>${esc(c[1])}</th>`).join('')}</tr>`,
+    tbody: rows.map(r => `<tr>${cols.map(c => `<td>${esc(r[c[0]] ?? '—')}</td>`).join('')}</tr>`).join(''),
+  })}` : '';
+  const blocTests = annexe('__tests', L.tests,
+    [['type', L.type], ['portee', L.portee], ['resultat', L.resultat], ['couverture', L.couverture]], data.tests);
+  const blocAnalyses = annexe('__analyses', L.analyses,
+    [['outil', L.outil], ['categorie', L.categorie], ['version_utilisee', L.version_utilisee], ['resultat', L.resultat]], data.analyses);
+  const blocComposants = annexe('__composants', L.composants,
+    [['nom', L.nom], ['version_resolue', L.version_resolue], ['version_actuelle', L.version_actuelle],
+      ['statut', L.statut], ['reco_flag', L.reco], ['perimetre', L.perimetre]], data.composants);
+  const blocReprise = (data.reprise ?? []).length ? `<h3 id="bloc-__reprise">${esc(L.reprise)}</h3>
+    ${tableau({
+    id: 't-__reprise', lignes: data.reprise.length, L: T, recherche: T.cherche,
+    thead: `<tr><th>${L.info}</th><th>${L.valeur}</th><th>${L.statut}</th></tr>`,
+    tbody: data.reprise.map(r => `<tr><td>${esc(r.label)}</td><td>${esc(r.value ?? r.valeur ?? '')}</td><td>${badge(`st-${esc(r.status ?? r.statut)}`, r.status ?? r.statut ?? '—', T.t.statut)}</td></tr>`).join(''),
+  })}` : '';
+  const maxDonnees = Math.max((data.tests ?? []).length, (data.analyses ?? []).length,
+    (data.composants ?? []).length, (data.reprise ?? []).length);
+  const vueDonnees = [blocTests, blocAnalyses, blocComposants, blocReprise].filter(Boolean).join('');
+
+  // ── VUE « Architecture & BDD »
+  const erd = renderERD(data.db_schema, L, T);
+  const archi = renderArchi(data.architecture, L);
+  const vueSchemas = (erd || archi) ? `${archi}${archi && erd ? '<hr class="sep">' : ''}${erd}` : '';
+
+  // ── VUE « Méthode & lecture » — le contenu GÉNÉRIQUE vit ici une fois, et une seule
+  //    (règle RL-7) ; le reste du rapport y renvoie par aria-describedby ou par ancre.
+  const vueMethode = `<h3>${esc(L.score)}</h3><p id="leg-score">${esc(T.leg.score)}</p>
+    <h3><dfn>${esc(L.gate)}</dfn></h3><p id="leg-gate">${esc(T.leg.gate)}</p>
+    <h3>${esc(L.verdict)}</h3><p id="leg-verdicts">${esc(T.leg.verdicts)}</p>
+    <p id="leg-criticites">${esc(T.leg.criticites)}</p>
+    <h3>${esc(L.prio)}</h3><p id="leg-priorites">${esc(T.leg.priorites)}</p>
+    <h3>${esc(L.preuve)}</h3><p id="leg-preuve">${esc(T.leg.preuve)}</p>
+    <p id="leg-mesures">${esc(T.leg.mesures)}</p>
+    <h3>${esc(T.provenance)}</h3>
+    ${tableau({
+    id: 't-__provenance', lignes: 4, L: T,
+    thead: `<tr><th>${L.info}</th><th>${L.valeur}</th></tr>`,
+    tbody: `<tr><td>${esc(L.auditeur)}</td><td>${esc(data.auditeur ?? '—')}</td></tr>
+      <tr><td>core</td><td>${esc(coreVersion || '—')}</td></tr>
+      <tr><td>${esc(L.moteur_llm)}</td><td>${esc(data.moteur_audit_llm ? [data.moteur_audit_llm.modele, data.moteur_audit_llm.modele_id, data.moteur_audit_llm.editeur, data.moteur_audit_llm.date].filter(Boolean).join(' · ') : '—')}</td></tr>
+      <tr><td>${esc(L.rapport)}</td><td>${esc(`${projet} · ${data.date ?? ''}${data.indice ?? ''}`)}</td></tr>`,
+  })}`;
+
+  // ── Assemblage des vues. Une vue sans donnée n'existe pas : son absence est DÉCLARÉE
+  //    au manifeste d'écarts, jamais laissée en cadre vide (règles RL-1 et RL-10).
+  const vues = [];
+  const ajoute = (id, cle, corps, exemple = '') => {
+    if (!corps) return;
+    vues.push({ id, titre: T.v[cle][0], annonce: T.v[cle][1], objectif: T.o[cle], corps, exemple });
+  };
+  const lien = (cle) => {
+    const v = vues.find(x => x.id === `v-${cle}`);
+    return v ? `<a href="#${v.id}">${esc(v.titre)}</a>` : esc(T.v[cle][0]);
+  };
+
+  ajoute('v-plan', 'plan', vuePlan, plan.length >= SEUIL_FILTRE ? T.ex.plan(plan[0].id) : '');
+  ajoute('v-dimensions', 'dimensions', famBlocs, maxTableDim >= SEUIL_FILTRE ? T.ex.dim : '');
+  ajoute('v-regles', 'regles', vueRegles);
+  ajoute('v-schemas', 'schemas', vueSchemas);
+  ajoute('v-donnees', 'donnees', vueDonnees, maxDonnees >= SEUIL_FILTRE ? T.ex.donnees : '');
+  ajoute('v-methode', 'methode', vueMethode);
+
+  const kpiHtml = (id, [label, def, repere], valeur, unite, cle) => `<article class="kpi">
+    <span class="k-label">${esc(label)}</span>
+    <span class="k-valeur" aria-describedby="${id}">${esc(valeur)}${unite ? ` <small>${esc(unite)}</small>` : ''}</span>
+    <span class="kpi-d">${esc(def)}</span>
+    <span class="k-repere" id="${id}">${esc(repere)}</span>
+    ${vues.some(v => v.id === `v-${cle}`) ? `<a class="k-action" href="#v-${cle}">${esc(T.a[cle])}</a>` : ''}</article>`;
+
+  // La synthèse cite les autres vues : elle se construit après elles, et s'insère en tête.
+  const synthese = `<div class="verdict">
+      <p><b><dfn title="${esc(T.t.gate)}">${esc(L.gate)}</dfn> :</b> <span class="gate ${gateClass}" title="${esc(T.t.gate)}">${esc(gate)}</span>
+      — ${bloquants.length} ${esc(L.bloquants.toLowerCase())}, ${nbNC} ${esc(L.regles.toLowerCase())} ${esc(L.nc)}, ${plan.length} ${esc(L.rem.toLowerCase())}.</p>
+    </div>
+    <div class="kpis">
+      ${kpiHtml('kr-score', [T.kpi.score[0], T.kpi.score[1], T.kpi.score[2](applicable.length, dims.length)], scoreGlobal, '/5', 'dimensions')}
+      ${kpiHtml('kr-bloq', [T.kpi.bloquants[0], T.kpi.bloquants[1], T.kpi.bloquants[2](bloquants.length, bloquants.map(b => b.id).join(' · '))], String(bloquants.length), '', 'dimensions')}
+      ${kpiHtml('kr-regles', [T.kpi.regles[0], T.kpi.regles[1], T.kpi.regles[2](nbNC, nbPartiel, nbSO, nbAutres, nbConf)], String(regles.length), '', 'regles')}
+      ${kpiHtml('kr-plan', [T.kpi.plan[0], T.kpi.plan[1], T.kpi.plan[2](urgentes, prioritaires)], String(plan.length), '', 'plan')}
+    </div>
+    ${data.syntheses ? tableau({
+    id: 't-__syntheses', lignes: Object.keys(data.syntheses).length, L: T, exemption: T.exempt_syntheses,
+    thead: `<tr><th>${L.info}</th><th>${L.valeur}</th></tr>`,
+    tbody: Object.entries(data.syntheses).map(([k, v]) => `<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>`).join(''),
+  }) : ''}
+    <h3>${L.familles}</h3>${figRadar}${figVerdicts}
+    <h3>${esc(T.commencer)}</h3>
+    <ul class="chemins">
+      <li class="chemin"><b>${esc(T.chemins[0][0])}</b>${esc(T.chemins[0][1])}${lien('plan')}.</li>
+      <li class="chemin"><b>${esc(T.chemins[1][0])}</b>${esc(T.chemins[1][1])}${lien('plan')}${esc(lang === 'en' ? ', then the ' : ', puis les ')}${lien('dimensions')}.</li>
+      <li class="chemin"><b>${esc(T.chemins[2][0])}</b>${esc(T.chemins[2][1])}${lien('methode')}${esc(lang === 'en' ? ', then ' : ', puis ')}${lien('regles')}.</li>
+    </ul>`;
+  vues.unshift({ id: 'v-synthese', titre: T.v.synthese[0], annonce: T.v.synthese[1], objectif: T.o.synthese, corps: synthese, exemple: '' });
+
+  // TF-1276 (02/10/2026) : L16 du socle commun exige qu'un role="tab" vise un role="tabpanel"
+  // RÉSOLU (aria-controls → id du panneau) et que chaque role="tabpanel" soit étiqueté PAR SON
+  // ONGLET (aria-labelledby → id de l'onglet, jamais un aria-label libre) — motif ARIA standard
+  // des onglets. L'onglet reçoit donc son propre id (tab-${v.id}, distinct du panneau).
+  // L25 : le manifeste d'écarts (<footer class="ecarts">, plus bas) porte lui aussi un <h2> —
+  // c'est un CHAPITRE comme un autre pour le lecteur, pas un bloc de service du gabarit ; il
+  // reçoit donc sa propre entrée, en simple ancre (pas un onglet : c'est un pied de page commun
+  // à toutes les vues, jamais un panneau que montreVue() bascule).
+  const nav = `<nav class="toc vues" aria-label="Sommaire" role="tablist">
+    <span class="toc-h">${esc(T.sommaire)}</span>
+    <ol>${vues.map((v, i) => `<li><a id="tab-${v.id}" href="#${v.id}" data-vue="${v.id}" role="tab" aria-selected="${i === 0}" aria-controls="${v.id}" onclick="return montreVue('${v.id}')"><span class="toc-t">${i + 1} · ${esc(v.titre)}</span><span class="toc-d">${esc(v.annonce)}</span></a></li>`).join('')}
+    <li><a href="#v-ecarts"><span class="toc-t">${esc(T.ecarts_t)}</span><span class="toc-d">${esc(T.ecarts_annonce)}</span></a></li></ol></nav>`;
+  const sections = vues.map((v, i) => `<section class="vue${i === 0 ? ' active' : ''}" id="${v.id}" role="tabpanel" aria-labelledby="tab-${v.id}">
+    <h2 class="sr">${esc(v.titre)}</h2>
+    <p class="objectif ch-apprend">${esc(v.objectif)}</p>
+    ${v.id === 'v-dimensions' ? `<nav class="familles" aria-label="${esc(T.aller_famille)}"><ul>${famLiens}</ul></nav>` : ''}
+    ${v.exemple ? `<p class="exemple-lecture muted small">${esc(v.exemple)}</p>` : ''}
+    ${v.corps}</section>`).join('');
+
+  // ── Manifeste d'écarts (RL-10) : CALCULÉ sur l'état réel de la mission. « Aucun écart »
+  //    se déclare aussi — l'absence du manifeste, elle, ne se tait pas.
+  const ecarts = [];
+  if (!vueSchemas) ecarts.push(T.ec.schemas);
+  if (!vueDonnees) ecarts.push(T.ec.donnees);
+  else if (!(data.reprise ?? []).length) ecarts.push(T.ec.reprise);
+  if (!(data.constats ?? []).length) ecarts.push(T.ec.constats);
+  // Un constat rattaché à une dimension inconnue ne s'affiche dans AUCUNE section : sans
+  // cette déclaration, il disparaîtrait en silence — exactement ce que le manifeste refuse.
+  const idsDims = new Set(dims.map(d => d.id));
+  const constatsOrphelins = (data.constats ?? []).filter(c => !idsDims.has(c.dimension ?? '—'));
+  if (constatsOrphelins.length) ecarts.push(T.ec.constats_orphelins(constatsOrphelins.length,
+    constatsOrphelins.map(c => c.titre ?? '—').join(', ')));
+  if (!data.syntheses) ecarts.push(T.ec.syntheses);
+  if (planIncomplet.length) ecarts.push(T.ec.plan_incomplet(planIncomplet.length));
+  if (nonRattachees.length) ecarts.push(T.ec.non_rattachees(nonRattachees.length, nonRattachees.map(a => a.source).join(', ')));
+  if (!figVerdicts) ecarts.push(T.ec.figures);
+  // TF-1276 (02/10/2026) : le radar n'est plus un écart déclaré — chaque forme qui le compose
+  // porte désormais la PAIRE data-overlap-ok qui la justifie (cf. radarIds plus haut), et le
+  // rendu passe V4 proprement. Le garder ici aurait affirmé un écart refermé, et sa phrase à
+  // elle seule dépassait le plafond de lecture (V18) une fois isolée dans la liste.
+  if (!ecarts.length) ecarts.push(T.ec.aucun);
+
+  // ── ECR-04/05 · le rapport est AUTO-PORTEUR de sa remédiation : bloc machine embarqué.
+  // Le projet n'a aucun export à demander — il lit le HTML qu'on lui a remis.
+  const planJson = JSON.stringify({
+    schema: 'auditcore.remediation-plan/v1',
+    meta: {
+      projet: data.projet?.nom ?? data.titre ?? null,
+      date: `${data.date ?? ''}${data.indice ?? ''}` || null,
+      verdict_gate1b: gate,
+      core_version: coreVersion || null,
+      // ECR-07 · quel LLM a réalisé l'AUDIT (distinct du LLM éventuel de l'application auditée)
+      moteur_audit_llm: data.moteur_audit_llm ?? null,
+    },
+    actions: plan,
+  });
+  // Faits nécessaires à l'auto-test interne du rapport (check 9 du gate de rendu).
+  const selfTestJson = JSON.stringify({
+    gate_declare: gate,
+    bloquants: bloquants.map(b => b.id),
+    dimensions_nogo: scored.filter(d => d.gate1b === 'nogo').map(d => d.id),
+    regles_non_conformes: regles.filter(r => r.verdict === 'non_conforme').map(r => r.id),
+    analyses_sans_version: (data.analyses ?? []).filter(a => !String(a.version_utilisee ?? '').trim()).map(a => a.outil ?? '?'),
+    vues: vues.map(v => v.id),
+  });
+
+  // TF-1276 (02/10/2026) : A4 du socle commun exige un titre « Marque — Objet · Client — version »
+  // AVEC un indice de version daté — « V1 » ne distingue pas deux révisions du même jour. La
+  // référence existe déjà (data.date / data.indice, ceux-là même qu'utilise auditRef() plus haut) :
+  // le titre la reprend, elle n'est pas inventée pour l'occasion.
+  const refDatee = `${data.date ?? ''}${data.indice ?? ''}`.trim();
+  // A2 : --accent est littéral dans themeCss (seule la PAGE en fait une variable CSS ; la
+  // favicon, elle, n'a pas de CSSOM) — on le relit tel quel, repli sur l'accent par défaut du
+  // thème (build-theme.mjs) si jamais le bloc :root ne le porte pas.
+  const accentFavicon = (/--accent:\s*([^;]+);/.exec(themeCss) || [])[1]?.trim() || '#2563eb';
+  const initialeFavicon = data._short_code || tenant;
+  return `<!DOCTYPE html><html lang="${esc(lang)}"><head><meta charset="utf-8">
+<link rel="icon" type="image/svg+xml" href="${faviconDataUri(initialeFavicon, accentFavicon)}">
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>${esc(tenant)} — ${L.rapport} — ${esc(projet)}${refDatee ? ` — ${esc(refDatee)}` : ''}</title>
+<style>${themeCss}${TOKENS_DERIVES_CSS}${adapterCanevasCss(CANEVAS_CSS)}
+${RAPPORT_CSS}</style></head><body data-restitution="rapport"><div class="wrap">
+<header><span class="brand">${esc(data._short_code ?? '')}</span> <b>${esc(tenant)}</b> — ${L.rapport}
+ <span class="muted">· ${esc(data.date ?? '')}${esc(data.indice ?? '')} · core ${esc(coreVersion)} · ${L.auditeur} : ${esc(data.auditeur ?? '—')}${data.moteur_audit_llm ? ` · ${L.moteur_llm} : ${esc([data.moteur_audit_llm.modele, data.moteur_audit_llm.modele_id, data.moteur_audit_llm.date].filter(Boolean).join(' · '))}` : ''}</span></header>
+<h1>${L.rapport} — ${esc(projet)}</h1>
+${nav}
+<main>${sections}</main>
+<footer class="ecarts"><div id="v-ecarts"><h2>${esc(T.ecarts_t)}</h2><p class="ch-apprend">${esc(T.ecarts_apprend)}</p><ul data-colonne-ok>${ecarts.map(e => `<li>${esc(e)}</li>`).join('')}</ul></div></footer>
+<footer class="muted small pied">
+${L.footer.replace('{v}', esc(coreVersion)).replace('{t}', esc(tenant))}<br>
+Gabarit : ${RAPPORT_GABARIT_ID} · version du gabarit ${RAPPORT_GABARIT_VERSION}</footer>
+</div>
+<script type="application/json" id="remediation-plan-json">${planJson.replace(/</g, '\\u003c')}</script>
+<script type="application/json" id="audit-selftest-data">${selfTestJson.replace(/</g, '\\u003c')}</script>
+<script>${TABLE_FILTERS_JS.replace(/<\/script/gi, '<\\/script')}
+${CANEVAS_FIT_JS.replace(/<\/script/gi, '<\\/script')}
+/* ── Navigation par VUES (référentiel de restitution, RL-1/RL-6). La fonction est GLOBALE
+   et nommée : le gate de rendu pilote chaque vue déclarée comme le ferait un lecteur, et
+   une vue qui casse au clic sort en erreur au lieu de se découvrir à l'usage. */
+function montreVue(k){
+ var vues=document.querySelectorAll('section.vue'),i;
+ for(i=0;i<vues.length;i++){ if(vues[i].id===k) vues[i].classList.add('active'); else vues[i].classList.remove('active'); }
+ var ong=document.querySelectorAll('nav.vues a[data-vue]');
+ for(i=0;i<ong.length;i++){ ong[i].setAttribute('aria-selected', String(ong[i].getAttribute('data-vue')===k)); }
+ try{ if(window.history&&window.history.replaceState) window.history.replaceState(null,'','#'+k); }catch(_){}
+ return false;
+}
+/* Recherche libre dans un tableau. Elle marque les lignes exclues par data-q-hidden et ne
+   touche PAS a style.display : le composant de filtres de colonne s'en sert, et les deux
+   mecanismes se composent au lieu de s'ecraser l'un l'autre. */
+function filtreTableau(idInput,idTable){
+ var champ=document.getElementById(idInput), t=document.getElementById(idTable);
+ if(!champ||!t) return 0;
+ var q=String(champ.value||'').toLowerCase(), trs=t.querySelectorAll('tbody tr'), n=0, i;
+ for(i=0;i<trs.length;i++){
+  var tr=trs[i], ok=String(tr.textContent||'').toLowerCase().indexOf(q)>=0;
+  if(ok){ tr.removeAttribute('data-q-hidden'); if(!tr.hasAttribute('data-tf-hidden')) n++; }
+  else tr.setAttribute('data-q-hidden','');
+ }
+ var c=document.querySelector('[data-tf-count-for="'+idTable+'"]');
+ if(c){ c.textContent=n+' / '+trs.length+' ${esc(T.lignes)}'; if(c.classList&&c.classList.toggle) c.classList.toggle('zero', n===0); }
+ return n;
+}
+/* Routeur a ancres : toute ancre pointant DANS une vue masquee ouvre la vue avant d'y
+   defiler — sans quoi la moitie des renvois du rapport seraient des liens morts. */
+(function(){
+ function vueDe(el){ while(el&&el.classList){ if(el.classList.contains('vue')) return el; el=el.parentNode; } return null; }
+ document.addEventListener('click', function(ev){
+  var a=ev.target&&ev.target.closest?ev.target.closest('a[href^="#"]'):null;
+  if(!a) return;
+  var href=a.getAttribute('href')||''; if(href.length<2) return;
+  var cible=document.getElementById(decodeURIComponent(href.slice(1)));
+  if(!cible) return;
+  var v=vueDe(cible); if(!v) return;
+  ev.preventDefault(); montreVue(v.id);
+  if(cible!==v&&cible.scrollIntoView) cible.scrollIntoView({block:'start'});
+ });
+ var h=(window.location&&window.location.hash)||'';
+ if(h.length>1){ var d=document.getElementById(decodeURIComponent(h.slice(1))); var v0=d?vueDe(d):null;
+  if(v0){ montreVue(v0.id); if(d!==v0&&d.scrollIntoView) d.scrollIntoView({block:'start'}); } }
+ /* Un changement de filtre de colonne recalcule le compteur en tenant compte de la
+    recherche libre : sinon le compteur annoncerait des lignes que l'autre filtre cache. */
+ var ts=document.querySelectorAll('table[data-filterable]');
+ for(var i=0;i<ts.length;i++){ (function(t){
+  if(!document.getElementById(t.id+'-q')) return;
+  var relance=function(){ setTimeout(function(){ filtreTableau(t.id+'-q', t.id); },0); };
+  t.addEventListener('change',relance); t.addEventListener('click',relance);
+ })(ts[i]); }
+ if(window.FactoryTableFilters) window.FactoryTableFilters.initAll(document);
+})();
+/* ECR-04 — plan de remédiation auto-porté : accessible sans export, sans navigateur. */
+function __auditJson(id){var e=document.getElementById(id); if(!e) return null;
+ try{return JSON.parse(e.textContent);}catch(_){return null;}}
+function remMeta(){return (__auditJson('remediation-plan-json')||{}).meta||{};}
+function buildRemediationPlan(){return (__auditJson('remediation-plan-json')||{}).actions||[];}
+var REMEDIATION_PLAN=buildRemediationPlan();
+try{window.REMEDIATION_PLAN=REMEDIATION_PLAN;}catch(_){}
+/* ECR-02 check 9 — AUTO-TEST INTERNE. Le gate externe hérite de son verdict : tout
+   contrôle ajouté ici est couvert automatiquement, sans toucher au vérificateur. */
+/* TF-0624 et TF-0625 (lot Produit-11 du 25/08/2026) — LA COHERENCE DU PLAN.
+
+   LE FAIT MESURE PAR LE PRODUIT : un plan annoncait 64 actions, il en contenait 33 DISTINCTES.
+   ONZE PAIRES disaient exactement la meme chose, sept autres se recouvraient partiellement. La
+   cause est structurelle : le plan concatene les plan_action des dimensions ET les remediations
+   des ADR non conformes, en attribuant un identifiant a chacune — deux textes identiques
+   produisent deux identifiants, deux lignes, deux charges.
+
+   CE QUE LE DOUBLE COMPTAGE COUTE, et ce n'est pas cosmetique : la charge est FAUSSE (deux
+   actions Terraform a 8 jours pour une seule chose a faire) ; le suivi de cloture devient
+   intenable, puisqu'il exige une preuve par identifiant et refuse une remediation pourtant FAITE
+   si une seule des deux lignes est cochee ; et le doublon est INVISIBLE a la lecture, le tri par
+   priorite eloignant les deux lignes l'une de l'autre.
+
+   POURQUOI CE CONTROLE VIT ICI. La porte machine a raison de ne juger que la FORME — et elle a
+   deja eu raison contre un auditeur, refusant un nombre de bloquants saisi a 6 quand le moteur en
+   calculait 7. Mais le plan de remediation est une DONNEE PRODUITE par le rapport et destinee a
+   etre CONSOMMEE par le projet : le gabarit l'ecrit lui-meme, « le projet recupere la remediation
+   exhaustive sans export manuel ». Une donnee destinee a etre consommee merite un controle de
+   COHERENCE, pas seulement de forme.
+
+   IL NE DECIDE PAS A LA PLACE DE L'AUDITEUR : il refuse de laisser passer EN SILENCE ce qu'une
+   machine sait voir. Le seuil de 45 % de recouvrement de vocabulaire vient de la mesure du
+   produit — il a trouve les onze paires exactes SANS un seul faux positif sur ce rapport. */
+function motsUtiles(t){
+ var bruts=String(t||'').toLowerCase().split(/[^a-z0-9]+/), mots=[], i;
+ for(i=0;i<bruts.length;i++){ if(bruts[i].length>=5 && mots.indexOf(bruts[i])<0) mots.push(bruts[i]); }
+ return mots;
+}
+function recouvrement(a,b){
+ /* Jaccard sur les mots pleins. Le vocabulaire de metier est partage par tout le plan, donc un
+    recouvrement bas ne dit rien — c'est le seuil, mesure, qui tranche. */
+ var ma=motsUtiles(a), mb=motsUtiles(b), communs=0, i;
+ if(!ma.length || !mb.length) return 0;
+ for(i=0;i<ma.length;i++) if(mb.indexOf(ma[i])>=0) communs++;
+ return communs/(ma.length+mb.length-communs);
+}
+/* LES DEUX SEUILS VIENNENT DE LA MESURE, ET IL EN FAUT DEUX. Les cinq paires que le produit a
+   citees comme redites reelles rendent, avec cette tokenisation, 0.600 / 0.429 / 0.333 / 0.333 /
+   0.250 ; les quatre paires temoins construites comme pieges rendent 0.000 / 0.000 / 0.000 /
+   0.200 — la derniere etant « chiffrer au repos » contre « chiffrer en transit », deux actions du
+   MEME sujet et pourtant distinctes. L'ecart entre la plus faible vraie (0.250) et la pire fausse
+   (0.200) est donc trop MINCE pour un seuil unique : le poser a 0.22 attraperait le piege.
+
+   D'ou deux seuils, et le second ne vaut que la ou la probabilite a priori est bien plus haute :
+     · TOUTE paire, seuil 0.45 — la redite est manifeste, le texte est quasi le meme ;
+     · paire du MEME DOMAINE, seuil 0.25 — c'est le cas que le produit decrit comme « le plus
+       frequent ici, et le plus mecaniquement detectable » : une action de dimension qui redit la
+       remediation d un ADR de la meme dimension. Dans un domaine, deux textes qui se recouvrent a
+       un quart parlent presque toujours de la meme chose.
+
+   CE QUI N EST PAS ATTRAPE, et c'est declare : une redite entre domaines DIFFERENTS au recouvrement
+   faible. Baisser le seuil global pour l'attraper ferait entrer le piege mesure, et un controle
+   bruyant se fait contourner au lieu d'etre corrige. */
+var SEUIL_REDITE=0.45;
+var SEUIL_REDITE_MEME_DOMAINE=0.25;
+// TF-1208 : lire la DIMENSION REELLE de l'action (deja deduite par buildPlan, meme pour une
+// action derivee d'une regle, cf. dimOfRule) plutot que les trois premiers caracteres de la
+// source. Pour une action derivee d'une regle, la source est l'identifiant de la regle
+// (« CTL-D05-001 »…) dont les trois premiers caracteres sont une constante commune a TOUT le
+// referentiel : toutes les actions derivees de regle se voyaient donc attribuer le MEME
+// domaine apparent, et le seuil bas de 25 % s'appliquait a tort a l'ensemble du plan.
+function domaineDe(a){ return String(a.dimension||'').slice(0,3); }
+function coherencePlan(p){
+ var e=[], i, j, franches=[], memeDomaine=[], texte=function(a){return String(a.action||'')+' '+String(a.titre||'');};
+ for(i=0;i<p.length;i++) for(j=i+1;j<p.length;j++){
+  var r=recouvrement(texte(p[i]),texte(p[j]));
+  var da=domaineDe(p[i]), db=domaineDe(p[j]);
+  var pct=Math.round(r*100);
+  if(r>=SEUIL_REDITE) franches.push(p[i].id+' ~ '+p[j].id+' ('+pct+' %)');
+  else if(da && db && da===db && r>=SEUIL_REDITE_MEME_DOMAINE) memeDomaine.push(p[i].id+' ~ '+p[j].id+' ('+pct+' %)');
+ }
+ if(franches.length) e.push(franches.length+' paire(s) d actions se redisent (recouvrement >= 45 %) : '+franches.slice(0,5).join(' · ')
+  +'. Deux actions au texte quasi identique produisent deux identifiants, deux lignes et DEUX CHARGES ;'
+  +' le suivi de cloture exige alors une preuve par identifiant et refuse une remediation pourtant faite'
+  +' si une seule des deux lignes est cochee. Rapprocher, ou dire pourquoi les deux sont distinctes.');
+ if(memeDomaine.length) e.push(memeDomaine.length+' redite(s) probable(s) DANS LE MEME domaine (recouvrement >= 25 %) : '
+  +memeDomaine.slice(0,5).join(' · ')+'. C est le cas le plus frequent et le plus mecaniquement detectable :'
+  +' une action de dimension qui redit la remediation d un ADR de la MEME dimension. Un ecart ADR se reporte'
+  +' en CONSTAT de dimension, pas en action du plan — sans quoi la dimension et son ADR facturent deux fois.');
+ return e;
+}
+function auditSelfTest(){
+ var e=[], d=__auditJson('audit-selftest-data')||{}, p=buildRemediationPlan();
+ var calc=(d.dimensions_nogo||[]).length? 'NO-GO' : ((d.bloquants||[]).length? 'GO SOUS RÉSERVE':'GO');
+ if(d.gate_declare && d.gate_declare!==calc && !((d.bloquants||[]).length>=5 && d.gate_declare==='NO-GO'))
+  e.push('verdict gate declare ('+d.gate_declare+') incoherent avec les dimensions saisies (calcule: '+calc+')');
+ var sansCritere=p.filter(function(a){return /\\{\\{/.test(String(a.action)+' '+String(a.verification));});
+ if(sansCritere.length) e.push(sansCritere.length+' action(s) de remediation sans critere de cloture: '+sansCritere.map(function(a){return a.id;}).join(', '));
+ (d.regles_non_conformes||[]).forEach(function(id){
+  if(!p.some(function(a){return a.source===id || (a.couvre||[]).indexOf(id)>=0;})) e.push('regle non conforme sans action de remediation: '+id);});
+ if((d.analyses_sans_version||[]).length)
+  e.push('inventaire ANALYSES: '+d.analyses_sans_version.length+' entree(s) sans version utilisee — outillage non execute, ou revue humaine mal rangee (deplacer en constat de dimension)');
+ if((d.vues||[]).length<2) e.push('restitution: moins de deux vues declarees — une restitution ne se lit pas a plat');
+ coherencePlan(p).forEach(function(m){e.push(m);});
+ return {ok:e.length===0, errors:e};
+}
+</script></body></html>`;
+}

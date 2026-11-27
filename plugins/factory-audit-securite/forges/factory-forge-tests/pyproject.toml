@@ -1,0 +1,54 @@
+[project]
+name = "forge-tests"
+version = "0.0.0"
+description = "Accélérateur de tests Factory — noyau universel mince et adaptateurs par écosystème."
+readme = "README.md"
+requires-python = ">=3.11"
+# Le rendu du front (pans accessibilite et visuel) passe par un navigateur pilote. Sans cette
+# dependance DECLAREE, les deux pans tombaient en SKIP « front non servi » sur une machine
+# fraichement synchronisee et la recette perdait deux defauts du corpus (H-10, H-11).
+dependencies = [
+    "playwright>=1.47",
+    # `oracle-visual-diff.py` compare deux rendus pixel a pixel : sans Pillow il repond SKIP
+    # « outil de rendu absent » et le defaut de regression visuelle passe au travers.
+    "pillow>=10.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.2",
+    # TF-0785 : version EXACTE, jamais un plancher. `ruff>=0.5` a rendu 115 constats sous
+    # 0.5.7 et 100 sous 0.16.1 sur le MEME arbre — 17 UP038 disparus (regle retiree en
+    # amont), 2 UP031 apparus — donc un verdict de recette (section `lint`, TF-0226) qui
+    # changeait de couleur d un poste a l autre sans qu un octet du depot ne bouge. Un
+    # garde-fou dont la reference derive ne mesure plus le depot, il mesure le poste.
+    "ruff==0.16.1",
+    "mypy>=1.10",
+    # TF-0244 verifie le contrat du pan `api` contre le schema qu un VRAI FastAPI produit
+    # (le 422 du cadre, les routeurs montes sous prefixe). Sans cette dependance declaree,
+    # ses six tests tombaient en SKIP dans le venv canonique et le contrat n etait prouve
+    # que sur les postes qui avaient fastapi par accident.
+    "fastapi>=0.110",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+# les bancs d'essai sont des DONNÉES d'acceptation (produits factices figés), pas le code
+# de la forge — les linter ajoute du bruit et les « corriger » risquerait leurs attendus
+extend-exclude = ["fixtures"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+# Le paquet n est pas installe dans l environnement (pas de build-system : Forge Tests se lance
+# par `uv run python -m forge_tests`). Sans cette ligne, `pytest` ne collectait rien et l absence
+# de suite unitaire passait pour un choix — c etait un chemin d import manquant.
+pythonpath = ["."]

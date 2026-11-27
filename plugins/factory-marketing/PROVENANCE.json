@@ -2,16 +2,21 @@
   "audit-seo-geo": {
     "depot": "factory-forge-seo-geo",
     "chemin": "skills/audit-seo-geo",
-    "commit": "720cc6feee6df70391e920d35e7f8753c2893fcc"
+    "commit": "7942a9e3042fd8b33de97bc0996982543ccc7b8e"
   },
   "animation-reseau": {
     "depot": "factory-forge-agents",
     "chemin": ".claude/skills/animation-reseau",
-    "commit": "200f72de09668324bc4d891922e1eff5e0d51e77"
+    "commit": "751595346464da69bc1249741f8c4eb52ee531bc"
   },
   "clip-de-presentation": {
     "depot": "factory-forge-design",
     "chemin": "skills/clip-de-presentation",
-    "commit": "d1665cc3747d4504d9e94051dc6ac4591754e370"
+    "commit": "c9c37305f47e0cb55a1a311bb17bef0c06a6e4f6"
+  },
+  "forge:factory-forge-seo-geo": {
+    "depot": "factory-forge-seo-geo",
+    "chemin": ".",
+    "commit": "7942a9e3042fd8b33de97bc0996982543ccc7b8e"
   }
 }

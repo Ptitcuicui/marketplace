@@ -13,10 +13,19 @@ de l'étape.
 
 ## 1. Prérequis (jamais simuler)
 
+Dans cet ordre : le parc du poste (`$FORGE_ROOT`, sinon `~/factory`), puis la forge livrée avec
+la mallette `factory-produit` et le pilot embarqué dans le socle (`<socle-factory>`).
+
 ```bash
 R="${FORGE_ROOT:-$HOME/factory}"; F="$R/factory-forge-ops"; P="$R/factory-pilot"
+[ -f "$F/README.md" ] || F="${CLAUDE_PLUGIN_ROOT}/forges/factory-forge-ops"
+[ -f "$P/ETAPE-MEP.md" ] || P="<socle-factory>/forges/factory-pilot"
 test -f "$F/README.md" && test -f "$P/ETAPE-MEP.md" && echo "prêt" || echo "forge ou pilot absent"
 ```
+
+Hors Claude Code, quand `${CLAUDE_PLUGIN_ROOT}` n'est pas remplacé, la forge livrée est dans
+`../../forges/factory-forge-ops` à partir du dossier de ce skill : la chercher là avant de
+conclure à son absence.
 
 - Absents : le dire, proposer la phrase d'usage de la Factory
   (`Utilise https://github.com/Ptitcuicui/factory pour ce projet`).

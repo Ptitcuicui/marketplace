@@ -1,0 +1,187 @@
+// Non-régression du vérificateur de RENDU (ECR-02) : le contrôle est EXÉCUTÉ, pas statique.
+// Un rapport dont le moteur ne compile pas, lève à l'initialisation, ou casse au clic d'une
+// vue passe TOUS les contrôles de chaînes — et se diffuserait. Ces cas doivent sortir 1.
+//
+// TF-0235 (volet P4) — le rapport se lit par VUES : le contrat de restitution (famille
+// déclarée, KPI complets, appariement sommaire↔vues, manifeste d'écarts, tableaux longs
+// filtrables) est contrôlé avec la MÊME exigence de preuve — chaque règle a sa fixture
+// rouge, faute de quoi la règle n'est qu'une intention.
+//
+// Les fixtures sont dérivées d'un rapport RÉELLEMENT généré (pas d'un HTML écrit à la main) :
+// le test échoue donc aussi si le moteur de rendu cesse d'émettre un moteur JS pilotable.
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const ROOT = path.join(HERE, '..', '..');
+const TOOL = path.join(ROOT, 'tools', 'verifier-rapport-html.mjs');
+const node = (args) => spawnSync(process.execPath, args, { encoding: 'utf8', timeout: 60000, maxBuffer: 1e8 });
+
+// Rapport de référence : produit par le moteur, comme en production.
+const REF = path.join(os.tmpdir(), 'ecr02-rapport.html');
+const gen = node([path.join(ROOT, 'tools', 'build-rapport.mjs'),
+  path.join(ROOT, 'tests', 'fixtures', 'rapport-data-valid.json'),
+  '--tenant', path.join(ROOT, 'config', 'tenants', 'exemple', 'tenant.yaml'), '--out', REF]);
+assert.equal(gen.status, 0, 'le rapport de référence doit se générer : ' + gen.stderr);
+const OK = fs.readFileSync(REF, 'utf8');
+
+/** Écrit une variante du rapport dont le moteur JS est saboté, et la vérifie. */
+const variante = (nom, muter) => {
+  const p = path.join(os.tmpdir(), `ecr02-${nom}.html`);
+  fs.writeFileSync(p, muter(OK), 'utf8');
+  return node([TOOL, p]);
+};
+
+test('rapport intact → diffusable (exit 0), moteur compilé, exécuté et vues pilotées', () => {
+  const r = node([TOOL, REF]);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /COMPILÉ et EXÉCUTÉ/);
+  assert.match(r.stdout, /vues pilotées/);
+  assert.match(r.stdout, /contrat de restitution tenu/);
+});
+
+test('le rendu déclare sa famille de restitution et ses composants de lecture', () => {
+  assert.match(OK, /<body[^>]*data-restitution="rapport"/);
+  assert.ok((OK.match(/<article class="kpi">/g) ?? []).length >= 3, 'au moins 3 KPI attendus');
+  assert.ok((OK.match(/class="chemin"/g) ?? []).length >= 2, 'au moins 2 chemins de lecteur attendus');
+  assert.match(OK, /<footer class="ecarts">/);
+  assert.match(OK, /<figcaption>[^<]*\?<\/figcaption>/);
+});
+
+test('moteur qui ne COMPILE pas (accolade manquante) → exit 1', () => {
+  const r = variante('syntax', (h) => h.replace('function montreVue(k){', 'function montreVue(k){ if(true{ '));
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /ne compile pas/);
+});
+
+test("moteur qui lève à l'INITIALISATION (ReferenceError) → exit 1", () => {
+  const r = variante('init', (h) => h.replace('function montreVue(k){', 'variableJamaisDefinie.appel();\nfunction montreVue(k){'));
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /lève à l'initialisation/);
+});
+
+test("moteur qui casse AU CLIC d'une vue → exit 1 (invisible pour un contrôle statique)", () => {
+  const r = variante('clic', (h) => h.replace('function montreVue(k){', 'function montreVue(k){ null.x; '));
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /au clic/);
+});
+
+test('rapport sans moteur JS du tout → exit 1 (rapport inerte)', () => {
+  const r = variante('inerte', (h) => h.replace(/<script>[\s\S]*?<\/script>/, ''));
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /aucun moteur JS exploitable|navigation/);
+});
+
+test('famille de restitution non déclarée → exit 1 (RL-1)', () => {
+  const r = variante('sans-famille', (h) => h.replace(' data-restitution="rapport"', ''));
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /famille de restitution non déclarée/);
+});
+
+test('vue absente du sommaire → exit 1 (chapitre perdu, RL-1)', () => {
+  const r = variante('vue-orpheline', (h) => h.replace('data-vue="v-methode"', 'data-vue-neutralise="v-methode"'));
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /absente du sommaire/);
+});
+
+test("entrée de sommaire sans destination → exit 1 (lien mort, RL-1)", () => {
+  const r = variante('entree-morte', (h) => h.replace('<section class="vue" id="v-methode"', '<section class="vue" id="v-fantome"'));
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /sans section de destination|absente du sommaire/);
+});
+
+test('KPI sans repère de lecture → exit 1 (RL-3 : un chiffre ne se lit pas seul)', () => {
+  const r = variante('kpi-nu', (h) => h.replace(/(class="k-repere" id="kr-score">)[^<]*/, '$1'));
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /sans repère de lecture/);
+});
+
+test("manifeste d'écarts retiré → exit 1 (RL-10 : l'absence d'écart se déclare)", () => {
+  const r = variante('sans-manifeste', (h) => h.replace(/<footer class="ecarts">[\s\S]*?<\/footer>/, ''));
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /manifeste d'écarts/);
+});
+
+// ── TF-0940 · LE CONTRÔLE DE COHÉRENCE SCHÉMA↔DICTIONNAIRE A CHANGÉ DE MARQUAGE, PAS DE FORCE ──
+// Le schéma de base de données est désormais rendu par le canevas vendoré (cartes `db-card`) et
+// non plus par le moteur SVG `erd-t` de rapport-engine. Un contrôle qu'on déplace en même temps
+// qu'on change le balisage qu'il regarde est un contrôle qui peut se désactiver sans que rien ne
+// le dise : c'est le mode de panne que ce dépôt paie le plus cher. Les deux sens sont donc joués
+// sur un rapport RICHE réellement généré — celui qui porte un `db_schema`.
+const REF_RICHE = path.join(os.tmpdir(), 'ecr02-rapport-riche.html');
+const genRiche = node([path.join(ROOT, 'tools', 'build-rapport.mjs'),
+  path.join(ROOT, 'tests', 'fixtures', 'rapport-data-riche.json'),
+  '--tenant', path.join(ROOT, 'config', 'tenants', 'exemple', 'tenant.yaml'), '--out', REF_RICHE]);
+assert.equal(genRiche.status, 0, 'le rapport riche doit se générer : ' + genRiche.stderr);
+const OK_RICHE = fs.readFileSync(REF_RICHE, 'utf8');
+const varianteRiche = (nom, muter) => {
+  const p = path.join(os.tmpdir(), `ecr02-riche-${nom}.html`);
+  fs.writeFileSync(p, muter(OK_RICHE), 'utf8');
+  return node([TOOL, p]);
+};
+
+test('TF-0940 — le rapport qui porte un schéma de base rend le CANEVAS et reste diffusable (exit 0)', () => {
+  const r = node([TOOL, REF_RICHE]);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(OK_RICHE, /class="db-card /, 'le schéma n\'est pas rendu par le canevas (cartes db-card)');
+  assert.doesNotMatch(OK_RICHE, /class="erd-t"/, 'le moteur SVG remplacé émet encore — la bascule n\'a pas eu lieu');
+  assert.match(OK_RICHE, /id="dbSchemaMount"/, 'le point de montage de la mise à l\'échelle est absent');
+  assert.match(OK_RICHE, /id="t-__erd"/, 'le dictionnaire TABULAIRE du rapport a disparu — RL-5 exige un tableau, pas les cartes du canevas');
+});
+
+test('TF-0940 — schéma rendu SANS son marquage PII → exit 1 (le contrôle déplacé mord toujours)', () => {
+  const r = varianteRiche('sans-pii', (h) => h.replace(/(<th>PII)\s*<svg class="ico-pii"[\s\S]*?<\/svg>/, '$1'));   // TF-2139 : le marquage PII est l'icône SVG, plus l'emoji
+  assert.equal(r.status, 1, 'un schéma sans dictionnaire des tables doit rester refusé');
+  assert.match(r.stderr, /schéma de base de données présent sans dictionnaire des tables/);
+});
+
+test('tableau long sans filtres → exit 1 (RL-5 : au-delà de 8 lignes, tri et filtres sont dus)', () => {
+  const r = variante('table-nue', (h) => {
+    const i = h.indexOf('<table id="rtable"');
+    const j = h.indexOf('</tbody>', i);
+    assert.ok(i > 0 && j > i, 'le tableau des règles doit exister dans le rendu');
+    return h.slice(0, j) + '<tr><td>ligne ajoutée</td></tr>'.repeat(8) + h.slice(j);
+  });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /sans data-filterable/);
+});
+
+// La cellule porte l'étiquette de sa colonne (data-label du repli en cartes, TF-2145) : la mutation la tolère, et
+// prouve qu'elle a eu lieu — une mutation sans effet rendrait le sens vert vacant.
+const versionActuelle = (h, nouvelle) => {
+  const m = h.replace(/(<td[^>]*>)2\.4\.0(<\/td><td[^>]*>)2\.6\.1(<\/td>)/, (_, a, b, c) => a + '2.4.0' + b + nouvelle + c);
+  assert.notEqual(m, h, 'la ligne de composant 2.4.0 / 2.6.1 doit exister dans le rendu');
+  return m;
+};
+
+test('TF-1737 — version actuelle = pré-version (PEP 440 .devN) → exit 1 (le check 10 juge aussi la stabilité)', () => {
+  const r = variante('preversion', (h) => versionActuelle(h, '3.0.dev5'));
+  assert.equal(r.status, 1, 'une pré-version recommandée doit être refusée : ' + r.stdout);
+  assert.match(r.stderr, /pré-version/);
+});
+
+test('TF-1737 — même composant, version actuelle stable → diffusable (le sens vert du même cas)', () => {
+  const r = variante('stable', (h) => versionActuelle(h, '3.0.1'));
+  assert.equal(r.status, 0, r.stderr);
+});
+
+// TF-1738 (lot Produit-76 du 25/08/2026, RA-2) : le modèle de rapport du kit client portait deux
+// <h1> et aucun :root de jetons, deux défauts bloquants du socle HTML, que le produit ne pouvait pas
+// corriger (le moteur lui est interdit). Le rapport que génère AuditCore les tient ; sa porte de
+// rendu les juge désormais, pour qu'une régression du moteur ne repasse pas en silence.
+test('TF-1738 — rapport à deux <h1> → exit 1 (un titre de document, socle HTML)', () => {
+  const r = variante('deux-h1', (h) => h.replace('<h1>', '<h1>Bandeau de marque</h1>\n<h1>'));
+  assert.equal(r.status, 1, 'un second <h1> est passé : ' + r.stdout);
+  assert.match(r.stderr, /<h1>/);
+});
+
+test('TF-1738 — rapport sans :root de jetons → exit 1 (socle HTML)', () => {
+  const r = variante('sans-root', (h) => h.replaceAll(':root{', '.racine{'));
+  assert.equal(r.status, 1, 'un rapport sans jetons :root est passé : ' + r.stdout);
+  assert.match(r.stderr, /:root/);
+});

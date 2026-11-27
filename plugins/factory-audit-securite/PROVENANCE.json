@@ -2,7 +2,7 @@
   "audit-applicatif": {
     "depot": "factory-forge-audit",
     "chemin": "skills/audit-applicatif",
-    "commit": "44d22da1c0cffbad23aa2b138653f72f98f8bc0e"
+    "commit": "92e8b82b119bb18dba4bd2c04683010a34bc312b"
   },
   "securite-web": {
     "depot": "factory-forge-websec",
@@ -17,7 +17,7 @@
   "audit-qualite-tests": {
     "depot": "factory-forge-tests",
     "chemin": "skills/audit-qualite-tests",
-    "commit": "7397e481edb2379cdbd84a555080e0c3f167c231"
+    "commit": "a08d031c8b8d457629b89d0e42e231d57de370d0"
   },
   "forge:factory-forge-agents-security": {
     "depot": "factory-forge-agents-security",
@@ -28,5 +28,15 @@
     "depot": "factory-forge-websec",
     "chemin": ".",
     "commit": "b49b4e049b76eb3b6d23b6911b153d83797e53d8"
+  },
+  "forge:factory-forge-audit": {
+    "depot": "factory-forge-audit",
+    "chemin": ".",
+    "commit": "92e8b82b119bb18dba4bd2c04683010a34bc312b"
+  },
+  "forge:factory-forge-tests": {
+    "depot": "factory-forge-tests",
+    "chemin": ".",
+    "commit": "a08d031c8b8d457629b89d0e42e231d57de370d0"
   }
 }

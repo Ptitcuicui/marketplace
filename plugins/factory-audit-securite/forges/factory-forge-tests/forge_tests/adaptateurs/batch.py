@@ -1,0 +1,263 @@
+"""Adaptateur Batch — branches inventoriées par AST (P3), couverture par exécution (P2).
+
+Avant : l inventaire lisait un tuple BRANCHES déclaré dans la source, et la couverture se
+déduisait d une mention textuelle. Deux dépendances à la coopération du projet analysé —
+un projet réel n a ni l un ni l autre. Désormais les branches sont dérivées de l arbre
+syntaxique, et « exercée » veut dire « ligne réellement exécutée par la suite ».
+"""
+
+from __future__ import annotations
+
+import ast
+import re
+from pathlib import Path
+
+from forge_tests import declencheurs as _declencheurs
+from forge_tests.disposition import paquet_sources
+from forge_tests.execution import (
+    arcs_executes,
+    executees,
+    motif_indisponibilite,
+    sortie_delai_depasse,
+    sortie_suite_rouge,
+)
+from forge_tests.noyau import Element, Finding, SortieAdaptateur, evaluer_surface
+from forge_tests.risque import coter
+
+NOM, PAN, SEUIL = "batch-python", "batch", 0.90
+
+# A-5 : ce qu il FAUDRAIT pour couvrir ce pan — publie tel quel au rapport.
+POUR_COUVRIR = (
+    "exposer un traitement par lot sous `backend/app/batch.py` (ou un module dont le nom "
+    "porte `batch`/`traitement`) avec ses branches de rejet et de reprise, et l'exercer par "
+    "la suite"
+)
+
+# Chapitre(s) de cahier de tests que ce pan alimente. Le cahier et le dashboard les
+# DERIVENT du registre : une liste ecrite ailleurs aurait laisse un pan futur invisible.
+# `decoupe` nomme l axe de sous-chapitrage ; un axe inconnu retombe sur « element », et le
+# repli est DECLARE au cahier plutot que silencieux.
+CHAPITRES = (
+    {"code": "T4", "famille": "technique", "titre": "Batch",
+     "decoupe": "job", "axe_cas": "unitaire"},
+)
+
+FICHIER = "batch.py"
+_CODE_REJET = re.compile(r"^[A-Z]{2,}-[A-Z]{2,}$")
+
+NON_JUGE = [
+    "batch : les branches sont dérivées de l AST du module ; une branche implicite (opérateur "
+    "ternaire, court-circuit booléen) n est pas inventoriée séparément",
+    "batch : une branche dont le corps tient sur la MEME ligne que son test (`if x: y`) n est "
+    "pas distinguable — les arcs de coverage.py vont de ligne a ligne, il n en existe aucun "
+    "entre une ligne et elle-meme. Repli sur la couverture de ligne, moins precis",
+]
+
+
+def _racine(cible: Path) -> Path:
+    # Paquet DECOUVERT, pas suppose `app` — voir `forge_tests.disposition`.
+    return paquet_sources(cible) or cible / "backend" / "app"
+
+
+def _sources(cible: Path) -> list[Path]:
+    classique = _racine(cible) / FICHIER
+    if classique.exists():
+        return [classique]
+    worker = _racine(cible) / "worker"
+    if worker.is_dir():
+        return sorted(p for p in worker.glob("*.py") if p.name != "__init__.py")
+    return []
+
+
+def _src(cible: Path) -> Path:
+    return _racine(cible) / FICHIER
+
+
+# ligne du corps -> ligne du test qui y mene. Rempli a l inventaire, lu a la couverture.
+_ARCS_ATTENDUS: dict[int, int] = {}
+
+
+def _premiere_ligne(corps: list[ast.stmt]) -> int | None:
+    return corps[0].lineno if corps else None
+
+
+def inventaire(cible: Path) -> list[Element]:
+    elements: list[Element] = []
+    for src in _sources(cible):
+        elements.extend(_inventaire_module(src))
+    # TF-0203 : les DÉCLENCHEURS ne sont volontairement pas comptés dans cette surface — ils
+    # portent leurs constats propres (voir `_findings_declencheurs`). Les y mettre ferait
+    # tomber le taux de couverture du pan pour une raison qui n'est pas un trou de test : un
+    # lot n'est presque jamais déclenché PAR la suite. Le choix est déclaré au `non_juge`,
+    # pas silencieux.
+    return elements
+
+
+def _inventaire_module(src: Path) -> list[Element]:
+    arbre = ast.parse(src.read_text(encoding="utf-8"), filename=str(src))
+    elements: list[Element] = []
+    vus: set[int] = set()
+    nom_fichier = src.name
+
+    for noeud in ast.walk(arbre):
+        # Chaque branche = un bloc dont la première ligne exécutable identifie le chemin.
+        blocs: list[tuple[str, list[ast.stmt]]] = []
+        if isinstance(noeud, ast.If):
+            blocs = [("si", noeud.body), ("sinon", noeud.orelse)]
+            _ARCS_ATTENDUS.update(
+                {corps[0].lineno: noeud.lineno for _, corps in blocs if corps}
+            )
+        elif isinstance(noeud, ast.ExceptHandler):
+            blocs = [("except", noeud.body)]
+        elif isinstance(noeud, (ast.For, ast.While)):
+            blocs = [("boucle", noeud.body)]
+        for libelle, corps in blocs:
+            ligne = _premiere_ligne(corps)
+            if ligne is None or ligne in vus:
+                continue
+            vus.add(ligne)
+            elements.append(
+                Element(
+                    f"branche:{nom_fichier}:{ligne}",
+                    PAN,
+                    f"branche {libelle} ligne {ligne}",
+                    str(src),
+                )
+            )
+        # Codes de rejet : littéraux de la forme XXX-YYY, quel que soit leur nom de variable.
+        if (
+            isinstance(noeud, ast.Constant)
+            and isinstance(noeud.value, str)
+            and _CODE_REJET.match(noeud.value)
+        ):
+            cle = f"rejet:{noeud.value}"
+            if cle not in {e.id for e in elements}:
+                elements.append(
+                    Element(cle, PAN, f"code de rejet {noeud.value}", str(src))
+                )
+    return elements
+
+
+def exerces(cible: Path) -> set[str] | None:
+    lignes = executees(cible, FICHIER)
+    if lignes is None:
+        return None
+    couvert: set[str] = set()
+    inv = inventaire(cible)  # remplit _ARCS_ATTENDUS
+    arcs = arcs_executes(cible, FICHIER)
+    for element in inv:
+        if not element.id.startswith("branche:"):
+            continue
+        ligne = int(element.id.rsplit(":", 1)[1])
+        origine = _ARCS_ATTENDUS.get(ligne)
+        # L arc tranche quand le corps est sur une AUTRE ligne que son test. Quand il partage
+        # sa ligne (`if x: y`), coverage.py n emet aucun arc distinctif — les arcs vont de ligne
+        # a ligne. On retombe alors sur la ligne, et la limite est declaree.
+        if arcs is not None and origine is not None and origine != ligne:
+            if (origine, ligne) in arcs:
+                couvert.add(element.id)
+            continue
+        if ligne in lignes:
+            couvert.add(element.id)
+    # Un code de rejet est exercé si la ligne qui le produit a été exécutée. Le scan n a de
+    # sens que si le module classique EXISTE : sur un projet sans `batch.py` (lot absent, ou
+    # lot porté par `worker\`), lire _src() levait FileNotFoundError et faisait sortir TOUT le
+    # rapport en ERREUR — là où l absence de lot est un NA que `sans_objet()` sait déjà prouver
+    # (TF-2090). Garde présente, exerces() rend alors un ensemble VIDE, pas None : `analyser`
+    # croise cet inventaire vide avec `sans_objet` dans `evaluer_surface` et sort NA, quand un
+    # None aurait forcé un SKIP (« non mesurable ») qui n est pas le bon verdict ici.
+    src = _src(cible)
+    if src.exists():
+        arbre = ast.parse(src.read_text(encoding="utf-8"), filename=str(src))
+        for noeud in ast.walk(arbre):
+            if (
+                isinstance(noeud, ast.Constant)
+                and isinstance(noeud.value, str)
+                and _CODE_REJET.match(noeud.value)
+                and noeud.lineno in lignes
+            ):
+                couvert.add(f"rejet:{noeud.value}")
+    return couvert
+
+
+def sans_objet(cible: Path) -> str | None:
+    """PREUVE d absence de traitement par lot (NA, 14/08) — pas une supposition.
+
+    Un produit purement interactif n a pas de lot. Ne pas en avoir n est pas un défaut de lot.
+    La garde reste stricte : s il existe un module de lot OU un déclencheur, le pan n est PAS
+    sans objet — même à inventaire vide, il y a alors quelque chose que l adaptateur n a pas su
+    lire, et c est un SKIP, pas un NA.
+    """
+    if _sources(cible):
+        return None
+    if _declencheurs.inventorier(cible):
+        return None
+    return (
+        "aucun module de traitement par lot (`batch.py`, `worker\\`) et aucun déclencheur "
+        "(cron, timer, tâche de file) : ce projet n a pas de lot à enclencher"
+    )
+
+
+def _findings_declencheurs(cible: Path) -> list[Finding]:
+    """Constats propres aux déclencheurs (TF-0203) — hors du calcul de surface.
+
+    Un déclencheur non câblé n'est pas « non exercé » : il est CASSÉ. Le confondre avec un
+    trou de couverture le noierait dans la liste des éléments à tester, alors qu'il demande
+    une correction, pas un cas de test.
+    """
+    inventories = _declencheurs.inventorier(cible)
+    jobs = [
+        e.id for src in _sources(cible) for e in _inventaire_module(src)
+    ]
+    return [
+        Finding(
+            id=constat["id"],
+            classe=constat["classe"],
+            localisation=constat["localisation"],
+            message=constat["message"],
+            risque=coter(PAN, constat["id"], constat["localisation"]),
+        )
+        for constat in _declencheurs.constats(cible, inventories, jobs)
+    ]
+
+
+def analyser(cible: Path) -> SortieAdaptateur:
+    couvert = exerces(cible)
+    findings_triggers = _findings_declencheurs(cible)
+    if couvert is None:
+        inv = inventaire(cible)
+        # TF-2269 : une suite ROUGE rend FAIL et nomme le test, les déclencheurs cassés restent.
+        # TF-2311 : un délai dépassé rend DELAI_DEPASSE, sauf déclencheur cassé (FAIL, comme SKIP).
+        non_juge = [*NON_JUGE, *_declencheurs.NON_JUGE]
+        rouge = sortie_suite_rouge(NOM, PAN, cible, non_juge) or sortie_delai_depasse(
+            NOM, PAN, cible, non_juge
+        )
+        if rouge is not None:
+            rouge.findings = [*findings_triggers, *rouge.findings]
+            if findings_triggers and rouge.verdict == "DELAI_DEPASSE":
+                rouge.verdict = "FAIL"
+            return rouge
+        return SortieAdaptateur(
+            NOM,
+            PAN,
+            str(cible),
+            # Un déclencheur cassé se juge SANS exécuter la suite : le constat tient même
+            # quand la couverture n'est pas mesurable ici.
+            "FAIL" if findings_triggers else "SKIP",
+            findings=findings_triggers,
+            non_juge=[
+                *NON_JUGE,
+                *_declencheurs.NON_JUGE,
+                f"batch : {len(inv)} branches/rejets INVENTORIES mais couverture non mesurable — "
+                + motif_indisponibilite(cible, "backend", "suite non executee sous sonde"),
+            ],
+        )
+    sortie = evaluer_surface(
+        NOM, PAN, str(cible), inventaire(cible), couvert, SEUIL,
+        [*NON_JUGE, *_declencheurs.NON_JUGE],
+        sans_objet=sans_objet(cible),
+    )
+    if findings_triggers:
+        sortie.findings = [*findings_triggers, *sortie.findings]
+        sortie.verdict = "FAIL"
+    return sortie

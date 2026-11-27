@@ -1,0 +1,15 @@
+{
+  "format": "forge-ops/porte-version@1",
+  "version": "0.9.0",
+  "fonctions_touchees": ["ia", "courrier"],
+  "porte": { "niveau": "legere" },
+  "smoke": {
+    "fournisseurs": [
+      { "fonction": "ia", "fournisseur": "fournisseur-ia-fictif", "mode": "simule", "cle": "factice" },
+      { "fonction": "courrier", "fournisseur": "boite-simulee", "mode": "simule", "cle": "factice" }
+    ]
+  },
+  "activation": {
+    "brouillon_essai": { "comparaison": "presence", "modele": "templates/activation.txt", "brouillon": "essai/brouillon-activation.txt", "ecarts": [] }
+  }
+}

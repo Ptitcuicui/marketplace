@@ -1,0 +1,806 @@
+"""Adaptateur Sécurité (Q4) — câblage des oracles existants, sans en réécrire un seul.
+
+Trois oracles du registre `quality-oracles` existent, sont exécutables, et n avaient jamais été
+appelés par Forge Tests : SAST (injection, exécution dangereuse), SCA (vulnérabilités de
+dépendances), secrets. Les réécrire aurait violé la règle R3 — on s appuie sur l outil qui fait
+foi. Cet adaptateur les invoque et traduit leur contrat de sortie dans celui du framework.
+
+Propriété importante : leurs `non_juge` sont REPRIS tels quels. Ce que ces oracles ne jugent
+pas devient de la dette déclarée du framework, pas une limite invisible héritée en silence.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import json
+import os
+import re
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
+
+from forge_tests import classes, exclusions, gabarit_env
+from forge_tests.disposition import motif_racine_execution, racine_execution
+from forge_tests.noyau import Finding, SortieAdaptateur
+from forge_tests.risque import coter
+from forge_tests.trouver_skill import dossier_skill  # résolveur de skills du parc (25/11/2026)
+
+NOM, PAN = "securite-oracles", "securite"
+
+# A-5 : ce qu il FAUDRAIT pour couvrir ce pan — publie tel quel au rapport.
+POUR_COUVRIR = (
+    "fournir des sources Python lisibles sous la racine d'exécution du projet (`backend/` ou "
+    "la racine du dépôt elle-même) : le pan est un contrôle statique, il n'a besoin d'aucune "
+    "exécution mais il lui faut du code à lire"
+)
+
+# Chapitre(s) de cahier de tests que ce pan alimente. Le cahier et le dashboard les
+# DERIVENT du registre : une liste ecrite ailleurs aurait laisse un pan futur invisible.
+# `decoupe` nomme l axe de sous-chapitrage ; un axe inconnu retombe sur « element », et le
+# repli est DECLARE au cahier plutot que silencieux.
+CHAPITRES = (
+    {"code": "T7", "famille": "technique", "titre": "Sécurité",
+     "decoupe": "module", "axe_cas": "unitaire"},
+)
+
+# RT-13 : le seul champ qui debloque CE pan — la racine des scripts d oracles a jouer. Un
+# compte ou une instance servie ne l auraient jamais rendu mesurable.
+CHAMPS_REQUIS = ("FORGE_TESTS_ORACLES",)
+
+ORACLES = ("sast", "secrets", "sca")
+
+_DEFAUT = dossier_skill("quality-oracles") / "scripts"
+
+# Nom attendu par le registre de dette. Les non_juge des oracles delegues s y ajoutent a
+# l execution : ils dependent des outils reellement presents (semgrep, gitleaks, pip-audit).
+NON_JUGE = [
+    "securite : le perimetre scanne est le dossier du projet analyse ; ni l historique git, "
+    "ni l infrastructure declaree ailleurs (conteneurs, pipelines, secrets d execution)",
+    "securite : aucun test d intrusion ni d authentification/autorisation au niveau metier",
+    "securite : le scan est BORNE aux sources du produit (dependances exclues — .venv, "
+    "node_modules, dist, build…) ; un secret commis DANS une dependance versionnee ne serait "
+    "pas vu ici, ce n est pas le meme risque ni le meme destinataire qu un secret du produit",
+    # TF-0292 : la REGLE, promue ici depuis le non_juge de SORTIE ou TF-0280 l avait laissee.
+    # La sortie continue de NOMMER les dossiers reellement ecartes — c est une mesure, elle
+    # depend du projet ; la regle, elle, est vraie de tout projet et c est pour cela qu elle
+    # entre au registre de dette, seul endroit ou les limites se comptent.
+    "securite : le code VENDORISE (dossier de convention `vendor`) n est PAS scanne — "
+    "dependance tierce EPINGLEE, copiee dans le depot pour la figer, jamais servie ni modifiee "
+    "par le produit. Meme perimetre que `.venv` et que la gate `vendor/` de forge-development : "
+    "un secret commis DANS un vendored se corrige en changeant l epingle, pas la ligne. Un "
+    "projet qui nommerait `vendor` un dossier de SON produit le verrait donc ignore ici",
+    # TF-0291 — meme famille que le Larsen du pan `prompts` (TF-0257) : l auditeur s accusait
+    # lui-meme. La regle est declaree ici, comme celle de TF-0257 l est dans `prompts`.
+    "securite : quand le projet audite EST forge-tests (signature du depot : le paquet "
+    "`forge_tests`, sa recette et son registre de dette), ses bancs d essai `fixtures\\` et ses "
+    "chaines de montage de test `tests\\` ne sont PAS scannes — un banc rouge PORTE le defaut "
+    "qu il existe pour faire detecter, et une chaine de montage PLANTE le secret dont elle "
+    "prouve la detection : les accuser mesure l auditeur, pas l audite (TF-0291). Le code de la "
+    "forge (`forge_tests\\`, `recette\\`) reste scanne, et tout autre projet garde ses "
+    "`fixtures\\` et ses `tests\\` sous controle",
+    # TF-1229 (volet a de TF-0964) : le controle « identite-assignee » ci-dessous est STATIQUE
+    # et BORNE a un seul fournisseur et une seule forme de declaration.
+    "securite/identite-assignee : ne voit que le fournisseur de jetons `DefaultAzureCredential` "
+    "(bibliotheque `azure.identity`) et une identite assignee DECLAREE par la presence du nom "
+    "`AZURE_CLIENT_ID` dans le MEME fichier lu — un autre fournisseur (AWS STS, GCP Workload "
+    "Identity, Okta), une identite assignee declaree uniquement dans l infrastructure (Bicep, "
+    "Terraform, portail Azure, non lus ici) ou transmise par un fichier different echappe a ce "
+    "controle",
+    # TF-2418 : la regle `generic-api-key` de gitleaks prend la ligne SUIVANTE pour la valeur d une
+    # affectation vide (le `\s` apres le `=` franchit le saut de ligne) ; le gabarit que la forge
+    # depose chez le produit en etait accuse a chaque campagne.
+    "securite/secrets : une affectation VIDE (`CLE=`) dont la ligne suivante ne porte aucune "
+    "valeur (autre affectation vide, commentaire, fin de fichier) n est pas jugee un secret : "
+    "le constat est ECARTE et dit au rapport, et le gabarit `.env.forge-tests.exemple` depose "
+    "par la forge sort du scan tant qu aucune valeur n y est renseignee. Un secret ecrit SOUS "
+    "une cle vide, sur la ligne suivante, reste signale ; un gabarit renseigne reste scanne",
+]
+
+# --- TF-0291, le LARSEN du pan securite -------------------------------------------------------
+# Constat mesure le 15/08 : le pan joue sur forge-tests elle-meme sort 5 constats, TOUS sur de la
+# matiere de test plantee expres — 2 SAST (`fixtures/banc-rouge/backend/app/recherche.py:13`, qui
+# est le defaut du banc rouge, et `tests/test_tf_0279_id_sast_stable.py:47`, la chaine de montage
+# qui prouve la stabilite de l identifiant SAST) et 3 secrets (des AKIA de fixture dans
+# `test_correctifs_20260811.py`, `test_tf_0216_racine_plate.py`, `test_tf_0280_vendored_exclu.py`).
+#
+# C est le cousin exact du Larsen de TF-0257 : l auditeur mesure ses propres bancs. Le remede est
+# le meme — reconnaitre l auditeur, et n exclure que ce qu il DECLARE comme matiere de test.
+#
+# La reconnaissance se fait sur la SIGNATURE du depot, jamais sur son nom : un depot renomme
+# reste forge-tests, et un produit qui s appellerait `forge-tests` sans en etre un doit rester
+# scanne entierement. Trois marqueurs, TOUS exiges.
+_SIGNATURE_FORGE_TESTS = (
+    Path("forge_tests") / "adaptateurs" / "__init__.py",
+    Path("recette") / "verifier_corpus.py",
+    Path("registre-dette.json"),
+)
+# Les emplacements que la forge DECLARE comme matiere de test. `fixtures\` est deja declare tel
+# quel dans son `pyproject.toml` (« les bancs d essai sont des DONNEES d acceptation — produits
+# factices figes —, pas le code de la forge ») ; `tests\` est le dossier des chaines de montage.
+# Ancres a la RACINE de l application : un `tests\` niche dans `forge_tests\` resterait scanne.
+_MATIERE_DE_TEST_DE_LA_FORGE = ("fixtures", "tests")
+
+# TF-2418 : une affectation sans valeur (`CLE=`, `export CLE=`, `CLE=""`). Le gabarit que la forge
+# depose chez le produit n en porte que de telles lignes, et gitleaks (`generic-api-key`) les
+# accusait : sa regle franchit le saut de ligne et prend la cle d apres pour la valeur.
+_AFFECTATION_VIDE = re.compile(r"""^\s*(?:export\s+)?[A-Za-z_][\w.\-]*\s*[=:]\s*(?:""|'')?\s*$""")
+# `oracle-secrets` publie `fichier:ligne · 4 premiers caracteres`.
+_LIEU_GITLEAKS = re.compile(r"^(?P<fichier>.+):(?P<ligne>\d+)(?: · .*)?$")
+
+
+def _ligne_sans_valeur(ligne: str) -> bool:
+    """Ligne blanche, commentaire ou affectation vide : rien qui puisse etre un secret."""
+    nue = ligne.strip()
+    return not nue or nue.startswith("#") or bool(_AFFECTATION_VIDE.match(ligne))
+
+
+def _est_le_gabarit_intact(chemin: Path) -> bool:
+    """Le gabarit deposé par la forge, dont aucune valeur n a ete renseignee.
+
+    Renseigne, il n est plus le gabarit de la forge : le projet y a ecrit ses valeurs, il reste
+    un fichier du produit et reste scanne.
+    """
+    if chemin.name != gabarit_env.FICHIER:
+        return False
+    try:
+        lignes = chemin.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError):
+        return False
+    return all(_ligne_sans_valeur(ligne) for ligne in lignes)
+
+
+def _sur_une_affectation_vide(lieu: str, scan: Path) -> bool:
+    """Le constat `fichier:ligne` de gitleaks tombe-t-il sur une affectation vide ?
+
+    La ligne accusee doit etre une affectation vide ET la suivante (la premiere non blanche,
+    celle que la regle a prise pour la valeur) ne porter aucune valeur : si elle en porte une,
+    c est elle que gitleaks a vue, et l ecarter masquerait un secret.
+    """
+    trouve = _LIEU_GITLEAKS.match(lieu)
+    if trouve is None:
+        return False
+    chemin = Path(trouve["fichier"])
+    if not chemin.is_absolute():
+        chemin = scan / chemin
+    try:
+        lignes = chemin.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError):
+        return False
+    rang = int(trouve["ligne"]) - 1
+    if not 0 <= rang < len(lignes) or not _AFFECTATION_VIDE.match(lignes[rang]):
+        return False
+    suivante = next((ligne for ligne in lignes[rang + 1:] if ligne.strip()), "")
+    return _ligne_sans_valeur(suivante)
+
+
+def est_la_forge_elle_meme(application: Path) -> bool:
+    """Le projet audité est-il forge-tests ? Sur signature, jamais sur le nom du dossier."""
+    return all((application / marqueur).exists() for marqueur in _SIGNATURE_FORGE_TESTS)
+
+
+def _racine_oracles() -> Path | None:
+    declare = os.environ.get("FORGE_TESTS_ORACLES")
+    if declare and Path(declare).is_dir():
+        return Path(declare)
+    return _DEFAUT if _DEFAUT.is_dir() else None
+
+
+# Nom conventionnel du dossier de code vendorise, partage par toute la chaine (voir TF-0280
+# ci-dessous) : `vendor` chez forge-development comme dans les pans `interface` et `prompts`.
+_VENDORISE = "vendor"
+
+# TF-0099 : constate le 11/08 — `oracle-secrets` complete son scanner integre par un appel a
+# `gitleaks detect -s <cible>` SANS aucune exclusion de repertoire (contrairement a son propre
+# scanner JS, qui exclut deja node_modules/.venv/dist/build). Le reecrire aurait viole la regle
+# R3 (« s appuyer sur l outil qui fait foi, ne pas le reecrire ») : la seule correction possible
+# cote appelant est de ne JAMAIS lui tendre les dependances. 219 « fuites » confirmees, 100 %
+# situees dans des bibliotheques tierces (cryptography, pyjwt, sqlalchemy…) sous .venv/ —
+# aucune dans le code du produit.
+_EXCLUS_DEPENDANCES = (
+    ".venv", "venv", "node_modules", "dist", "build", "__pycache__",
+    ".git", "site-packages", ".mypy_cache", ".pytest_cache", ".ruff_cache",
+    # TF-0216 : depuis que la racine est DECOUVERTE, ce pan peut lire la racine du depot
+    # elle-meme (projet plat) et non plus seulement `backend/`. Les dossiers d ARTEFACTS de la
+    # convention pilot y vivent — `forge\` (livrables archives des cycles precedents, cf.
+    # TF-0218), `output\`, ses archives `old\`/`Old\`, les PNG d oracles. Les tendre a l oracle
+    # delegue rejouerait exactement RT-9/RT-4 dans le pan securite : volume copie sans rapport
+    # avec le produit, et « fuites » imputees a des livrables de forge-tests plutot qu au code
+    # audite. Meme raisonnement que pour `.venv` : un dossier jamais copie ne peut pas produire
+    # de finding.
+    "forge", "output", "old", "Old", ".oracles",
+    # TF-0280 : le code VENDORISE — dependance tierce EPINGLEE, copiee dans le depot pour la
+    # figer, jamais servie ni modifiee par le produit. C est une dependance qui a change de
+    # dossier, pas du code du produit : meme risque, meme destinataire et meme remede que
+    # `.venv` (mettre a jour l epingle, pas corriger la ligne). Le contrat existait deja
+    # partout ailleurs — les gates de forge-development l excluent du lint
+    # (`extend-exclude = ["vendor"]`, « code tiers epingle »), les pans `interface` et
+    # `prompts` de cette forge aussi ; ce pan etait le SEUL a le tendre encore aux oracles.
+    # Cout mesure sur forge-tests elle-meme : `tests/vendor/axe.min.js` (axe-core epingle,
+    # jamais servi) produisait a lui seul 114 constats — 112 secrets, 2 SAST — soit un rapport
+    # dont le lecteur devait ecarter la quasi-totalite a la main avant d apercevoir le produit.
+    _VENDORISE,
+    # TF-0536/0542/0543 (lot Produit-02 20260823) : le SOCLE commun vient desormais
+    # d'une source unique. Le depot portait DIX listes divergentes (7 a 31 entrees) et
+    # `input` ne figurait dans AUCUNE : sur un audit reel, 12 constats sur 15 portaient sur
+    # `input\` — un site concurrent aspire et une ancienne version du site. Les entrees
+    # ci-dessus restent ecrites ici : elles portent le motif de CE pan.
+    *exclusions.socle(),
+    # TF-0537 (lot Produit-02 du 23/08) : LES ARTEFACTS DE SAUVEGARDE NAVIGATEUR. Le pan
+    # sortait FAIL sur NEUF « secrets » qui etaient les cles Google Maps et Weglot embarquees dans
+    # `weglot.min.js.telechargement` et `saved_resource` — du JavaScript minifie DE TIERS, capture
+    # par « Enregistrer la page sous… ». Aucun n appartient au projet, aucun n est revocable par
+    # lui, aucun ne peut fuiter par son fait : ils sont PUBLICS dans le HTML du site d origine.
+    # L oracle savait deja discriminer (3 des 9 etaient classes « valeur non reelle — OK ») : il
+    # savait distinguer, il ne savait pas s abstenir. Ces motifs valent pour les FICHIERS, la ou
+    # les entrees ci-dessus ne nomment que des dossiers.
+    *exclusions.MOTIFS_FICHIERS_ASPIRES,
+)
+
+
+def _sources_du_produit(
+    application: Path,
+    tmp: Path,
+    vendorises: list[str] | None = None,
+    bancs: list[str] | None = None,
+    aspires: list[str] | None = None,
+    gabarits: list[str] | None = None,
+    projet: Path | None = None,
+    ignores_git: list[str] | None = None,
+) -> Path:
+    """Copie FILTRÉE de `application`, sans les dossiers de dépendances.
+
+    Border ce que l oracle délégué reçoit est le seul levier qui ne réécrit pas gitleaks : un
+    dossier qui ne contient jamais `.venv` ne peut pas produire de finding « dans » `.venv`,
+    quel que soit le comportement interne de l outil invoqué.
+
+    `vendorises` recueille les dossiers vendorisés réellement écartés : une exclusion se DIT au
+    rapport, elle ne se pratique jamais en silence (TF-0280). Sans cette liste, un lecteur ne
+    pourrait pas distinguer « aucun secret dans le vendored » de « le vendored n a pas été lu ».
+
+    `bancs` fait de même pour la matière de test de la forge (TF-0291), et pour la même raison.
+    L exclusion est ANCRÉE à la racine de l application : un `tests\\` niché dans le paquet reste
+    scanné, seule la matière déclarée à la racine du dépôt de la forge sort du périmètre.
+
+    `projet` (la racine du projet audité) et `ignores_git` portent le périmètre exclu par git
+    (TF-2654) : un dossier que le dépôt ignore n'est pas copié, et son nom, relatif à `projet`,
+    est ajouté à `ignores_git`. Sans `projet`, rien n'est écarté de ce chef.
+    """
+    cible = tmp / "sources"
+    filtre = shutil.ignore_patterns(*_EXCLUS_DEPENDANCES)
+    forge = est_la_forge_elle_meme(application)
+
+    def tracant(dossier: str, noms: list[str]) -> set[str]:
+        exclus = set(filtre(dossier, noms))
+        # TF-2654 : le périmètre que le rapport déclare exclu (`perimetre_exclu_git`, TF-1767)
+        # l'est AUSSI pour les oracles délégués. Ce pan copie le projet avant de le tendre aux
+        # oracles, et ne leur appliquait pas le filtre que les autres pans appliquent à leur
+        # parcours : 631 constats bloquants sur 701 venaient de dossiers que git ignore
+        # (`vendor-check` 614, sauvegardes 21, clients 6, runtime 2 — Produit-82, 13/11/2026).
+        if projet is not None:
+            for nom in noms:
+                chemin = Path(dossier) / nom
+                if nom not in exclus and chemin.is_dir() and exclusions.ignore_par_git(
+                    chemin, projet
+                ):
+                    exclus.add(nom)
+                    if ignores_git is not None:
+                        ignores_git.append(os.path.relpath(chemin, projet).replace(os.sep, "/"))
+        # LE MARQUEUR PLUTOT QUE LE NOM (TF-0537). Un `saved_resource` sans extension, ou un
+        # fichier renomme a la main, echappe a tout motif de nom. Les navigateurs ecrivent
+        # « saved from url » en tete d une page sauvegardee : sa presence dit d ou vient le
+        # fichier, sans configuration. Ce helper existait dans `exclusions` depuis TF-0536 et
+        # N ETAIT APPELE PAR PERSONNE — une regle morte de plus, reveillee par le constat.
+        for nom in noms:
+            chemin = Path(dossier) / nom
+            if nom not in exclus and chemin.is_file() and exclusions.est_page_aspiree(chemin):
+                exclus.add(nom)
+                if aspires is not None:
+                    aspires.append(str(chemin.relative_to(application)))
+            # TF-2418 : le gabarit que la forge depose chez le produit, tant qu il est vide.
+            elif nom not in exclus and chemin.is_file() and _est_le_gabarit_intact(chemin):
+                exclus.add(nom)
+                if gabarits is not None:
+                    gabarits.append(str(chemin.relative_to(application)))
+        if forge and Path(dossier) == Path(application):
+            for nom in noms:
+                if nom in _MATIERE_DE_TEST_DE_LA_FORGE and (application / nom).is_dir():
+                    exclus.add(nom)
+                    if bancs is not None:
+                        bancs.append(nom)
+        if vendorises is not None:
+            vendorises.extend(
+                os.path.relpath(Path(dossier, nom), application)
+                for nom in exclus
+                if nom == _VENDORISE
+            )
+        return exclus
+
+    shutil.copytree(application, cible, ignore=tracant)
+    return cible
+
+
+# --- TF-2403 : les DEPENDANCES se lisent sur toute la racine du PROJET --------------------------
+# Constat du 10/11/2026, cause mesuree le 12/11 : `oracle-sca` joue a la main sur le banc vert
+# voyait quatre avis publies (`vite` x3, `react-router-dom` x1), le pan n'en rendait aucun. Le pan
+# ne remettait aux oracles que la RACINE D'EXECUTION (`backend/` sur ce banc) : le front, rangé a
+# cote avec son `package.json` et son verrou, n'etait ni lu ni cite — un audit de securite vert sur
+# des avis connus. SAST et secrets lisent du CODE et gardent cette racine (l'elargir leur ferait
+# lire les bancs et les livrables du depot) ; SCA ne lit que des manifestes, et un manifeste
+# de dependances appartient au produit ou qu'il soit range. On ne lui remet donc QUE les
+# manifestes, copies sans les dossiers de dependances (meme filtre que ci-dessus).
+_MANIFESTES_DE_DEPENDANCES = (
+    "package.json", "package-lock.json", "npm-shrinkwrap.json",
+    "requirements.txt", "uv.lock", "poetry.lock",
+)
+
+
+def _manifestes_du_produit(
+    racines: list[Path], tmp: Path, origine: dict[str, Path]
+) -> Path:
+    """Copie des seuls MANIFESTES DE DÉPENDANCES du projet, sans les dossiers de dépendances.
+
+    `racines[0]` est la racine du projet ; les suivantes (une racine d'exécution déclarée hors du
+    projet par `FORGE_TESTS_SOURCES`) sont rangées sous `hors-projet-<n>` pour ne rien perdre de
+    ce que le pan lisait avant. `origine` associe le chemin RELATIF d'un manifeste dans la copie
+    (séparateur `/`, tel que l'oracle le publie) à son chemin RÉEL : une `localisation` qui
+    pointerait un dossier temporaire détruit serait illisible (voir `_relocaliser`).
+    """
+    copie = tmp / "manifestes"
+    copie.mkdir()
+    ecartes = shutil.ignore_patterns(*_EXCLUS_DEPENDANCES)
+    for rang, racine in enumerate(racines):
+        forge = est_la_forge_elle_meme(racine)
+        for dossier, sous_dossiers, fichiers in os.walk(racine):
+            exclus = set(ecartes(dossier, sous_dossiers))
+            if forge and Path(dossier) == racine:
+                exclus.update(n for n in sous_dossiers if n in _MATIERE_DE_TEST_DE_LA_FORGE)
+            # TF-2654 : un manifeste sous un dossier que git ignore (`vendor-check/package.json`)
+            # n'est pas celui du produit ; le périmètre exclu l'est aussi pour oracle-sca.
+            sous_dossiers[:] = [
+                n for n in sous_dossiers
+                if n not in exclus and not exclusions.ignore_par_git(Path(dossier, n), racines[0])
+            ]
+            for nom in fichiers:
+                if nom not in _MANIFESTES_DE_DEPENDANCES:
+                    continue
+                reel = Path(dossier) / nom
+                relatif = reel.relative_to(racine)
+                if rang:
+                    relatif = Path(f"hors-projet-{rang}") / relatif
+                destination = copie / relatif
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(reel, destination)
+                origine[relatif.as_posix()] = reel
+    return copie
+
+
+def _relocaliser(texte: str, scan: Path, application: Path) -> str:
+    """Réécrit un chemin sous la copie filtrée en chemin sous l arbre réel du projet audité.
+
+    Sans ce ré-étiquetage, chaque `localisation` publiée pointerait vers un dossier temporaire
+    détruit à la fin de l analyse — illisible pour quiconque reçoit le rapport.
+
+    TF-0279 — DEUX formes à ré-étiqueter, pas une. Les oracles délégués ne publient pas leur
+    `where` dans le même repère : `oracle-secrets` donne un chemin ABSOLU (le remplacement de
+    préfixe ci-dessous suffit, et c est pourquoi ses 112 constats se contestaient sans mal),
+    `oracle-sast` donne `path.relative(process.cwd(), fichier)` — un chemin RELATIF où la copie
+    filtrée n apparaît que par son suffixe `<brouillon aléatoire>\\sources\\`. Le préfixe absolu
+    n y figurant nulle part, le remplacement échouait en silence et l identifiant du finding
+    embarquait le nom TIRÉ AU SORT du dossier de la passe : deux exécutions du même défaut sur
+    le même fichier produisaient deux identifiants distincts. Constaté sur trois passes
+    (lgvdcxei, qyoth9pg, ccnh5t5j) : aucune ligne de `constats-contestes.jsonl` ne pouvait plus
+    matcher, la contestation d un constat SAST était mécaniquement impossible.
+
+    L ancre est donc le chemin PROJET dans les deux cas. Réécrire l oracle aurait violé R3 ;
+    c est l appelant qui sait, lui, où il a copié quoi.
+    """
+    if str(scan) in texte:
+        return texte.replace(str(scan), str(application))
+    for separateur in ("\\", "/"):
+        marque = f"{scan.parent.name}{separateur}{scan.name}"
+        debut = texte.find(marque)
+        if debut == -1:
+            continue
+        reste = texte[debut + len(marque):].lstrip("\\/")
+        return str(application) + (os.sep + reste if reste else "")
+    return texte
+
+
+def _lancer(script: Path, cible: Path) -> dict | None:
+    node = shutil.which("node")
+    if node is None:
+        return None
+    try:
+        resultat = subprocess.run(
+            [node, str(script), str(cible)],
+            capture_output=True,
+            text=True,
+            timeout=300,
+            encoding="utf-8",
+            errors="replace",
+        )
+    except subprocess.TimeoutExpired:
+        # Delai depasse : le pan se declare non mesure, il n emporte pas l audit entier.
+        return None
+    sortie = (resultat.stdout or "").strip()
+    if not sortie:
+        return None
+    try:
+        return json.loads(sortie)
+    except json.JSONDecodeError:
+        return None
+
+
+# --- TF-1229 (volet a de TF-0964) : fournisseur de jetons construit SANS l identifiant, alors --
+# qu une identite ASSIGNEE est posee par l environnement ---------------------------------------
+# Constat de production (volet b, commit 1d856701) : `DefaultAzureCredential()` construit sans
+# `client_id`/`managed_identity_client_id` resout l IDENTITE SYSTEME de l hote (ou echoue) la ou
+# l infrastructure assigne une identite PRECISE par `AZURE_CLIENT_ID` — defaut invisible jusqu a
+# l execution, et qu aucun des trois oracles externes de ce pan (sast, secrets, sca) ne voit : ce
+# n est ni une injection, ni un secret, ni une dependance vulnerable.
+#
+# CONTROLE STATIQUE, PUR PYTHON — aucun outil tiers a invoquer (la regle R3 ne s applique pas
+# ici : rien ne fait deja foi sur ce point precis), donc INDEPENDANT du registre externe
+# `FORGE_TESTS_ORACLES` : il juge meme quand `quality-oracles` n est pas installe.
+#
+# Critere, et rien d autre : le MEME fichier lu APPELLE `DefaultAzureCredential(...)` sans
+# qu aucun des deux mots-cles d identite (`client_id`, `managed_identity_client_id` — le second
+# CONTIENT le premier) n apparaisse dans ses parenthèses, ET reference `AZURE_CLIENT_ID`
+# (l environnement POSE une identite assignee). Les deux cotes sont exiges : un projet qui ne
+# construit jamais ce fournisseur, ou qui n assigne aucune identite, n a rien a se faire
+# reprocher ici — fixture double sens en `tests/test_tf_1229_identite_assignee.py`.
+_REFERENCE_IDENTITE_ASSIGNEE = re.compile(r"AZURE_CLIENT_ID")
+_CONSTRUCTION_FOURNISSEUR = re.compile(r"DefaultAzureCredential\s*\(")
+# Borne de securite sur l equilibrage de parentheses : un appel reel tient en quelques lignes,
+# et une parenthese jamais fermee ne doit pas faire parcourir un fichier entier.
+_PORTEE_APPEL_MAX = 2000
+
+
+def _appel_complet(texte: str, debut: int) -> str:
+    """Le texte de l appel repere en `debut` (la parenthese ouvrante comprise), equilibre."""
+    profondeur = 0
+    borne = min(len(texte), debut + _PORTEE_APPEL_MAX)
+    for position in range(debut, borne):
+        if texte[position] == "(":
+            profondeur += 1
+        elif texte[position] == ")":
+            profondeur -= 1
+            if profondeur == 0:
+                return texte[debut:position + 1]
+    return texte[debut:borne]
+
+
+def _findings_identite_assignee(application: Path) -> list[Finding]:
+    """Fournisseurs de jetons Azure construits sans l identifiant assigne — TF-1229."""
+    findings: list[Finding] = []
+    for chemin in sorted(application.rglob("*.py")):
+        parties = exclusions.parties_du_projet(chemin, application)  # TF-2523
+        if any(partie in _EXCLUS_DEPENDANCES for partie in parties):
+            continue
+        try:
+            texte = chemin.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if not _REFERENCE_IDENTITE_ASSIGNEE.search(texte):
+            continue  # cet environnement-ci n assigne aucune identite : rien a juger
+        relatif = chemin.relative_to(application).as_posix()
+        for appel in _CONSTRUCTION_FOURNISSEUR.finditer(texte):
+            fragment = _appel_complet(texte, appel.start())
+            if "client_id" in fragment:
+                continue
+            ligne = texte.count("\n", 0, appel.start()) + 1
+            identifiant = f"securite:identite-assignee:{relatif}:{ligne}"
+            findings.append(
+                Finding(
+                    id=identifiant,
+                    classe=classes.FOURNISSEUR_JETONS_SANS_IDENTIFIANT,
+                    localisation=f"{relatif}:{ligne}",
+                    message=(
+                        "DefaultAzureCredential() construit SANS identifiant (client_id / "
+                        "managed_identity_client_id) alors que ce fichier reference "
+                        "AZURE_CLIENT_ID : l environnement assigne une identite precise, et ce "
+                        "fournisseur de jetons ne la porte pas — il resout l identite SYSTEME "
+                        "de l hote (ou echoue) a la place de l identite assignee"
+                    ),
+                    severite="bloquant",
+                    risque=coter(PAN, identifiant, str(application)),
+                )
+            )
+    return findings
+
+
+# --- TF-2096 : les regles semgrep `python.django.*` hors d un projet Django ------------------
+# `django-no-csrf-token` (et ses soeurs) se declenchent sur TOUT gabarit a champ cache, meme
+# sans Django : sur un backend FastAPI + Jinja2, chaque formulaire porte deja son jeton CSRF
+# verifie cote serveur, et la regle le prend pour une absence — un bloquant FAUX. On ne peut pas
+# filtrer par le namespace `python.django.*` : `oracle-sast` ne publie que le DERNIER segment du
+# check_id (`msg = "semgrep " + check_id.split('.').pop()`), le namespace est perdu en amont. On
+# reconnait donc la famille Django a ce segment, et on n ecarte ces constats QUE si le projet ne
+# DECLARE aucune dependance Django. Sur un vrai projet Django, ils restent signales.
+_MANIFESTES_DEPENDANCES = (
+    "pyproject.toml", "requirements.txt", "Pipfile", "setup.cfg", "setup.py",
+)
+# `django`, `Django`, `django-rest-framework`, `django>=4`… la famille au sens large. Non
+# precede d un mot (ecarte `mydjango`) ni d un point (ecarte un sous-module `paquet.django`).
+_DEPENDANCE_DJANGO = re.compile(r"(?<![\w.])django", re.IGNORECASE)
+# La famille Django d une regle semgrep, reconnue a son dernier segment (le seul publie).
+_REGLE_DJANGO = re.compile(r"\bdjango\b", re.IGNORECASE)
+
+
+def _depend_de_django(application: Path, cible: Path) -> bool:
+    """Le projet DECLARE-t-il une dependance Django ? Lu dans ses manifestes aux deux racines.
+
+    Meme idiome que le pan `prompts` (lecture du texte, pas d analyse fine du graphe de
+    dependances) et CONSERVATEUR par choix : au moindre `django` cite dans un manifeste, on
+    considere la dependance presente et on ne filtre RIEN — masquer un vrai defaut Django
+    couterait plus qu un faux positif laisse visible.
+    """
+    racines = [application] if cible == application else [application, cible]
+    vus: set[Path] = set()
+    for racine in racines:
+        candidats = [racine / nom for nom in _MANIFESTES_DEPENDANCES]
+        with contextlib.suppress(OSError):
+            candidats.extend(sorted(racine.glob("requirements*.txt")))
+        for fichier in candidats:
+            if fichier in vus or not fichier.is_file():
+                continue
+            vus.add(fichier)
+            try:
+                texte = fichier.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            if _DEPENDANCE_DJANGO.search(texte):
+                return True
+    return False
+
+
+def analyser(cible: Path) -> SortieAdaptateur:
+    racine = _racine_oracles()
+    # Perimetre elargi : le code applicatif ET tout ce qui l entoure — configuration, tests,
+    # scripts. Un secret en dur vit rarement dans le module metier.
+    # TF-0216 : la racine est DECOUVERTE (`backend/` puis la racine plate), plus supposee. Sur un
+    # produit a racine plate, `cible/'backend'` n existait pas et ce pan sortait SKIP alors que
+    # ses sources etaient juste a cote, parfaitement lisibles.
+    application = racine_execution(cible)
+    # TF-0219 — DEUX causes, DEUX motifs. Le motif unique publiait « registre d oracles
+    # introuvable » y compris quand le registre etait parfaitement resolu et que la vraie cause
+    # etait l absence de sources a lire : un aller-retour de configuration inutile, mesure au
+    # ledger du lot COMPTA (seq 17). Le `POUR_COUVRIR` de ce pan disait deja la bonne cause ;
+    # le motif s aligne dessus. Le motif publie au rapport est le DERNIER de la liste.
+    if racine is None:
+        return SortieAdaptateur(
+            NOM, PAN, str(cible), "SKIP",
+            non_juge=[
+                *NON_JUGE,
+                "registre d oracles introuvable : definir FORGE_TESTS_ORACLES vers le dossier "
+                "scripts de quality-oracles",
+            ],
+        )
+    if not application.is_dir():
+        return SortieAdaptateur(
+            NOM, PAN, str(cible), "SKIP",
+            non_juge=[
+                *NON_JUGE,
+                f"aucune source a lire : {application} n existe pas — le registre d oracles, "
+                f"lui, EST resolu ({racine}). {motif_racine_execution(cible)}",
+            ],
+        )
+
+    # TF-1229 : controle INTERNE, independant des oracles externes delegues plus bas — pure
+    # Python, aucun outil tiers a invoquer. Il ne rejoint `joues`/`echec` QUE s il a reellement
+    # trouve quelque chose : un projet qui n a pas ce defaut ne doit pas faire sortir ce pan d un
+    # SKIP que les trois oracles externes auraient motive pour une autre raison (registre
+    # absent, aucun script trouve) — meme principe que la garde de precondition du pan `qualif`,
+    # qui ne se deduit jamais d une ignorance.
+    # TF-2096 : lu une fois, le projet declare-t-il Django ? Sinon, les regles `python.django.*`
+    # remontees par oracle-sast sont des faux positifs sur ce projet et sont ECARTEES plus bas.
+    django_present = _depend_de_django(application, cible)
+    ecartes_django: list[str] = []
+
+    findings_identite = _findings_identite_assignee(application)
+    findings: list[Finding] = list(findings_identite)
+    # TF-0216 (garde-fou de methode) : le pan DIT sur quelle racine il a lu. Une decouverte qui
+    # change d un projet a l autre sans se declarer serait pire que l ancre en dur qu elle
+    # remplace — ce pan est le canal de publication toujours present pour cette phrase.
+    non_juge: list[str] = [*NON_JUGE, f"securite : {motif_racine_execution(cible)}"]
+    echec = False
+    joues: list[str] = []
+    if findings_identite:
+        joues.append("identite-assignee")
+        echec = True
+
+    vendorises: list[str] = []
+    aspires: list[str] = []
+    bancs: list[str] = []
+    gabarits: list[str] = []
+    ignores_git: list[str] = []
+    ecartes_vides: list[str] = []
+    with tempfile.TemporaryDirectory(prefix="forge-tests-securite-") as brouillon:
+        scan = _sources_du_produit(
+            application, Path(brouillon), vendorises, bancs, aspires, gabarits, cible, ignores_git
+        )
+        # TF-2654 : le périmètre exclu par git se DIT, comme les autres exclusions de ce pan — et
+        # le rapport porte déjà ces dossiers sous `perimetre_exclu_git` : ici, ce que CE scan a
+        # réellement écarté. Un lecteur ne distingue pas « rien à signaler dans `vendor-check` »
+        # de « `vendor-check` n'a pas été lu » sans cette phrase.
+        if ignores_git:
+            non_juge.append(
+                "securite : dossiers ignorés par git écartés de ce scan — "
+                + ", ".join(sorted(ignores_git))
+                + " — non versionnés, donc hors produit : leurs constats ne sont ni comptés ni "
+                "bloquants (`perimetre_exclu_git`, TF-1767). Réclamer un dossier : son nom dans "
+                "FORGE_TESTS_INCLURE"
+            )
+        # TF-0291 : la MESURE de l exclusion — ce que CE scan a reellement ecarte parce que le
+        # projet audite est la forge elle-meme. La regle vit dans `NON_JUGE` ; ici on nomme les
+        # dossiers, et seulement s il y en a. Un lecteur doit pouvoir distinguer « rien a
+        # signaler dans les bancs » de « les bancs n ont jamais ete lus ».
+        if bancs:
+            non_juge.append(
+                "securite : matiere de test de la forge ECARTEE de ce scan — "
+                + ", ".join(sorted(bancs))
+                + " : le projet audite EST forge-tests (signature du depot). Un banc rouge PORTE "
+                "le defaut qu il existe pour faire detecter, une chaine de montage PLANTE le "
+                "secret dont elle prouve la detection. Le code de la forge, lui, reste scanne"
+            )
+        # TF-0280 : l exclusion se DIT, toujours, et elle NOMME ce qu elle a ecarte. Un pan qui
+        # borne son perimetre sans le publier transforme un choix defendable en angle mort : le
+        # lecteur d un rapport muet ne peut pas distinguer « rien a signaler dans le vendored »
+        # de « le vendored n a jamais ete lu ». La phrase n est emise que si quelque chose a
+        # reellement ete ecarte — declarer une exclusion qui n a rien exclu serait du bruit.
+        # TF-0292 : la REGLE vit desormais dans `NON_JUGE` (elle est vraie de tout projet, donc
+        # elle se compte au registre de dette). Ce qui reste ici est la MESURE — les dossiers
+        # que CE scan a reellement ecartes — et elle ne s emet que s il y en a : declarer une
+        # exclusion qui n a rien exclu serait du bruit, et un rapport se lit.
+        if aspires:
+            # Une exclusion se DIT au rapport, jamais en silence (meme doctrine que le vendorise) :
+            # sans cette ligne, un lecteur ne distingue pas « aucun secret dans la page aspiree » de
+            # « la page aspiree n a pas ete lue ».
+            non_juge.append(
+                "securite : ARTEFACTS DE SAUVEGARDE NAVIGATEUR ecartes de ce scan — "
+                + ", ".join(sorted(aspires))
+                + " — reconnus a leur marqueur « saved from url » : du code de tiers reecrit "
+                "par un navigateur, que le projet ne peut ni revoquer ni corriger"
+            )
+        if gabarits:
+            # TF-2418 : meme doctrine que les artefacts de navigateur — l exclusion se DIT.
+            non_juge.append(
+                f"securite : gabarit `{gabarit_env.FICHIER}` depose par la forge ECARTE de ce "
+                "scan — "
+                + ", ".join(sorted(gabarits))
+                + " — aucune valeur n y est renseignee (des affectations vides et des "
+                "commentaires) : gitleaks y prenait la cle suivante pour la valeur de la "
+                "precedente. Renseigne, il redevient un fichier du produit et reste scanne"
+            )
+        if vendorises:
+            non_juge.append(
+                "securite : code VENDORISE ECARTE de ce scan — " + ", ".join(sorted(vendorises))
+            )
+        # TF-2403 : SCA reçoit les manifestes de TOUT le projet (voir `_manifestes_du_produit`) ; la
+        # liste de ce qui lui est remis se DIT, sans quoi « aucun avis » ne se distingue pas de
+        # « manifeste jamais lu ».
+        racines_manifestes = [cible]
+        if application != cible and cible not in application.parents:
+            racines_manifestes.append(application)
+        origine_manifestes: dict[str, Path] = {}
+        manifestes = _manifestes_du_produit(
+            racines_manifestes, Path(brouillon), origine_manifestes
+        )
+        if origine_manifestes:
+            non_juge.append(
+                "securite : manifestes de dependances remis a oracle-sca (toute la racine du "
+                "projet, pas seulement la racine d execution) — "
+                + ", ".join(sorted(origine_manifestes))
+            )
+        for nom in ORACLES:
+            script = racine / f"oracle-{nom}.mjs"
+            if not script.exists():
+                non_juge.append(f"securite : oracle-{nom} absent du registre, non joue")
+                continue
+            rapport = _lancer(script, manifestes if nom == "sca" else scan)
+            if rapport is None:
+                non_juge.append(f"securite : oracle-{nom} n a produit aucun verdict exploitable")
+                continue
+            # TF-2449 : un oracle qui rend SKIP n a RIEN verifie (outil absent, reseau injoignable,
+            # aucun manifeste). Le compter « joue » faisait rendre PASS a ce pan sur une
+            # verification qui n a pas eu lieu. Il se dit non joue, avec le motif de l oracle.
+            # TF-2468 : seuls PASS et FAIL sont un verdict PRONONCE. Un champ `verdict` absent, un
+            # verdict hors vocabulaire (WARN, ERROR, « pass »…) ou une sortie qui n est pas un
+            # objet disent la meme chose que SKIP : on ne sait pas si la verification a eu lieu.
+            # Le compter joue ferait rendre PASS a ce pan sur une mesure non prononcee.
+            if not isinstance(rapport, dict) or rapport.get("verdict") not in ("PASS", "FAIL"):
+                brut_rapport = rapport if isinstance(rapport, dict) else {}
+                verdict = brut_rapport.get("verdict")
+                if not isinstance(rapport, dict):
+                    cause = (
+                        f"a rendu une sortie qui n est pas un objet JSON ({type(rapport).__name__})"
+                    )
+                elif verdict == "SKIP":
+                    cause = "a rendu SKIP"
+                elif "verdict" not in brut_rapport:
+                    cause = "n a rendu aucun verdict (champ « verdict » absent)"
+                else:
+                    cause = f"a rendu le verdict « {verdict} » (hors PASS, FAIL)"
+                constats = brut_rapport.get("findings", [])
+                motif = brut_rapport.get("motif") or " ; ".join(
+                    str(brut.get("msg", "")) for brut in constats if isinstance(brut, dict)
+                ) or "motif non publie par l oracle"
+                non_juge.append(f"securite : oracle-{nom} {cause} — non joue : {motif}")
+                non_juge.extend(
+                    f"securite/{nom} : {ligne}" for ligne in brut_rapport.get("non_juge", [])
+                )
+                continue
+            joues.append(nom)
+            # Les limites de l oracle delegue deviennent de la dette DECLAREE du framework.
+            non_juge.extend(f"securite/{nom} : {ligne}" for ligne in rapport.get("non_juge", []))
+            if rapport.get("verdict") != "FAIL":
+                continue
+            echec = True
+            for brut in rapport.get("findings", []):
+                if brut.get("sev") == "info":
+                    continue
+                message = str(brut.get("msg", ""))
+                # TF-2096 : une regle Django sur un projet qui n en declare pas est un faux
+                # positif ECARTE (et declare au non_juge plus bas) ; sur un projet Django, gardee.
+                if nom == "sast" and not django_present and _REGLE_DJANGO.search(message):
+                    ecartes_django.append(message)
+                    continue
+                # TF-2418 : gitleaks prend la ligne d apres pour la valeur d une affectation vide.
+                lieu = str(brut.get("where") or "")
+                if (
+                    nom == "secrets"
+                    and "generic-api-key" in message
+                    and _sur_une_affectation_vide(lieu, scan)
+                ):
+                    ecartes_vides.append(_relocaliser(lieu.split(" · ")[0], scan, application))
+                    continue
+                # TF-2403 : un finding SCA se localise sur le manifeste RÉEL (et deux manifestes
+                # de même nom, dans deux dossiers, restent deux identifiants).
+                if nom == "sca" and brut.get("where") in origine_manifestes:
+                    ou = str(origine_manifestes[brut["where"]])
+                else:
+                    ou = _relocaliser(str(brut.get("where") or application), scan, application)
+                identifiant = f"securite:{nom}:{ou}"
+                findings.append(
+                    Finding(
+                        id=identifiant,
+                        classe=classes.SECURITE,
+                        localisation=ou,
+                        message=f"[{nom}] {message}",
+                        severite="bloquant" if brut.get("sev") == "bloquant" else "signale",
+                        risque=coter(PAN, identifiant, str(application)),
+                    )
+                )
+        if ecartes_vides:
+            non_juge.append(
+                f"securite/secrets : {len(ecartes_vides)} constat(s) `generic-api-key` sur une "
+                "affectation VIDE ECARTE(S) — la ligne accusee est une cle sans valeur et la "
+                "suivante n en porte aucune : gitleaks franchit le saut de ligne et prend la "
+                "cle d apres pour la valeur (TF-2418). Ecartes : "
+                + ", ".join(sorted(ecartes_vides)[:6])
+            )
+        if ecartes_django:
+            non_juge.append(
+                f"securite/sast : {len(ecartes_django)} constat(s) de regle Django ECARTE(S) "
+                "— regles `python.django.*` (dont `django-no-csrf-token`) : le projet ne declare "
+                "aucune dependance Django (manifestes lus), et ces regles se declenchent a tort "
+                "sur des gabarits a champ cache hors Django, ou chaque formulaire porte deja son "
+                "jeton CSRF verifie cote serveur (TF-2096). Sur un projet Django, elles restent "
+                "signalees. Ecartes : " + ", ".join(sorted(set(ecartes_django))[:6])
+            )
+
+    if not joues:
+        return SortieAdaptateur(
+            NOM, PAN, str(cible), "SKIP",
+            non_juge=[*non_juge, "aucun oracle de securite n a pu etre joue"],
+        )
+    non_juge.append(f"securite : oracles reellement joues — {', '.join(joues)}")
+    return SortieAdaptateur(
+        adaptateur=NOM,
+        pan=PAN,
+        cible=str(cible),
+        verdict="FAIL" if echec and any(f.severite == "bloquant" for f in findings) else "PASS",
+        findings=findings,
+        non_juge=non_juge,
+    )

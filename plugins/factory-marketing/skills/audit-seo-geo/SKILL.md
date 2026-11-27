@@ -13,10 +13,19 @@ audité est un **site en ligne**, et l'étude s'accumule dans le dossier du proj
 
 ## 1. Trouver la forge (jamais simuler)
 
+Dans cet ordre : la forge du poste (`$FORGE_ROOT`, sinon `~/factory`), puis la copie livrée
+avec la mallette `factory-marketing`.
+
 ```bash
 R="${FORGE_ROOT:-$HOME/factory}"; F="$R/factory-forge-seo-geo"
+[ -f "$F/scripts/new_mission.py" ] || F="${CLAUDE_PLUGIN_ROOT}/forges/factory-forge-seo-geo"
 test -f "$F/scripts/new_mission.py" && echo "forge présente : $F" || echo "forge absente"
 ```
+
+Hors Claude Code, quand `${CLAUDE_PLUGIN_ROOT}` n'est pas remplacé, la copie livrée est dans
+`../../forges/factory-forge-seo-geo` à partir du dossier de ce skill : la chercher là avant de
+conclure à son absence. Le pipeline ne demande que Python ; seul `--rendu-js` (site SPA) demande
+Playwright et Chromium, à installer sur accord.
 
 Forge absente : le dire, proposer la phrase d'usage de la Factory
 (`Utilise https://github.com/Ptitcuicui/factory pour ce projet`). Aucun constat inventé.

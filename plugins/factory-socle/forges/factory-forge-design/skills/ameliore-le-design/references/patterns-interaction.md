@@ -1,0 +1,292 @@
+# Patterns d'interaction
+
+Le catalogue ADR de référence est le **plancher**, pas la cible : données en
+constante JS, rendu dynamique, filtres, zéro dépendance. Le dépassement attendu
+porte sur l'interaction.
+
+## Un CTA = une cible
+
+Retour de production RD-4 : une maquette montrait le même CTA « Créer un dossier »
+en en-tête, en état vide et dans un formulaire ; le développement les a repris sans
+les câbler, faute de savoir lesquels pointaient la même action. L'utilisateur a
+trouvé des boutons inertes en production. Loi générique : **toute affordance
+montrée par la maquette est une promesse que le développement devra tenir** — la
+maquette doit rendre chaque promesse identifiable et câblable.
+
+Tout élément interactif (bouton, lien, puce cliquable) porte une **cible explicite
+et nommée**, sous l'une de ces trois formes :
+
+- **ancre interne réelle** : `href="#route"` qui existe dans la table de routage —
+  jamais `href="#"` seul ni `javascript:void(0)`, qui ne sont pas des destinations ;
+- **action nommée** : `data-action="<verbe-objet>"` (ex. `data-action="creer-dossier"`,
+  `data-action="marquer-lu"`) — convention obligatoire dès qu'il n'y a pas de route
+  à câbler dessus ;
+- **soumission de formulaire** : `type="submit"` dans un `<form>`.
+
+**Même libellé, même écran ⇒ même cible.** Un CTA « Créer un dossier » répété en
+en-tête, état vide et formulaire porte la **même** valeur de `data-action` ou le
+même `href` partout sur cet écran. Deux occurrences du même libellé avec des cibles
+différentes sont soit une incohérence à corriger, soit deux actions distinctes qui
+doivent porter des libellés distincts — jamais les deux à la fois en silence.
+
+**Un seul CTA visible par écran** (RD-6 : renvoi de design 6, 2ᵉ inspection utilisateur
+du premier produit —
+rendre des doublons *fonctionnels* ne suffit pas, l'utilisateur les a re-signalés après le
+premier correctif) : l'action principale n'a qu'**une occurrence visible à la fois** par
+écran — dans l'état vide OU dans l'en-tête, jamais les deux ; le formulaire est replié par
+défaut et sa soumission n'apparaît qu'une fois le formulaire ouvert. Test-garde côté produit :
+au **texte visible rendu**, un libellé de CTA n'apparaît qu'une fois par écran
+(implémentation de référence : `backend/tests/test_exigences_interface.py` de
+Produit-12). La visibilité étant un état dynamique, C15 reste un contrôle de cibles — ce
+test-garde est le contrôle de visibilité, à exiger au contrat du produit.
+
+**La maquette n'invente pas d'affordance sans destination.** Un élément qui a
+l'air cliquable sans écran, état ou réaction à montrer ne se construit pas comme
+interactif : il se construit `disabled` (état documenté ci-dessous) ou ne se
+construit pas du tout. Une affordance sans destination est un mensonge visuel que
+le développement paiera en production.
+
+Contrôle exécutable : `check_maquette.py` (C15) — élément interactif sans `href`
+réel, `data-action` ni `type="submit"`, ou libellé dupliqué à cibles divergentes
+sur un même écran. Contrat de sortie correspondant : `references/criteres-sortie.md`.
+
+## Registre des déclencheurs — la forme dit ce que la chose fait
+
+Deux tours de retour utilisateur, sur la même fonctionnalité, en deux jours (TF-0797).
+Le 31/08 : « je ne vois pas de changement » — la fonctionnalité était pourtant livrée et
+câblée. Le 01/09, une fois montrée du doigt : « mets-le sous forme de bouton, pas de lien
+— le lien a une signification particulière, tout comme le bouton a la sienne ». Le point
+d'entrée unique d'une fenêtre d'arborescence était un bouton **fantôme** : sans fond ni
+bordure, il se lisait comme du texte. Aucune grille ne mesurait qu'une fonctionnalité a au
+moins un point d'entrée qui **a l'air de ce qu'il fait**.
+
+Le registre tient en trois lignes, et se lit comme un contrat entre la forme et l'effet.
+La colonne « Forme » dit ce qu'on écrit dans le HTML et le CSS, la colonne « Ce que
+l'utilisateur en déduit » dit ce que la forme promet — une promesse que le déclencheur
+doit tenir.
+
+| Intention | Forme | Ce que l'utilisateur en déduit |
+|---|---|---|
+| **Action** (crée, envoie, ouvre, calcule, supprime) | `<button>` au fond posé, ou bordé | « il va se passer quelque chose ici » |
+| **Navigation** (change d'écran, va à une ancre, ouvre une ressource) | `<a href="…">` vers une destination réelle | « je me déplace, je peux ouvrir dans un onglet » |
+| **Action secondaire** | bouton fantôme — fond transparent, pas de bordure | « c'est possible, ce n'est pas le geste principal » |
+
+Trois règles dures en découlent :
+
+1. **Une action ne se déclenche jamais par un lien.** Un `<a>` sans destination réelle
+   (`href` absent, `#` seul, `javascript:`) qui agit trompe sur ce qui va se passer et
+   perd le contrat clavier du bouton. Un `href` réel **plus** un `data-action` reste un
+   lien : la destination écrite est ce que l'utilisateur lit.
+2. **Une navigation ne se fait jamais par un bouton.** Un `<button>` qui pose
+   `location.href` prive d'ouvrir dans un onglet, de copier l'adresse, et de l'annonce
+   faite par les technologies d'assistance.
+3. **Un fantôme n'est jamais l'unique accès à une fonctionnalité.** Il est légitime en
+   second accès, en rappel, en action de rangée. Seul, il rend la fonctionnalité
+   invisible — c'est le défaut du 31/08, et il coûte deux tours.
+
+Balisage attendu, qui rend le critère mesurable (`oracle-declencheurs`, DE1–DE3, DE4 en avertissement) :
+
+| Attribut | Sur quoi |
+|---|---|
+| `data-fonctionnalite="<nom>"` | chaque point d'entrée d'une fonctionnalité, y compris les rappels secondaires |
+| `data-action="<verbe-objet>"` ou `href="#route"` | sa cible, comme pour tout CTA (voir « Un CTA = une cible ») |
+
+Sans `data-fonctionnalite`, l'oracle rend le **registre** de la page — chaque déclencheur
+avec sa nature mesurée — et déclare que la couverture des fonctionnalités n'a pas été
+jugée. Il ne devine pas un regroupement à partir des libellés : un contrôle qui devine ment.
+
+## Onglets sous le premier écran — le lecteur garde sa place (TF-1916)
+
+Le 18/10/2026, sur les pages de réservation d'un produit : cinq onglets de gîte, placés sous le
+bandeau et au-dessus d'un calendrier, étaient de simples liens vers cinq pages. Chaque clic
+rechargeait la page et la ramenait en haut. Le retour de l'exploitant, mot pour mot : « Lorsqu'on
+clique sur un autre gite dans la réservation, ne reviens pas en haut de la page, reste au même
+endroit sur la page. Fais en une règle générale des onglets en milieu de page pour la Factory. »
+Les treize oracles de la forge et `render_page.py` avaient passé : aucun ne cliquait un onglet
+après avoir défilé.
+
+**Règle.** Un groupe d'onglets situé sous le premier écran ne provoque ni rechargement ni
+remontée : cliquer un autre onglet laisse le lecteur exactement où il était, le contenu du
+nouvel onglet sous les yeux. Deux voies, par ordre de préférence :
+
+1. **Échange du contenu sur place (voie préférée).** Les onglets restent de **vrais liens**
+   (`<a role="tab" href="…">` vers la page de l'onglet : clic droit, nouvel onglet, copie de
+   l'adresse, lien profond et repli sans script restent entiers). Le script **intercepte** le clic
+   simple (ni modificateur, ni bouton secondaire), charge ou affiche le contenu **sur place**,
+   met l'adresse à jour par `history.pushState`, gère le retour arrière (`popstate`) et tient
+   `aria-selected` à jour. Le défilement n'est pas touché.
+2. **Ancre de retour à la position (repli).** À défaut, chaque lien pointe la page sœur **avec
+   le fragment du groupe d'onglets** (`href="gite-b.html#onglets"`, `id="onglets"` sur le groupe,
+   `scroll-margin-top` s'il y a un bandeau collant) : la page se recharge mais retombe sur le
+   groupe, pas en haut. Voie admise, dégradée : rechargement visible, état de la page perdu.
+
+Ce qui est refusé : des onglets qui sont de simples liens vers des pages sœurs, sans l'une des
+deux voies. La barre d'onglets de **navigation entre écrans en tête de page** (voir
+`contrat-technique.md`) n'est pas concernée : elle est dans le premier écran, il n'y a pas de
+place à perdre.
+
+**Critère mesurable** (clic réel dans un navigateur) : défiler jusqu'au groupe d'onglets, cliquer
+un autre onglet, mesurer. `scrollY` après le clic égale `scrollY` avant, à 2 px près ; pour la
+voie préférée, aucun rechargement complet (un marqueur posé sur `window` avant le clic est encore
+là après). Contrôle exécutable : `oracle-exploitabilite` **X6** — écart de défilement supérieur à
+2 px : majeur ; rechargement qui conserve la position (repli par ancre) : avertissement. Il se joue
+sur la page rendue ou, de préférence, sur l'instance servie (`run-oracles-design.mjs <page>
+--instance <url>`), et dit **non joué** quand la page n'a pas de groupe d'au moins deux onglets
+sous le premier écran. Le joué n'est pas le jugé : X6 ne clique qu'un onglet du premier groupe,
+et ne mesure ni l'adresse mise à jour ni le retour arrière — à vérifier à la critique
+d'implémentation.
+
+## Champs de saisie — TYPÉ, PROPOSÉ, BORNÉ, ATTEIGNABLE, COMPILABLE
+
+Cinq volets, pour **tout** champ, quel que soit son format et son contexte
+(TF-0736 et TF-0739, deux retours utilisateur en deux jours sur le même composant
+d'un écran **livré et audité** : la campagne de tests le mesurait câblé, et il
+l'était — le défaut n'était mesurable par aucun référentiel ; COMPILABLE en vient
+d'un troisième, TF-1343, même défaut de fond : l'affordance mesurée câblée, la
+contrainte réelle absente). Contrôle exécutable : `oracle-saisie` (SA1–SA7, SA8 en avertissement).
+
+**TYPÉ** — tout format connu prend son type d'entrée natif : `date`,
+`datetime-local`, `month`, `week`, `time`, `email`, `tel`, `url`, `number`,
+`password`, `color`. Un champ de date en `type="text"` est un défaut nommé, pas un
+choix. Le natif est gratuit sur le budget de poids, accessible au clavier par
+défaut, et correct hors connexion. Écart motivé : `data-type-motive="<raison>"`.
+
+**PROPOSÉ** — la valeur par défaut est **la meilleure hypothèse du système**,
+jamais un champ vide quand le système sait :
+
+| Contexte | Valeur proposée |
+|---|---|
+| fin de période | aujourd'hui |
+| début de période | dernière position connue de l'utilisateur ; à défaut, profondeur métier justifiée (1, 3 ou 6 mois) |
+| port réseau | celui du protocole retenu (993 IMAPS, 587 SMTP submission…) |
+| unité, devise, fuseau, langue | celle du contexte de l'utilisateur, jamais la première de la liste |
+| champ unique d'un formulaire à une entrée | focus posé dessus au chargement |
+
+Le vide qui a un **sens** se déclare : `data-vide-motive="<raison>"`. Un champ vide
+non déclaré à côté d'un texte qui affiche la valeur que le système connaît déjà —
+le défaut exact de TF-0736 — est le cas à ne jamais reproduire.
+
+**BORNÉ** — les bornes `min`/`max` sont posées **par le sens** : une période ne
+finit pas dans le futur, un port tient dans 1–65535, une date de naissance n'est
+pas demain. Toute borne d'interface a sa **garde serveur symétrique** — l'interface
+guide, elle ne protège pas. Borne absente pour une raison : `data-borne-motive`.
+
+**ATTEIGNABLE** — la cible de geste d'un composant composite couvre **tout le
+composant**, jamais une fraction de sa surface, et le mode de saisie alternatif
+(clavier au moins) reste toujours ouvert. Le critère se mesure, il ne se juge pas :
+une zone active plus petite que la surface visible est un défaut nommé. Sur un
+`input type="date"` natif, seul le clic sur l'icône de bord — une vingtaine de
+pixels — ouvre le sélecteur ; le corps du champ place un curseur de saisie. « Vu la
+taille du composant, personne ne pense à cliquer tout à droite. » Le geste global se
+pose une fois pour tout le fichier : voir le snippet de référence dans
+`contrat-technique.md`. Interdits : `readonly` posé pour forcer le sélecteur,
+`preventDefault()` sur `keydown` — Tab n'ouvre rien, Échap ferme, le champ reste
+éditable.
+
+**COMPILABLE** — un attribut `pattern` se COMPILE sous le drapeau `v`, celui que le
+navigateur applique réellement pour juger `validity.valid`
+(`new RegExp('^(?:'+pattern+')$', 'v')`, HTML Standard §4.10.5.3.4). Un motif invalide
+sous ce drapeau — `\-` hors d'une classe de caractères, par exemple — est ignoré EN
+SILENCE : la console affiche la `SyntaxError`, mais le champ accepte tout, sans borne
+ni format. TF-1343, mesuré le 23/09/2026 sur un champ « Suffixe du coffre » :
+`[A-Za-z0-9]+(\-[A-Za-z0-9]+)*` cassait ainsi ; `[A-Za-z0-9]+(-[A-Za-z0-9]+)*` — sans
+l'antislash — dit exactement la même chose et compile. Aucune échappatoire : un motif
+qui ne compile pas n'est jamais une intention.
+
+**Toute promesse écrite dans l'aide est câblée dans le champ.** « La période part de
+la dernière lecture » exige une `value` ; « jusqu'à aujourd'hui au plus tard » exige
+un `max`. Une promesse non câblée n'existe pas (loi transverse n° 1) — c'est le
+troisième défaut du même écran.
+
+## Écrans de création — deux motifs légitimes, et le critère de choix
+
+TF-0707 et TF-0708. Le motif « formulaire replié toujours présent » (`<details>`
+sous la liste) était imposé partout par une exigence d'interface. Il est **bon**
+quand le formulaire est court et unique ; il devient **nuisible** dès que le
+formulaire porte des branches exclusives, car le repli **masque** la contradiction
+au lieu de la résoudre — et le test a dû être assoupli pour laisser passer une
+refonte qui corrigeait un vrai défaut d'ergonomie. Deux motifs, donc, et un critère.
+
+| Motif | Quand | Forme |
+|---|---|---|
+| **Formulaire replié** | création **simple** : ≤ 4 champs, aucune branche exclusive, aucune étape | `<details>` + `data-cible`, sous la liste qu'il alimente |
+| **Panneau adressable** | tâche à **branches**, à étapes, ou à plus de 4 champs | écran ou panneau sur sa propre route (`#…?nouveau=…`), **hors** de la liste |
+
+Critère de choix, binaire : **le formulaire porte-t-il un choix exclusif ?** Oui →
+panneau adressable. Non, et ≤ 4 champs → formulaire replié. Un doute se tranche vers
+le panneau adressable : il est adressable, donc partageable et testable.
+
+**Loi du panneau de tâche** — *un panneau de tâche ne coexiste pas avec la liste
+qu'il alimente, et ne rend que les champs de la branche retenue ; un choix exclusif
+se pose AVANT les champs qu'il commande, jamais au milieu d'un formulaire qui les
+affiche déjà tous.*
+
+Mauvais (l'écran de TF-0707, mal compris par son destinataire) : un encart replié
+sous la liste des connexions affiche **en même temps** les champs des deux modes du
+même flux — clé d'application, secret, code d'autorisation **et** jeton direct.
+L'utilisateur en déduit une alternative entre « clé d'application » et « OAuth »
+alors que la clé d'application **est** l'identifiant client du flux OAuth. La même
+clé lui est demandée deux fois, et un seul libellé porte deux actions.
+
+Bon : une route dédiée ; en tête du panneau, la question qui tranche (« comment ce
+stockage vous autorise-t-il ? ») ; puis, et seulement puis, les champs de la branche
+retenue. L'autre branche n'est pas rendue.
+
+Balisage attendu, qui rend la règle mécanisable (`oracle-panneau-tache`, PA1–PA7) :
+
+| Attribut | Sur quoi |
+|---|---|
+| `data-panneau-tache="<nom>"` | le panneau de création |
+| `data-route="#…?nouveau=…"` | sa route, si panneau adressable — un déclencheur réel doit la pointer |
+| `data-commande-branches` | le sélecteur exclusif (radios ou `select`), **placé avant** les branches |
+| `data-branche="<valeur>"` | chaque groupe de champs d'une branche |
+| `data-branche-active` | la seule branche rendue ; les autres sont `hidden` |
+
+**Un renseignement n'est demandé qu'une fois par branche** : deux champs de même
+`name`, ou deux étiquettes visibles identiques dans un même panneau, sont un défaut.
+
+## Tables de données
+
+Attendu sur au moins une table de la maquette, en fonctionnement réel :
+
+- tri multi-colonnes, indicateur de rang de tri visible ;
+- filtre **dans l'en-tête de colonne**, typé selon la donnée : texte, énumération
+  à cases, intervalle numérique, plage de dates ;
+- recherche globale et recherche par colonne ;
+- sélection tous / aucun / inverse, avec compteur et actions de masse ;
+- colonnes masquables et réordonnables ;
+- densité confortable / compact ;
+- pagination ou défilement virtualisé au-delà de 500 lignes ;
+- export CSV construit depuis la vue courante, pas depuis le jeu complet ;
+- état de la vue (tri, filtres, colonnes) porté par l'URL et donc partageable.
+
+## États des composants
+
+Chaque composant de la bibliothèque est montré **en fonctionnement**, avec ses
+états : repos, survol, focus, actif, désactivé, chargement, erreur, vide. Une
+capture morte ne démontre rien et se voit immédiatement.
+
+## Accessibilité — plancher non négociable
+
+- contraste ≥ 4.5:1 sur le texte, ≥ 3:1 sur les éléments d'interface, **sur les
+  deux thèmes** ;
+- focus visible partout, jamais supprimé sans remplacement ;
+- navigation clavier complète, y compris tri de colonne, arborescence, boîtes de
+  dialogue (piège de focus) et bulles d'onboarding ;
+- sémantique conforme aux *ARIA Authoring Practices* pour tout composant custom —
+  c'est le seul référentiel qui donne le contrat clavier attendu ;
+- lien d'évitement, libellés associés aux champs, hiérarchie de titres continue.
+
+## Onboarding
+
+Bulles ancrées à un élément réel, ordonnées, avec suivant, précédent, passer et
+rejouer. Chaque bulle dit **ce que la personne peut faire ici**, pas ce que le
+composant est. Un onboarding qui décrit l'interface au lieu de la tâche est un
+onboarding raté.
+
+## Écriture d'interface
+
+Verbes actifs, vocabulaire de l'utilisateur et non du système, un libellé
+constant d'un bout à l'autre du parcours (le bouton « Publier » produit
+« Publié »). Les erreurs disent ce qui s'est passé et comment le réparer. Un
+écran vide est une invitation à agir, pas un constat de vide.

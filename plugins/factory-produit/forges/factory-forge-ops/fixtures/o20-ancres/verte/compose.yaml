@@ -1,0 +1,23 @@
+# Fixture VERTE O-20 (TF-2657) : ancres, alias et clé de fusion. Chaque service est lu APRÈS résolution :
+# postgres 16 monte son volume sur /var/lib/postgresql/data par la fusion, redis par un alias de liste.
+x-image-pg: &image-pg postgres:16
+x-donnees-pg: &donnees-pg
+  restart: unless-stopped
+  volumes:
+    - base-donnees:/var/lib/postgresql/data
+x-volumes-cache: &volumes-cache
+  - cache-donnees:/data
+services:
+  base:
+    image: *image-pg
+    <<: *donnees-pg
+  cache:
+    image: redis:7
+    volumes: *volumes-cache
+  web:
+    image: nginx:1.27
+    ports:
+      - "8080:80"
+volumes:
+  base-donnees:
+  cache-donnees:

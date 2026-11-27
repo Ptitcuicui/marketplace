@@ -2,10 +2,10 @@
   "racine": "C:\\Users\\Ptitcuicui\\factory",
   "plugins": {
     "factory-socle": {
-      "skills": 13,
+      "skills": 15,
       "skills_hors_marketplace": {},
-      "fichiers_de_code_avec_chemin_skill": 45,
-      "references_au_pilot": 1326,
+      "fichiers_de_code_avec_chemin_skill": 55,
+      "references_au_pilot": 1341,
       "chemins_c_dev": {
         "plugins\\factory-socle\\skills\\quality-oracles\\references\\registre-oracles.json": 1,
         "plugins\\factory-socle\\skills\\quality-oracles\\references\\registre-oracles.md": 2,
@@ -58,7 +58,13 @@
         "plugins\\factory-socle\\forges\\factory-pilot\\scripts\\sessions-par-transcriptions.test.mjs": 1,
         "plugins\\factory-socle\\forges\\factory-pilot\\scripts\\verifier-carte-forges.mjs": 1,
         "plugins\\factory-socle\\forges\\factory-pilot\\todo\\anonymiser-entrant.mjs": 1,
-        "plugins\\factory-socle\\forges\\factory-pilot\\todo\\emettre-travaux.mjs": 7
+        "plugins\\factory-socle\\forges\\factory-pilot\\todo\\emettre-travaux.mjs": 7,
+        "plugins\\factory-socle\\forges\\factory-forge-design\\README.md": 1,
+        "plugins\\factory-socle\\forges\\factory-forge-design\\demo\\rendus\\render-clair.json": 4,
+        "plugins\\factory-socle\\forges\\factory-forge-design\\demo\\rendus\\render-sombre.json": 4,
+        "plugins\\factory-socle\\forges\\factory-forge-design\\oracles\\registre-entrees.md": 14,
+        "plugins\\factory-socle\\forges\\factory-forge-design\\oracles\\self-test-regles-jouees.mjs": 1,
+        "plugins\\factory-socle\\forges\\factory-forge-design\\oracles\\self-test.mjs": 3
       }
     },
     "factory-avant-vente": {
@@ -77,29 +83,53 @@
       "skills": 10,
       "skills_hors_marketplace": {},
       "fichiers_de_code_avec_chemin_skill": 0,
-      "references_au_pilot": 12,
-      "chemins_c_dev": {}
+      "references_au_pilot": 41,
+      "chemins_c_dev": {
+        "plugins\\factory-produit\\forges\\factory-forge-ops\\CLAUDE.md": 2,
+        "plugins\\factory-produit\\forges\\factory-forge-ops\\README.md": 2,
+        "plugins\\factory-produit\\forges\\factory-forge-ops\\fixtures\\lien-railway\\config-ambigu.json": 4,
+        "plugins\\factory-produit\\forges\\factory-forge-ops\\fixtures\\lien-railway\\config-lie.json": 4,
+        "plugins\\factory-produit\\forges\\factory-forge-ops\\oracles\\self-test.mjs": 16,
+        "plugins\\factory-produit\\forges\\factory-forge-ops\\references\\GESTES-EXPLOITATION.md": 5,
+        "plugins\\factory-produit\\forges\\factory-forge-ops\\scripts\\dossier-railway.mjs": 2,
+        "plugins\\factory-produit\\forges\\factory-forge-ops\\scripts\\lib-lien-railway.mjs": 2,
+        "plugins\\factory-produit\\forges\\factory-forge-ops\\scripts\\ops.mjs": 2
+      }
     },
     "factory-audit-securite": {
       "skills": 4,
       "skills_hors_marketplace": {},
-      "fichiers_de_code_avec_chemin_skill": 0,
-      "references_au_pilot": 20,
-      "chemins_c_dev": {}
+      "fichiers_de_code_avec_chemin_skill": 7,
+      "references_au_pilot": 77,
+      "chemins_c_dev": {
+        "plugins\\factory-audit-securite\\forges\\factory-forge-tests\\docs\\Factory - CDC Forge - Framework Tests - 20260802a.md": 2,
+        "plugins\\factory-audit-securite\\forges\\factory-forge-tests\\tests\\test_tf_0136.py": 1,
+        "plugins\\factory-audit-securite\\forges\\factory-forge-tests\\tests\\test_tf_0215_garde_fou_jeux.py": 1
+      }
     },
     "factory-data": {
       "skills": 3,
       "skills_hors_marketplace": {},
-      "fichiers_de_code_avec_chemin_skill": 1,
-      "references_au_pilot": 6,
+      "fichiers_de_code_avec_chemin_skill": 3,
+      "references_au_pilot": 11,
       "chemins_c_dev": {}
     },
     "factory-marketing": {
       "skills": 3,
       "skills_hors_marketplace": {},
-      "fichiers_de_code_avec_chemin_skill": 0,
-      "references_au_pilot": 4,
-      "chemins_c_dev": {}
+      "fichiers_de_code_avec_chemin_skill": 2,
+      "references_au_pilot": 12,
+      "chemins_c_dev": {
+        "plugins\\factory-marketing\\forges\\factory-forge-seo-geo\\README.md": 15,
+        "plugins\\factory-marketing\\forges\\factory-forge-seo-geo\\prompts\\PHASE-A-forge-skill-seo.md": 3,
+        "plugins\\factory-marketing\\forges\\factory-forge-seo-geo\\scripts\\livrables.py": 1,
+        "plugins\\factory-marketing\\forges\\factory-forge-seo-geo\\scripts\\migrer_mission.py": 2,
+        "plugins\\factory-marketing\\forges\\factory-forge-seo-geo\\scripts\\new_mission.py": 1,
+        "plugins\\factory-marketing\\forges\\factory-forge-seo-geo\\scripts\\rapport_html.py": 2,
+        "plugins\\factory-marketing\\forges\\factory-forge-seo-geo\\scripts\\remplir_fiches.py": 1,
+        "plugins\\factory-marketing\\forges\\factory-forge-seo-geo\\scripts\\scorer_actions.py": 1,
+        "plugins\\factory-marketing\\forges\\factory-forge-seo-geo\\scripts\\validate.py": 1
+      }
     }
   }
 }

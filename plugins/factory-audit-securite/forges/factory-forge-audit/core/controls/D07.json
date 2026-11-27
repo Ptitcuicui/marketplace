@@ -1,0 +1,195 @@
+{
+  "dimension": "D07",
+  "label": "Coûts & FinOps",
+  "controls": [
+    {
+      "id": "CTL-D07-01",
+      "adr_source": ["ADR0102"],
+      "dimension_audit": "D07",
+      "regle": "Une taxonomie de tags minimale (application, environnement, domaine, propriétaire) est définie, publiée et appliquée dès la création de toute ressource facturable.",
+      "criticite": "Bloquant",
+      "profil": ["light", "complet"],
+      "mode_de_controle": "déclaratif + revue",
+      "verification": "Vérifier l'existence d'une taxonomie de tags publiée (clés obligatoires) et l'application d'un contrôle à la création (policy) empêchant le provisionnement de ressources non conformes.",
+      "preuve_attendue": "Référence de la taxonomie de tags publiée + configuration de la policy de contrôle à la création.",
+      "grille_verdict": "conforme = taxonomie publiée + contrôle bloquant à la création actif ; partiel = taxonomie publiée sans contrôle automatisé ; non conforme = absence de taxonomie constatée",
+      "enforcement": "required",
+      "applicabilite": { "types": ["web-app", "api", "data", "mobile", "ml", "infra"], "defaut": "applicable" },
+      "actions_audit": [
+        "Demander la taxonomie de tags publiée (clés obligatoires) ; joindre la référence.",
+        "Provisionner une ressource de test non conforme et vérifier le blocage par la policy ; documenter le résultat.",
+        "Si écart : publier la taxonomie et activer le contrôle bloquant à la création."
+      ],
+      "derogation": null,
+      "standards": ["FinOps Framework — domaine Allocation (tagging)", "ISO 55001:2014 — gestion d'actifs (identification)"]
+    },
+    {
+      "id": "CTL-D07-02",
+      "adr_source": ["ADR0102"],
+      "dimension_audit": "D07",
+      "regle": "Le taux de conformité de tagging du portefeuille de ressources est mesuré périodiquement, avec alerte automatique sur toute ressource non conforme détectée.",
+      "criticite": "Majeur",
+      "profil": ["complet"],
+      "mode_de_controle": "automatique",
+      "verification": "Exécuter ou consulter le dernier rapport de conformité de tagging ; vérifier le taux de conformité obtenu et la présence d'une alerte active sur les ressources non conformes.",
+      "preuve_attendue": "Rapport de conformité de tagging daté avec taux mesuré et liste des ressources non conformes.",
+      "grille_verdict": "conforme = ≥ 98 % de conformité et alerte active ; partiel = mesure disponible sans alerte automatisée ; non conforme = aucune mesure de conformité disponible",
+      "enforcement": "advisory",
+      "applicabilite": { "types": ["web-app", "api", "data", "mobile", "ml", "infra"], "defaut": "applicable" },
+      "actions_audit": [
+        "Extraire le dernier rapport de conformité de tagging du portefeuille ; joindre le taux constaté.",
+        "Vérifier la configuration de l'alerte sur ressources non conformes ; documenter son activation.",
+        "Si écart : mettre en place la mesure périodique et l'alerte manquantes."
+      ],
+      "derogation": null,
+      "standards": ["FinOps Framework — domaine Allocation (tagging)"]
+    },
+    {
+      "id": "CTL-D07-03",
+      "adr_source": ["ADR0103", "ADR0105"],
+      "dimension_audit": "D07",
+      "regle": "Chaque ressource facturable porte un tag applicatif résolu de façon univoque dans le référentiel de services, permettant de suivre le coût par application et par unité métier sans reconstruction manuelle.",
+      "criticite": "Majeur",
+      "profil": ["complet"],
+      "mode_de_controle": "automatique + revue",
+      "verification": "Vérifier que la totalité des ressources porte un tag applicatif valide résolu dans le référentiel de services (CMDB) et que le coût peut être ventilé par application/unité métier sans enquête manuelle.",
+      "preuve_attendue": "Rapport de réconciliation tag applicatif ↔ référentiel de services + exemple de ventilation de coût par application.",
+      "grille_verdict": "conforme = résolution à 100 % et ventilation automatisée par unité métier ; partiel = résolution manuelle documentée pour les écarts ; non conforme = ressources orphelines non détectées",
+      "enforcement": "required",
+      "applicabilite": { "types": ["web-app", "api", "data", "mobile", "ml", "infra"], "defaut": "applicable" },
+      "actions_audit": [
+        "Extraire le rapport de réconciliation entre tags applicatifs et référentiel de services ; joindre le taux de résolution.",
+        "Simuler la résolution d'un incident depuis une ressource isolée jusqu'à l'application propriétaire ; chronométrer et documenter.",
+        "Si écart : corriger les ressources orphelines et automatiser la réconciliation périodique."
+      ],
+      "derogation": null,
+      "standards": ["FinOps Framework — domaine Allocation (chargeback)", "ITIL 4 — pratique Service Configuration Management"]
+    },
+    {
+      "id": "CTL-D07-04",
+      "adr_source": ["ADR0107"],
+      "dimension_audit": "D07",
+      "regle": "Un budget est déclaré pour chaque périmètre significatif (application, environnement), avec une alerte automatique de dérive à des seuils progressifs (ex. 50 %/80 %/100 %).",
+      "criticite": "Bloquant",
+      "profil": ["light", "complet"],
+      "mode_de_controle": "déclaratif + revue",
+      "verification": "Vérifier l'existence d'un budget déclaré pour chaque périmètre significatif et la configuration effective des alertes de dérive à plusieurs seuils progressifs.",
+      "preuve_attendue": "Configuration des budgets et des alertes + historique de déclenchement des alertes.",
+      "grille_verdict": "conforme = budget couvrant tous les périmètres significatifs + alertes actives multi-seuils ; partiel = budget partiel ou alerte à seuil unique ; non conforme = absence de budget déclaré",
+      "enforcement": "required",
+      "applicabilite": { "types": ["web-app", "api", "data", "mobile", "ml", "infra"], "defaut": "applicable" },
+      "actions_audit": [
+        "Inventorier les budgets déclarés par périmètre significatif ; joindre la configuration.",
+        "Vérifier le déclenchement effectif des alertes aux seuils progressifs (historique) ; documenter le résultat.",
+        "Si écart : déclarer les budgets manquants et configurer les alertes multi-seuils."
+      ],
+      "derogation": null,
+      "standards": ["FinOps Foundation — cycle Inform/Optimize/Operate", "ISO/IEC 38500:2015 — principe d'acquisition"]
+    },
+    {
+      "id": "CTL-D07-05",
+      "adr_source": ["ADR0107"],
+      "dimension_audit": "D07",
+      "regle": "Une revue FinOps périodique est tenue, avec compte-rendu daté et décisions d'arbitrage consignées.",
+      "criticite": "Majeur",
+      "profil": ["complet"],
+      "mode_de_controle": "revue",
+      "verification": "Demander les comptes-rendus des dernières revues FinOps ; vérifier leur régularité et la présence de décisions actées, au-delà d'un simple tableau de bord consulté.",
+      "preuve_attendue": "Compte-rendu de la dernière revue FinOps daté + calendrier de revue récurrente.",
+      "grille_verdict": "conforme = revue régulière tracée avec décisions consignées ; partiel = revue irrégulière ou sans décision actée ; non conforme = aucune revue FinOps constatée",
+      "enforcement": "advisory",
+      "applicabilite": { "types": ["web-app", "api", "data", "mobile", "ml", "infra"], "defaut": "applicable" },
+      "actions_audit": [
+        "Demander les comptes-rendus des dernières revues FinOps et leur calendrier ; joindre les documents.",
+        "Vérifier la présence de décisions d'arbitrage actées dans les comptes-rendus ; documenter le constat.",
+        "Si écart : instaurer la cadence de revue et le format de compte-rendu décisionnel manquants."
+      ],
+      "derogation": null,
+      "standards": ["FinOps Foundation — cycle Inform/Optimize/Operate"]
+    },
+    {
+      "id": "CTL-D07-06",
+      "adr_source": ["ADR0107"],
+      "dimension_audit": "D07",
+      "regle": "Le coût actuel d'exécution est connu, ventilé par ressource et par service, et une projection de coût à l'échelle cible (volumétrie, utilisateurs) est documentée avec des hypothèses de calcul explicites.",
+      "criticite": "Bloquant",
+      "profil": ["light", "complet"],
+      "mode_de_controle": "déclaratif + revue",
+      "verification": "Vérifier l'export des coûts des 30-90 derniers jours ventilé par ressource/service et l'existence d'une projection chiffrée à la cible avec hypothèses explicites (utilisateurs, requêtes/jour, volumétrie).",
+      "preuve_attendue": "Export de coûts ventilé + document de projection à la cible avec hypothèses de calcul.",
+      "grille_verdict": "conforme = coût connu et ventilé + projection chiffrée documentée ; partiel = coût connu sans projection (ou projection sans ventilation) ; non conforme = coût non mesuré",
+      "enforcement": "required",
+      "applicabilite": { "types": ["web-app", "api", "data", "mobile", "ml", "infra"], "defaut": "applicable" },
+      "actions_audit": [
+        "Extraire l'export de coûts des 30-90 derniers jours ventilé par ressource/service ; joindre l'export.",
+        "Demander le document de projection à la cible et vérifier l'explicitation des hypothèses de calcul ; documenter le constat.",
+        "Si écart : produire la ventilation et/ou la projection manquantes."
+      ],
+      "derogation": null,
+      "standards": ["FinOps Foundation — cycle Inform/Optimize/Operate", "ISO/IEC 38500:2015 — principe d'acquisition"]
+    },
+    {
+      "id": "CTL-D07-07",
+      "adr_source": ["ADR0107"],
+      "dimension_audit": "D07",
+      "regle": "Les optimisations de coût pertinentes sont identifiées, chiffrées et priorisées dans un plan d'action : routage vers un modèle économique selon la complexité, cache sémantique et compression de contexte pour les coûts d'inférence IA ; dimensionnement, réservation ou extinction programmée pour les autres ressources.",
+      "criticite": "Standard",
+      "profil": ["complet"],
+      "mode_de_controle": "revue",
+      "verification": "Vérifier l'existence d'un plan d'optimisation chiffré (gain estimé, effort) couvrant à la fois les coûts d'infrastructure classiques et, le cas échéant, les coûts d'inférence IA (routage modèle, cache sémantique, compression de prompt).",
+      "preuve_attendue": "Plan d'optimisation daté avec gains estimés et statut de mise en œuvre.",
+      "grille_verdict": "conforme = plan d'optimisation chiffré et partiellement mis en œuvre ; partiel = optimisations identifiées non chiffrées ; non conforme = aucune optimisation identifiée",
+      "enforcement": "recommendation",
+      "applicabilite": { "types": ["web-app", "api", "data", "mobile", "ml", "infra"], "defaut": "applicable" },
+      "actions_audit": [
+        "Demander le plan d'optimisation de coût chiffré, incluant le cas échéant les coûts d'inférence IA ; joindre le document.",
+        "Vérifier le statut de mise en œuvre des optimisations prioritaires (routage modèle, cache, compression) ; documenter l'avancement.",
+        "Si écart : identifier et chiffrer les optimisations manquantes, puis prioriser leur mise en œuvre."
+      ],
+      "derogation": null,
+      "standards": ["FinOps Foundation — cycle Inform/Optimize/Operate"]
+    },
+    {
+      "id": "CTL-D07-08",
+      "adr_source": ["ADR0107"],
+      "dimension_audit": "D07",
+      "regle": "La maturité FinOps est déclarée capacité par capacité (ex. allocation, forecasting, optimisation de la dépense, optimisation de l'inférence IA) selon l'échelle Crawl/Walk/Run, pour chaque périmètre de dépense significatif (cloud public, SaaS, licences, IA/inférence) — jamais un score de maturité global unique masquant des écarts entre capacités.",
+      "criticite": "Standard",
+      "profil": ["complet"],
+      "mode_de_controle": "déclaratif + revue",
+      "verification": "Demander la déclaration de maturité par capacité et par périmètre de dépense (Crawl/Walk/Run) ; vérifier qu'aucun score global unique ne remplace cette granularité et que chaque périmètre de dépense significatif est couvert.",
+      "preuve_attendue": "Grille de maturité par capacité et par périmètre de dépense, datée, avec justification du niveau déclaré pour chacune.",
+      "grille_verdict": "conforme = maturité déclarée par capacité pour tous les périmètres significatifs, avec justification ; partiel = déclaration partielle ou score global sans détail par capacité ; non conforme = aucune déclaration de maturité",
+      "enforcement": "advisory",
+      "applicabilite": { "types": ["web-app", "api", "data", "mobile", "ml", "infra"], "defaut": "applicable" },
+      "actions_audit": [
+        "Demander la grille de maturité par capacité et par périmètre de dépense ; joindre le document.",
+        "Vérifier que la granularité par capacité est respectée (pas de score global masquant) et que les périmètres significatifs (cloud, SaaS, licences, IA) sont couverts.",
+        "Si écart : produire la grille de maturité par capacité manquante ou décomposer un score global existant."
+      ],
+      "derogation": null,
+      "standards": ["FinOps Foundation — FinOps Framework 2025/2026 (Scopes, maturité Crawl/Walk/Run par capacité)"]
+    },
+    {
+      "id": "CTL-D07-09",
+      "adr_source": ["ADR0110"],
+      "dimension_audit": "D07",
+      "regle": "Les décisions d'hébergement et de dimensionnement documentent leur impact environnemental au moins qualitativement (choix de région, extinction programmée, dimensionnement au plus près du besoin réel) ; une mesure quantitative (ex. Software Carbon Intensity) est adoptée dès qu'un profil technologique l'expose de façon vérifiable.",
+      "criticite": "Standard",
+      "profil": ["complet"],
+      "mode_de_controle": "déclaratif + revue",
+      "verification": "Vérifier que le plan d'optimisation de coût (CTL-D07-07) documente aussi l'impact environnemental qualitatif des choix retenus, et qu'une mesure quantitative est utilisée si un profil technologique l'expose.",
+      "preuve_attendue": "Section environnementale du plan d'optimisation, ou document dédié, documentant les choix (région, extinction, dimensionnement) et leur justification qualitative — mesure quantitative jointe si disponible.",
+      "grille_verdict": "conforme = impact environnemental documenté qualitativement pour les choix significatifs (+ mesure quantitative si un profil l'expose) ; partiel = mention informelle sans documentation structurée ; non conforme = aucune considération environnementale documentée",
+      "enforcement": "recommendation",
+      "applicabilite": { "types": ["web-app", "api", "data", "mobile", "ml", "infra"], "defaut": "applicable" },
+      "actions_audit": [
+        "Demander la section environnementale du plan d'optimisation de coût ou le document dédié ; joindre la référence.",
+        "Vérifier la justification qualitative des choix de région/extinction/dimensionnement et la présence d'une mesure quantitative si un profil l'expose.",
+        "Si écart : documenter l'impact environnemental qualitatif des décisions d'hébergement manquantes."
+      ],
+      "derogation": null,
+      "standards": ["Green Software Foundation — Software Carbon Intensity (SCI)"]
+    }
+  ]
+}

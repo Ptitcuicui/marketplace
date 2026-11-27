@@ -1,0 +1,1868 @@
+{
+  "version": 2,
+  "note": "Dette de jugement du framework. `todo` = à outiller · `assume` = limite acceptée et déclarée pour toujours · `ok` = comblée, et le champ `preuve` NOMME le test ou le contrôle de recette qui la tient · `retiree` = énoncé disparu du code sans preuve, ce qui n est PAS une fermeture. L identifiant est stable et découplé de l énoncé : reformuler une phrase conserve l entrée. Régénéré depuis le code (`python -m forge_tests.dette`) et vérifié en recette (`--verifier`) : ne pas éditer les énoncés à la main, seulement les statuts, les preuves et les notes.",
+  "dette": [
+    {
+      "id": "accessibilite-a11y-001",
+      "domaine": "accessibilite-a11y",
+      "enonce": "accessibilite : le DOM est capture a l etat INITIAL de chaque route ; les etats atteints apres interaction (menu ouvert, modale, message d erreur) ne sont pas audites",
+      "statut": "assume",
+      "note": "instruite le 2026-08-14 (lot COMPTA) : limite declaree par le correctif lui-meme — perimetre du garde-fou, provenance des routes, racine d execution decouverte. Reevaluer si un run reel prouve que la limite coute."
+    },
+    {
+      "id": "accessibilite-a11y-002",
+      "domaine": "accessibilite-a11y",
+      "enonce": "accessibilite : sans compte configure (.env), les routes protegees redirigent vers la page publique — le nombre de PAGES DISTINCTES rendues le dit au rapport",
+      "statut": "assume",
+      "note": "instruite le 2026-08-14 (lot COMPTA) : limite declaree par le correctif lui-meme — perimetre du garde-fou, provenance des routes, racine d execution decouverte. Reevaluer si un run reel prouve que la limite coute."
+    },
+    {
+      "id": "accessibilite-a11y-004",
+      "domaine": "accessibilite-a11y",
+      "enonce": "accessibilite : les routes RELEVEES sur l instance servie sont celles que la racine LIE — une page atteinte seulement apres une action (formulaire poste, menu ouvert) ou par une URL que rien ne lie n y figure pas ; la declarer par FORGE_TESTS_QUALIF_ROUTES (TF-0217)",
+      "statut": "assume",
+      "note": "instruite le 2026-08-14 (lot COMPTA) : limite declaree par le correctif lui-meme — perimetre du garde-fou, provenance des routes, racine d execution decouverte. Reevaluer si un run reel prouve que la limite coute."
+    },
+    {
+      "id": "actions-001",
+      "domaine": "actions",
+      "enonce": "actions : la categorie et l etape sont derivees de la CLASSE du finding, pas de son contenu — deux findings de meme classe recoivent la meme suite, meme si l un est trivial et l autre profond ; l attendu, lui, cite l element",
+      "statut": "assume",
+      "note": "instruite le 2026-08-14 (campagne dettes, mandat humain) : classification par CLASSE = doctrine du module (déterminisme opposable, jq du DOSSIER-MEP). Réévaluer si un run réel prouve que la limite coûte."
+    },
+    {
+      "id": "actions-002",
+      "domaine": "actions",
+      "enonce": "actions : `auto_ia` signifie « derivable d une source qui fait foi », pas « sans relecture » — un cas genere reste une PROPOSITION soumise a relecture (loi du generateur)",
+      "statut": "assume",
+      "note": "instruite le 2026-08-14 (campagne dettes, mandat humain) : classification par CLASSE = doctrine du module (déterminisme opposable, jq du DOSSIER-MEP). Réévaluer si un run réel prouve que la limite coûte."
+    },
+    {
+      "id": "actions-003",
+      "domaine": "actions",
+      "enonce": "actions : un pan SANS element inventorie dont la configuration n est que PRESUMEE ne produit plus d action humaine (TF-0381) — l entree reste au rapport avec son motif, mais reclamer une configuration pour un pan qui n a rien a mesurer usait la credibilite des actions qui comptent. Le pan reste NOMME : ce qui disparait est la demande, pas le constat",
+      "statut": "assume",
+      "note": "Limite ACCEPTEE, pas a outiller : la soustraction est le correctif lui-meme. Reclamer une configuration pour un pan sans element inventorie ne devient pas utile en l outillant mieux — le pan reste NOMME au rapport, et c est ce qui est du. Ce qui resterait a outiller serait de savoir si un pan est SANS OBJET plutot que non mesure, ce qui demande un indice de racine d execution : c est une autre entree, pas celle-ci."
+    },
+    {
+      "id": "adoption-001",
+      "domaine": "adoption",
+      "enonce": "adoption : le fichier `forge/cas-adoptes.jsonl` est une DECLARATION du projet — ce module verifie que le test cite existe, jamais qu il couvre reellement le cas ni qu il affirme quoi que ce soit (c est le role de la mutation)",
+      "statut": "assume",
+      "note": "instruite le 2026-08-14 (RT-13) : limites constitutives du mécanisme — le module constate une DÉCLARATION du projet et l'existence de son support ; juger qu'un test couvre vraiment son cas est le rôle de la mutation. Réévaluer si un run réel prouve que la limite coûte."
+    },
+    {
+      "id": "adoption-002",
+      "domaine": "adoption",
+      "enonce": "adoption : un cas adopte puis renomme cote cahier ressort en reference INCONNUE, declaree telle quelle — la reference de cas est stable par construction, pas eternelle",
+      "statut": "assume",
+      "note": "instruite le 2026-08-14 (RT-13) : limites constitutives du mécanisme — le module constate une DÉCLARATION du projet et l'existence de son support ; juger qu'un test couvre vraiment son cas est le rôle de la mutation. Réévaluer si un run réel prouve que la limite coûte."
+    },
+    {
+      "id": "anomalies-001",
+      "domaine": "anomalies",
+      "enonce": "anomalies : le rattachement est celui d `exigences` — déclaré (`elements`) ou LEXICAL. Un rattachement lexical est une PISTE, pas une preuve : qu un cas partage des mots avec une anomalie ne prouve pas qu il la couvre, et c est pourquoi la provenance est publiée",
+      "statut": "assume",
+      "note": "Limite DECLAREE par le module a sa creation (la justification vit dans son NON_JUGE, avec le fait qui l a motivee) — entree au registre par la DECOUVERTE de TF-0384 : neuf modules portaient des limites qu aucun domaine ne collectait, catalogue_i18n n etait que celui qu on avait vu."
+    },
+    {
+      "id": "anomalies-002",
+      "domaine": "anomalies",
+      "enonce": "anomalies : seules les anomalies OUVERTES entrent au reste-à-faire. Une anomalie fermée n a pas à être couverte — l exiger ferait grossir le reste avec tout l historique du produit, et un reste-à-faire qui grossit cesse d être lu",
+      "statut": "assume",
+      "note": "Limite DECLAREE par le module a sa creation (la justification vit dans son NON_JUGE, avec le fait qui l a motivee) — entree au registre par la DECOUVERTE de TF-0384 : neuf modules portaient des limites qu aucun domaine ne collectait, catalogue_i18n n etait que celui qu on avait vu."
+    },
+    {
+      "id": "anomalies-003",
+      "domaine": "anomalies",
+      "enonce": "anomalies : ce module ne va PAS chercher les anomalies dans un gestionnaire de tickets. C est le projet qui exporte sa liste — aucune API tierce, aucun secret en transit",
+      "statut": "assume",
+      "note": "Limite DECLAREE par le module a sa creation (la justification vit dans son NON_JUGE, avec le fait qui l a motivee) — entree au registre par la DECOUVERTE de TF-0384 : neuf modules portaient des limites qu aucun domaine ne collectait, catalogue_i18n n etait que celui qu on avait vu."
+    },
+    {
+      "id": "api-fastapi-001",
+      "domaine": "api-fastapi",
+      "enonce": "api : un code emis pendant la suite est repute couvert ; la sonde ne verifie pas qu une ASSERTION porte sur lui — c est le role du second contre-oracle",
+      "statut": "assume",
+      "note": "par conception : la faiblesse d assertion est mesuree par la mutation, pas par la couverture. Architecture, pas dette."
+    },
+    {
+      "id": "batch-python-001",
+      "domaine": "batch-python",
+      "enonce": "batch : les branches sont dérivées de l AST du module ; une branche implicite (opérateur ternaire, court-circuit booléen) n est pas inventoriée séparément",
+      "statut": "assume",
+      "note": "non levable par les arcs de couverture : un ternaire tient sur une seule ligne, il n existe aucun arc entre ses deux issues. Exigerait une instrumentation AST du code teste."
+    },
+    {
+      "id": "batch-python-002",
+      "domaine": "batch-python",
+      "enonce": "batch : une branche dont le corps tient sur la MEME ligne que son test (`if x: y`) n est pas distinguable — les arcs de coverage.py vont de ligne a ligne, il n en existe aucun entre une ligne et elle-meme. Repli sur la couverture de ligne, moins precis",
+      "statut": "assume",
+      "note": "non levable par les arcs : coverage.py les emet de ligne a ligne, il n en existe aucun entre une ligne et elle-meme. Exigerait une instrumentation AST du code teste."
+    },
+    {
+      "id": "cahiers-001",
+      "domaine": "cahiers",
+      "enonce": "cahiers : un cas derive dit ce qu il faut VERIFIER, pas comment le produit l implemente — les etapes sont exprimees sur la surface (route, endpoint, contrainte), un scenario metier reste a ecrire par qui connait le metier",
+      "statut": "assume",
+      "note": "instruite le 2026-08-14 (campagne dettes, mandat humain) : dérivation par la forme et la surface = définition opposable de l exhaustivité — un cas dit QUOI vérifier, jamais COMMENT. Réévaluer si un run réel prouve que la limite coûte."
+    },
+    {
+      "id": "cahiers-002",
+      "domaine": "cahiers",
+      "enonce": "cahiers : les etats vide, erreur et chargement sont des DEGRADATIONS generiques ; un ecran dont l etat vide a une semantique propre (premiere utilisation, filtre trop restrictif) reclame un cas supplementaire que la seule surface ne permet pas de deriver",
+      "statut": "assume",
+      "note": "instruite le 2026-08-14 (campagne dettes, mandat humain) : dérivation par la forme et la surface = définition opposable de l exhaustivité — un cas dit QUOI vérifier, jamais COMMENT. Réévaluer si un run réel prouve que la limite coûte."
+    },
+    {
+      "id": "cahiers-003",
+      "domaine": "cahiers",
+      "enonce": "cahiers : l exhaustivite est verifiee sur les elements que le RAPPORT porte — un element qu aucun adaptateur n a su enumerer n est ni couvert ni declare non couvert, il est absent des deux, et c est la limite de l inventaire, pas celle du cahier",
+      "statut": "assume",
+      "note": "instruite le 2026-08-14 (campagne dettes, mandat humain) : dérivation par la forme et la surface = définition opposable de l exhaustivité — un cas dit QUOI vérifier, jamais COMMENT. Réévaluer si un run réel prouve que la limite coûte."
+    },
+    {
+      "id": "cahiers-004",
+      "domaine": "cahiers",
+      "enonce": "cahiers : les gestes d un cas unitaire sont derives de la FORME de l identifiant (`code:METHODE /chemin=NNN`, `contrainte:x`, `mutant:...`) ; un identifiant de forme inconnue recoit un geste GENERIQUE, nomme comme tel dans le cas, a preciser par qui connait le pan",
+      "statut": "assume",
+      "note": "instruite le 2026-08-14 (campagne dettes, mandat humain) : dérivation par la forme et la surface = définition opposable de l exhaustivité — un cas dit QUOI vérifier, jamais COMMENT. Réévaluer si un run réel prouve que la limite coûte."
+    },
+    {
+      "id": "catalogue-i18n-001",
+      "domaine": "catalogue-i18n",
+      "enonce": "i18n catalogue : la JUSTESSE d une traduction n est PAS jugee — ni sa fidelite, ni son registre, ni sa terminologie. Un catalogue complet, aux parametres intacts et aux libelles constants peut etre integralement mal traduit. La doctrine du socle de marque le dit deja pour la voix : « la justesse n est pas decidable par script, ce qui EST verifiable c est la constance » — et le declarer est la condition pour que les trois controles soient crus",
+      "statut": "assume",
+      "note": "Limite ACCEPTEE, pas a outiller. La plus importante — la JUSTESSE d une traduction n est pas jugee — n est pas une dette : c est la doctrine du socle de marque, « la justesse n est pas decidable par script, ce qui EST verifiable c est la constance ». L outiller demanderait un juge de fidelite, qui n existe pas et dont la sortie serait elle-meme non refutable. Les autres bornent une comparaison exacte (JSON par locale, union des cles, noms de parametres, libelles d action) : les elargir ferait du bruit, et le bruit se fait ignorer. Reste a outiller un jour, hors de cette entree : lire un catalogue TypeScript, ce qui demande un analyseur JS."
+    },
+    {
+      "id": "catalogue-i18n-002",
+      "domaine": "catalogue-i18n",
+      "enonce": "i18n catalogue : seul le JSON par locale est compare (`fr.json`, `en-GB.json`). Un catalogue dans un module TypeScript, un YAML ou un fichier gettext est NOMME comme non lu, jamais confondu avec une absence de catalogue — c est la difference entre « je ne sais pas lire » et « il n y a rien a lire »",
+      "statut": "assume",
+      "note": "Limite ACCEPTEE, pas a outiller. La plus importante — la JUSTESSE d une traduction n est pas jugee — n est pas une dette : c est la doctrine du socle de marque, « la justesse n est pas decidable par script, ce qui EST verifiable c est la constance ». L outiller demanderait un juge de fidelite, qui n existe pas et dont la sortie serait elle-meme non refutable. Les autres bornent une comparaison exacte (JSON par locale, union des cles, noms de parametres, libelles d action) : les elargir ferait du bruit, et le bruit se fait ignorer. Reste a outiller un jour, hors de cette entree : lire un catalogue TypeScript, ce qui demande un analyseur JS."
+    },
+    {
+      "id": "catalogue-i18n-003",
+      "domaine": "catalogue-i18n",
+      "enonce": "i18n catalogue : la completude se mesure contre l UNION des cles de toutes les locales. Une cle presente dans une seule langue manque donc dans les autres — sur un produit ou la traduction est en cours PAR CHOIX, l ecart est reel mais il peut etre voulu : il se conteste par declaration, il ne se devine pas",
+      "statut": "assume",
+      "note": "Limite ACCEPTEE, pas a outiller. La plus importante — la JUSTESSE d une traduction n est pas jugee — n est pas une dette : c est la doctrine du socle de marque, « la justesse n est pas decidable par script, ce qui EST verifiable c est la constance ». L outiller demanderait un juge de fidelite, qui n existe pas et dont la sortie serait elle-meme non refutable. Les autres bornent une comparaison exacte (JSON par locale, union des cles, noms de parametres, libelles d action) : les elargir ferait du bruit, et le bruit se fait ignorer. Reste a outiller un jour, hors de cette entree : lire un catalogue TypeScript, ce qui demande un analyseur JS."
+    },
+    {
+      "id": "catalogue-i18n-004",
+      "domaine": "catalogue-i18n",
+      "enonce": "i18n catalogue : quand les locales ne s accordent pas sur les parametres d une cle, c est la MAJORITE STRICTE qui fait foi. SANS majorite (deux locales qui divergent, par exemple), le desaccord est NOMME sans prendre parti : rien ne permet alors de distinguer un parametre INVENTE d un parametre PERDU, et pretendre le contraire serait une affirmation que la donnee ne porte pas",
+      "statut": "assume",
+      "note": "Limite ACCEPTEE, pas a outiller. La plus importante — la JUSTESSE d une traduction n est pas jugee — n est pas une dette : c est la doctrine du socle de marque, « la justesse n est pas decidable par script, ce qui EST verifiable c est la constance ». L outiller demanderait un juge de fidelite, qui n existe pas et dont la sortie serait elle-meme non refutable. Les autres bornent une comparaison exacte (JSON par locale, union des cles, noms de parametres, libelles d action) : les elargir ferait du bruit, et le bruit se fait ignorer. Reste a outiller un jour, hors de cette entree : lire un catalogue TypeScript, ce qui demande un analyseur JS."
+    },
+    {
+      "id": "catalogue-i18n-005",
+      "domaine": "catalogue-i18n",
+      "enonce": "i18n catalogue : l ordre des parametres n est PAS compare, seuls leurs NOMS le sont — deux langues n ordonnent pas leurs parametres pareil, et l exiger serait un faux defaut. Un `%s` sans nom est compte par son RANG : on n affirme alors que le nombre",
+      "statut": "assume",
+      "note": "Limite ACCEPTEE, pas a outiller. La plus importante — la JUSTESSE d une traduction n est pas jugee — n est pas une dette : c est la doctrine du socle de marque, « la justesse n est pas decidable par script, ce qui EST verifiable c est la constance ». L outiller demanderait un juge de fidelite, qui n existe pas et dont la sortie serait elle-meme non refutable. Les autres bornent une comparaison exacte (JSON par locale, union des cles, noms de parametres, libelles d action) : les elargir ferait du bruit, et le bruit se fait ignorer. Reste a outiller un jour, hors de cette entree : lire un catalogue TypeScript, ce qui demande un analyseur JS."
+    },
+    {
+      "id": "catalogue-i18n-006",
+      "domaine": "catalogue-i18n",
+      "enonce": "i18n catalogue : la constance ne porte que sur les libelles d ACTION, reconnus au SEGMENT de cle (`action`, `bouton`, `button`, `cta`, `commande`, `verbe`). C est ce que `voix.md` §Actions prescrit, et l etendre a toutes les chaines produit du bruit : mesure sur un catalogue reel de 245 cles x 7 locales, 6 constats et 6 FAUX POSITIFS, tous du francais correct (Tous/Toutes, Approuve/Approuvee, accord en genre). Ce que le resserrage abandonne : un STATUT rendu de deux facons dans un meme produit n est plus vu — le distinguer d un accord legitime demande de lire, pas de comparer",
+      "statut": "assume",
+      "note": "Limite ACCEPTEE, pas a outiller. La plus importante — la JUSTESSE d une traduction n est pas jugee — n est pas une dette : c est la doctrine du socle de marque, « la justesse n est pas decidable par script, ce qui EST verifiable c est la constance ». L outiller demanderait un juge de fidelite, qui n existe pas et dont la sortie serait elle-meme non refutable. Les autres bornent une comparaison exacte (JSON par locale, union des cles, noms de parametres, libelles d action) : les elargir ferait du bruit, et le bruit se fait ignorer. Reste a outiller un jour, hors de cette entree : lire un catalogue TypeScript, ce qui demande un analyseur JS."
+    },
+    {
+      "id": "catalogue-i18n-007",
+      "domaine": "catalogue-i18n",
+      "enonce": "i18n catalogue : un catalogue qui ne NOMME pas ses actions (aucun segment `action`/`bouton`/`cta`) n est pas juge sur leur constance. C est une limite du catalogue, declaree — pas un controle qui se tait",
+      "statut": "assume",
+      "note": "Limite ACCEPTEE, pas a outiller. La plus importante — la JUSTESSE d une traduction n est pas jugee — n est pas une dette : c est la doctrine du socle de marque, « la justesse n est pas decidable par script, ce qui EST verifiable c est la constance ». L outiller demanderait un juge de fidelite, qui n existe pas et dont la sortie serait elle-meme non refutable. Les autres bornent une comparaison exacte (JSON par locale, union des cles, noms de parametres, libelles d action) : les elargir ferait du bruit, et le bruit se fait ignorer. Reste a outiller un jour, hors de cette entree : lire un catalogue TypeScript, ce qui demande un analyseur JS."
+    },
+    {
+      "id": "catalogue-i18n-008",
+      "domaine": "catalogue-i18n",
+      "enonce": "i18n catalogue : ce module lit les SOURCES, le pan i18n lit le BUILD SERVI. Les deux peuvent se contredire (un catalogue complet mal cable, un build complet sur catalogue troue) : cette contradiction est un RESULTAT, pas un defaut de mesure",
+      "statut": "assume",
+      "note": "Limite ACCEPTEE, pas a outiller. La plus importante — la JUSTESSE d une traduction n est pas jugee — n est pas une dette : c est la doctrine du socle de marque, « la justesse n est pas decidable par script, ce qui EST verifiable c est la constance ». L outiller demanderait un juge de fidelite, qui n existe pas et dont la sortie serait elle-meme non refutable. Les autres bornent une comparaison exacte (JSON par locale, union des cles, noms de parametres, libelles d action) : les elargir ferait du bruit, et le bruit se fait ignorer. Reste a outiller un jour, hors de cette entree : lire un catalogue TypeScript, ce qui demande un analyseur JS."
+    },
+    {
+      "id": "confrontation-001",
+      "domaine": "confrontation",
+      "enonce": "confrontation : le sens est ASYMÉTRIQUE — ce qui est SERVI sans être promis n est jamais accusé ; il peut venir d un terme que le lecteur ne sait pas lire, et l accuser serait accuser la limite du lecteur (faute payée une fois, TF-0312)",
+      "statut": "assume",
+      "note": "Limite DECLAREE par le module a sa creation (la justification vit dans son NON_JUGE, avec le fait qui l a motivee) — entree au registre par la DECOUVERTE de TF-0384 : neuf modules portaient des limites qu aucun domaine ne collectait, catalogue_i18n n etait que celui qu on avait vu."
+    },
+    {
+      "id": "confrontation-002",
+      "domaine": "confrontation",
+      "enonce": "confrontation : la LECTURE des deux termes n est pas jugée ici — ce module reçoit deux ensembles déjà constitués. Un lecteur qui manque des éléments produit une promesse plus courte, donc un PASS plus faible, et c est au lecteur de déclarer sa portée",
+      "statut": "assume",
+      "note": "Limite DECLAREE par le module a sa creation (la justification vit dans son NON_JUGE, avec le fait qui l a motivee) — entree au registre par la DECOUVERTE de TF-0384 : neuf modules portaient des limites qu aucun domaine ne collectait, catalogue_i18n n etait que celui qu on avait vu."
+    },
+    {
+      "id": "dashboard-001",
+      "domaine": "dashboard",
+      "enonce": "dashboard : la page rend le rapport, elle ne le juge pas — un chiffre surprenant se conteste sur le rapport JSON, jamais sur le HTML",
+      "statut": "assume",
+      "note": "limite par CONCEPTION, declaree au contrat NON_JUGE de forge_tests/livrables/dashboard.py (la page rend, ne juge pas) — requalifiee todo->assume le 2026-08-11 (TF-0078) : un enonce du contrat permanent n est pas un travail en attente"
+    },
+    {
+      "id": "dashboard-002",
+      "domaine": "dashboard",
+      "enonce": "dashboard : l etat d un seuil est derive du RAPPROCHEMENT entre sa valeur et les findings `seuil-non-tenu` qui la citent ; deux seuils de meme valeur ne sont pas discernables par ce rapprochement et sont alors tous deux marques « non tenu »",
+      "statut": "assume",
+      "note": "limite par CONCEPTION, declaree au contrat NON_JUGE de forge_tests/livrables/dashboard.py (la page rend, ne juge pas) — requalifiee todo->assume le 2026-08-11 (TF-0078) : un enonce du contrat permanent n est pas un travail en attente"
+    },
+    {
+      "id": "dashboard-003",
+      "domaine": "dashboard",
+      "enonce": "dashboard : la tendance compare deux rapports par leurs TOTAUX — elle ne dit pas si ce sont les memes elements qui ont bouge",
+      "statut": "assume",
+      "note": "limite par CONCEPTION, declaree au contrat NON_JUGE de forge_tests/livrables/dashboard.py (la page rend, ne juge pas) — requalifiee todo->assume le 2026-08-11 (TF-0078) : un enonce du contrat permanent n est pas un travail en attente"
+    },
+    {
+      "id": "dashboard-004",
+      "domaine": "dashboard",
+      "enonce": "dashboard : le detail d un cas est la derivation des cahiers (memes references stables) — sa pertinence pedagogique est celle du cahier, la page ne l ameliore pas",
+      "statut": "assume",
+      "note": "instruite le 2026-08-14 (campagne dettes, mandat humain) : le dashboard REND, il ne recalcule ni ne juge — conception délibérée (TF-0153/0175). Réévaluer si un run réel prouve que la limite coûte."
+    },
+    {
+      "id": "data-sql-001",
+      "domaine": "data-sql",
+      "enonce": "data : sur SQLite les clés étrangères restent non attribuables (le moteur ne nomme pas la contrainte violée) ; l attribution complète exige un moteur qui les nomme, comme PostgreSQL",
+      "statut": "assume",
+      "note": "limite du MOTEUR, pas de l outil : le banc tourne sur PostgreSQL, qui nomme tout. Note de portabilite pour un projet reste sur SQLite."
+    },
+    {
+      "id": "data-sql-002",
+      "domaine": "data-sql",
+      "enonce": "data : un index ou un trigger est réputé exercé si son instruction de création a été envoyée au moteur ; son EFFET (unicité réellement testée, trigger réellement déclenché) n est pas vérifié",
+      "statut": "assume",
+      "note": "l effet d un index (performance) ou d un trigger sort du contrat d un oracle de couverture ; son existence et son application sont, elles, verifiees."
+    },
+    {
+      "id": "data-sql-003",
+      "domaine": "data-sql",
+      "enonce": "data : le repli `sqlite3` relève les INSTRUCTIONS envoyées au pilote, pas les violations de contrainte ; sur un projet sans SQLAlchemy les contraintes restent donc non attribuables — tables, index et triggers, eux, sont mesurés",
+      "statut": "assume",
+      "note": "instruite le 2026-08-14 (campagne dettes, mandat humain) : repli sqlite3 déclaré comme repli — il relève ce qu il peut relever. Réévaluer si un run réel prouve que la limite coûte."
+    },
+    {
+      "id": "declarations-001",
+      "domaine": "declarations",
+      "enonce": "declarations : le fichier `forge/constats-contestes.jsonl` est une DECLARATION du projet — ce module verifie que la preuve citee EXISTE, jamais qu elle etablit ce qu elle pretend (c est le role de la mutation et de l execution)",
+      "statut": "assume",
+      "note": "instruite le 2026-08-14 (RT-18) : le canal constate une DECLARATION du projet et l'existence de sa preuve ; juger la sincerite de la contre-preuve est le role du relecteur, pas de l'outil. Reevaluer si un run reel prouve que la limite coute."
+    },
+    {
+      "id": "declarations-002",
+      "domaine": "declarations",
+      "enonce": "declarations : un constat ecarte reste MESURE et reste au rapport ; il sort du decompte principal, il ne sort pas de l inventaire — la mesure demeure opposable, la declaration aussi",
+      "statut": "assume",
+      "note": "instruite le 2026-08-14 (RT-18) : le canal constate une DECLARATION du projet et l'existence de sa preuve ; juger la sincerite de la contre-preuve est le role du relecteur, pas de l'outil. Reevaluer si un run reel prouve que la limite coute."
+    },
+    {
+      "id": "declarations-003",
+      "domaine": "declarations",
+      "enonce": "declarations : la peremption se juge sur la DATE DECLAREE par le projet, jamais sur une horloge externe — une date postee en avant differe le terme d autant, et cela se lit",
+      "statut": "assume",
+      "note": "instruite le 2026-08-14 (RT-18) : le canal constate une DECLARATION du projet et l'existence de sa preuve ; juger la sincerite de la contre-preuve est le role du relecteur, pas de l'outil. Reevaluer si un run reel prouve que la limite coute."
+    },
+    {
+      "id": "declarations-004",
+      "domaine": "declarations",
+      "enonce": "declarations : une declaration qui ne vise aucun constat du rapport courant sort en INCONNUE, declaree telle quelle — le constat a pu disparaitre, ou l identifiant changer ; seul le numero de ligne qui suit un nom de fichier est rapproche (TF-1672), tout autre changement d identifiant reste INCONNU",
+      "statut": "assume",
+      "note": "instruite le 2026-08-14 (RT-18) : le canal constate une DECLARATION du projet et l'existence de sa preuve ; juger la sincerite de la contre-preuve est le role du relecteur, pas de l'outil. Reevaluer si un run reel prouve que la limite coute."
+    },
+    {
+      "id": "declencheurs-001",
+      "domaine": "declencheurs",
+      "enonce": "declencheurs : la decouverte est STATIQUE et bornee aux formes reconnues (cron d un workflow CI, crontab, timer systemd, decorateurs de planification Python, taches Celery, point d entree `__main__`) — un declencheur pose a l execution par un ordonnanceur externe (Airflow deporte, planificateur du cloud configure hors depot) n est pas inventoriable ici, et le declarer serait mentir",
+      "statut": "assume",
+      "note": "instruite le 2026-08-14 (TF-0203) : decouverte STATIQUE bornee aux formes reconnues ; un ordonnanceur configure hors depot n'est pas inventoriable, et le declarer serait mentir. Reevaluer si un run reel prouve que la limite coute."
+    },
+    {
+      "id": "declencheurs-002",
+      "domaine": "declencheurs",
+      "enonce": "declencheurs : le cablage est verifie sur le NOM de la cible (module, fonction, commande) presente dans le depot ; qu elle soit la BONNE cible, et qu elle fasse ce que le declencheur promet, releve du cas de test, pas de l inventaire",
+      "statut": "assume",
+      "note": "instruite le 2026-08-14 (TF-0203) : decouverte STATIQUE bornee aux formes reconnues ; un ordonnanceur configure hors depot n'est pas inventoriable, et le declarer serait mentir. Reevaluer si un run reel prouve que la limite coute."
+    },
+    {
+      "id": "declencheurs-003",
+      "domaine": "declencheurs",
+      "enonce": "declencheurs : une expression cron syntaxiquement valide n est pas pour autant la cadence VOULUE — l ecart entre la cadence declaree et la cadence attendue est un jugement humain",
+      "statut": "assume",
+      "note": "instruite le 2026-08-14 (TF-0203) : decouverte STATIQUE bornee aux formes reconnues ; un ordonnanceur configure hors depot n'est pas inventoriable, et le declarer serait mentir. Reevaluer si un run reel prouve que la limite coute."
+    },
+    {
+      "id": "declencheurs-004",
+      "domaine": "declencheurs",
+      "enonce": "declencheurs : la v0 juge le CABLAGE, la lisibilite de la planification et l absence totale de declencheur ; elle ne dit pas si la suite de tests DECLENCHE le lot au moins une fois (il faudrait relier le declencheur a la couverture d execution de sa cible) — ce volet est declare comme reste-a-faire, pas comme mesure",
+      "statut": "assume",
+      "note": "instruite le 2026-08-14 (TF-0203) : decouverte STATIQUE bornee aux formes reconnues ; un ordonnanceur configure hors depot n'est pas inventoriable, et le declarer serait mentir. Reevaluer si un run reel prouve que la limite coute."
+    },
+    {
+      "id": "domaine-001",
+      "domaine": "domaine",
+      "enonce": "domaine : seuls les domaines DÉCLARÉS sont lus (`validate.Range`/`OneOf`, `CHECK` SQL). Un domaine déduit des valeurs observées serait une tautologie — il déclarerait conforme exactement ce qui est là, y compris les 11 points du golfe de Guinée",
+      "statut": "assume",
+      "note": "Limite DECLAREE par le module a sa creation (la justification vit dans son NON_JUGE, avec le fait qui l a motivee) — entree au registre par la DECOUVERTE de TF-0384 : neuf modules portaient des limites qu aucun domaine ne collectait, catalogue_i18n n etait que celui qu on avait vu."
+    },
+    {
+      "id": "domaine-002",
+      "domaine": "domaine",
+      "enonce": "domaine : un contrôle par CHAMP ne voit jamais une combinaison fausse dont chaque terme est valide. Les couples connus sont nommés (`COUPLES_SUSPECTS`) ; les autres échappent, et c est une limite, pas un oubli",
+      "statut": "assume",
+      "note": "Limite DECLAREE par le module a sa creation (la justification vit dans son NON_JUGE, avec le fait qui l a motivee) — entree au registre par la DECOUVERTE de TF-0384 : neuf modules portaient des limites qu aucun domaine ne collectait, catalogue_i18n n etait que celui qu on avait vu."
+    },
+    {
+      "id": "domaine-003",
+      "domaine": "domaine",
+      "enonce": "domaine : la PRÉSENCE n est pas rejugée ici — elle est comptée à part. Le contrôle de présence n est pas redondant, il est le JUMEAU de celui-ci",
+      "statut": "assume",
+      "note": "Limite DECLAREE par le module a sa creation (la justification vit dans son NON_JUGE, avec le fait qui l a motivee) — entree au registre par la DECOUVERTE de TF-0384 : neuf modules portaient des limites qu aucun domaine ne collectait, catalogue_i18n n etait que celui qu on avait vu."
+    },
+    {
+      "id": "execution-001",
+      "domaine": "execution",
+      "enonce": "exécution : la couverture combine lignes et ARCS de branchement ; une branche implicite (ternaire, court-circuit booléen) reste hors de portée de coverage.py",
+      "statut": "assume",
+      "note": "instruite le 2026-08-14 (campagne dettes, mandat humain) : arcs implicites hors couverture : limite de l outil amont (coverage.py), déclarée. Réévaluer si un run réel prouve que la limite coûte."
+    },
+    {
+      "id": "execution-002",
+      "domaine": "execution",
+      "enonce": "exécution : une ligne atteinte n implique pas qu elle soit ASSERTÉE — c est le rôle du second contre-oracle (mutation)",
+      "statut": "assume",
+      "note": "par conception : la faiblesse d assertion est mesuree par la mutation, jamais par la couverture. Deux contre-oracles, deux roles."
+    },
+    {
+      "id": "execution-003",
+      "domaine": "execution",
+      "enonce": "exécution : la configuration Playwright du projet peut démarrer son propre webServer, qui ÉCRIT dans l arbre analysé (build, code généré) — hors de portée du garde-fou lecture seule ; seuls les artefacts produits par Forge Tests sont routés hors du projet",
+      "statut": "assume",
+      "note": "instruite le 2026-08-14 (lot COMPTA) : limite declaree par le correctif lui-meme — perimetre du garde-fou, provenance des routes, racine d execution decouverte. Reevaluer si un run reel prouve que la limite coute."
+    },
+    {
+      "id": "exigences-001",
+      "domaine": "exigences",
+      "enonce": "exigences : sans cle technique au referentiel, le rattachement d un cas a une exigence est LEXICAL (deux racines de 5 caracteres communes au minimum) — il est publie avec sa provenance et doit etre valide par un humain, jamais lu comme un fait",
+      "statut": "assume",
+      "note": "instruite le 2026-08-14 (campagne dettes, mandat humain) : rattachement lexical = repli DÉCLARÉ quand le référentiel n apporte pas de clé technique — la clé reste la voie noble. Réévaluer si un run réel prouve que la limite coûte."
+    },
+    {
+      "id": "exigences-002",
+      "domaine": "exigences",
+      "enonce": "exigences : la reciproque (exigence sans aucun cas rattache) est calculee sur le meme rattachement lexical — une exigence declaree « sans cas » peut en avoir un que le vocabulaire n a pas rapproche",
+      "statut": "assume",
+      "note": "instruite le 2026-08-14 (campagne dettes, mandat humain) : rattachement lexical = repli DÉCLARÉ quand le référentiel n apporte pas de clé technique — la clé reste la voie noble. Réévaluer si un run réel prouve que la limite coûte."
+    },
+    {
+      "id": "fichiers-python-001",
+      "domaine": "fichiers-python",
+      "enonce": "fichiers : les chemins sont les branches du module de parsing ; une variante de format qui ne produit aucune branche dédiée (encodage géré par la bibliothèque) reste invisible",
+      "statut": "assume",
+      "note": "une variante sans branche dediee est indistinguable du chemin nominal par analyse de flot."
+    },
+    {
+      "id": "flaky-001",
+      "domaine": "flaky",
+      "enonce": "flaky : la detection repose sur la lecture des lignes de verdict par test dans la sortie de la commande rejouee (motif `id::test VERDICT` ou `VERDICT id::test`) — un harnais qui n imprime pas ce format par test n est pas mesurable ici",
+      "statut": "assume",
+      "note": "Limite DECLAREE par le module a sa creation (la justification vit dans son NON_JUGE, avec le fait qui l a motivee) — entree au registre par la DECOUVERTE de TF-0384 : neuf modules portaient des limites qu aucun domaine ne collectait, catalogue_i18n n etait que celui qu on avait vu."
+    },
+    {
+      "id": "flaky-002",
+      "domaine": "flaky",
+      "enonce": "flaky : deux rejeux identiques ne prouvent pas l ABSENCE de non-determinisme, seulement qu il ne s est pas manifeste sur cet echantillon de repetitions",
+      "statut": "assume",
+      "note": "Limite DECLAREE par le module a sa creation (la justification vit dans son NON_JUGE, avec le fait qui l a motivee) — entree au registre par la DECOUVERTE de TF-0384 : neuf modules portaient des limites qu aucun domaine ne collectait, catalogue_i18n n etait que celui qu on avait vu."
+    },
+    {
+      "id": "front-react-001",
+      "domaine": "front-react",
+      "enonce": "front : un element manipule pendant la suite est repute exerce ; la trace dit qu il a ete atteint, pas qu une ASSERTION porte sur son effet",
+      "statut": "assume",
+      "note": "par conception : la faiblesse d assertion est mesuree par la mutation, jamais par la couverture. Deux contre-oracles, deux roles."
+    },
+    {
+      "id": "front-react-002",
+      "domaine": "front-react",
+      "enonce": "front : elements rendus dynamiquement sans data-testid statique (non inventoriables ici)",
+      "statut": "assume",
+      "note": "limite de l inventaire statique ; leve seulement par un crawl navigateur (pan front, dette ouverte)."
+    },
+    {
+      "id": "generateur-001",
+      "domaine": "generateur",
+      "enonce": "generateur : les codes exigeant une valeur METIER invalide (400), un etat conflictuel (409) ou un type de media particulier (415) ne sont pas generables depuis le seul schema — ils sont declares NON GENERABLES, jamais emis a l aveugle",
+      "statut": "assume",
+      "note": "non derivable du schema : exige des invariants metier declares (enum, bornes) que OpenAPI ne porte pas."
+    },
+    {
+      "id": "generateur-003",
+      "domaine": "generateur",
+      "enonce": "generateur : le corps synthetise ne porte que les champs REQUIS ; un endpoint dont le comportement depend d un champ optionnel ne sera pas exerce sur ce chemin",
+      "statut": "assume",
+      "note": "arbitrage precision/rappel assume : remplir un optionnel au hasard produit des faux positifs."
+    },
+    {
+      "id": "generateur-data-001",
+      "domaine": "generateur-data",
+      "enonce": "generateur data : la valeur violante est derivee du TYPE de contrainte (unicite, non-nullite, cle etrangere, verification) ; une contrainte de verification a expression complexe n est pas resolue et n est pas generee",
+      "statut": "assume",
+      "note": "une contrainte CHECK a expression arbitraire demande un solveur ; hors contrat, la contrainte est signalee non generable plutot que generee a tort."
+    },
+    {
+      "id": "generateur-proprietes-001",
+      "domaine": "generateur-proprietes",
+      "enonce": "generateur_proprietes : la PURETE d une fonction est approchee par une heuristique legere (pas de self/cls, pas d appel a des fonctions d effet de bord connues) — pas prouvee ; une fonction retenue a tort reste une PROPOSITION a relire, jamais un cas execute a l aveugle",
+      "statut": "assume",
+      "note": "Limite DECLAREE par le module a sa creation (la justification vit dans son NON_JUGE, avec le fait qui l a motivee) — entree au registre par la DECOUVERTE de TF-0384 : neuf modules portaient des limites qu aucun domaine ne collectait, catalogue_i18n n etait que celui qu on avait vu."
+    },
+    {
+      "id": "generateur-proprietes-002",
+      "domaine": "generateur-proprietes",
+      "enonce": "generateur_proprietes : la PROPRIETE a affirmer n est jamais devinee — chaque squelette porte un `# TODO` explicite, la seule chose que ce module ne PEUT pas dériver du code",
+      "statut": "assume",
+      "note": "Limite DECLAREE par le module a sa creation (la justification vit dans son NON_JUGE, avec le fait qui l a motivee) — entree au registre par la DECOUVERTE de TF-0384 : neuf modules portaient des limites qu aucun domaine ne collectait, catalogue_i18n n etait que celui qu on avait vu."
+    },
+    {
+      "id": "generateur-proprietes-003",
+      "domaine": "generateur-proprietes",
+      "enonce": "generateur_proprietes : seuls les parametres aux annotations SIMPLES (int, float, str, bool) sont couverts — une fonction pure a parametres complexes (dataclass, Enum) n est pas proposee ici",
+      "statut": "assume",
+      "note": "Limite DECLAREE par le module a sa creation (la justification vit dans son NON_JUGE, avec le fait qui l a motivee) — entree au registre par la DECOUVERTE de TF-0384 : neuf modules portaient des limites qu aucun domaine ne collectait, catalogue_i18n n etait que celui qu on avait vu."
+    },
+    {
+      "id": "impact-001",
+      "domaine": "impact",
+      "enonce": "impact : la cartographie chemin -> pan est DECLAREE (prefixes de repertoires connus), pas dérivée d un graphe d imports reel — un fichier qui ne matche aucun prefixe fait retomber sur l audit COMPLET plutot que de deviner",
+      "statut": "assume",
+      "note": "Limite DECLAREE par le module a sa creation (la justification vit dans son NON_JUGE, avec le fait qui l a motivee) — entree au registre par la DECOUVERTE de TF-0384 : neuf modules portaient des limites qu aucun domaine ne collectait, catalogue_i18n n etait que celui qu on avait vu."
+    },
+    {
+      "id": "impact-002",
+      "domaine": "impact",
+      "enonce": "impact : la granularite est le PAN, pas le test individuel — un seul fichier change dans backend/app/ rejoue le pan api en entier, comme une reprise",
+      "statut": "assume",
+      "note": "Limite DECLAREE par le module a sa creation (la justification vit dans son NON_JUGE, avec le fait qui l a motivee) — entree au registre par la DECOUVERTE de TF-0384 : neuf modules portaient des limites qu aucun domaine ne collectait, catalogue_i18n n etait que celui qu on avait vu."
+    },
+    {
+      "id": "interface-statique-001",
+      "domaine": "interface-statique",
+      "enonce": "interface : controle STATIQUE — un gestionnaire pose a l execution par un framework (React, Vue, delegation d evenement sur un ancetre, composant compile) est INVISIBLE ici ; un element declare inerte doit etre lu comme « aucun cablage lisible dans les sources »",
+      "statut": "assume",
+      "note": "instruite le 2026-08-14 (campagne dettes, mandat humain) : contrôle STATIQUE par nature : le dynamique appartient au pan qualif et aux tests d interactions (deux étages voulus). Réévaluer si un run réel prouve que la limite coûte."
+    },
+    {
+      "id": "interface-statique-002",
+      "domaine": "interface-statique",
+      "enonce": "interface : un element juge cable ne l est que par PRESUMPTION — son identifiant, sa classe ou son attribut de donnees est cite dans le JS du projet. La coincidence de chaine suffit a le blanchir : le pan attrape l inerte flagrant, il ne certifie pas le cable",
+      "statut": "assume",
+      "note": "instruite le 2026-08-14 (campagne dettes, mandat humain) : contrôle STATIQUE par nature : le dynamique appartient au pan qualif et aux tests d interactions (deux étages voulus). Réévaluer si un run réel prouve que la limite coûte."
+    },
+    {
+      "id": "interface-statique-003",
+      "domaine": "interface-statique",
+      "enonce": "interface : le cablage prouve l existence d un gestionnaire, jamais que son effet soit OBSERVABLE par l utilisateur — un handler vide passerait pour cable",
+      "statut": "assume",
+      "note": "instruite le 2026-08-14 (campagne dettes, mandat humain) : contrôle STATIQUE par nature : le dynamique appartient au pan qualif et aux tests d interactions (deux étages voulus). Réévaluer si un run réel prouve que la limite coûte."
+    },
+    {
+      "id": "interface-statique-004",
+      "domaine": "interface-statique",
+      "enonce": "interface : les composants de framework (.jsx, .tsx, .vue, .svelte) ne sont pas analyses comme gabarits — seule la DESTINATION litterale de leurs liens est jugee (TF-0283, etendu a `.vue` et `.svelte` par TF-0295) ; leur CABLAGE reste hors perimetre et leur surface est inventoriee par le pan front via `data-testid`",
+      "statut": "assume",
+      "note": "instruite le 2026-08-14 (campagne dettes, mandat humain) : contrôle STATIQUE par nature : le dynamique appartient au pan qualif et aux tests d interactions (deux étages voulus). Réévaluer si un run réel prouve que la limite coûte."
+    },
+    {
+      "id": "interface-statique-005",
+      "domaine": "interface-statique",
+      "enonce": "interface : une ancre `#nom` dont la cible n existe pas dans le document n est pas jugee morte — la cible peut etre injectee au rendu",
+      "statut": "assume",
+      "note": "instruite le 2026-08-14 (campagne dettes, mandat humain) : contrôle STATIQUE par nature : le dynamique appartient au pan qualif et aux tests d interactions (deux étages voulus). Réévaluer si un run réel prouve que la limite coûte."
+    },
+    {
+      "id": "invariants-001",
+      "domaine": "invariants",
+      "enonce": "invariants : extraits des gardes du code — donc l invariant TEL QU IMPLEMENTE, pas tel que voulu. Une garde fausse produit un cas qui confirme le bug au lieu de le reveler",
+      "statut": "assume",
+      "note": "instruite le 2026-08-14 (campagne dettes, mandat humain) : les gardes sont lues TELLES QU IMPLÉMENTÉES, résolution bornée documentée (TF-0135) — dépasser serait interpréter. Réévaluer si un run réel prouve que la limite coûte."
+    },
+    {
+      "id": "invariants-002",
+      "domaine": "invariants",
+      "enonce": "invariants : seules les gardes de forme simple sont lues (comparaison, appartenance, negation) ; une garde composee ou deportee dans une fonction n est pas extraite",
+      "statut": "assume",
+      "note": "instruite le 2026-08-14 (campagne dettes, mandat humain) : les gardes sont lues TELLES QU IMPLÉMENTÉES, résolution bornée documentée (TF-0135) — dépasser serait interpréter. Réévaluer si un run réel prouve que la limite coûte."
+    },
+    {
+      "id": "invariants-003",
+      "domaine": "invariants",
+      "enonce": "invariants : la resolution des gardes deportees s arrete a UN niveau d appel, par nom simple, cherche dans TOUS les modules de l application (RT-9 / TF-0135). Un helper qui en appelle un autre, un appel par attribut (`service.refuser()`) ou un status_code calcule restent invisibles — le code declare paraitra alors « jamais leve »",
+      "statut": "assume",
+      "note": "instruite le 2026-08-14 (campagne dettes, mandat humain) : les gardes sont lues TELLES QU IMPLÉMENTÉES, résolution bornée documentée (TF-0135) — dépasser serait interpréter. Réévaluer si un run réel prouve que la limite coûte."
+    },
+    {
+      "id": "invariants-004",
+      "domaine": "invariants",
+      "enonce": "invariants : la resolution par nom n est PAS qualifiee par module (TF-0135) — deux fonctions de meme nom dans deux fichiers distincts de l application voient leurs codes fusionnes, ce qui peut masquer ou inventer une garde",
+      "statut": "assume",
+      "note": "instruite le 2026-08-14 (campagne dettes, mandat humain) : les gardes sont lues TELLES QU IMPLÉMENTÉES, résolution bornée documentée (TF-0135) — dépasser serait interpréter. Réévaluer si un run réel prouve que la limite coûte."
+    },
+    {
+      "id": "jeux-de-donnees-001",
+      "domaine": "jeux-de-donnees",
+      "enonce": "jeux de donnees : le garde-fou compare aux valeurs de configuration LISIBLES (env sensibles, `.env*` du projet) — une donnee reelle recopiee a la main qui ne figure dans aucune de ces sources ne serait pas reconnue ; la synthese, elle, est integrale",
+      "statut": "assume",
+      "note": "instruite le 2026-08-14 (campagne dettes, mandat humain) : les jeux couvrent la FORME du cas ; garde-fou borné au LISIBLE — au-delà, il promettrait ce qu il ne peut tenir. Réévaluer si un run réel prouve que la limite coûte."
+    },
+    {
+      "id": "jeux-de-donnees-002",
+      "domaine": "jeux-de-donnees",
+      "enonce": "jeux de donnees : les valeurs sont derivees de l IDENTIFIANT de l element, pas de son type metier — un jeu couvre la FORME du cas (nominal, vide, erreur), pas la semantique d un domaine que le rapport ne connait pas",
+      "statut": "assume",
+      "note": "instruite le 2026-08-14 (campagne dettes, mandat humain) : les jeux couvrent la FORME du cas ; garde-fou borné au LISIBLE — au-delà, il promettrait ce qu il ne peut tenir. Réévaluer si un run réel prouve que la limite coûte."
+    },
+    {
+      "id": "jeux-de-donnees-003",
+      "domaine": "jeux-de-donnees",
+      "enonce": "jeux de donnees : les variables `FORGE_TESTS_*` qui NOMMENT (PRODUIT, SOURCES, APP, BASE_URL, QUALIF_*, ORACLES...) configurent l AUDITEUR et sont hors du corpus interdit — une valeur du jeu qui reprendrait l une d elles n est PAS signalee ; celles qui AUTHENTIFIENT (LOGIN, PASSWORD, TOKEN, SECRET, KEY, CRED...) y restent (TF-0215)",
+      "statut": "assume",
+      "note": "instruite le 2026-08-14 (lot COMPTA) : limite declaree par le correctif lui-meme — perimetre du garde-fou, provenance des routes, racine d execution decouverte. Reevaluer si un run reel prouve que la limite coute."
+    },
+    {
+      "id": "migrations-sql-001",
+      "domaine": "migrations-sql",
+      "enonce": "migrations : l effet verifie est l EXISTENCE des objets nommes (tables, contraintes, index) apres application ; ni leur definition exacte, ni les donnees migrees",
+      "statut": "assume",
+      "note": "instruite le 2026-08-14 (campagne dettes, mandat humain) : l effet vérifié est l existence des objets nommés ; le rejeu est une seconde exécution — périmètre déclaré. Réévaluer si un run réel prouve que la limite coûte."
+    },
+    {
+      "id": "migrations-sql-002",
+      "domaine": "migrations-sql",
+      "enonce": "migrations : le rejeu est déduit d une seconde exécution de TOUTES les instructions de la section ; deux migrations rigoureusement identiques resteraient indiscernables",
+      "statut": "assume",
+      "note": "instruite le 2026-08-14 (campagne dettes, mandat humain) : l effet vérifié est l existence des objets nommés ; le rejeu est une seconde exécution — périmètre déclaré. Réévaluer si un run réel prouve que la limite coûte."
+    },
+    {
+      "id": "mutation-python-001",
+      "domaine": "mutation-python",
+      "enonce": "mutation : les mutants équivalents ne sont pas détectés — un survivant peut être un mutant sémantiquement identique à l original",
+      "statut": "assume",
+      "note": "indécidable en général : aucune version future ne les éliminera. Triage humain des survivants."
+    },
+    {
+      "id": "mutation-python-002",
+      "domaine": "mutation-python",
+      "enonce": "mutation : opérateurs arithmétiques, de comparaison, booléens, d appartenance, bornes numériques et suppression d instruction ; ni permutation d arguments, ni littéraux non numériques",
+      "statut": "assume",
+      "note": "instruite le 2026-08-14 (campagne dettes, mandat humain) : jeu d opérateurs et échantillonnage déclarés au rapport ; exercé ≠ vérifié est précisément le rôle du score. Réévaluer si un run réel prouve que la limite coûte."
+    },
+    {
+      "id": "mutation-python-003",
+      "domaine": "mutation-python",
+      "enonce": "mutation : la profondeur est ECHANTILLONNEE par module (voir `mutation.taux_echantillon` au rapport) — un score de module porte sur les mutants JOUES, pas sur tous les mutants possibles ; le perimetre, lui, est total et ses exclusions sont nommees",
+      "statut": "assume",
+      "note": "instruite le 2026-08-14 (campagne dettes, mandat humain) : jeu d opérateurs et échantillonnage déclarés au rapport ; exercé ≠ vérifié est précisément le rôle du score. Réévaluer si un run réel prouve que la limite coûte."
+    },
+    {
+      "id": "mutation-python-004",
+      "domaine": "mutation-python",
+      "enonce": "modules : un module est dit « exerce » des qu une ligne en est couverte — l etre ne dit pas qu il soit VERIFIE, c est le role du score de mutation qui l accompagne",
+      "statut": "assume",
+      "note": "instruite le 2026-08-14 (campagne dettes, mandat humain) : jeu d opérateurs et échantillonnage déclarés au rapport ; exercé ≠ vérifié est précisément le rôle du score. Réévaluer si un run réel prouve que la limite coûte."
+    },
+    {
+      "id": "orphelins-001",
+      "domaine": "orphelins",
+      "enonce": "orphelins : la PRECISION de ce controle est MESUREE, et elle est de 0 % sur le corpus reel de 4 886 chaines sur lequel il a ete eprouve — 6 accusations, aucune n etant un defaut. Il vit donc derriere FORGE_TESTS_ORPHELINS=1, ABSENT PAR DEFAUT : sans le drapeau il compte, mesure et DECLARE ses candidats, il n emet aucun finding. Le seuil de publication bloquante est de 80 %",
+      "statut": "assume",
+      "note": "instruite le 2026-09-02 (TF-0665) : la precision est MESUREE sur un corpus reel de 4 886 chaines, pas estimee. Le drapeau eteint par defaut EST la consequence de la mesure — la limite est le fait, pas un manque d outillage. Rebasculer le jour ou une precision >= 80 % est remesuree."
+    },
+    {
+      "id": "orphelins-003",
+      "domaine": "orphelins",
+      "enonce": "orphelins : sans DECLARATION de denombrables, le controle ne juge rien. La version naive (tout nombre absent de la donnee) a ete mesuree sur le meme corpus : 405 accusations, 0 defaut — elle accuse des heures, des prix et des faits editoriaux tiers. Elle est REFUSEE, pas remise a plus tard",
+      "statut": "assume",
+      "note": "instruite le 2026-09-02 (TF-0665) : la version naive a ete MESUREE (405 accusations, 0 defaut) et REFUSEE sur mesure. Exiger une declaration est le prix de la precision, pas un outillage manquant."
+    },
+    {
+      "id": "orphelins-004",
+      "domaine": "orphelins",
+      "enonce": "orphelins : les fichiers de donnees sont DECLARES (FORGE_TESTS_DONNEES), jamais devines. Un fichier de donnees oublie ne rend pas ce controle muet, il le rend ACCUSATEUR — tout ce que ce fichier rendait deviendrait orphelin",
+      "statut": "assume",
+      "note": "instruite le 2026-09-02 (TF-0665) : deviner les fichiers de donnees rendrait le controle ACCUSATEUR et non muet — asymetrie qui interdit le repli silencieux."
+    },
+    {
+      "id": "orphelins-005",
+      "domaine": "orphelins",
+      "enonce": "orphelins : seuls les objets litteraux PLATS sont lus comme enregistrements. Un objet a accolades imbriquees n est pas decoupe, donc ses valeurs n entrent dans aucun agregat — un enregistrement mal decoupe fabriquerait des sommes fausses, ce qui est pire qu un manque",
+      "statut": "assume",
+      "note": "instruite le 2026-09-02 (TF-0665) : un enregistrement mal decoupe fabriquerait des SOMMES FAUSSES, ce qui est pire qu un manque. Limite de lecture assumee."
+    },
+    {
+      "id": "orphelins-006",
+      "domaine": "orphelins",
+      "enonce": "orphelins : un nombre ECRIT EN LETTRES, ou attache au denombrable par plus d un mot intercale, n est pas vu. Elargir la fenetre rapprocherait deux propositions differentes",
+      "statut": "assume",
+      "note": "instruite le 2026-09-02 (TF-0665) : meme famille que la limite de pluriel de `glossaire` — elargir la fenetre rapprocherait deux propositions differentes."
+    },
+    {
+      "id": "prompts-statique-001",
+      "domaine": "prompts-statique",
+      "enonce": "prompts : la v0 est STATIQUE et GRATUITE — le volet execute (rejeu N fois pour mesurer la stabilite d une reponse, jugement semantique par un juge) est HORS PERIMETRE : il depense des jetons, donc il releve d un mandat humain (regle 29). `mesure_d_instabilite` en porte la mesure, testee sur donnees figees et JAMAIS appelee par l audit",
+      "statut": "assume",
+      "note": "instruite le 2026-08-14 (TF-0200) : v0 GRATUITE par construction — mesurer la stabilite ou juger le sens exige un modele, donc une depense, donc un mandat (regle 34). Reevaluer si un run reel prouve que la limite coute."
+    },
+    {
+      "id": "prompts-statique-002",
+      "domaine": "prompts-statique",
+      "enonce": "prompts : la QUALITE d un prompt n est pas jugee ici — ce pan dit ou vivent les prompts, s ils sont exerces et si le modele est epingle, jamais si le prompt est bon (cela releve de `prompt-analyzer-l99` et de la revue humaine)",
+      "statut": "assume",
+      "note": "Hors perimetre par conception (14/08/2026, TF-0200) : juger la qualite d un prompt est le verbe de prompt-analyzer-l99 (cat-agt-07) et de la revue humaine, pas d un pan d audit."
+    },
+    {
+      "id": "prompts-statique-003",
+      "domaine": "prompts-statique",
+      "enonce": "prompts : la decouverte est bornee aux formes ADRESSABLES reconnues (suffixe `.prompt`, dossier `prompts/` ou `gabarits/`, `SKILL.md`, constante Python en MAJUSCULES dont le nom porte `PROMPT`, `INSTRUCTIONS`, `SYSTEM` ou `SYSTEME`, en tete de nom comprise — TF-2780) — un prompt assemble a l execution par concatenation, ou stocke en base, n est pas inventoriable statiquement et le deviner serait mentir ; une constante qui porte ce mot sous une autre forme (`_SYSTEM_PROMPT`, `system_prompt`) est NOMMEE au rapport, jamais inventoriee",
+      "statut": "assume",
+      "note": "Limite de l analyse STATIQUE, assumee a la v0 (14/08/2026) : un prompt assemble a l execution n a pas d adresse ; l inventer serait une surface fausse."
+    },
+    {
+      "id": "prompts-statique-004",
+      "domaine": "prompts-statique",
+      "enonce": "prompts : l epinglage juge la FORME du nom (suffixe date `-AAAAMMJJ`, `-AAAA-MM-JJ` ou `-AAMM`), pas la disponibilite reelle du modele — aucun appel reseau n est fait et aucun calendrier de depreciation fournisseur n est consulte ici",
+      "statut": "assume",
+      "note": "Choix de la v0 GRATUITE (14/08/2026) : consulter un calendrier de depreciation fournisseur exige un appel reseau. La forme datee du nom est le signal disponible sans depense ; la sonde de cadence est deleguee a forge-observability (etude O2, candidature 3)."
+    },
+    {
+      "id": "prompts-statique-005",
+      "domaine": "prompts-statique",
+      "enonce": "prompts : les noms de modeles sont reconnus par FAMILLE declaree et seulement dans une chaine litterale ou une cle `modele:`/`model:` — un fournisseur absent de la table, un nom construit par concatenation ou lu d une variable d environnement n est pas vu",
+      "statut": "assume",
+      "note": "Table de familles DECLAREE donc contestable (14/08/2026) : un fournisseur absent s ajoute en une ligne. Le filtre << chaine litterale ou cle modele: >> est ce qui evite de confondre une mention en prose avec un usage."
+    },
+    {
+      "id": "prompts-statique-006",
+      "domaine": "prompts-statique",
+      "enonce": "prompts : le corpus est LU, jamais joue — qu un cas soit pertinent, que sa reponse attendue soit juste, et que le jeu couvre les cas limites, restent des jugements humains (l execution du corpus est deleguee a `oracle-agent-evals`, cat-agt-05)",
+      "statut": "assume",
+      "note": "Delegation assumee (14/08/2026, etude O2) : l execution du corpus et le jugement semantique appartiennent a oracle-agent-evals (cat-agt-05, juge distinct de l executant, fail-closed) — les reimplementer ici violerait R3."
+    },
+    {
+      "id": "prompts-statique-007",
+      "domaine": "prompts-statique",
+      "enonce": "prompts : les artefacts de l AUDITEUR sont exclus de l inventaire de l AUDITE (TF-0257) — le dossier de convention `forge\\` du pilot (ledger, contestations, rapports d etape), les rapports forge-tests persistes (reconnus a leurs cles de premier niveau) et les livrables scelles par la forge. Un projet qui nommerait `forge\\` un dossier de SON produit le verrait donc ignore ici : la convention du pilot prime, et elle est declaree",
+      "statut": "assume",
+      "note": "Limite ACCEPTEE et DECLAREE (TF-0272, decision humaine du 15/08/2026) : l exclusion de `forge\\` a ete posee a la campagne TF-0257 comme un choix de perimetre — les artefacts de l auditeur ne sont pas la surface de l audite. L entree etait entree en `todo` par le seul defaut du regenerateur, jamais sur un constat de manque : rien n est a outiller ici. Le cout residuel est nomme : un produit qui nommerait `forge\\` un dossier a lui perdrait ses prompts de l inventaire ; il le recupere en renommant ce dossier, la convention du pilot primant."
+    },
+    {
+      "id": "qualif-navigateur-001",
+      "domaine": "qualif-navigateur",
+      "enonce": "qualif : sans FORGE_TESTS_QUALIF_EFFETS=1, le pan LIT les ecouteurs attaches a chaque affordance, il ne CLIQUE jamais — sur une instance peuplee un clic ecrit vraiment (suppression, envoi, appel tiers facture). Un gestionnaire attache mais dont le corps ne fait rien passe alors pour un effet : ces affordances sont comptees CABLEES, pas exercees, et le rapport publie leur compte separement",
+      "statut": "assume",
+      "note": "instruite le 2026-08-14 (campagne dettes, mandat humain) : le pan LIT et ne clique jamais (G-1 : cliquer écrirait chez l audité) ; marqueur/délégation = limites dites. Réévaluer si un run réel prouve que la limite coûte."
+    },
+    {
+      "id": "qualif-navigateur-003",
+      "domaine": "qualif-navigateur",
+      "enonce": "qualif : le marqueur de contenu par defaut est le titre de la page (premier `h1` non vide, sinon `title`) ; il atteste qu une page a RENDU quelque chose, pas qu elle ait rendu les BONNES donnees — un marqueur metier se declare par FORGE_TESTS_QUALIF_MARQUEURS",
+      "statut": "assume",
+      "note": "instruite le 2026-08-14 (campagne dettes, mandat humain) : le pan LIT et ne clique jamais (G-1 : cliquer écrirait chez l audité) ; marqueur/délégation = limites dites. Réévaluer si un run réel prouve que la limite coûte."
+    },
+    {
+      "id": "qualif-navigateur-004",
+      "domaine": "qualif-navigateur",
+      "enonce": "qualif : quand une delegation d evenement est posee sur `document`, `body` ou un ancetre des affordances (conteneur racine de React 17+, TF-1791), aucun element ne peut plus etre declare inerte avec certitude — les elements concernes sont NOMMES en non_juge au lieu d etre accuses",
+      "statut": "assume",
+      "note": "instruite le 2026-08-14 (campagne dettes, mandat humain) : le pan LIT et ne clique jamais (G-1 : cliquer écrirait chez l audité) ; marqueur/délégation = limites dites. Réévaluer si un run réel prouve que la limite coûte."
+    },
+    {
+      "id": "qualification-001",
+      "domaine": "qualification",
+      "enonce": "qualification : un manque de configuration n est reconnu que s il se DIT — variable citee par une trace d execution, declaration d adaptateur, ou cle d un `.env.example` du projet. Un service tiers injoignable sans jamais nommer sa cle reste un pan non mesure ordinaire",
+      "statut": "assume",
+      "note": "instruite le 2026-08-14 (campagne dettes, mandat humain) : un manque n est reconnu que s il SE DIT — prouvé RT-6a/RT-13 ; présomption .env.example déclarée. Réévaluer si un run réel prouve que la limite coûte."
+    },
+    {
+      "id": "qualification-002",
+      "domaine": "qualification",
+      "enonce": "qualification : les champs tires d un `.env.example` sont PRESUMES requis (le fichier ne dit pas quel pan depend de quelle cle) — la provenance de chaque entree le declare",
+      "statut": "assume",
+      "note": "instruite le 2026-08-14 (campagne dettes, mandat humain) : un manque n est reconnu que s il SE DIT — prouvé RT-6a/RT-13 ; présomption .env.example déclarée. Réévaluer si un run réel prouve que la limite coûte."
+    },
+    {
+      "id": "qualification-003",
+      "domaine": "qualification",
+      "enonce": "qualification : un champ qu AUCUN adaptateur ne revendique dans son `CHAMPS_REQUIS` reste partage par les pans de son domaine (cas des variables PROPRES AU PROJET citees par une trace) — l attribution par pan ne vaut que pour les champs de la forge elle-meme",
+      "statut": "assume",
+      "note": "instruite le 2026-08-14 (campagne dettes, mandat humain) : un manque n est reconnu que s il SE DIT — prouvé RT-6a/RT-13 ; présomption .env.example déclarée. Réévaluer si un run réel prouve que la limite coûte."
+    },
+    {
+      "id": "reprise-001",
+      "domaine": "reprise",
+      "enonce": "reprise : la re-execution a la granularite du PAN — un pan qui doit etre rejoue l est en entier. La provenance, elle, est donnee element par element",
+      "statut": "assume",
+      "note": "instruite le 2026-08-14 (campagne dettes, mandat humain) : granularité au pan et mesure passée : la provenance est déclarée au rapport et rendue à l écran. Réévaluer si un run réel prouve que la limite coûte."
+    },
+    {
+      "id": "reprise-002",
+      "domaine": "reprise",
+      "enonce": "reprise : un element repris d un rapport anterieur atteste d une mesure PASSEE, pas de l etat courant du projet — si le code a change entre les deux passes, seule une passe complete fait foi",
+      "statut": "assume",
+      "note": "instruite le 2026-08-14 (campagne dettes, mandat humain) : granularité au pan et mesure passée : la provenance est déclarée au rapport et rendue à l écran. Réévaluer si un run réel prouve que la limite coûte."
+    },
+    {
+      "id": "revue-001",
+      "domaine": "revue",
+      "enonce": "revue de suite : la CELLULE MUTANTE sur objet partage (TF-0344, piege 3) n est pas detectable statiquement — savoir qu une action MUTE l etat demande de connaitre le metier. Elle est tenue par le patron de matrice des droits (TF-0343), qui exige un objet neuf pour toute cellule dont le succes mute l etat",
+      "statut": "assume",
+      "note": "Limite DECLAREE par le module a sa creation (la justification vit dans son NON_JUGE, avec le fait qui l a motivee) — entree au registre par la DECOUVERTE de TF-0384 : neuf modules portaient des limites qu aucun domaine ne collectait, catalogue_i18n n etait que celui qu on avait vu."
+    },
+    {
+      "id": "revue-002",
+      "domaine": "revue",
+      "enonce": "revue de suite : seules les suites de NAVIGATEUR sont relues (.spec.ts et voisins) — les suites Python ne le sont pas, faute de cas reel sur leurs idiomes",
+      "statut": "assume",
+      "note": "Limite DECLAREE par le module a sa creation (la justification vit dans son NON_JUGE, avec le fait qui l a motivee) — entree au registre par la DECOUVERTE de TF-0384 : neuf modules portaient des limites qu aucun domaine ne collectait, catalogue_i18n n etait que celui qu on avait vu."
+    },
+    {
+      "id": "revue-003",
+      "domaine": "revue",
+      "enonce": "revue de suite : lecture TEXTUELLE, pas d analyse de flot — un motif construit a l execution (variable, gabarit) echappe a ces regles",
+      "statut": "assume",
+      "note": "Limite DECLAREE par le module a sa creation (la justification vit dans son NON_JUGE, avec le fait qui l a motivee) — entree au registre par la DECOUVERTE de TF-0384 : neuf modules portaient des limites qu aucun domaine ne collectait, catalogue_i18n n etait que celui qu on avait vu."
+    },
+    {
+      "id": "revue-004",
+      "domaine": "revue",
+      "enonce": "revue de suite (piege 7, session fabriquee) : la PROVENANCE reelle de la valeur ecrite. L oracle distingue une valeur composee SUR PLACE (litteral, objet serialise) d une valeur issue d un APPEL, et il ne peut pas savoir si cet appel touche le produit ou compose la session ailleurs. Le second cas est SIGNALE, jamais mis en echec — c est exactement ce que fait le harnais de cette forge (`forge_tests/authentification.py`), ou le jeton vient d une authentification reelle et son audience est verifiee par le serveur qui l a emis",
+      "statut": "assume",
+      "note": "Limite DECLAREE par la regle a sa creation (TF-0593, 24/08) : la justification vit dans son NON_JUGE avec le fait qui l a motivee. Elle est ASSUMEE et non a outiller — distinguer statiquement une session composee d un jeton obtenu par un appel opaque demanderait une analyse de flot, et le prix de l approximation a ete choisi : mieux vaut SIGNALER le cas douteux que mettre en echec le harnais de cette forge elle-meme, ce qui ferait desactiver la regle (R-33 bis)."
+    },
+    {
+      "id": "revue-005",
+      "domaine": "revue",
+      "enonce": "revue de suite (piege 7) : les cles de session sont une liste FERMEE de fragments. Une cle de session dont le nom n en porte aucun passe, et c est assume : un controle qui attraperait toute cle de stockage attraperait les preferences d affichage, et se ferait desactiver",
+      "statut": "assume",
+      "note": "Limite DECLAREE par la regle a sa creation (TF-0593, 24/08) : la justification vit dans son NON_JUGE avec le fait qui l a motivee. Elle est ASSUMEE et non a outiller — distinguer statiquement une session composee d un jeton obtenu par un appel opaque demanderait une analyse de flot, et le prix de l approximation a ete choisi : mieux vaut SIGNALER le cas douteux que mettre en echec le harnais de cette forge elle-meme, ce qui ferait desactiver la regle (R-33 bis)."
+    },
+    {
+      "id": "revue-006",
+      "domaine": "revue",
+      "enonce": "revue de suite (piege 8) : le rapprochement `storageState` / `sessionStorage` est fait sur le CORPUS, pas sur le flot — une recette qui persiste son etat dans un projet et ecrit le sessionStorage dans un autre serait signalee a tort. Le cas ne s est jamais presente, et l ecart est declare plutot que couvert par une heuristique de plus",
+      "statut": "assume",
+      "note": "Limite DECLAREE par la regle a sa creation (TF-0593, 24/08) : la justification vit dans son NON_JUGE avec le fait qui l a motivee. Elle est ASSUMEE et non a outiller — distinguer statiquement une session composee d un jeton obtenu par un appel opaque demanderait une analyse de flot, et le prix de l approximation a ete choisi : mieux vaut SIGNALER le cas douteux que mettre en echec le harnais de cette forge elle-meme, ce qui ferait desactiver la regle (R-33 bis)."
+    },
+    {
+      "id": "risque-001",
+      "domaine": "risque",
+      "enonce": "risque : la criticité et le coût de détection tardive sont DÉCLARÉS par pan, pas mesurés — un projet dont les enjeux diffèrent doit redéclarer la table COTATION_PAN",
+      "statut": "assume",
+      "note": "choix de conception assumé et versionné dans COTATION_PAN ; à redéclarer par projet."
+    },
+    {
+      "id": "risque-002",
+      "domaine": "risque",
+      "enonce": "risque : la probabilité de défaillance est approchée par le nombre de commits touchant le fichier ; hors dépôt git, elle retombe sur une valeur neutre",
+      "statut": "assume",
+      "note": "proxy assume : sans historique il n existe pas de meilleur signal que la valeur neutre declaree."
+    },
+    {
+      "id": "securite-oracles-001",
+      "domaine": "securite-oracles",
+      "enonce": "securite : le perimetre scanne est le dossier du projet analyse ; ni l historique git, ni l infrastructure declaree ailleurs (conteneurs, pipelines, secrets d execution)",
+      "statut": "assume",
+      "note": "l historique git et l infrastructure relevent d autres oracles du registre, pas de celui-ci — perimetre assume, pas oubli."
+    },
+    {
+      "id": "securite-oracles-002",
+      "domaine": "securite-oracles",
+      "enonce": "securite : aucun test d intrusion ni d authentification/autorisation au niveau metier",
+      "statut": "assume",
+      "note": "hors du contrat d un oracle statique : un test d intrusion releve d une demarche offensive, pas d une mesure de couverture."
+    },
+    {
+      "id": "securite-oracles-004",
+      "domaine": "securite-oracles",
+      "enonce": "securite : le scan est BORNE aux sources du produit (dependances exclues — .venv, node_modules, dist, build…) ; un secret commis DANS une dependance versionnee ne serait pas vu ici, ce n est pas le meme risque ni le meme destinataire qu un secret du produit",
+      "statut": "assume",
+      "note": "instruite le 2026-08-14 (campagne dettes, mandat humain) : scan borné aux sources du produit — les dépendances relèvent d un autre outil, le périmètre est dit. Réévaluer si un run réel prouve que la limite coûte."
+    },
+    {
+      "id": "sql-001",
+      "domaine": "sql",
+      "enonce": "sql : le decoupage reconnait les litteraux `'...'` (echappement `''`) et les identifiants entre guillemets ; un `;` ou un `--` place dans un litteral DOLLAR-QUOTE (`$$...$$`, corps de fonction PL/pgSQL) ou dans une chaine a echappement backslash (`E'...\\'...'`) reste hors de portee — l instruction serait coupee au mauvais endroit",
+      "statut": "assume",
+      "note": "instruite le 2026-08-14 (campagne dettes, mandat humain) : lecture textuelle assumée, limites prouvées par RT-8 sur fixtures. Réévaluer si un run réel prouve que la limite coûte."
+    },
+    {
+      "id": "sql-002",
+      "domaine": "sql",
+      "enonce": "sql : ce module lit le TEXTE des migrations, il ne l analyse pas grammaticalement — une instruction syntaxiquement invalide est rendue telle quelle, sans jugement",
+      "statut": "assume",
+      "note": "instruite le 2026-08-14 (campagne dettes, mandat humain) : lecture textuelle assumée, limites prouvées par RT-8 sur fixtures. Réévaluer si un run réel prouve que la limite coûte."
+    },
+    {
+      "id": "surface-servie-001",
+      "domaine": "surface-servie",
+      "enonce": "routes appelées : seuls les appels LITTÉRAUX absolus sont lus — un client qui compose son URL à l exécution (concaténation, table de configuration) n est pas lisible statiquement",
+      "statut": "assume",
+      "note": "Limite DECLAREE par le module a sa creation (la justification vit dans son NON_JUGE, avec le fait qui l a motivee) — entree au registre par la DECOUVERTE de TF-0384 : neuf modules portaient des limites qu aucun domaine ne collectait, catalogue_i18n n etait que celui qu on avait vu."
+    },
+    {
+      "id": "surface-servie-002",
+      "domaine": "surface-servie",
+      "enonce": "routes servies : les préfixes de blueprints sont lus dans le MÊME fichier que leurs décorateurs ; un blueprint enregistré ailleurs sous un autre préfixe fait suspendre les appels dont le segment final existe (jamais accuser à la place de savoir)",
+      "statut": "assume",
+      "note": "Limite DECLAREE par le module a sa creation (la justification vit dans son NON_JUGE, avec le fait qui l a motivee) — entree au registre par la DECOUVERTE de TF-0384 : neuf modules portaient des limites qu aucun domaine ne collectait, catalogue_i18n n etait que celui qu on avait vu."
+    },
+    {
+      "id": "surface-servie-003",
+      "domaine": "surface-servie",
+      "enonce": "ressources : dans un HTML, seules les balises qui chargent un FICHIER sont lues (link, img, script, source, video, audio, track, embed, use) — un `<a href>` est une destination de NAVIGATION, jugée par la paire nav et par le pan i18n, jamais cherchée comme un fichier",
+      "statut": "assume",
+      "note": "Limite DECLAREE par le module a sa creation (la justification vit dans son NON_JUGE, avec le fait qui l a motivee) — entree au registre par la DECOUVERTE de TF-0384 : neuf modules portaient des limites qu aucun domaine ne collectait, catalogue_i18n n etait que celui qu on avait vu."
+    },
+    {
+      "id": "surface-servie-004",
+      "domaine": "surface-servie",
+      "enonce": "ressources : les URLs absolues, `data:` et `blob:` ne sont pas suivies — elles ne sont pas des fichiers du build ; leur disponibilité RÉELLE relève d un contrôle réseau, pas d ici",
+      "statut": "assume",
+      "note": "Limite DECLAREE par le module a sa creation (la justification vit dans son NON_JUGE, avec le fait qui l a motivee) — entree au registre par la DECOUVERTE de TF-0384 : neuf modules portaient des limites qu aucun domaine ne collectait, catalogue_i18n n etait que celui qu on avait vu."
+    },
+    {
+      "id": "surface-servie-005",
+      "domaine": "surface-servie",
+      "enonce": "ni l une ni l autre paire n interroge l instance : ce sont des confrontations STATIQUES. Un 404 réel dont la cause n est ni une route absente ni un fichier manquant (règle de réécriture, proxy, cache) leur échappe",
+      "statut": "assume",
+      "note": "Limite DECLAREE par le module a sa creation (la justification vit dans son NON_JUGE, avec le fait qui l a motivee) — entree au registre par la DECOUVERTE de TF-0384 : neuf modules portaient des limites qu aucun domaine ne collectait, catalogue_i18n n etait que celui qu on avait vu."
+    },
+    {
+      "id": "visuel-golden-001",
+      "domaine": "visuel-golden",
+      "enonce": "visuel : un diff dit qu il y a changement, pas si le changement est VOULU — la decision reste humaine (limite propre de l oracle, reprise telle quelle)",
+      "statut": "assume",
+      "note": "indecidable par construction : seul un humain sait si un changement de rendu est voulu. C est la raison d etre du feu vert sur les goldens."
+    },
+    {
+      "id": "visuel-golden-002",
+      "domaine": "visuel-golden",
+      "enonce": "visuel : le rendu compare est le DOM capture a l etat initial de chaque route, sans style externe charge depuis le serveur",
+      "statut": "assume",
+      "note": "le DOM capture est autoportant par choix : dependre du serveur au moment du jugement rendrait le verdict non reproductible."
+    },
+    {
+      "id": "i18n-build-servi-003",
+      "domaine": "i18n-build-servi",
+      "enonce": "i18n : la parite de NAVIGATION compare le NOMBRE d entrees du menu de la page d accueil de chaque locale au menu le PLUS RICHE ; deux menus de meme taille aux entrees differentes passent le controle, et un sous-menu qui ne s ouvre qu au clic (non rendu dans le HTML servi) n est pas compte",
+      "statut": "ok",
+      "preuve": "tests/test_tf_0295_levees.py — levee 1 : l appariement se fait par ENTREE (destination delocalisee), deux menus de meme taille aux entrees differentes echouent, et les entrees manquantes sont nommees"
+    },
+    {
+      "id": "i18n-build-servi-004",
+      "domaine": "i18n-build-servi",
+      "enonce": "i18n : la langue du contenu est jugee par HEURISTIQUE — densite de mots-outils francais sur le texte visible de la page. Le lexique est FRANCAIS et lui seul : le pan detecte du francais servi sous une locale non francaise, jamais l inverse ni un autre couple de langues",
+      "statut": "ok",
+      "preuve": "tests/test_tf_0295_levees.py — levee 3 : le lexique est une TABLE (`fr`, `en`) extensible par declaration de projet, et le couple symetrique (anglais servi sous `/fr`) est prouve rouge/vert"
+    },
+    {
+      "id": "interface-statique-009",
+      "domaine": "interface-statique",
+      "enonce": "interface/liens : la locale d un composant est deduite de son arborescence ou de son nom (`.../en/Header.tsx`, `HeaderEn.tsx`) ; un composant qui rend PLUSIEURS locales selon une prop n a pas de locale propre et ses liens ne sont pas juges sur ce critere",
+      "statut": "ok",
+      "preuve": "tests/test_tf_0295_levees.py — levee 4 : les locales opposables sont lues dans la configuration du framework (`locales: [...]`), et sans locale connaissable le jugement est SUSPENDU plutot que devine"
+    },
+    {
+      "id": "accessibilite-a11y-003",
+      "domaine": "accessibilite-a11y",
+      "enonce": "accessibilite : perimetre du seul oracle structurel — ni audit axe-core complet, ni contraste, ni navigation clavier (limites propres de l oracle, reprises telles quelles)",
+      "statut": "retiree",
+      "note": "limite propre de oracle-a11y, reprise telle quelle : audit axe-core complet, contraste et navigation clavier sortent de son contrat."
+    },
+    {
+      "id": "accessibilite-a11y-005",
+      "domaine": "accessibilite-a11y",
+      "enonce": "accessibilite : perimetre du seul oracle structurel. La NAVIGATION CLAVIER, les pieges de focus et l ARIA avance (roles, ordre de focus) ne sont couverts par AUCUN oracle du parc a ce jour — pour un site public francais, RGAA 4.1 est une obligation legale et cet ecart se declare au dossier MEP, il ne se tait pas (RF-6, 20/08/2026). Le CONTRASTE a, lui, une mesure existante mais NON CABLEE a cet audit : render_page.py V2 du socle factory-page-html (luminance WCAG sur styles rendus, deja jouee contre des ecrans produits le 11/08) — l executer separement en attendant son cablage. Et l audit RGAA complet reste un livrable HUMAIN : un tiers des criteres n est pas mecanisable, la machine prepare l audit, elle ne rend pas la declaration",
+      "statut": "retiree",
+      "note": "Limite DECLAREE, chantier decide ailleurs : RF-6 (lot Produit-09 20260820a) porte les trois temps — declarer (fait, 20/08), cabler render_page V2 puis pan axe-core + clavier (O3 de l etude RGAA 20260820a), design accessible a la source (O4). La lever ici sans le pan serait le mensonge inverse."
+    },
+    {
+      "id": "api-fastapi-002",
+      "domaine": "api-fastapi",
+      "enonce": "api : un code asserte dans une fonction de test est rattache a TOUS les appels de cette fonction ; l oracle ne relie pas l assertion a un appel precis",
+      "statut": "retiree"
+    },
+    {
+      "id": "api-fastapi-003",
+      "domaine": "api-fastapi",
+      "enonce": "api : codes produits par le framework sans declaration explicite dans responses=",
+      "statut": "retiree"
+    },
+    {
+      "id": "api-fastapi-004",
+      "domaine": "api-fastapi",
+      "enonce": "exécution : la couverture est mesurée au niveau LIGNE ; deux branches sur une même ligne ne sont pas distinguées",
+      "statut": "retiree"
+    },
+    {
+      "id": "api-fastapi-005",
+      "domaine": "api-fastapi",
+      "enonce": "exécution : une ligne atteinte n implique pas qu elle soit ASSERTÉE — c est le rôle du second contre-oracle (mutation)",
+      "statut": "retiree"
+    },
+    {
+      "id": "batch-python-003",
+      "domaine": "batch-python",
+      "enonce": "exécution : la couverture est mesurée au niveau LIGNE ; deux branches sur une même ligne ne sont pas distinguées",
+      "statut": "retiree"
+    },
+    {
+      "id": "batch-python-004",
+      "domaine": "batch-python",
+      "enonce": "exécution : une ligne atteinte n implique pas qu elle soit ASSERTÉE — c est le rôle du second contre-oracle (mutation)",
+      "statut": "retiree"
+    },
+    {
+      "id": "contraste-wcag-006",
+      "domaine": "contraste-wcag",
+      "enonce": "contraste : la mesure attend la fin des animations et transitions FINIES, 5 s au plus ; une animation SANS FIN (spinner, pulsation) ou en pause n est pas attendue — un texte qui la porte est mesure a la phase atteinte — et une page qui porte encore une animation finie apres 5 s est mesuree dans cet etat, ce que le rapport dit route par route",
+      "statut": "retiree"
+    },
+    {
+      "id": "data-sql-004",
+      "domaine": "data-sql",
+      "enonce": "data : une contrainte est réputée exercée si son nom ou sa colonne apparaît dans un test attendant un rejet ; l oracle ne vérifie pas que le rejet porte bien sur cette contrainte",
+      "statut": "retiree"
+    },
+    {
+      "id": "data-sql-005",
+      "domaine": "data-sql",
+      "enonce": "data : les clés étrangères ne sont PAS attribuables par exécution — SQLite ne nomme pas la contrainte dans « FOREIGN KEY constraint failed ». Elles restent sur le recoupement textuel, moins sûr, jusqu à confrontation à un moteur qui nomme ses contraintes",
+      "statut": "retiree"
+    },
+    {
+      "id": "data-sql-006",
+      "domaine": "data-sql",
+      "enonce": "data : contraintes créées hors migrations (ORM seul, triggers, index partiels)",
+      "statut": "retiree"
+    },
+    {
+      "id": "data-sql-007",
+      "domaine": "data-sql",
+      "enonce": "data : la présence d une table est déduite du texte des tests, pas de son usage réel",
+      "statut": "retiree"
+    },
+    {
+      "id": "data-sql-008",
+      "domaine": "data-sql",
+      "enonce": "data : triggers et index partiels ne sont pas inventoriés",
+      "statut": "retiree"
+    },
+    {
+      "id": "execution-004",
+      "domaine": "execution",
+      "enonce": "exécution : la couverture est mesurée au niveau LIGNE ; deux branches sur une même ligne ne sont pas distinguées",
+      "statut": "retiree"
+    },
+    {
+      "id": "fichiers-python-002",
+      "domaine": "fichiers-python",
+      "enonce": "exécution : la couverture est mesurée au niveau LIGNE ; deux branches sur une même ligne ne sont pas distinguées",
+      "statut": "retiree"
+    },
+    {
+      "id": "fichiers-python-003",
+      "domaine": "fichiers-python",
+      "enonce": "exécution : une ligne atteinte n implique pas qu elle soit ASSERTÉE — c est le rôle du second contre-oracle (mutation)",
+      "statut": "retiree"
+    },
+    {
+      "id": "front-react-003",
+      "domaine": "front-react",
+      "enonce": "front : un element mentionne par la suite est repute exerce ; l oracle ne verifie pas que l interaction a lieu ni qu elle assert quelque chose",
+      "statut": "retiree"
+    },
+    {
+      "id": "generateur-004",
+      "domaine": "generateur",
+      "enonce": "generateur : ne synthetise pas les preconditions (ressource existante, corps valide, en-tete de type de media) ni les parametres qui declenchent un code d erreur",
+      "statut": "retiree"
+    },
+    {
+      "id": "generateur-005",
+      "domaine": "generateur",
+      "enonce": "generateur : precision MESUREE a 0 % sur le banc (recette/precision_generateur.py) — les cas produits echouent aussi sur du code correct. NON UTILISABLE en l etat",
+      "statut": "retiree"
+    },
+    {
+      "id": "generateur-006",
+      "domaine": "generateur",
+      "enonce": "generateur : couvre le seul pan API ; les autres pans ne sont pas generes",
+      "statut": "retiree"
+    },
+    {
+      "id": "migrations-sql-003",
+      "domaine": "migrations-sql",
+      "enonce": "migrations : un sens est exercé si une ligne de test RÉELLEMENT EXÉCUTÉE le nomme ; l oracle ne vérifie pas que la migration a été appliquée dans ce sens, seulement que le code qui la nomme a tourné",
+      "statut": "retiree"
+    },
+    {
+      "id": "migrations-sql-004",
+      "domaine": "migrations-sql",
+      "enonce": "migrations : le rejeu est déduit d une seconde exécution des mêmes instructions — deux migrations aux instructions identiques seraient confondues",
+      "statut": "retiree"
+    },
+    {
+      "id": "migrations-sql-005",
+      "domaine": "migrations-sql",
+      "enonce": "migrations : un sens est réputé exercé si un test le nomme ; l oracle ne vérifie pas que la migration a réellement été appliquée dans ce sens",
+      "statut": "retiree"
+    },
+    {
+      "id": "migrations-sql-006",
+      "domaine": "migrations-sql",
+      "enonce": "migrations : un sens est exercé si les instructions de sa section ont été RÉELLEMENT envoyées au moteur ; l oracle ne vérifie pas que leur effet sur le schéma est correct",
+      "statut": "retiree"
+    },
+    {
+      "id": "mutation-python-005",
+      "domaine": "mutation-python",
+      "enonce": "mutation : périmètre limité au module de calcul ; le reste du back n est pas muté",
+      "statut": "retiree"
+    },
+    {
+      "id": "mutation-python-006",
+      "domaine": "mutation-python",
+      "enonce": "mutation : opérateurs arithmétiques, de comparaison, booléens, d appartenance et bornes numériques ; ni suppression d instruction, ni permutation d arguments, ni littéraux non numériques",
+      "statut": "retiree"
+    },
+    {
+      "id": "mutation-python-007",
+      "domaine": "mutation-python",
+      "enonce": "mutation : opérateurs arithmétiques et constantes numériques seulement",
+      "statut": "retiree"
+    },
+    {
+      "id": "mutation-python-008",
+      "domaine": "mutation-python",
+      "enonce": "mutation : opérateurs arithmétiques et de comparaison ; ni suppression d instruction, ni permutation d arguments, ni mutation de littéraux non numériques",
+      "statut": "retiree"
+    },
+    {
+      "id": "parcours-personas-001",
+      "domaine": "parcours-personas",
+      "enonce": "parcours-personas : statique — un persona est tenu pour exercé quand un fichier de test de bout en bout (navigateur piloté, navigation) le CITE par son nom de fichier ou dans son texte ; ce pan ne joue aucun parcours et ne prouve pas qu un parcours cité passe",
+      "statut": "retiree"
+    },
+    {
+      "id": "parcours-personas-002",
+      "domaine": "parcours-personas",
+      "enonce": "parcours-personas : le jeu de chaque parcours contre l instance servie, sous l identité du rôle, n est PAS réalisé ici — il relève du pan qualif multi-sessions (storage states par rôle) et de la suite du projet ; il reste ouvert",
+      "statut": "retiree"
+    },
+    {
+      "id": "plancher-rendu-001",
+      "domaine": "plancher-rendu",
+      "enonce": "plancher : mesure a l etat INITIAL de chaque route — les etats atteints apres interaction (menu ouvert, modale, filtre, message d erreur) ne sont pas mesures ici. La matrice d etats du socle (render_page.py --matrice-etats, TF-0493) les joue sur un FICHIER, elle n est pas cablee sur une instance servie",
+      "statut": "retiree"
+    },
+    {
+      "id": "qualif-navigateur-010",
+      "domaine": "qualif-navigateur",
+      "enonce": "qualif : meme effets observes, la PERTINENCE de la destination n est pas jugee — un lien « Ma commande » qui mene a la page d aide produit bien une navigation, donc un effet. La destination CONSTATEE est publiee avec l affordance pour qu un relecteur la voie ; aucune attente ne lui est opposee, faute d attente declaree",
+      "statut": "retiree"
+    },
+    {
+      "id": "securite-oracles-003",
+      "domaine": "securite-oracles",
+      "enonce": "securite : le perimetre scanne est le dossier applicatif ; ni l historique git, ni l infrastructure, ni la configuration de deploiement",
+      "statut": "retiree"
+    },
+    {
+      "id": "supabase-pgtap-001",
+      "domaine": "supabase-pgtap",
+      "enonce": "supabase : statique — une table est tenue pour exercée quand un fichier pgTAP de `supabase/tests/` la cite après avoir adopté un rôle de l API ; le test n est ni exécuté ni prouvé vert par ce pan (`supabase test db` le juge)",
+      "statut": "retiree"
+    },
+    {
+      "id": "accessibilite-a11y-006",
+      "domaine": "accessibilite-a11y",
+      "enonce": "accessibilite : perimetre du seul oracle structurel. Le CONTRASTE est mesure par le pan `contraste` (render_page.py V2, luminance WCAG sur styles rendus) et la NAVIGATION CLAVIER par le pan `clavier` (focus visible, pieges de focus, lien d evitement). Restent DECOUVERTS : l ARIA avance (roles, ordre de focus coherent avec l ordre de lecture) et les etats atteints apres interaction — pour un site public francais, RGAA 4.1 est une obligation legale et ces ecarts se declarent au dossier MEP, ils ne se taisent pas. Et l audit RGAA complet reste un livrable HUMAIN : un tiers des criteres n est pas mecanisable, la machine prepare l audit, elle ne rend pas la declaration",
+      "statut": "todo"
+    },
+    {
+      "id": "accessibilite-a11y-007",
+      "domaine": "accessibilite-a11y",
+      "enonce": "accessibilite : la capture attend la fin des animations et transitions FINIES, 5 s au plus ; une animation SANS FIN (spinner, pulsation) ou en pause n est pas attendue, et une page qui porte encore une animation finie apres 5 s est jugee dans cet etat — le rapport le dit route par route",
+      "statut": "todo"
+    },
+    {
+      "id": "adoption-003",
+      "domaine": "adoption",
+      "enonce": "adoption : un cas `non_testable` ou `ecarte` (R-40) est pris au mot — ce module exige que le motif soit NOMME (champs_requis, ou qui/quand/pourquoi) et jamais que la raison soit bonne ; le solde compte des etats declares, il ne juge pas un arbitrage humain",
+      "statut": "todo"
+    },
+    {
+      "id": "chaine-001",
+      "domaine": "chaine",
+      "enonce": "chaine : la CI HEBERGEE (GitHub Actions, Azure Pipelines) n'est pas interrogee — la collecte rejouee est celle de la commande pytest locale, sur l'hypothese qu'elle est identique a celle de l'hebergeur (angle mort partage avec TF-1017)",
+      "statut": "todo"
+    },
+    {
+      "id": "chaine-002",
+      "domaine": "chaine",
+      "enonce": "chaine : un test COLLECTE mais marque `pytest.mark.skip` sans motif date n'est pas vu ici — classe voisine, pas celle mesuree par RT-62 (le test avait disparu de la collecte)",
+      "statut": "todo"
+    },
+    {
+      "id": "chaine-003",
+      "domaine": "chaine",
+      "enonce": "chaine : la regle 2 (un correctif de securite cite les tests qu'il affecte) n'est pas mecanisee dans ce module — elle suppose un diff de commit, nature differente de l'etat du depot que ce module lit",
+      "statut": "todo"
+    },
+    {
+      "id": "chaine-004",
+      "domaine": "chaine",
+      "enonce": "chaine : sans `testpaths` declare au pyproject.toml audite, le perimetre suppose est le dossier `tests` — un projet qui range ses suites ailleurs SANS le declarer echappe au perimetre (meme angle mort que pytest lui-meme dans ce cas)",
+      "statut": "todo"
+    },
+    {
+      "id": "clavier-focus-001",
+      "domaine": "clavier-focus",
+      "enonce": "clavier : mesure a l etat INITIAL de chaque route — un piege de focus qui n apparait qu apres ouverture d une modale ou d un menu n est pas atteint",
+      "statut": "todo"
+    },
+    {
+      "id": "clavier-focus-002",
+      "domaine": "clavier-focus",
+      "enonce": "clavier : K1 juge qu une apparence CHANGE au focus, pas que le changement soit SUFFISAMMENT visible — le contraste de l anneau se juge en amont, au contrat de tokens (oracle-tokens T8 de forge-design) ; ici, un changement imperceptible passerait",
+      "statut": "todo"
+    },
+    {
+      "id": "clavier-focus-003",
+      "domaine": "clavier-focus",
+      "enonce": "clavier : l ORDRE de tabulation (coherence avec l ordre de lecture) n est pas juge — il demande de comprendre l intention de la page, ce qu aucune mesure ne fait",
+      "statut": "todo"
+    },
+    {
+      "id": "clavier-focus-004",
+      "domaine": "clavier-focus",
+      "enonce": "clavier : les raccourcis, la gestion du focus au changement de route et les regions ARIA live ne sont pas mesures",
+      "statut": "todo"
+    },
+    {
+      "id": "clavier-focus-005",
+      "domaine": "clavier-focus",
+      "enonce": "clavier : l audit RGAA complet reste un livrable HUMAIN — la machine prepare l audit, elle ne rend pas la declaration",
+      "statut": "todo"
+    },
+    {
+      "id": "contraste-wcag-001",
+      "domaine": "contraste-wcag",
+      "enonce": "contraste : mesure a l etat INITIAL de chaque route — les etats atteints apres interaction (menu ouvert, modale, message d erreur) ne sont pas mesures",
+      "statut": "todo"
+    },
+    {
+      "id": "contraste-wcag-002",
+      "domaine": "contraste-wcag",
+      "enonce": "contraste : un texte pose sur une IMAGE de fond n est pas mesurable par calcul — la mesure le declare `non mesure` au lieu de l approuver, et il reste a verifier a l oeil",
+      "statut": "todo"
+    },
+    {
+      "id": "contraste-wcag-003",
+      "domaine": "contraste-wcag",
+      "enonce": "contraste : le seuil applique est WCAG AA (4.5:1, ou 3:1 pour le texte large tel que le socle le qualifie). AAA (7:1) n est pas jugé ici",
+      "statut": "todo"
+    },
+    {
+      "id": "contraste-wcag-004",
+      "domaine": "contraste-wcag",
+      "enonce": "contraste : la NAVIGATION CLAVIER et les pieges de focus relevent du pan `clavier` ; l ARIA avance (roles, ordre de focus) n est couvert par aucun oracle du parc a ce jour",
+      "statut": "todo"
+    },
+    {
+      "id": "contraste-wcag-005",
+      "domaine": "contraste-wcag",
+      "enonce": "contraste : l audit RGAA complet reste un livrable HUMAIN — un tiers des criteres n est pas mecanisable, la machine prepare l audit, elle ne rend pas la declaration",
+      "statut": "todo"
+    },
+    {
+      "id": "contraste-wcag-007",
+      "domaine": "contraste-wcag",
+      "enonce": "contraste : la mesure attend la fin des animations et transitions FINIES, 5 s au plus ; une animation SANS FIN (spinner, pulsation) ou en pause n est pas attendue, elle est ANNULEE (TF-2698) : le verdict est celui de la page figee a son style de repos, et un texte qui n echoue que pendant la boucle est nomme au non-juge (« mesure en cours de transition »), jamais compte bloquant — une page qui porte encore une animation finie apres 5 s est mesuree dans cet etat, ce que le rapport dit route par route",
+      "statut": "todo"
+    },
+    {
+      "id": "couverture-001",
+      "domaine": "couverture",
+      "enonce": "couverture : la configuration est lue comme du TEXTE, sans evaluer le JavaScript. Un perimetre construit a l execution (variable, fonction, fusion de configurations) echappe aux trois regles — elles verront « pas de perimetre declare » la ou il y en a un",
+      "statut": "todo"
+    },
+    {
+      "id": "couverture-002",
+      "domaine": "couverture",
+      "enonce": "couverture : le NIVEAU ATTEINT n est pas connu en lisant une configuration, donc la regle « le plancher se cale SOUS le niveau atteint, pas dessus » ne peut pas etre mecanisee ici. Elle est ecrite dans le message de la regle du seuil par fichier, la ou quelqu un s apprete a choisir un chiffre — c est le seul endroit ou elle sert",
+      "statut": "todo"
+    },
+    {
+      "id": "couverture-003",
+      "domaine": "couverture",
+      "enonce": "couverture : la JUSTESSE d un perimetre declare. L oracle constate qu un `include` existe, jamais qu il vise le bon dossier — un perimetre declare et faux passe, et c est deja infiniment mieux qu un perimetre absent, qui derive a chaque fichier ajoute ou retire",
+      "statut": "todo"
+    },
+    {
+      "id": "couverture-004",
+      "domaine": "couverture",
+      "enonce": "couverture : les outils hors de la liste fermee CONFIGS ne sont pas juges. Un projet qui configure sa couverture ailleurs (script npm, arguments de ligne de commande, CI) n est pas vu — la configuration en ligne de commande est le trou connu de cette famille",
+      "statut": "todo"
+    },
+    {
+      "id": "dashboard-005",
+      "domaine": "dashboard",
+      "enonce": "dashboard : un constat DECLARE par le projet (RT-18) sort du compteur « Constats d echec » et reste integralement affiche, avec son motif type et sa contre-preuve — la page rend la declaration, elle ne la valide pas",
+      "statut": "todo"
+    },
+    {
+      "id": "dashboard-006",
+      "domaine": "dashboard",
+      "enonce": "dashboard : une figure n existe que si la donnee existe — une figure ABSENTE signale une donnee absente du rapport, jamais une donnee nulle ou un choix de mise en page",
+      "statut": "todo"
+    },
+    {
+      "id": "data-sql-009",
+      "domaine": "data-sql",
+      "enonce": "data : les contraintes Delta (CONSTRAINT … CHECK, NOT NULL) et les tests d un projet de transformation (dbt, SQL Delta) ne sont pas exercés ici — leur forme est jugée par oracle-transformer.mjs de forge-data sur manifest.json / run_results.json / catalog.json (composition TF-0861) ; ce pan ne relit pas ces artefacts",
+      "statut": "todo"
+    },
+    {
+      "id": "declarations-005",
+      "domaine": "declarations",
+      "enonce": "declarations : une declaration SANS `texte` rapprochee par la seule forme sans numero de ligne (fichier, balise, classe) vise le seul constat libre de cette forme ; si le constat conteste a disparu et qu un AUTRE de meme forme est apparu, c est lui qui est ecarte — le rapprochement est donc publie au rapport, jamais tu, et `texte` le rend exact",
+      "statut": "todo"
+    },
+    {
+      "id": "fabrique-donnees-001",
+      "domaine": "fabrique-donnees",
+      "enonce": "fabrique de donnees : seul PostgreSQL juge le jeu (base ephemere postgres:16-alpine montee par testcontainers) ; un projet servi par un autre moteur (SQLite, MySQL, SQL Server) recoit un jeu dont le chargement n est pas juge pour son moteur",
+      "statut": "todo"
+    },
+    {
+      "id": "fabrique-donnees-002",
+      "domaine": "fabrique-donnees",
+      "enonce": "fabrique de donnees : seules les migrations SQL `-- +migrate Up` sont lues ; un schema versionne par Alembic, ou par un ORM sans migrations SQL, n est pas lu et aucun jeu n est produit — la fabrique le dit au lieu d inventer un schema",
+      "statut": "todo"
+    },
+    {
+      "id": "fabrique-donnees-003",
+      "domaine": "fabrique-donnees",
+      "enonce": "fabrique de donnees : une verification CHECK hors des formes reconnues (IN, = ANY, comparaison a une borne, BETWEEN, longueur, IS NOT NULL, relation d ordre entre deux colonnes, OU d egalites) n est pas traduite en valeurs : elle est NOMMEE au rapport et seul le chargement reel la juge",
+      "statut": "todo"
+    },
+    {
+      "id": "fabrique-donnees-004",
+      "domaine": "fabrique-donnees",
+      "enonce": "fabrique de donnees : un declencheur, une regle, une politique RLS ou une contrainte d exclusion (EXCLUDE) n est pas modelise ; seul le chargement reel en juge l effet",
+      "statut": "todo"
+    },
+    {
+      "id": "fabrique-donnees-005",
+      "domaine": "fabrique-donnees",
+      "enonce": "fabrique de donnees : les lignes que les migrations inserent elles-memes ne sont pas lues ; une unicite qu elles occupent deja peut faire echouer le chargement, qui le nomme",
+      "statut": "todo"
+    },
+    {
+      "id": "fabrique-donnees-006",
+      "domaine": "fabrique-donnees",
+      "enonce": "fabrique de donnees : le jeu dit la FORME d une donnee valide (type, bornes, unicite, cles), pas la semantique metier d une colonne — un `telephone` recoit un libelle",
+      "statut": "todo"
+    },
+    {
+      "id": "fabrique-donnees-007",
+      "domaine": "fabrique-donnees",
+      "enonce": "fabrique de donnees : aucun script de retrait (teardown) n est produit pour une base durable ; seule la base ephemere du jugement est creee puis detruite",
+      "statut": "todo"
+    },
+    {
+      "id": "fabrique-donnees-008",
+      "domaine": "fabrique-donnees",
+      "enonce": "fabrique de donnees : un cycle de cles etrangeres sans colonne nullable n est pas resolu (ni UPDATE differe, ni contrainte DEFERRABLE exploitee) : les lignes qu il empeche manquent au volume, et le rapport le dit",
+      "statut": "todo"
+    },
+    {
+      "id": "fabrique-donnees-009",
+      "domaine": "fabrique-donnees",
+      "enonce": "fabrique de donnees : un index unique sur EXPRESSION (`lower(email)`) est approche par les colonnes qu il cite, comparees sans casse ; un index unique PARTIEL est tenu comme total",
+      "statut": "todo"
+    },
+    {
+      "id": "generateur-002",
+      "domaine": "generateur",
+      "enonce": "generateur : pans API et Data generes ; Front, Batch et Fichiers ne le sont pas — leurs cas exigent un scenario, pas une seule requete",
+      "statut": "todo"
+    },
+    {
+      "id": "generateur-data-002",
+      "domaine": "generateur-data",
+      "enonce": "generateur data (TF-0840) : la ligne valide est derivee des colonnes NOT NULL declarees dans le CREATE TABLE ; une valeur exigee par un declencheur, une contrainte d exclusion ou une verification multi-colonnes n est pas devinee, et le cas genere echouera a la SEMENCE — visible, jamais silencieux, puisque le rejet attendu est nomme",
+      "statut": "todo"
+    },
+    {
+      "id": "generateur-data-003",
+      "domaine": "generateur-data",
+      "enonce": "generateur data (TF-0840) : les lignes parentes ne sont semees que pour les cles etrangeres declarees en CONSTRAINT dans le corps de la table ; une cle etrangere posee par ALTER TABLE ou en REFERENCES de colonne n est pas vue, et sa ligne parente manquera",
+      "statut": "todo"
+    },
+    {
+      "id": "glossaire-001",
+      "domaine": "glossaire",
+      "enonce": "glossaire : la JUSTESSE d un fait declare n est pas jugee. Ce module confronte une chaine a un nombre DECLARE par le produit ; si la declaration est fausse, l ecart rendu est faux dans l autre sens. C est un point fixe assume, pas une verite mesuree",
+      "statut": "todo"
+    },
+    {
+      "id": "glossaire-002",
+      "domaine": "glossaire",
+      "enonce": "glossaire : un PLURIEL IRREGULIER n est pas vu. Le terme retenu est cherche suivi d au plus deux caracteres de mot — ce qui couvre -s, -es, -en, -i. Inventer une morphologie par locale serait affirmer ce que la donnee ne porte pas ; le manque est donc declare plutot que comble au jugé",
+      "statut": "todo"
+    },
+    {
+      "id": "glossaire-003",
+      "domaine": "glossaire",
+      "enonce": "glossaire : un nombre ECRIT EN LETTRES (« huit gites ») n est pas vu. Le lexique des nombres varie par langue et le deduire du glossaire n a pas de sens",
+      "statut": "todo"
+    },
+    {
+      "id": "glossaire-004",
+      "domaine": "glossaire",
+      "enonce": "glossaire : la comparaison ENTRE LOCALES ne remplace pas cette confrontation et c est mesure — le defaut fondateur disait « 8 » dans les SEPT langues, parfaitement coherent entre locales et integralement faux. Il faut un point fixe HORS du catalogue",
+      "statut": "todo"
+    },
+    {
+      "id": "glossaire-005",
+      "domaine": "glossaire",
+      "enonce": "glossaire : un terme employe UNIQUEMENT sous une forme flechie eloignee (pluriel irregulier, declinaison) compte ZERO emploi. Inventer une morphologie par langue serait affirmer ce que la donnee ne porte pas ; le manque est declare plutot que comble au juge",
+      "statut": "todo"
+    },
+    {
+      "id": "glossaire-006",
+      "domaine": "glossaire",
+      "enonce": "glossaire : le controle d emploi ne se declenche que si le retenu est a ZERO **et** qu un proscrit est employe. Un retenu a zero dans une locale qui ne parle pas du concept n est pas un defaut, et un proscrit employe a cote d un retenu employe peut etre une citation",
+      "statut": "todo"
+    },
+    {
+      "id": "glossaire-007",
+      "domaine": "glossaire",
+      "enonce": "glossaire : la coherence interne ne voit un fait que si le NOM PROPRE PRECEDE le nombre dans la meme phrase — « a 45 minutes de Granville » n est pas rapproche de « Granville : 40 minutes ». Elargir l ordre ferait rapprocher des sujets differents ; le manque est declare plutot que comble au juge",
+      "statut": "todo"
+    },
+    {
+      "id": "glossaire-008",
+      "domaine": "glossaire",
+      "enonce": "glossaire : seules les unites de DISTANCE et de DUREE sont confrontees. Un fait chiffre sans unite (« 23 personnes ») n est pas juge : sans unite, deux nombres attaches au meme nom propre peuvent parler de deux grandeurs differentes",
+      "statut": "todo"
+    },
+    {
+      "id": "glossaire-009",
+      "domaine": "glossaire",
+      "enonce": "glossaire : le controle d accord ne juge QUE le determinant colle au terme retenu. Le PARTICIPE APRES COPULE (« estan especialmente adaptados ») est ECARTE : la copule ne nomme pas son sujet, et le corpus a exhibe le contre-exemple — « A Irene e o Samuel sao verdadeiramente acolhedores e simpaticos », masculin JUSTE dans une chaine qui parle par ailleurs du logement. Un controle qui ne sait pas de QUI on parle accuserait cette phrase",
+      "statut": "todo"
+    },
+    {
+      "id": "glossaire-010",
+      "domaine": "glossaire",
+      "enonce": "glossaire : le controle d accord ne connait de determinants que pour es, pt, it et fr. Une locale hors de cette table n est pas jugee — l allemand et l anglais n entrent pas dans une opposition binaire de determinants, et les y forcer inventerait des fautes",
+      "statut": "todo"
+    },
+    {
+      "id": "i18n-build-servi-001",
+      "domaine": "i18n-build-servi",
+      "enonce": "i18n : le pan lit un BUILD SERVI (dossier de pages), jamais un site distant ni le code source — une locale declaree dans la configuration mais jamais construite est invisible ici, et c est voulu : ce qui n est pas servi n est pas ce que le visiteur recoit",
+      "statut": "todo"
+    },
+    {
+      "id": "i18n-build-servi-002",
+      "domaine": "i18n-build-servi",
+      "enonce": "i18n : la parite de ROUTES se mesure contre l UNION des routes de toutes les locales — une route servie dans une seule langue manque donc dans les autres. Sur un produit ou la traduction est en cours PAR CHOIX, l ecart mesure est reel mais il peut etre voulu : il se conteste alors par declaration, il ne se devine pas",
+      "statut": "todo"
+    },
+    {
+      "id": "i18n-build-servi-005",
+      "domaine": "i18n-build-servi",
+      "enonce": "i18n : une page de moins de 40 mots visibles n est pas jugee sur sa langue — sous ce volume, la densite de mots-outils n est plus un signal, c est du bruit",
+      "statut": "todo"
+    },
+    {
+      "id": "i18n-build-servi-006",
+      "domaine": "i18n-build-servi",
+      "enonce": "i18n : l attribut `lang` du document n est pas oppose au contenu — un `lang=\"en\"` pose sur du francais est precisement le defaut, le croire reviendrait a interroger le suspect",
+      "statut": "todo"
+    },
+    {
+      "id": "i18n-build-servi-007",
+      "domaine": "i18n-build-servi",
+      "enonce": "i18n : les pages conventionnelles de service (`404`, `500`, et tout segment commencant par `_`) sont hors comptage de parite : elles ne sont pas des routes du produit",
+      "statut": "todo"
+    },
+    {
+      "id": "i18n-build-servi-008",
+      "domaine": "i18n-build-servi",
+      "enonce": "i18n : la parite de NAVIGATION apparie les entrees du menu de la page d accueil de chaque locale a celles du menu le PLUS RICHE, par DESTINATION delocalisee — deux menus de meme taille aux entrees differentes echouent donc, et les entrees manquantes sont nommees. Un sous-menu qui ne s ouvre qu au clic (absent du HTML servi) n est toujours pas compte, et une entree sans destination lisible est appariee sur son libelle, donc jamais entre deux langues",
+      "statut": "todo"
+    },
+    {
+      "id": "i18n-build-servi-009",
+      "domaine": "i18n-build-servi",
+      "enonce": "i18n : la langue du contenu est jugee par HEURISTIQUE — densite des mots-outils d une langue sur le texte visible de la page. Le pan connait les lexiques `fr` et `en` et accepte ceux que le projet DECLARE (FORGE_TESTS_I18N_LEXIQUES) ; une langue servie sans lexique opposable n est pas jugee, et le rapport DIT contre quels lexiques il a mesure",
+      "statut": "todo"
+    },
+    {
+      "id": "i18n-build-servi-010",
+      "domaine": "i18n-build-servi",
+      "enonce": "i18n : seule une locale PREFIXEE est jugee sur sa langue — la locale par defaut n a pas de prefixe, donc aucune langue opposable, et la deviner reviendrait a interroger le suspect",
+      "statut": "todo"
+    },
+    {
+      "id": "instance-001",
+      "domaine": "instance",
+      "enonce": "instance/cycle-de-vie : la forge ne MONTE pas l instance aujourd hui — le montage reste délégué au projet, qui seul sait ce que « peuplée » veut dire chez lui. Elle ne démonte donc rien : elle publie ce qu elle laisse debout et nomme la commande de démontage que le projet a déclarée. Le jour où elle montera, la règle s appliquera dans son premier sens",
+      "statut": "todo"
+    },
+    {
+      "id": "instance-002",
+      "domaine": "instance",
+      "enonce": "instance/cycle-de-vie : ce qui est publié « debout » est ce que la CONFIGURATION déclare servi (URL, champs revendiqués par les pans), pas un balayage de ports ni un inventaire de conteneurs — sonder le poste dirait ce qui tourne, jamais ce qui appartient à cet audit, et accuserait l instance d un voisin",
+      "statut": "todo"
+    },
+    {
+      "id": "instance-003",
+      "domaine": "instance",
+      "enonce": "instance/cycle-de-vie (TF-0842) : `verifier_demontage` sonde LE port de L URL que cet audit a lui-même déclarée servie, jamais le poste. Il dit qu un port est TENU, pas QUI le tient : un socket ouvert ne nomme pas son propriétaire sans un droit et un outil que la forge n a pas. Un port repris entre-temps par un autre processus se lirait donc « encore tenu » — le doute va vers la vérification, jamais vers le silence",
+      "statut": "todo"
+    },
+    {
+      "id": "instance-004",
+      "domaine": "instance",
+      "enonce": "instance/cycle-de-vie (TF-0842) : la forge ne vérifie pas ce que la commande de MONTAGE transmet à l instance. Une instance remontée sans les secrets de session que l application attend démarre, prend le port, et rend 500 au premier appel — indiscernable d une instance saine tant qu on ne l interroge pas. C est au projet de faire porter à FORGE_TESTS_INSTANCE_MONTER l environnement complet de son instance",
+      "statut": "todo"
+    },
+    {
+      "id": "instance-005",
+      "domaine": "instance",
+      "enonce": "instance/provenance : le terme SERVI est le document de provenance DÉCLARÉ par le projet, jamais une introspection de l instance en service — interroger un conteneur supposerait un runtime, un droit et une topologie que la forge ne connaît pas, et ferait dépendre le verdict de l outil d inspection au lieu du produit",
+      "statut": "todo"
+    },
+    {
+      "id": "instance-006",
+      "domaine": "instance",
+      "enonce": "instance/provenance : le terme VERSIONNÉ est le WORKING TREE de la cible, comme pour `interface/ecart-servi` (TF-0288) — un produit hors git n a donc pas de commit opposable, seulement des fichiers ; la comparaison par empreintes de fichiers reste jouable et le dit",
+      "statut": "todo"
+    },
+    {
+      "id": "instance-007",
+      "domaine": "instance",
+      "enonce": "instance/provenance : la comparaison n est pas symétrique. Un fichier PRÉSENT dans l empreinte scellée et modifié depuis est un écart ; un fichier neuf dans l arbre de travail, que l empreinte ne connaît pas, n en est PAS un — il peut n avoir jamais eu à être déployé. Seul ce que le SERVI prétend porter est confronté",
+      "statut": "todo"
+    },
+    {
+      "id": "interface-statique-006",
+      "domaine": "interface-statique",
+      "enonce": "interface/liens : une destination EXPRIMEE (`href={chemin}`, template avec `${...}`, constante importee) n est pas resolue — elle est comptee et declaree NON JUGEE, jamais supposee bonne ni mauvaise",
+      "statut": "todo"
+    },
+    {
+      "id": "interface-statique-007",
+      "domaine": "interface-statique",
+      "enonce": "interface/liens : un lien RELATIF (sans `/` initial) n est pas juge — sa resolution depend de l URL de rendu, que l analyse statique ne connait pas",
+      "statut": "todo"
+    },
+    {
+      "id": "interface-statique-008",
+      "domaine": "interface-statique",
+      "enonce": "interface/liens : l existence d une destination se juge sur l arborescence ENUMEREE (routes Next `app/`+`pages/`, tables react-router et TanStack, gabarits et fichiers `public/`) ; une route posee a l execution ou par un proxy est invisible ici, et si aucune route n est enumerable le controle d existence est DESACTIVE plutot que devine",
+      "statut": "todo"
+    },
+    {
+      "id": "interface-statique-010",
+      "domaine": "interface-statique",
+      "enonce": "interface/liens : « logo » et « bascule de langue » sont reconnus par HEURISTIQUE — mention de `logo` dans le contenu du lien, libelle egal a un nom de langue ou attribut `hrefLang`. Un logo sans le mot `logo` ni `hrefLang` echappe au controle, et le lien ainsi reconnu se conteste comme tout constat (`declarations`)",
+      "statut": "todo"
+    },
+    {
+      "id": "interface-statique-011",
+      "domaine": "interface-statique",
+      "enonce": "interface/liens : le libelle d un lien est lu jusqu a la premiere fermeture de meme balise ; un lien qui en imbrique un autre de meme nom verrait son libelle tronque",
+      "statut": "todo"
+    },
+    {
+      "id": "interface-statique-012",
+      "domaine": "interface-statique",
+      "enonce": "interface/liens : la locale d un composant est deduite de son arborescence ou de son nom (`.../en/Header.tsx`, `HeaderEn.tsx`), et les locales OPPOSABLES sont lues dans l arborescence litterale ET dans la configuration du framework (`locales: [...]` de Next, nuxt, next-intl — TF-0295) ; un composant qui rend PLUSIEURS locales selon une prop n a pas de locale propre et ses liens ne sont pas juges sur ce critere. Quand le produit route ses locales par un segment DYNAMIQUE sans les declarer, aucune racine de locale n est connaissable : logo, bascule de langue et coherence de locale sont alors NON JUGES, et le rapport le dit — les deviner accusait un logo correct",
+      "statut": "todo"
+    },
+    {
+      "id": "interface-statique-013",
+      "domaine": "interface-statique",
+      "enonce": "interface/liens : les grammaires de destination sont DECLAREES par dialecte — React (`href`, `to`, expression `{...}`), Vue (`to`, `:to`, `v-bind:href`, la forme liee etant toujours EXPRIMEE) et Svelte (`href`, interpolation dans la chaine). Un dialecte absent de la table (Angular, Astro, Solid) n est pas lu, et un attribut de destination pose par une bibliotheque de routage inconnue non plus",
+      "statut": "todo"
+    },
+    {
+      "id": "interface-statique-014",
+      "domaine": "interface-statique",
+      "enonce": "interface/ecart-servi : le controle compare les entrees de NAVIGATION — les liens vivant dans un `<nav>` LITTERAL, des deux cotes (composant source et page servie). Un menu rendu par un composant `<Nav>`, marque `role=\"navigation\"` ou construit a l execution echappe aux deux lecteurs : c est voulu, les deux cotes doivent voir la meme chose sous peine de mesurer l ecart des lecteurs et non celui du produit",
+      "statut": "todo"
+    },
+    {
+      "id": "interface-statique-015",
+      "domaine": "interface-statique",
+      "enonce": "interface/ecart-servi : la comparaison n est pas symetrique — une entree SERVIE qu aucune source ne promet n est PAS jugee. Elle peut venir d un autre composant, d un gabarit rendu cote serveur ou d une forme de menu non reconnue : l accuser serait accuser la limite du lecteur. Seul le manque de ce que la source PROMET est un constat",
+      "statut": "todo"
+    },
+    {
+      "id": "interface-statique-016",
+      "domaine": "interface-statique",
+      "enonce": "interface/ecart-servi : le terme « versionne » est le WORKING TREE, pas une reference git — un produit hors git n a donc pas de version opposable, seulement des fichiers. Le contrôle reste jouable et le dit ; poser git est le prealable, pas ce controle",
+      "statut": "todo"
+    },
+    {
+      "id": "interface-statique-017",
+      "domaine": "interface-statique",
+      "enonce": "interface/ecart-servi : la confrontation porte sur la page d ACCUEIL de chaque locale servie. Un menu qui differerait sur une page profonde seulement n est pas vu — c est le cas fondateur (INS-0001) qui fixe ce perimetre, ou les 36 pages EN partageaient le meme composant",
+      "statut": "todo"
+    },
+    {
+      "id": "interface-statique-018",
+      "domaine": "interface-statique",
+      "enonce": "interface/ecart-servi : une destination EXPRIMEE d un composant n entre pas dans les entrees promises — comparer ce qu on n a pas resolu accuserait un deploiement correct",
+      "statut": "todo"
+    },
+    {
+      "id": "interface-statique-019",
+      "domaine": "interface-statique",
+      "enonce": "interface/ecart-servi : les deux termes delocalisent leurs cles, le servi avec les locales qu il PREFIXE et la source avec celles qu on lui donne. Les locales du servi sont donc rendues a la lecture de la source (alignement). Reste indeterminable une entree source `/xx/…` dont `xx` est une locale CONNUE que ni l arborescence source ni le build servi ne nomme : son espace de cles n est pas etablissable, le jugement y est SUSPENDU et l entree NOMMEE au motif — un deploiement correct accuse coute plus cher qu une entree non jugee",
+      "statut": "todo"
+    },
+    {
+      "id": "jeux-de-donnees-004",
+      "domaine": "jeux-de-donnees",
+      "enonce": "jeux de donnees (TF-0841) : un nom qui porte a la fois un segment authentifiant et un segment de LOCALISATION (PATH, ROUTE, URL, ENDPOINT...) sort du corpus quand sa valeur ressemble a un emplacement (« / », « http:// », « https:// ») — une adresse que le produit publie lui-meme n ouvre rien. La reconnaissance de l emplacement se fait sur la FORME de la valeur : une route ecrite sans barre oblique de tete reste classee comme un identifiant",
+      "statut": "todo"
+    },
+    {
+      "id": "orphelins-002",
+      "domaine": "orphelins",
+      "enonce": "orphelins : les six accusations mesurees sont le MEME fait dans six locales — « grande piece de vie avec espace repas (12 personnes) ». Ce n est pas un nombre orphelin, c est un DENOMBRABLE HOMONYME : 12 places a table, pas 12 couchages. Le discriminant n est donc ni le nombre ni le nom commun, c est le SUJET que le nom qualifie — et la declaration ne le porte pas. C est ce qui manque pour rendre le controle bloquant",
+      "statut": "todo",
+      "note": "instruite le 2026-09-02 (TF-0665) : c est le SEUL vrai reste de l item. Rendre le controle bloquant demande que la declaration porte la PORTEE du denombrable (quelles cles du catalogue parlent d hebergement), sinon un homonyme — 12 places a table — reste indiscernable d une capacite de couchage."
+    },
+    {
+      "id": "parcours-personas-003",
+      "domaine": "parcours-personas",
+      "enonce": "parcours-personas : une citation n est pas un parcours DÉDIÉ — un persona au nom courant (« admin ») cité dans un parcours écrit pour un autre est tenu pour exercé ; la lecture du fichier désigné reste humaine",
+      "statut": "todo"
+    },
+    {
+      "id": "parcours-personas-004",
+      "domaine": "parcours-personas",
+      "enonce": "parcours-personas : seuls les pilotes Playwright, Cypress, Selenium et Puppeteer sont reconnus ; un parcours écrit avec un autre outil n est pas vu",
+      "statut": "todo"
+    },
+    {
+      "id": "parcours-personas-005",
+      "domaine": "parcours-personas",
+      "enonce": "parcours-personas : les personas ne sont lus que dans EXIGENCES.json (clés `personas` et `roles`, convention de cette forge : le schéma du référentiel ne les définit pas), la matrice des droits et les comptes par rôle ; un persona seulement décrit en prose n est pas vu",
+      "statut": "todo"
+    },
+    {
+      "id": "parcours-personas-006",
+      "domaine": "parcours-personas",
+      "enonce": "parcours-personas : quand le jeu a lieu (instance et compte par rôle fournis), il rejoue en GET les routes que le parcours NAVIGUE (littéraux de `goto`, `visit`…), sous les cookies et le jeton du storage state du rôle ; il ne joue ni clic ni formulaire ni JavaScript. Une application à page unique qui répond 200 sur son enveloppe et renvoie vers la mire côté client n est pas vue ici : c est le pan qualif multi-sessions qui parcourt l application rendue",
+      "statut": "todo"
+    },
+    {
+      "id": "parcours-personas-007",
+      "domaine": "parcours-personas",
+      "enonce": "parcours-personas : statique — un persona est tenu pour exercé (`persona:<clé>`) quand un fichier de test de bout en bout (navigateur piloté, navigation) le CITE par son nom de fichier ou dans son texte ; la citation seule ne prouve pas qu un parcours cité passe, le jeu contre l instance est un élément à part (`joue:<clé>`), présent quand il a lieu",
+      "statut": "todo"
+    },
+    {
+      "id": "parcours-personas-008",
+      "domaine": "parcours-personas",
+      "enonce": "parcours-personas : un parcours croisé est un parcours qui CITE deux personas ; la citation ne prouve pas qu un profil agit pendant que l autre observe (la coexistence de deux identités dans un test est contrôlée par le pan qualif, TF-0342), et une suite dont chaque test peut être sauté est écartée sur lecture du texte, pas sur le compte des tests réellement sautés à l exécution (la forge ne lance pas la suite du produit)",
+      "statut": "todo"
+    },
+    {
+      "id": "parcours-personas-009",
+      "domaine": "parcours-personas",
+      "enonce": "parcours-personas : un appel mutant dont l adresse se construit à l exécution dans le test du produit (`${id}`, concaténation) n est pas rejouable depuis le source — l adresse n existe qu après la réponse d une étape ; un enchaînement ne se rejoue que DÉCLARÉ (clé `enchainements` d EXIGENCES.json), et ce que la déclaration omet n est pas rejoué ; les atteindre sans déclaration exigerait d exécuter la suite du produit sous trace, ce que ce pan ne fait pas",
+      "statut": "todo"
+    },
+    {
+      "id": "plancher-rendu-002",
+      "domaine": "plancher-rendu",
+      "enonce": "plancher : V5 croisements de fleches et V6 images deformees restent une inspection HUMAINE sur captures — ce pan ne produit pas d image, il lit des mesures du DOM",
+      "statut": "todo"
+    },
+    {
+      "id": "plancher-rendu-003",
+      "domaine": "plancher-rendu",
+      "enonce": "plancher : la largeur de fenetre est celle du parcours servi (une seule) — les breakpoints se jouent au pan `front` et par oracle-mobile, pas ici",
+      "statut": "todo"
+    },
+    {
+      "id": "plancher-rendu-004",
+      "domaine": "plancher-rendu",
+      "enonce": "plancher : ce pan juge un PLANCHER, jamais une intention graphique. « Ce n est pas desirable » n est decidable par aucun script (doctrine du socle de marque)",
+      "statut": "todo"
+    },
+    {
+      "id": "plancher-rendu-005",
+      "domaine": "plancher-rendu",
+      "enonce": "plancher : mesure a l etat INITIAL de chaque route — les etats atteints apres interaction (menu ouvert, modale, filtre, message d erreur) ne sont pas mesures ici. La matrice d etats du socle (render_page.py --matrice-etats, TF-0493) n est pas cablee sur ce pan. Une seule porte est ouverte, et sur demande : les FILTRES CROISES (jouer_paires, TF-1093) se jouent sur l instance SERVIE quand FORGE_TESTS_PLANCHER_CROISEMENTS=1 — option absente par defaut, etat declare a chaque execution, couverture publiee en « N paires jouees sur M possibles »",
+      "statut": "todo"
+    },
+    {
+      "id": "prompts-statique-008",
+      "domaine": "prompts-statique",
+      "enonce": "prompts : l appel de fournisseur dans un test (TF-2110) est juge sur la PRESENCE d un double dans le fichier ou dans une configuration voisine (`conftest.py` du dossier ou d un parent, `vitest.setup.*`, `jest.setup.*`, `setupTests.*`), jamais sur son EFFICACITE : un double pose mais qui ne couvre pas l appel, ou un fichier d aide non nomme comme un test (`tests/helpers.py`), n est pas vu. Seuls OpenAI, Azure OpenAI et Gemini sont reconnus ; une adresse citee en assertion sans double reste un constat",
+      "statut": "todo"
+    },
+    {
+      "id": "qualif-navigateur-002",
+      "domaine": "qualif-navigateur",
+      "enonce": "qualif : les routes sont decouvertes par exploration des liens depuis la racine ; une route atteignable seulement apres une action (formulaire poste, menu ouvert au clic) n est pas visitee — la declarer en amorce avec FORGE_TESTS_QUALIF_ROUTES",
+      "statut": "todo"
+    },
+    {
+      "id": "qualif-navigateur-005",
+      "domaine": "qualif-navigateur",
+      "enonce": "qualif : le controle des URL auto-referentes ne connait que quatre formes — `canonical`, `og:url`, le `url`/`@id` du JSON-LD et les `loc` de sitemap — lues sur les seules routes PARCOURUES et dans les 20 000 premiers caracteres de chaque page ; une page plus longue, une route non atteinte ou une cinquieme facon de se designer echappent au controle. Les URLs RELATIVES ne portent aucune origine : elles ne sont pas jugees, et c est la forme saine",
+      "statut": "todo"
+    },
+    {
+      "id": "qualif-navigateur-006",
+      "domaine": "qualif-navigateur",
+      "enonce": "qualif : l ouverture d une session par la mire se CONSTATE — un cookie de session pose pendant la soumission, ou la mire qui rend la main (sortie de sa route, sans champ de mot de passe rendu). Un produit qui garde son jeton en MEMOIRE, sans cookie ni changement de route, reste indiscernable d un echec : la session est alors declaree NON OUVERTE plutot que supposee ouverte — un audit qui se croit authentifie est plus dangereux qu un audit anonyme",
+      "statut": "todo"
+    },
+    {
+      "id": "qualif-navigateur-007",
+      "domaine": "qualif-navigateur",
+      "enonce": "qualif : l etiquette de role d une session declaree est DECLARATIVE — la forge ne verifie PAS qu une session dite « admin » EST admin, elle constate ce que cette session VOIT ; une etiquette fausse produit une couverture faussement nommee, et c est l operateur qui repond de l etiquette",
+      "statut": "todo"
+    },
+    {
+      "id": "qualif-navigateur-008",
+      "domaine": "qualif-navigateur",
+      "enonce": "qualif : les surfaces INVISIBLES a l identite exercee ne sont ni inventoriees ni comptees — une route qu aucun lien ne rend pour ce role, et qu aucune amorce ne declare, n apparait nulle part au rapport : son absence ne se voit pas. Seules les routes REFUSEES (401, 403, redirection d autorisation, atterrissage de refus reconnu) sont nommees, parce qu elles ont ete atteintes",
+      "statut": "todo"
+    },
+    {
+      "id": "qualif-navigateur-009",
+      "domaine": "qualif-navigateur",
+      "enonce": "qualif : un refus rendu par une page MAISON n est reconnu que si sa route est DECLAREE (FORGE_TESTS_QUALIF_REFUS) ou si un de ses segments nomme l erreur d autorisation (403, acces-refuse, forbidden…). Un produit qui refuse en servant `/oups` ou `/erreur` sans plus de precision garde ce refus COMPTE COMME PARCOURU : le non-jugement est prefere au faux refus, qui sortirait du ratio une route peut-etre cassee. Declarer la route leve la limite",
+      "statut": "todo"
+    },
+    {
+      "id": "qualif-navigateur-011",
+      "domaine": "qualif-navigateur",
+      "enonce": "qualif : la PERTINENCE de la destination d un effet observe n est jugee QUE si une attente est DECLAREE pour l affordance (FORGE_TESTS_QUALIF_DESTINATIONS, TF-1218) — sans elle, un lien « Ma commande » qui mene a la page d aide produit bien une navigation, donc un effet, et la destination CONSTATEE reste publiee avec l affordance pour qu un relecteur la voie, sans qu aucune attente ne lui soit opposee",
+      "statut": "todo"
+    },
+    {
+      "id": "qualif-navigateur-012",
+      "domaine": "qualif-navigateur",
+      "enonce": "qualif : « etat survit a une navigation » n est joue QUE si les quatre champs de CHAMPS_ETAT sont declares (route, geste de remplissage, marqueur, route de destination) — sans eux, aucun etat client n est verifie, et ce silence n est pas un constat",
+      "statut": "todo"
+    },
+    {
+      "id": "qualif-navigateur-013",
+      "domaine": "qualif-navigateur",
+      "enonce": "qualif : « identifiants affiches » ne lit que les 20 000 premiers caracteres de chaque page (meme bornage que le reste du pan) et seulement les routes PARCOURUES — une page plus longue ou non atteinte echappe a ce controle",
+      "statut": "todo"
+    },
+    {
+      "id": "reglages-plateforme-001",
+      "domaine": "reglages-plateforme",
+      "enonce": "reglages-plateforme : l'état lu est celui que la commande `cmd_lire` du registre rend AU MOMENT de l'audit, avec les droits du jeton fourni ; un jeton qui ne voit pas le réglage rend une lecture refusée, nommée, jamais un succès",
+      "statut": "todo"
+    },
+    {
+      "id": "reglages-plateforme-002",
+      "domaine": "reglages-plateforme",
+      "enonce": "reglages-plateforme : la comparaison à l'attendu est mécanique pour une valeur simple (`true`, `on`, `enabled`, `0`) et pour « contient a, b et c » ; toute autre forme d'attendu (plages déclarées, seuils) est lue mais NON COMPARÉE, nommée au non-jugé avec la valeur lue",
+      "statut": "todo"
+    },
+    {
+      "id": "reglages-plateforme-003",
+      "domaine": "reglages-plateforme",
+      "enonce": "reglages-plateforme : le registre est une référence datée, sourcée à la date de sa lecture (`source_lue_le`) ; un réglage dont l'éditeur a changé depuis se lit au registre à jour",
+      "statut": "todo"
+    },
+    {
+      "id": "revue-007",
+      "domaine": "revue",
+      "enonce": "revue de suite (piege 9, saut conditionnel) : la LICEITE d un saut. L oracle distingue une forme CONDITIONNELLE d une forme inconditionnelle motivee ; il ne peut pas savoir si le prealable d un saut conditionnel est en realite garanti par le harnais — auquel cas le saut ne se declenchera jamais et le constat est excedentaire. Le declarer coute une ligne de reponse ; le taire coute des mois de tests ignores en silence",
+      "statut": "todo"
+    },
+    {
+      "id": "revue-008",
+      "domaine": "revue",
+      "enonce": "revue de suite (piege 9) : les sauts construits a l EXECUTION (une variable qui porte la condition, un decorateur compose) echappent a la lecture ligne a ligne. C est la limite commune a tout ce module, et elle vaut ici comme ailleurs",
+      "statut": "todo"
+    },
+    {
+      "id": "revue-009",
+      "domaine": "revue",
+      "enonce": "revue de suite (pieges 10 et 11, TF-2216) : la non-vacuite d une boucle est acquittee par TOUTE assertion de non-vacuite du meme test, pas par celle qui porte sur CETTE collection — relier l assertion a la collection demande un flot que ce module n a pas ; une boucle dont le corps est une expression fleche sans accolade, et les suites Python, ne sont pas lues",
+      "statut": "todo"
+    },
+    {
+      "id": "revue-010",
+      "domaine": "revue",
+      "enonce": "revue de suite (piege 12, TF-2270) : la revue releve l ABSENCE d une assertion de valeur (contenu, compte, egalite) apres l attente d un etat terminal ; elle ne peut pas juger que la VERITE DE REFERENCE est la bonne ni qu une CONTRE-EPREUVE existe — la regle les exige, la lecture reste humaine. Une assertion portee par une fonction d aide, un message qui contient lui-meme le mot d etat, ou un test Python echappent a la lecture textuelle",
+      "statut": "todo"
+    },
+    {
+      "id": "schema-cible-001",
+      "domaine": "schema-cible",
+      "enonce": "schema cible : le relevé compare les TABLES, les COLONNES, leur nullabilité, leur identité ; un type, un défaut serveur, un déclencheur ou une contrainte absents du relevé ne sont pas comparés, et un relevé extrait d'une autre version de la cible fait comparer autre chose",
+      "statut": "todo"
+    },
+    {
+      "id": "schema-sql-001",
+      "domaine": "schema-sql",
+      "enonce": "schema sql : la lecture suit le decoupage de `forge_tests.sql` — un corps dollar-quote ($$...$$) qui contient un `;` est coupe au mauvais endroit, et un litteral dont les espaces sont multiples est normalise par le decoupage",
+      "statut": "todo"
+    },
+    {
+      "id": "schema-sql-002",
+      "domaine": "schema-sql",
+      "enonce": "schema sql : seuls CREATE / ALTER / DROP TABLE, CREATE / DROP INDEX, CREATE / ALTER / DROP TYPE ... AS ENUM et CREATE DOMAIN sont modelises ; les autres instructions (fonctions, vues, declencheurs, sequences, donnees inserees par la migration) sont COMPTEES par nature, pas lues",
+      "statut": "todo"
+    },
+    {
+      "id": "schema-sql-003",
+      "domaine": "schema-sql",
+      "enonce": "schema sql : le nom implicite d une contrainte non nommee est reconstitue a la maniere de PostgreSQL (`<table>_<colonne>_key`, `_fkey`, `_check`, `_pkey`) sans sa troncature a 63 octets ni ses suffixes de dedoublonnage — un DROP CONSTRAINT qui vise un autre nom n est pas applique, et le dit",
+      "statut": "todo"
+    },
+    {
+      "id": "schema-sql-004",
+      "domaine": "schema-sql",
+      "enonce": "schema sql : deux tables de meme nom dans deux schemas differents ne sont pas distinguees ; les colonnes heritees (INHERITS) et les partitions (PARTITION OF) ne sont pas lues",
+      "statut": "todo"
+    },
+    {
+      "id": "schema-sql-005",
+      "domaine": "schema-sql",
+      "enonce": "schema sql : une contrainte posee par ALTER DOMAIN, ou une verification de domaine ajoutee apres la creation d une colonne qui l utilise, n est pas reportee sur la colonne",
+      "statut": "todo"
+    },
+    {
+      "id": "scripts-node-001",
+      "domaine": "scripts-node",
+      "enonce": "scripts : la suite `node:test` du produit est jouée EN PLACE, depuis sa racine (comme la suite backend) : un test qui écrit dans l'arbre le fait sous le nom du produit, la lecture seule (G-1) ne peut pas être garantie sur ce chemin",
+      "statut": "todo"
+    },
+    {
+      "id": "scripts-node-002",
+      "domaine": "scripts-node",
+      "enonce": "scripts : seuls les scripts `.mjs` du dossier `scripts/` sont inventoriés ; un module `.cjs`, `.js` ou `.ts`, ou un script rangé ailleurs, n'entre pas dans l'inventaire",
+      "statut": "todo"
+    },
+    {
+      "id": "scripts-node-003",
+      "domaine": "scripts-node",
+      "enonce": "scripts : « exercé » veut dire chargé par au moins une ligne de test (rapporteur lcov de `node --test --experimental-test-coverage`) ; une ligne atteinte n'implique pas qu'elle soit ASSERTÉE, et la mutation ne rejoue pas ces scripts",
+      "statut": "todo"
+    },
+    {
+      "id": "securite-oracles-005",
+      "domaine": "securite-oracles",
+      "enonce": "securite : le code VENDORISE (dossier de convention `vendor`) n est PAS scanne — dependance tierce EPINGLEE, copiee dans le depot pour la figer, jamais servie ni modifiee par le produit. Meme perimetre que `.venv` et que la gate `vendor/` de forge-development : un secret commis DANS un vendored se corrige en changeant l epingle, pas la ligne. Un projet qui nommerait `vendor` un dossier de SON produit le verrait donc ignore ici",
+      "statut": "todo"
+    },
+    {
+      "id": "securite-oracles-006",
+      "domaine": "securite-oracles",
+      "enonce": "securite : quand le projet audite EST forge-tests (signature du depot : le paquet `forge_tests`, sa recette et son registre de dette), ses bancs d essai `fixtures\\` et ses chaines de montage de test `tests\\` ne sont PAS scannes — un banc rouge PORTE le defaut qu il existe pour faire detecter, et une chaine de montage PLANTE le secret dont elle prouve la detection : les accuser mesure l auditeur, pas l audite (TF-0291). Le code de la forge (`forge_tests\\`, `recette\\`) reste scanne, et tout autre projet garde ses `fixtures\\` et ses `tests\\` sous controle",
+      "statut": "todo"
+    },
+    {
+      "id": "securite-oracles-007",
+      "domaine": "securite-oracles",
+      "enonce": "securite/identite-assignee : ne voit que le fournisseur de jetons `DefaultAzureCredential` (bibliotheque `azure.identity`) et une identite assignee DECLAREE par la presence du nom `AZURE_CLIENT_ID` dans le MEME fichier lu — un autre fournisseur (AWS STS, GCP Workload Identity, Okta), une identite assignee declaree uniquement dans l infrastructure (Bicep, Terraform, portail Azure, non lus ici) ou transmise par un fichier different echappe a ce controle",
+      "statut": "todo"
+    },
+    {
+      "id": "securite-oracles-008",
+      "domaine": "securite-oracles",
+      "enonce": "securite/secrets : une affectation VIDE (`CLE=`) dont la ligne suivante ne porte aucune valeur (autre affectation vide, commentaire, fin de fichier) n est pas jugee un secret : le constat est ECARTE et dit au rapport, et le gabarit `.env.forge-tests.exemple` depose par la forge sort du scan tant qu aucune valeur n y est renseignee. Un secret ecrit SOUS une cle vide, sur la ligne suivante, reste signale ; un gabarit renseigne reste scanne",
+      "statut": "todo"
+    },
+    {
+      "id": "supabase-pgtap-002",
+      "domaine": "supabase-pgtap",
+      "enonce": "supabase : les migrations se lisent par motif ; une table créée par du SQL dynamique, par `create table … as`, renommée par `alter table … rename`, ou décrite dans un schéma déclaratif `supabase/schemas/` n est pas inventoriée",
+      "statut": "todo"
+    },
+    {
+      "id": "supabase-pgtap-003",
+      "domaine": "supabase-pgtap",
+      "enonce": "supabase : les commentaires SQL sont retirés avant lecture ; une chaîne qui contient `--` est tronquée au même endroit",
+      "statut": "todo"
+    },
+    {
+      "id": "supabase-pgtap-004",
+      "domaine": "supabase-pgtap",
+      "enonce": "supabase : la RLS active ne dit rien de la JUSTESSE des politiques ; seul un test sous rôle en juge, et ce pan ne fait que constater qu il existe",
+      "statut": "todo"
+    },
+    {
+      "id": "supabase-pgtap-005",
+      "domaine": "supabase-pgtap",
+      "enonce": "supabase : statique — une table est tenue pour exercée quand un fichier pgTAP de `supabase/tests/` la cite après avoir adopté un rôle de l API, quand un fichier sous un dossier `tests/` l appelle par l API (`/rest/v1/<table>`, `from_(\"<table>\")` ou `.from(\"<table>\")`) ou quand le produit la déclare avec un chemin de preuve lisible (`FORGE_TESTS_SUPABASE_TABLES_EXERCEES`, `table=chemin`) ; le test n est ni exécuté ni prouvé vert par ce pan (`supabase test db` le juge), et une table déclarée n est pas vérifiée : la preuve citée doit exister, pas dire ce qu elle prétend",
+      "statut": "todo"
+    },
+    {
+      "id": "supabase-pgtap-006",
+      "domaine": "supabase-pgtap",
+      "enonce": "supabase : l appel par l API se lit par motif ; un nom de table construit (concaténation, variable), un autre client que `from_`, `.from` ou `/rest/v1/`, un `.from(\"<table>\")` cité dans une chaîne et un `.from` d un objet que la liste des faux amis ne connaît pas (`Array`, `Buffer`, `Object`, `Observable`, `Readable`, `Iterator`, tableaux typés), et deux tables de même nom dans deux schémas exposés (le chemin `/rest/v1/<table>` ne porte pas le schéma) ne sont pas distingués",
+      "statut": "todo"
+    },
+    {
+      "id": "workers-wrangler-001",
+      "domaine": "workers-wrangler",
+      "enonce": "workers : statique — un gestionnaire est tenu pour exercé quand un fichier de test qui tourne dans le runtime Workers le DISPATCHE nommément (exports.default.fetch, server.fetch, createScheduledController, createMessageBatch, runInDurableObject, introspectWorkflow…) ; le dispatch cité n est ni exécuté ni prouvé vert par ce pan",
+      "statut": "todo"
+    },
+    {
+      "id": "workers-wrangler-002",
+      "domaine": "workers-wrangler",
+      "enonce": "workers : seule la configuration Wrangler de la racine est lue ; dans un dépôt de plusieurs Workers, les autres ne sont pas inventoriés",
+      "statut": "todo"
+    },
+    {
+      "id": "workers-wrangler-003",
+      "domaine": "workers-wrangler",
+      "enonce": "workers : les gestionnaires se lisent dans le module `main` par motif de définition de méthode ; un gestionnaire défini ailleurs puis réexporté échappe à l inventaire, sauf s il est impliqué par la configuration (crons, consommateurs de file)",
+      "statut": "todo"
+    },
+    {
+      "id": "workers-wrangler-004",
+      "domaine": "workers-wrangler",
+      "enonce": "workers : les Pages Functions (dossier `functions/`) et la syntaxe Service Worker ne sont pas inventoriées",
+      "statut": "todo"
+    },
+    {
+      "id": "workers-wrangler-005",
+      "domaine": "workers-wrangler",
+      "enonce": "workers : la parité entre la date de compatibilité testée et la date servie n est pas jugée ici — gate `runtime-parity` de forge-development (TF-1998)",
+      "statut": "todo"
+    }
+  ]
+}

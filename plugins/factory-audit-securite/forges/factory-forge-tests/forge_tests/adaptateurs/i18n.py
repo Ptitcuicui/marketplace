@@ -1,0 +1,1557 @@
+"""Adaptateur i18n — parité entre locales, mesurée sur le BUILD SERVI (TF-0284).
+
+**Le trou, daté et mesuré.** Étude du 15/08/2026 : AUCUN oracle de l écosystème ne juge le
+multilingue. Ni forge-tests, ni quality-oracles, ni les gates de forge-development. La
+conséquence a été payée sur un produit en production, et trois fois plutôt qu une :
+
+  - une route française sur 201 n avait pas d équivalent anglais — un visiteur anglophone
+    tombait sur une impasse, et rien ne le disait ;
+  - le menu anglais portait **4 entrées** quand le français en portait **9**, avec ses
+    sous-menus. Non détecté depuis juin : aucune mesure ne comparait une locale à une autre ;
+  - **9 pages sur 200** servies sous `/en` rendaient du contenu FRANÇAIS, par câblage de
+    données qui renvoyait la langue par défaut quelle que soit la locale demandée.
+
+Les trois ont été trouvés À LA MAIN, en quelques minutes, et les trois sont scriptables sans le
+moindre modèle de langage. C est exactement la définition d un pan manquant : un contrôle que
+l humain sait faire, que la machine sait refaire, et que personne ne faisait.
+
+**Ce que le pan lit.** Le BUILD SERVI — l arborescence de pages telle que le visiteur la
+reçoit. Ni le code source (une locale peut être déclarée et jamais construite), ni un site
+distant (aucun réseau : le pan lit un dossier). C est le même point d observation que le pan
+`qualif`, sans navigateur : la parité de deux arborescences ne demande pas de rendu.
+
+**Trois contrôles, trois natures, dites comme telles.** (a) et (b) sont des comparaisons
+EXACTES — une route est là ou elle n y est pas, un menu porte n entrées ou il n en porte pas
+autant. (c) est une HEURISTIQUE : la densité de mots-outils français dans une page servie sous
+une locale non française. Son seuil est déclaré (`seuils.py`), sa marge est large (un texte
+français dépasse 0,25 quand un texte anglais reste sous 0,02) et ses constats se contestent
+comme tout constat d audit — `.forge-tests-declarations.json`, motif typé et contre-preuve.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+from html.parser import HTMLParser
+from pathlib import Path
+from typing import Any
+
+from forge_tests import catalogue_i18n as _catalogue
+from forge_tests import classes, exclusions, seuils
+from forge_tests import glossaire as _glossaire
+from forge_tests import orphelins as _orphelins
+from forge_tests import peremption_i18n as _peremption
+from forge_tests.noyau import Element, Finding, SortieAdaptateur
+from forge_tests.risque import coter
+
+NOM, PAN = "i18n-build-servi", "i18n"
+SEUIL = seuils.valeur("couverture_surface_i18n")
+SEUIL_DENSITE_FR = seuils.valeur("densite_mots_outils_francais")
+
+POUR_COUVRIR = (
+    "construire le produit et désigner le dossier du BUILD SERVI dans FORGE_TESTS_I18N_BUILD "
+    "(`out/`, `dist/`, `_site/`… : l'arborescence de pages telle que le visiteur la reçoit). "
+    "Le pan la découvre seul quand elle est à sa place conventionnelle sous la racine du "
+    "projet ; il ne lit AUCUN site distant et n'ouvre aucun navigateur. DÉCISION (RF-7, lot "
+    "Produit-09 20260820a) : les rendus SERVEUR / ISR qui n'émettent PAS d'arborescence (Next.js "
+    "`output: 'standalone'`) sont HORS CHAMP de la parité de routes et de menus — le CATALOGUE "
+    "SOURCE reste jugé (TF-0383), et la voie de levée est nommée : accepter une racine servie "
+    "(FORGE_TESTS_BASE_URL, déjà employée par le pan accessibilité) comme source des routes par "
+    "crawl des liens. C'est une décision écrite ici, plus une découverte au premier run. "
+    "LEVÉE PARTIELLE le 23/08 (TF-0470) : les routes attendues par locale se DÉCLARENT dans un "
+    "fichier JSON versionné désigné par FORGE_TESTS_I18N_ROUTES — la parité entre locales est "
+    "alors jugée SANS arborescence, et le déclaré est confronté au servi quand un build existe. "
+    "SITE RENDU CÔTÉ SERVEUR (FastAPI, contenus Markdown…, TF-2670) : exécuter un export statique, "
+    "c'est-à-dire un script du produit qui appelle l'application en process pour chaque route "
+    "déclarée et écrit le HTML dans un dossier (`out/<locale>/<route>/index.html`, locale par "
+    "défaut sans préfixe), puis désigner ce dossier dans FORGE_TESTS_I18N_BUILD — recette dans le "
+    "README, section « Site rendu côté serveur ». Une TRADUCTION PÉRIMÉE (sa source a changé) se "
+    "déclare dans FORGE_TESTS_I18N_PEREMPTION. Rien de déclaré, rien de jugé"
+)
+
+# Chapitre(s) de cahier de tests que ce pan alimente. Le cahier et le dashboard les
+# DERIVENT du registre : une liste ecrite ailleurs aurait laisse un pan futur invisible.
+CHAPITRES = (
+    {"code": "F6", "famille": "fonctionnel", "titre": "Internationalisation",
+     "decoupe": "locale", "axe_cas": "etats"},
+)
+
+# RT-13 : le seul champ qui débloque CE pan. Ni compte, ni URL : un dossier de build.
+CHAMPS_REQUIS = ("FORGE_TESTS_I18N_BUILD",)
+
+NON_JUGE = [
+    "i18n : le pan lit un BUILD SERVI (dossier de pages), jamais un site distant ni le code "
+    "source — une locale declaree dans la configuration mais jamais construite est invisible "
+    "ici, et c est voulu : ce qui n est pas servi n est pas ce que le visiteur recoit",
+    "i18n : la parite de ROUTES se mesure contre l UNION des routes de toutes les locales — une "
+    "route servie dans une seule langue manque donc dans les autres. Sur un produit ou la "
+    "traduction est en cours PAR CHOIX, l ecart mesure est reel mais il peut etre voulu : il se "
+    "conteste alors par declaration, il ne se devine pas",
+    # TF-0295, levee 1 : l appariement par ENTREE remplace la comparaison de COMPTES. Ce qui
+    # reste hors de portee est le sous-menu non rendu, et il est dit.
+    "i18n : la parite de NAVIGATION apparie les entrees du menu de la page d accueil de chaque "
+    "locale a celles du menu le PLUS RICHE, par DESTINATION delocalisee — deux menus de meme "
+    "taille aux entrees differentes echouent donc, et les entrees manquantes sont nommees. Un "
+    "sous-menu qui ne s ouvre qu au clic (absent du HTML servi) n est toujours pas compte, et "
+    "une entree sans destination lisible est appariee sur son libelle, donc jamais entre deux "
+    "langues",
+    # TF-0295, levee 3 : le lexique n est plus le seul francais et il est declarable par projet.
+    "i18n : la langue du contenu est jugee par HEURISTIQUE — densite des mots-outils d une "
+    "langue sur le texte visible de la page. Le pan connait les lexiques `fr` et `en` et accepte "
+    "ceux que le projet DECLARE (FORGE_TESTS_I18N_LEXIQUES) ; une langue servie sans lexique "
+    "opposable n est pas jugee, et le rapport DIT contre quels lexiques il a mesure",
+    "i18n : seule une locale PREFIXEE est jugee sur sa langue — la locale par defaut n a pas de "
+    "prefixe, donc aucune langue opposable, et la deviner reviendrait a interroger le suspect",
+    "i18n : une page de moins de 40 mots visibles n est pas jugee sur sa langue — sous ce "
+    "volume, la densite de mots-outils n est plus un signal, c est du bruit",
+    "i18n : l attribut `lang` du document n est pas oppose au contenu — un `lang=\"en\"` pose "
+    "sur du francais est precisement le defaut, le croire reviendrait a interroger le suspect",
+    "i18n : les pages conventionnelles de service (`404`, `500`, et tout segment commencant par "
+    "`_`) sont hors comptage de parite : elles ne sont pas des routes du produit",
+]
+
+# Dossiers de build conventionnels, cherchés sous la racine du projet quand aucun n est déclaré.
+DOSSIERS_BUILD = ("out", "dist", "build", "_site", "site", "www", "public")
+_EXCLUS = {
+    "node_modules", ".venv", "venv", ".git", "__pycache__", "site-packages", ".next", ".nuxt",
+    ".svelte-kit", ".visuel", "htmlcov", "coverage", ".tox", ".mypy_cache", ".ruff_cache",
+    ".pytest_cache", "vendor", ".forge", "forge", "output", "old", "Old", ".oracles",
+    # TF-0536/0542/0543 (lot Produit-02 20260823) : le SOCLE commun vient desormais
+    # d'une source unique. Le depot portait DIX listes divergentes (7 a 31 entrees) et
+    # `input` ne figurait dans AUCUNE : sur un audit reel, 12 constats sur 15 portaient sur
+    # `input\` — un site concurrent aspire et une ancienne version du site. Les entrees
+    # ci-dessus restent ecrites ici : elles portent le motif de CE pan.
+    *exclusions.socle(),
+}
+# Pages de service : servies, mais ce ne sont pas des routes du produit.
+_PAGES_DE_SERVICE = ("404", "500", "403", "offline")
+_MINIMUM_MOTS = 40
+
+# Codes ISO 639-1 des langues qu un site multilingue préfixe couramment. Liste FERMÉE : prendre
+# `/id/42` pour une locale sur un site qui n en a pas fabriquerait une parité imaginaire, donc
+# des constats contre des routes parfaitement saines.
+LOCALES_CONNUES = frozenset(
+    ("en", "fr", "de", "es", "it", "nl", "pt", "pl", "ru", "ja", "zh", "ar", "sv", "da", "fi",
+     "cs", "tr", "ko", "el", "he", "hu", "ro", "uk")
+)
+
+# Mots-outils FRANÇAIS non ambigus : aucun n est un mot anglais courant. `on`, `en`, `a`, `as`,
+# `no`, `son`, `pas`, `car`, `plus` en sont volontairement ABSENTS — ce sont eux qui feraient
+# monter la densité d un texte anglais, c est-à-dire qui accuseraient une page saine.
+MOTS_OUTILS_FR = frozenset((
+    "le", "les", "des", "du", "une", "dans", "pour", "avec", "sur", "par", "qui", "que", "est",
+    "sont", "nous", "vous", "cette", "aux", "chez", "mais", "donc", "etre", "ete", "leur",
+    "leurs", "nos", "vos", "ses", "cet", "ces", "elle", "elles", "ils", "notre", "votre",
+    "ainsi", "depuis", "entre", "sans", "sous", "alors", "aussi", "comme", "tous", "toute",
+    "toutes", "peut", "doit", "fait", "faire", "chaque", "lors", "afin", "dont", "ou", "est-ce",
+    "quelle", "quel", "quelles", "quels", "lorsque", "parce", "apres", "avant", "deja", "encore",
+    "jamais", "toujours", "beaucoup", "moins", "tres", "bien", "celui", "celle", "ceux", "quand",
+    "puis", "ni", "tandis",
+))
+
+# TF-0295 (levée 3) — le lexique n est plus le seul français. Le pan ne connaissait qu UN couple,
+# « français servi sous locale non française » : un produit dont les pages `/fr` rendent de
+# l anglais — le cas symétrique, tout aussi réel — passait sans un mot. Le contrôle est désormais
+# une TABLE de lexiques, et la règle est générale : sous la locale L, la présence dense du
+# lexique d une langue M ≠ L est un constat.
+#
+# Mêmes précautions que pour le français, et elles sont la condition du contrôle : aucun mot
+# ambigu entre les deux langues. « on », « en », « a », « as », « son », « plus », « car »,
+# « pas », « no », « or », « si », « ni », « nos », « ces » sont donc ABSENTS des deux lexiques —
+# ce sont eux qui feraient monter la densité d une page saine, c est-à-dire qui accuseraient à
+# tort. Le seuil, lui, est commun et opposable (`seuils.py`).
+MOTS_OUTILS_EN = frozenset((
+    "the", "and", "with", "this", "that", "these", "those", "from", "have", "has", "had",
+    "which", "they", "their", "them", "our", "your", "been", "were", "will", "would", "should",
+    "could", "about", "into", "than", "then", "when", "what", "who", "whom", "whose", "how",
+    "there", "here", "because", "while", "after", "before", "each", "any", "all", "not", "but",
+    "for", "are", "was", "its", "his", "her", "him", "you", "of", "to", "in", "is", "be", "by",
+    "at", "an", "so", "if", "we", "it", "also", "such", "both", "very", "many", "more", "most",
+    "other", "some", "only", "own", "same", "through", "during", "between", "under", "over",
+    "again", "further", "once", "always", "never", "already", "still", "just", "does", "did",
+))
+
+# Le lexique d une langue, par code ISO 639-1. Une clé de plus suffit à ouvrir un couple de plus :
+# c est ce que « extensible » veut dire ici. Un projet peut en DÉCLARER d autres sans toucher au
+# code, par `FORGE_TESTS_I18N_LEXIQUES` (voir `lexiques()`).
+LEXIQUES: dict[str, frozenset[str]] = {"fr": MOTS_OUTILS_FR, "en": MOTS_OUTILS_EN}
+# Sous ce nombre de mots, un lexique DÉCLARÉ ne fait pas un contrôle : une poignée de mots-outils
+# ne discrimine rien et fabriquerait des constats au hasard. Le refus est déclaré, pas silencieux.
+_LEXIQUE_MINIMAL = 20
+
+
+# TF-0466 — les clés de métadonnées jugées : ce qu'un moteur ou un aperçu social consomme.
+_META_JUGEES = frozenset({
+    "description", "keywords",
+    "og:title", "og:description", "og:site_name",
+    "twitter:title", "twitter:description",
+    "article:tag", "article:section",
+})
+
+
+def _valeurs_jsonld(brut: str, cle: str) -> list[str]:
+    """Valeurs de `cle` dans un bloc JSON-LD, en lecture TOLÉRANTE (chaîne ou liste).
+
+    Un JSON-LD mal formé ne doit pas faire échouer l audit : on lit ce qui se lit, on ignore
+    le reste. Le pan mesure une langue, il ne valide pas un schéma.
+    """
+    import json as _json
+
+    try:
+        donnees = _json.loads(brut)
+    except Exception:
+        return []
+    trouvees: list[str] = []
+
+    def _descendre(noeud: object) -> None:
+        if isinstance(noeud, dict):
+            for nom, valeur in noeud.items():
+                if nom == cle:
+                    if isinstance(valeur, str):
+                        trouvees.append(valeur)
+                    elif isinstance(valeur, list):
+                        trouvees.extend(str(x) for x in valeur if isinstance(x, str))
+                else:
+                    _descendre(valeur)
+        elif isinstance(noeud, list):
+            for valeur in noeud:
+                _descendre(valeur)
+
+    _descendre(donnees)
+    return [v.strip() for v in trouvees if v and v.strip()]
+
+
+class _Page(HTMLParser):
+    """Ce qu une page servie dit d elle-même : sa langue déclarée, son menu, son texte."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.lang = ""
+        self.menu: list[str] = []
+        # TF-0295 (1) : la DESTINATION de chaque entrée, dans le même ordre que `menu`. C est
+        # elle qui rend deux menus comparables ENTRÉE PAR ENTRÉE : les libellés, eux, sont
+        # traduits — « Accueil » et « Home » sont la même entrée et aucun rapprochement textuel
+        # ne peut le savoir.
+        self.destinations: list[str] = []
+        self.texte: list[str] = []
+        self._muet = 0
+        self._dans_menu = 0
+        self._lien_de_menu = False
+        # TF-0464 (22/08) : le CHROME PARTAGE ne se limite pas au <nav>. Mesure sur
+        # factory.example, 201 pages en production : le pied de page francais porte 21 liens,
+        # l anglais 3 — et les deux pieds sont des <footer> SANS <nav>. Le pan lisait donc
+        # 0 contre 0 et rendait PASS : un silence indiscernable d un succes, le pire mode de
+        # defaillance d un oracle. La garde existante (`muettes`) ne se declenchait pas
+        # puisque l en-tete, lui, EST un <nav> : la navigation passait pour vue et
+        # l amputation du pied disparaissait sans un mot. Le repere s etend donc a <footer>
+        # et a role="contentinfo"/"navigation" — meme classe de defaut que celui qui a FONDE
+        # le pan (menu anglais a 4 entrees contre 9), autre repere, meme silence.
+        self._reperes = 0
+        # TF-0466 (22/08) : les MÉTADONNÉES sont ce que consomment les moteurs et les aperçus
+        # sociaux, et le pan ne lisait que les mots VISIBLES. Mesure sur factory.example : 78 des
+        # 131 articles du blog anglais portent au moins un `article:tag` en français (67 tags
+        # distincts), repris dans les keywords du JSON-LD. Même affichées, ces valeurs
+        # resteraient sous le seuil de densité (5 mots sur 1 200) : c'est la SOURCE qu'il faut
+        # lire, pas le seuil qu'il faut baisser.
+        self.meta: dict[str, list[str]] = {}
+        self._dans_titre = False
+        self._dans_jsonld = False
+        # TF-0465 + TF-0467 (22/08) : chaque fragment de texte est enregistré AVEC l'état de
+        # son marquage de langue. Un fragment délibérément dans une autre langue DOIT porter
+        # `lang` (WCAG 2.2, critère 3.1.2) : ce n'est pas opposer `lang` au contenu — ce que le
+        # pan refuse à juste titre — c'est vérifier qu'il est POSÉ là où le contenu est ASSUMÉ
+        # étranger. Preuve : les 201 pages anglaises de factory.example portent
+        # `aria-label="Voir cette page en français"` sans `lang="fr"` ; un lecteur d'écran les
+        # prononce avec la phonétique anglaise.
+        self.fragments: list[tuple[str, bool]] = []
+        self._pile_lang: list[bool] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        table = {nom.lower(): (valeur or "") for nom, valeur in attrs}
+        if tag == "html" and table.get("lang"):
+            self.lang = table["lang"]
+        if tag != "html" and table.get("lang"):
+            self._pile_lang.append(True)
+            ouvertes = getattr(self, "_marque_ouverte", None) or []
+            self._marque_ouverte = [*ouvertes, tag]
+        if tag == "title":
+            self._dans_titre = True
+        if tag == "script" and (table.get("type") or "").lower() == "application/ld+json":
+            self._dans_jsonld = True
+        if tag == "meta":
+            cle = (table.get("property") or table.get("name") or "").strip().lower()
+            valeur = (table.get("content") or "").strip()
+            if valeur and cle in _META_JUGEES:
+                self.meta.setdefault(cle, []).append(valeur)
+        if tag in ("script", "style", "template"):
+            self._muet += 1
+            return
+        role = (table.get("role") or "").strip().lower()
+        if tag in ("nav", "footer") or role in ("navigation", "contentinfo"):
+            self._dans_menu += 1
+            self._reperes += 1
+            return
+        if tag == "a" and self._dans_menu:
+            self._lien_de_menu = True
+            self.menu.append(table.get("aria-label") or "")
+            self.destinations.append(table.get("href") or "")
+
+    def handle_endtag(self, tag: str) -> None:
+        ouvertes = getattr(self, "_marque_ouverte", None)
+        if ouvertes and ouvertes[-1] == tag and self._pile_lang:
+            self._pile_lang.pop()
+            self._marque_ouverte.pop()
+        if tag == "title":
+            self._dans_titre = False
+        if tag == "script":
+            self._dans_jsonld = False
+        if tag in ("script", "style", "template") and self._muet:
+            self._muet -= 1
+        elif tag in ("nav", "footer") and self._dans_menu:
+            self._dans_menu -= 1
+        elif tag == "a" and self._lien_de_menu:
+            self._lien_de_menu = False
+
+    def handle_data(self, data: str) -> None:
+        # TF-0466 : les métadonnées se lisent AVANT la garde `_muet` — <title> et le JSON-LD
+        # vivent justement dans des zones que le texte visible ignore. Une seule méthode
+        # `handle_data` par classe : deux définitions et la seconde écrase la première en
+        # silence (piège rencontré en écrivant ce correctif).
+        if self._dans_titre:
+            valeur = data.strip()
+            if valeur:
+                self.meta.setdefault("title", []).append(valeur)
+        elif self._dans_jsonld:
+            for cle in ("keywords", "articleSection"):
+                for valeur in _valeurs_jsonld(data, cle):
+                    self.meta.setdefault(f"jsonld:{cle}", []).append(valeur)
+        if self._muet:
+            return
+        texte_utile = data.strip()
+        if texte_utile:
+            self.fragments.append((texte_utile, bool(self._pile_lang)))
+        if self._lien_de_menu and self.menu:
+            self.menu[-1] = (self.menu[-1] + " " + data).strip()
+        self.texte.append(data)
+
+
+def _lire(fichier: Path) -> _Page:
+    page = _Page()
+    try:
+        page.feed(fichier.read_text(encoding="utf-8", errors="replace"))
+    except Exception:  # noqa: BLE001 — une page illisible se DECLARE, elle n emporte pas le pan
+        return page
+    return page
+
+
+def build_servi(cible: Path) -> Path | None:
+    """Le dossier de build à lire : déclaré, sinon découvert, sinon rien — jamais supposé."""
+    declare = os.environ.get("FORGE_TESTS_I18N_BUILD")
+    if declare and Path(declare).is_dir():
+        return Path(declare)
+    for nom in DOSSIERS_BUILD:
+        candidat = cible / nom
+        if candidat.is_dir() and (candidat / "index.html").is_file():
+            return candidat
+    if (cible / "index.html").is_file():
+        return cible  # le projet EST le build servi (site statique à plat)
+    return None
+
+
+def _route(fichier: Path, build: Path) -> str | None:
+    """Route servie par ce fichier, ou None si ce n est pas une route du produit."""
+    relatif = fichier.relative_to(build)
+    if any(partie in _EXCLUS or partie.startswith("_") for partie in relatif.parts):
+        return None
+    if fichier.stem in _PAGES_DE_SERVICE:
+        return None
+    if fichier.name == "index.html":
+        parent = relatif.parent.as_posix()
+        return "/" if parent == "." else "/" + parent
+    return "/" + relatif.as_posix()[: -len(fichier.suffix)]
+
+
+def pages_servies(build: Path) -> dict[str, Path]:
+    """Route servie -> fichier qui la rend."""
+    pages: dict[str, Path] = {}
+    for fichier in sorted(build.rglob("*.html")):
+        route = _route(fichier, build)
+        if route is not None:
+            pages.setdefault(route, fichier)
+    return pages
+
+
+def locales_servies(pages: dict[str, Path]) -> set[str]:
+    """Locales PRÉFIXÉES réellement servies. La locale par défaut, elle, n a pas de préfixe."""
+    trouvees = set()
+    for route in pages:
+        segments = route.split("/")
+        if len(segments) > 1 and segments[1] in LOCALES_CONNUES:
+            trouvees.add(segments[1])
+    return trouvees
+
+
+def _sans_prefixe(route: str, locale: str) -> str:
+    reste = route[len(f"/{locale}"):]
+    return reste or "/"
+
+
+def _par_locale(pages: dict[str, Path], locales: set[str]) -> dict[str, dict[str, Path]]:
+    """locale -> {route SANS son préfixe: fichier}. La locale par défaut a la clé « »."""
+    table: dict[str, dict[str, Path]] = {locale: {} for locale in locales}
+    table[""] = {}
+    for route, fichier in pages.items():
+        segments = route.split("/")
+        locale = segments[1] if len(segments) > 1 and segments[1] in locales else ""
+        table[locale][_sans_prefixe(route, locale) if locale else route] = fichier
+    return table
+
+
+def _route_servie(locale: str, route: str) -> str:
+    if not locale:
+        return route
+    return f"/{locale}" if route == "/" else f"/{locale}{route}"
+
+
+# --- Parité de navigation : par ENTRÉE, jamais par compte (TF-0295, levée 1) -------------------
+def entrees_de_menu(page: _Page, locales: set[str]) -> list[str]:
+    """Clés comparables des entrées du menu de `page`, dans l ordre du document.
+
+    La clé est la DESTINATION délocalisée : `/en/tarifs` sous la locale `en` et `/tarifs` sous la
+    locale par défaut sont la MÊME entrée. Le libellé ne peut pas servir de clé — il est traduit,
+    c est tout l objet du sujet. Une entrée sans destination lisible retombe sur son libellé,
+    faute de mieux, et une entrée sans ni l un ni l autre porte son rang : sans cela deux entrées
+    muettes se confondraient et un menu amputé de l une passerait pour complet.
+    """
+    cles: list[str] = []
+    for rang, (libelle, destination) in enumerate(
+        zip(page.menu, page.destinations, strict=True)
+    ):
+        brut = (destination or "").split("?")[0].split("#")[0].strip()
+        if brut.startswith("/"):
+            chemin = brut.rstrip("/") or "/"
+            segments = chemin.split("/")
+            if len(segments) > 1 and segments[1] in locales:
+                chemin = _sans_prefixe(chemin, segments[1])
+            cles.append(chemin)
+        elif brut:
+            cles.append(brut)  # externe, `mailto:`, ancre : comparable tel quel
+        elif libelle.strip():
+            cles.append(f"libelle:{libelle.strip().lower()}")
+        else:
+            cles.append(f"rang:{rang}")
+    return cles
+
+
+def lexiques() -> dict[str, frozenset[str]]:
+    """Les lexiques opposables : ceux du code, plus ceux que le projet DÉCLARE (TF-0295).
+
+    `FORGE_TESTS_I18N_LEXIQUES` désigne un fichier JSON `{"de": ["der", "die", …], …}`. Un
+    lexique déclaré remplace celui du code pour la même langue — un produit sait mieux que la
+    forge quels mots-outils il n emploie jamais dans l autre langue. Un fichier illisible, une
+    langue inconnue ou un lexique trop court sont IGNORÉS et le motif se dit au rapport
+    (`motifs_de_lexique`), jamais silencieusement pris pour bon.
+    """
+    table = dict(LEXIQUES)
+    for code, mots in _lexiques_declares()[0].items():
+        table[code] = mots
+    return table
+
+
+def _lexiques_declares() -> tuple[dict[str, frozenset[str]], list[str]]:
+    """(lexiques déclarés retenus, motifs de ce qui a été écarté)."""
+    import json
+
+    chemin = (os.environ.get("FORGE_TESTS_I18N_LEXIQUES") or "").strip()
+    if not chemin:
+        return {}, []
+    fichier = Path(chemin)
+    if not fichier.is_file():
+        return {}, [f"lexiques declares introuvables : {chemin}"]
+    try:
+        charge = json.loads(fichier.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as erreur:
+        return {}, [f"lexiques declares illisibles ({type(erreur).__name__}) : {chemin}"]
+    if not isinstance(charge, dict):
+        return {}, [f"lexiques declares : objet JSON attendu, {type(charge).__name__} lu"]
+    retenus: dict[str, frozenset[str]] = {}
+    motifs: list[str] = []
+    for code, mots in sorted(charge.items()):
+        if code not in LOCALES_CONNUES:
+            motifs.append(f"lexique declare « {code} » : locale inconnue, ignore")
+            continue
+        if not isinstance(mots, list) or len(mots) < _LEXIQUE_MINIMAL:
+            motifs.append(
+                f"lexique declare « {code} » : moins de {_LEXIQUE_MINIMAL} mots-outils, ignore "
+                "— un lexique trop court ne discrimine rien et accuserait au hasard"
+            )
+            continue
+        retenus[code] = frozenset(str(mot).strip().lower() for mot in mots if str(mot).strip())
+    return retenus, motifs
+
+
+def densite_mots_outils(texte: str, lexique: frozenset[str]) -> tuple[float, int]:
+    """(part des mots-outils de `lexique` dans le texte, nombre de mots). Sans modèle.
+
+    Le compte porte sur des mots ENTIERS et minusculés ; les accents ne sont pas requis (une
+    page servie en `latin-1` mal décodée perdrait ses accents mais garderait ses mots-outils).
+    """
+    mots = [
+        "".join(caractere for caractere in mot.lower() if caractere.isalpha() or caractere == "-")
+        for mot in texte.split()
+    ]
+    mots = [mot for mot in mots if mot]
+    if not mots:
+        return 0.0, 0
+    outils = sum(1 for mot in mots if mot in lexique)
+    return outils / len(mots), len(mots)
+
+
+def densite_mots_outils_fr(texte: str) -> tuple[float, int]:
+    """La densité du lexique FRANÇAIS — le premier couple, conservé sous son nom d origine."""
+    return densite_mots_outils(texte, MOTS_OUTILS_FR)
+
+
+def _sans_accents(texte: str) -> str:
+    """Le lexique est écrit sans accents : le texte lu est ramené au même alphabet."""
+    table = str.maketrans("àâäéèêëîïôöùûüçÀÂÄÉÈÊËÎÏÔÖÙÛÜÇ", "aaaeeeeiioouuucAAAEEEEIIOOUUUC")
+    return texte.translate(table)
+
+
+def _constat_de_langue(
+    fichier: Path, locale: str, table: dict[str, frozenset[str]] | None = None
+) -> tuple[str, float, int] | None:
+    """(langue détectée, densité, nombre de mots) quand une page trahit une AUTRE langue que sa
+    locale — sinon None (page saine, ou volume insuffisant pour conclure).
+
+    TF-0295 (levée 3) : la règle est générale. Sous la locale L, chaque lexique d une langue
+    M ≠ L est mesuré, et c est le plus dense au-delà du seuil qui est retenu — nommer deux
+    langues pour une même page serait dire deux fois le même défaut.
+    """
+    page = _lire(fichier)
+    texte = _sans_accents(" ".join(page.texte))
+    mesures = [
+        (code, *densite_mots_outils(texte, lexique))
+        for code, lexique in sorted((table or lexiques()).items())
+        if code != locale
+    ]
+    if not mesures or mesures[0][2] < _MINIMUM_MOTS:
+        return None
+    code, densite, mots = max(mesures, key=lambda mesure: mesure[1])
+    return (code, densite, mots) if densite >= SEUIL_DENSITE_FR else None
+
+
+def constats_metadonnees(
+    servie: Path, reference: Path, table: dict[str, frozenset[str]] | None = None,
+    locale: str = "", locale_reference: str = "",
+) -> list[tuple[str, str, list[str]]]:
+    """Métadonnées d une page traduite confrontées à celles de son équivalent de référence.
+
+    Deux constats DISTINCTS, et c est le point (TF-0466) : le lecteur n en fait pas la même
+    chose, et le premier ne demande aucun lexique.
+
+      · `non_traduit` — la valeur est identique, caractère pour caractère, à celle de la page
+        de référence. Aucune heuristique : soit c est un nom propre légitime, soit la
+        traduction n a pas eu lieu, et le rapport nomme la clé pour qu on trancthe en une
+        seconde.
+      · `mal_traduit` — la valeur diffère mais porte des mots-outils de la langue de
+        référence. Mesuré sur la valeur SEULE : une métadonnée fait cinq mots, la noyer dans
+        les 1 200 mots de la page revenait à ne jamais la voir.
+
+    Retourne une liste de (constat, cle, valeurs). Vide = rien à dire.
+    """
+    page, ref = _lire(servie), _lire(reference)
+    if not page.meta:
+        return []
+    lexique_ref = (table or lexiques()).get(locale_reference or "fr") or MOTS_OUTILS_FR
+    constats: list[tuple[str, str, list[str]]] = []
+    for cle, valeurs in sorted(page.meta.items()):
+        valeurs_ref = ref.meta.get(cle, [])
+        identiques = [v for v in valeurs if v in valeurs_ref]
+        if identiques:
+            constats.append(("non_traduit", cle, identiques))
+        autres = [v for v in valeurs if v not in valeurs_ref]
+        if not autres:
+            continue
+        # La densité se mesure sur la valeur seule, et le minimum de mots ne s applique pas :
+        # « Analyse de donnees » fait trois mots et porte deux mots-outils français.
+        suspectes = [
+            v for v in autres
+            if densite_mots_outils(_sans_accents(v), lexique_ref)[0] > 0
+        ]
+        if suspectes:
+            constats.append(("mal_traduit", cle, suspectes))
+    return constats
+
+
+def routes_de_reference() -> dict[str, list[str]]:
+    """Routes ATTENDUES par locale, déclarées par le projet dans un fichier versionné.
+
+    POURQUOI CETTE DÉCLARATION EXISTE (TF-0470, 23/08/2026). La parité de routes se mesurait
+    contre l UNION des routes SERVIES — donc contre une arborescence. Un produit rendu côté
+    serveur (`output: 'standalone'`) n émet aucune arborescence : le pan sortait en SKIP sur la
+    parité de routes, et c était le constat FONDATEUR du pan qui devenait invisible — une route
+    sur 201 existait en FR et pas en EN, sur le produit même où le pan a été conçu.
+
+    Trois options ont été pesées par l étude du 22/08 ; deux sont écartées et le motif est écrit
+    ici pour qu il ne se reperde pas. Un TROISIÈME POINT D OBSERVATION « site en ligne » aurait
+    introduit une dépendance réseau dans un pan hors-ligne et un troisième calibrage — exactement
+    le mécanisme qui a produit le trou. Lire les routes DEPUIS LA SOURCE du dépôt demanderait un
+    extracteur par framework, avec le risque de dire faux sur les routes dynamiques.
+
+    Reste la déclaration, au patron déjà éprouvé de `FORGE_TESTS_I18N_CHAINES` : RIEN DE DÉCLARÉ,
+    RIEN DE JUGÉ. `FORGE_TESTS_I18N_ROUTES` désigne un fichier JSON `{"fr": ["/", "/a-propos"],
+    "en": ["/en", "/en/about"]}` — ou, plus simple, des chemins SANS préfixe de locale, le pan
+    les préfixant lui-même. Le fichier est versionné avec le produit : c est une donnée
+    périssable, elle vit datée et éditable, jamais en dur dans un contrôle (loi n° 4).
+
+    CE QUE LA DÉCLARATION PROUVE, ET CE QU ELLE NE PROUVE PAS. Elle prouve une INTENTION : ce que
+    le produit dit devoir exister. L asymétrie DANS la déclaration est donc déjà un constat, sans
+    aucun build — une route promise en FR et pas en EN est un trou que le produit déclare
+    lui-même. Elle ne prouve RIEN de l existence réelle : quand un build est lu, le déclaré est
+    confronté au servi, et l écart part dans les deux sens.
+    """
+    chemin = (os.environ.get("FORGE_TESTS_I18N_ROUTES") or "").strip()
+    if not chemin or not Path(chemin).is_file():
+        return {}
+    try:
+        donnees = json.loads(Path(chemin).read_text(encoding="utf-8", errors="replace"))
+    except Exception:  # noqa: BLE001 — une déclaration illisible se DÉCLARE, elle n emporte rien
+        return {}
+    if not isinstance(donnees, dict):
+        return {}
+    propres: dict[str, list[str]] = {}
+    for code, valeurs in donnees.items():
+        if not isinstance(valeurs, list) or not isinstance(code, str):
+            continue
+        routes = sorted({
+            ("/" + str(r).strip().strip("/")).replace("//", "/") or "/"
+            for r in valeurs if isinstance(r, str) and r.strip()
+        })
+        if routes:
+            propres[code.strip()] = routes
+    return propres
+
+
+def constats_routes_declarees(
+    declarees: dict[str, list[str]], servies: dict[str, dict[str, object]] | None = None,
+) -> tuple[list[tuple[str, str]], list[str]]:
+    """Confronte les routes DÉCLARÉES entre elles, puis au servi quand il existe.
+
+    Rend `(constats, motifs)` — un constat est `(identifiant, message)`. La fonction est pure :
+    elle ne lit ni disque ni réseau, ce qui la rend jouable en recette sans build.
+    """
+    constats: list[tuple[str, str]] = []
+    motifs: list[str] = []
+    if len(declarees) < 2:
+        if declarees:
+            motifs.append(
+                "i18n : routes declarees pour UNE SEULE locale "
+                f"({', '.join(declarees)}) — aucune parite a mesurer entre locales"
+            )
+        return constats, motifs
+
+    # Les chemins sont compares SANS leur prefixe de locale : `/en/about` et `/a-propos` ne se
+    # comparent pas par leur texte. On rapproche donc par POSITION dans la liste declaree quand
+    # les listes ont la meme longueur, et par COMPTE sinon — c est ce que le produit peut
+    # promettre sans dictionnaire de traduction, et le declarer evite de faire croire mieux.
+    tailles = {code: len(routes) for code, routes in declarees.items()}
+    reference = max(tailles.values())
+    for code, taille in sorted(tailles.items()):
+        if taille == reference:
+            continue
+        manquantes = reference - taille
+        constats.append((
+            f"i18n:routes-declarees:{code}",
+            f"la locale « {code} » declare {taille} route(s) quand la locale la plus fournie en "
+            f"declare {reference} : {manquantes} route(s) promise(s) ailleurs et pas ici. "
+            "C est le defaut fondateur du pan — une route sur 201 existait en FR et pas en EN, "
+            "et aucune mesure ne pouvait le dire sur un produit sans arborescence servie. "
+            f"Fichier : FORGE_TESTS_I18N_ROUTES"
+        ))
+    motifs.append(
+        "i18n : routes DECLAREES confrontees entre locales — "
+        + ", ".join(f"{code} ({taille})" for code, taille in sorted(tailles.items()))
+        + ". La declaration prouve une INTENTION, jamais une existence : ce qui n est pas "
+        "declare n est pas juge"
+    )
+
+    if servies:
+        for code, routes in sorted(declarees.items()):
+            connues = servies.get(code)
+            if connues is None:
+                motifs.append(
+                    f"i18n : locale « {code} » declaree et ABSENTE du build servi — "
+                    "confrontation declare/servi non jouee pour elle"
+                )
+                continue
+            absentes = [r for r in routes if r not in connues]
+            for route in absentes:
+                constats.append((
+                    f"i18n:route-declaree-absente:{code}:{route}",
+                    f"route « {route} » DECLAREE pour la locale « {code} » et ABSENTE du build "
+                    "servi : le produit promet une page qu il ne sert pas. Un lien vers elle "
+                    "rend 404, et un plan de site la reference"
+                ))
+    return constats, motifs
+
+
+def chaines_de_reference() -> dict[str, list[str]]:
+    """Chaînes littérales dont la PRÉSENCE est un constat, par locale, déclarées par le projet.
+
+    `FORGE_TESTS_I18N_CHAINES` désigne un fichier JSON `{"fr": ["Réponse courte", …], …}`.
+    Rien de déclaré : rien de jugé — le pan ne devine pas le vocabulaire d un produit.
+    """
+    chemin = (os.environ.get("FORGE_TESTS_I18N_CHAINES") or "").strip()
+    if not chemin or not Path(chemin).is_file():
+        return {}
+    try:
+        donnees = json.loads(Path(chemin).read_text(encoding="utf-8", errors="replace"))
+    except Exception:  # noqa: BLE001 — une déclaration illisible se DÉCLARE, elle n emporte rien
+        return {}
+    if not isinstance(donnees, dict):
+        return {}
+    return {
+        code: [c for c in valeurs if isinstance(c, str) and c.strip()]
+        for code, valeurs in donnees.items()
+        if isinstance(valeurs, list)
+    }
+
+
+def constats_chaines(
+    servie: Path, chaines: list[str],
+) -> list[tuple[str, str]]:
+    """Chaînes de la langue de référence trouvées sur une page servie sous une AUTRE locale.
+
+    Deux constats, un seul balayage (TF-0465 + TF-0467) :
+
+      · `non_traduite` — la chaîne est là, et rien ne signale qu elle est étrangère : soit la
+        traduire, soit poser `lang` sur son porteur ;
+      · `signalee` — la chaîne est là SOUS un élément portant `lang` : c est la convention
+        correcte pour une bascule de langue, aucun défaut.
+
+    La PRÉSENCE est le constat, jamais la fréquence : « Réponse courte » sur une page de
+    1 200 mots pèse 0,17 %, très en dessous du seuil de densité — et c est pourtant le défaut.
+    Baisser le seuil accuserait au hasard ; c est la méthode qui devait changer, pas son
+    paramètre.
+    """
+    if not chaines:
+        return []
+    page = _lire(servie)
+    constats: list[tuple[str, str]] = []
+    vues: set[str] = set()
+    for texte, marque in page.fragments:
+        for chaine in chaines:
+            if chaine and chaine in texte and (chaine, marque) not in vues:
+                vues.add((chaine, marque))
+                constats.append(("signalee" if marque else "non_traduite", chaine))
+    return constats
+
+
+# --- (l) DIMENSIONNEMENT SERP — TF-1318, étape B6 de la chaîne « audite les traductions » -------
+#
+# LE FAIT. Le lot `Produit-02 - RETOURS - 20260826f` nomme le « dimensionnement SERP » comme une
+# étape de la chaîne d'audit des traductions (B6) et de la chaîne de traduction (A10). Sur le
+# produit d'origine, c'est un contrôleur PROPRE AU PRODUIT qui la tenait — `check-seo`, qui « compte
+# des caractères » (lot `20260826d`) — et le produit suivant n'en aura pas. C'est pourtant une étape
+# de méthode : une traduction change la longueur d'un titre, et un titre tronqué en SERP perd ce qui
+# venait après la coupe. La taille se juge donc langue par langue, sur les pages servies.
+#
+# LA BORNE EST UNE DONNÉE EXTERNE PÉRISSABLE (loi n° 4 du pilot) : la troncature d'un moteur change
+# sans préavis, et elle se fait en PIXELS, pas en caractères. Elle ne s'invente donc pas ici : le
+# projet la DÉCLARE, sourcée et datée, dans `FORGE_TESTS_SERP_BORNES`. Rien de déclaré, rien de jugé
+# — et une borne sans source ni date est refusée, avec son motif, au lieu d'être crue.
+_BALISES_SERP = ("title", "description")
+_DATE_ISO = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _regle_serp(brute: object) -> dict[str, int] | None:
+    """Une règle `{"max": n}` / `{"min": n, "max": m}` en entiers positifs, ou None si illisible."""
+    if not isinstance(brute, dict):
+        return None
+    regle = {cle: val for cle, val in brute.items()
+             if cle in ("min", "max") and isinstance(val, int) and not isinstance(val, bool)
+             and val > 0}
+    return regle or None
+
+
+def bornes_serp() -> tuple[dict[str, Any] | None, str | None]:
+    """Les bornes SERP DÉCLARÉES par le projet, ou `(None, motif)`. Ne lève jamais.
+
+    `FORGE_TESTS_SERP_BORNES` désigne un fichier JSON :
+    `{"source": "<d'où vient la borne>", "verifie_le": "AAAA-MM-JJ",
+      "bornes": {"title": {"max": 60}, "description": {"max": 155}},
+      "par_locale": {"de": {"title": {"max": 65}}}}` — `par_locale` est facultatif.
+    Le motif distingue « rien de déclaré » de « déclaré mais pas opposable » : le premier est un
+    choix du projet, le second un défaut de sa déclaration, et les confondre les tairait tous deux.
+    """
+    chemin = (os.environ.get("FORGE_TESTS_SERP_BORNES") or "").strip()
+    if not chemin:
+        return None, None
+    fichier = Path(chemin)
+    if not fichier.is_file():
+        return None, f"bornes SERP declarees introuvables : {chemin}"
+    try:
+        brut = json.loads(fichier.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as erreur:
+        return None, f"bornes SERP illisibles ({type(erreur).__name__}) : {chemin}"
+    if not isinstance(brut, dict):
+        return None, f"bornes SERP : objet JSON attendu, {type(brut).__name__} lu"
+    source = brut.get("source")
+    date = brut.get("verifie_le")
+    if not isinstance(source, str) or not source.strip() or not isinstance(date, str) \
+            or not _DATE_ISO.match(date.strip()):
+        return None, (
+            "bornes SERP NON opposables : `source` et `verifie_le` (AAAA-MM-JJ) sont exiges. Une "
+            "borne de troncature est une donnee externe perissable — sans source ni date, elle ne "
+            "se distingue pas d une valeur inventee"
+        )
+    bornes = {b: r for b in _BALISES_SERP
+              if (r := _regle_serp((brut.get("bornes") or {}).get(b))) is not None}
+    if not bornes:
+        return None, ("bornes SERP : aucune regle lisible pour `title` ni `description` "
+                      "(entiers positifs `min`/`max`)")
+    par_locale: dict[str, dict[str, dict[str, int]]] = {}
+    for code, regles in (brut.get("par_locale") or {}).items():
+        if isinstance(regles, dict):
+            propres = {b: r for b in _BALISES_SERP if (r := _regle_serp(regles.get(b))) is not None}
+            if propres:
+                par_locale[str(code)] = propres
+    return {"source": source.strip(), "verifie_le": date.strip(), "bornes": bornes,
+            "par_locale": par_locale}, None
+
+
+def _texte_serp(page: _Page, balise: str) -> str | None:
+    """Le texte de la balise tel que le moteur le lit, espaces normalisés — ou None s'il manque.
+
+    Le `title` est le PREMIER du document : celui du `<head>`. Un `<title>` d'icône SVG, plus loin
+    dans la page, n'est pas un titre de résultat, et l'additionner fabriquerait un dépassement.
+    """
+    valeurs = page.meta.get(balise) or []
+    if not valeurs:
+        return None
+    texte = " ".join(valeurs[0].split())
+    return texte or None
+
+
+def constats_serp(
+    par_locale: dict[str, dict[str, Path]], bornes: dict[str, Any],
+) -> tuple[list[tuple[str, str, str, int, str, int, str, Path]], dict[str, Any]]:
+    """Les balises hors de leurs bornes, page par page et locale par locale — `(constats, mesure)`.
+
+    Un constat est `(locale, route, balise, longueur, sens, borne, texte, fichier)`. La longueur se
+    compte en CARACTÈRES : c'est ce qu'un projet sait déclarer et ce qu'un contrôleur de produit
+    mesure déjà ; la troncature réelle, en pixels, n'est qu'approchée — c'est dit au rapport.
+    """
+    constats: list[tuple[str, str, str, int, str, int, str, Path]] = []
+    pages = 0
+    mesurees: dict[str, int] = dict.fromkeys(_BALISES_SERP, 0)
+    absentes: dict[str, int] = dict.fromkeys(_BALISES_SERP, 0)
+    for locale in sorted(par_locale):
+        regles = {**bornes["bornes"], **bornes.get("par_locale", {}).get(locale or "defaut", {})}
+        for route, fichier in sorted(par_locale[locale].items()):
+            page = _lire(fichier)
+            pages += 1
+            for balise in _BALISES_SERP:
+                regle = regles.get(balise)
+                if not regle:
+                    continue
+                texte = _texte_serp(page, balise)
+                if texte is None:
+                    absentes[balise] += 1
+                    continue
+                mesurees[balise] += 1
+                longueur = len(texte)
+                if "max" in regle and longueur > regle["max"]:
+                    sens = "max"
+                elif "min" in regle and longueur < regle["min"]:
+                    sens = "min"
+                else:
+                    continue
+                constats.append(
+                    (locale, route, balise, longueur, sens, regle[sens], texte, fichier))
+    return constats, {"pages": pages, "mesurees": mesurees, "absentes": absentes}
+
+
+def _signes_i18n(cible: Path) -> list[str]:
+    """Preuves POSITIVES qu un produit prétend être multilingue, hors build servi.
+
+    Sans elles, un produit monolingue — l immense majorité — sortirait en SKIP à chaque audit et
+    rendrait tous les rapports PARTIELS pour un pan qui n a rien à mesurer chez lui.
+    """
+    signes: list[str] = []
+    for nom in ("package.json", "next.config.js", "next.config.mjs", "next.config.ts"):
+        fichier = cible / nom
+        if not fichier.is_file() or exclusions.non_suivi_par_git(fichier, cible):  # TF-2134
+            continue
+        texte = fichier.read_text(encoding="utf-8", errors="replace")
+        for marqueur in ("next-intl", "react-i18next", "i18next", "vue-i18n", "\"i18n\"", "i18n:"):
+            if marqueur in texte:
+                signes.append(f"{nom} mentionne {marqueur}")
+                break
+    # `os.walk` et non `rglob` : l arborescence des dépendances se COUPE au lieu d être
+    # parcourue. Ce contrôle tourne sur TOUT audit de TOUT produit — descendre dans
+    # `node_modules` pour n en rien tirer serait un coût payé partout, tout le temps.
+    for racine, dossiers, _ in os.walk(cible):
+        # TF-2134 : un dossier sans aucun fichier suivi est le travail d une autre session, il
+        # ne dit rien du produit ; il se coupe comme une dépendance.
+        dossiers[:] = sorted(
+            nom for nom in dossiers
+            if nom not in _EXCLUS and not exclusions.ignore_par_git(Path(racine, nom), cible)
+            and not exclusions.dossier_sans_fichier_suivi(Path(racine, nom), cible)
+        )
+        for nom in dossiers:
+            chemin = Path(racine, nom)
+            if nom in ("locales", "messages", "translations", "i18n"):
+                signes.append(f"dossier de traductions `{chemin.relative_to(cible).as_posix()}`")
+            elif nom.strip("[]") in ("locale", "lang", "lng"):
+                signes.append(f"segment de route `{nom}`")
+        if len(signes) >= 5:
+            break
+    return signes[:5]
+
+
+def sans_objet(cible: Path) -> str | None:
+    """PREUVE que ce produit n a pas de périmètre i18n (NA) — jamais une supposition.
+
+    Deux formes d absence, et une seule est un « sans objet » : le produit qui ne se prétend
+    nulle part multilingue. Celui qui le prétend mais dont le build n est pas là est un pan NON
+    MESURÉ, ce qui est tout autre chose et se répare en fournissant le dossier.
+    """
+    build = build_servi(cible)
+    if build is not None:
+        if locales_servies(pages_servies(build)):
+            return None
+        return (
+            f"build servi lu ({build.name}) : aucune page prefixee par une locale — ce produit "
+            "est servi dans une seule langue, il n y a pas de parite a mesurer"
+        )
+    if _signes_i18n(cible):
+        return None  # il se prétend multilingue : le manque est le BUILD, pas le sujet
+    return (
+        "aucun build servi sous la racine et aucun signe d internationalisation (ni dependance "
+        "i18n, ni dossier de traductions, ni segment de route de locale) : ce produit n est pas "
+        "multilingue"
+    )
+
+
+def inventaire(cible: Path) -> list[Element]:
+    """Éléments de surface : une route ATTENDUE par locale servie (la locale par défaut incluse).
+
+    Le produit cartésien EST la mesure : une route qui n existe que dans une langue occupe une
+    case vide dans les autres, et c est cette case vide qui devient un constat nommé.
+    """
+    build = build_servi(cible)
+    if build is None:
+        return []
+    pages = pages_servies(build)
+    locales = locales_servies(pages)
+    if not locales:
+        return []
+    par_locale = _par_locale(pages, locales)
+    attendues = sorted({route for routes in par_locale.values() for route in routes})
+    return [
+        Element(
+            f"i18n:route:{locale or 'defaut'}:{route}",
+            PAN,
+            f"route « {_route_servie(locale, route)} » (locale {locale or 'defaut'})",
+            str(par_locale[locale].get(route) or build),
+        )
+        for locale in sorted(par_locale)
+        for route in attendues
+    ]
+
+
+def _findings_catalogue(cible: Path) -> tuple[list[Finding], list[str]]:
+    """Les trois contrôles du CATALOGUE SOURCE — TF-0383. Le second point d'observation du pan.
+
+    Le build servi dit ce que le visiteur reçoit ; le catalogue dit ce que le produit PRÉTEND
+    savoir dire. Un produit à repli de langue sans préfixe d'URL sert toutes ses routes dans
+    toutes ses locales et remplit les trous avec la langue par défaut : le build est parfait, le
+    catalogue est troué, et seul le second le montre. Mesuré sur un produit client livré : 150
+    clés manquantes par locale sur 5 des 7 langues déclarées, et le pan rendait SKIP.
+    """
+    lus, non_lus = _catalogue.catalogues(cible)
+    findings: list[Finding] = []
+    motifs = [f"i18n : catalogue non lu — {motif}" for motif in non_lus]
+
+    if not lus:
+        return findings, motifs
+
+    for dossier, par_locale in sorted(lus.items()):
+        verdict = _catalogue.juger(par_locale)
+        motifs.append(
+            f"i18n : catalogue `{dossier}` lu — {len(verdict['locales'])} locale(s) "
+            f"({', '.join(verdict['locales'])}), {verdict['union']} cle(s) a l UNION ; comptes "
+            + ", ".join(f"{loc} {n}" for loc, n in verdict["comptes"].items())
+        )
+        # (d) COMPLÉTUDE — une locale déclarée dont le catalogue est troué sert la langue de repli
+        # sans le dire. Le finding porte sur la LOCALE et nomme ses premières clés : un total
+        # anonyme ne se corrige pas, et 150 clés listées ne se lisent pas.
+        for locale, absentes in sorted(verdict["manquantes"].items()):
+            part = len(absentes) / verdict["union"] if verdict["union"] else 0
+            findings.append(
+                Finding(
+                    id=f"i18n:catalogue:{dossier}:{locale}",
+                    classe=classes.I18N,
+                    localisation=f"{dossier}/{locale}.json",
+                    message=(
+                        f"locale « {locale} » : {len(absentes)} cle(s) MANQUANTE(S) sur "
+                        f"{verdict['union']} ({part:.0%}) — servies dans la langue de repli sans "
+                        f"qu aucun message ne le signale. Premieres : "
+                        + ", ".join(absentes[:6])
+                        + (f" (+{len(absentes) - 6} autres)" if len(absentes) > 6 else "")
+                    ),
+                    risque=coter(PAN, f"i18n:catalogue:{locale}", dossier),
+                )
+            )
+        # (e) INTÉGRITÉ DES PARAMÈTRES — un paramètre perdu rend un trou dans la phrase, un
+        # paramètre inventé rend le littéral. Les deux sont servis à l utilisateur.
+        for ecart in verdict["divergences"]:
+            findings.append(
+                Finding(
+                    id=f"i18n:parametre:{dossier}:{ecart['locale']}:{ecart['cle']}",
+                    classe=classes.I18N,
+                    localisation=f"{dossier}/{ecart['locale']}.json",
+                    message=(
+                        f"« {ecart['cle']} » en « {ecart['locale']} » : parametre(s) "
+                        + (f"PERDU(S) {', '.join(ecart['perdus'])}" if ecart["perdus"] else "")
+                        + (" et " if ecart["perdus"] and ecart["inventes"] else "")
+                        + (f"INVENTE(S) {', '.join(ecart['inventes'])}"
+                           if ecart["inventes"] else "")
+                        + f" — attendus {ecart['attendus']}, trouves {ecart['trouves']}"
+                    ),
+                    risque=coter(PAN, "i18n:parametre", dossier),
+                )
+            )
+        # (f) CONSTANCE — sur les seuls libelles d ACTION (`voix.md` §Actions). Le resserrage est
+        # mesure : etendu a toutes les chaines, ce controle rendait 6 faux positifs sur 6.
+        for ecart in verdict["inconstances"]:
+            findings.append(
+                Finding(
+                    id=f"i18n:constance:{dossier}:{ecart['locale']}:{ecart['cles'][0]}",
+                    classe=classes.I18N,
+                    localisation=f"{dossier}/{ecart['locale']}.json",
+                    message=(
+                        f"libelle d action rendu de {len(ecart['rendus'])} facons en "
+                        f"« {ecart['locale']} » pour une meme source : "
+                        + " · ".join(f"« {r} »" for r in ecart["rendus"])
+                        + f" — cles {', '.join(ecart['cles'])}. Un libelle, un seul, d un bout a "
+                        "l autre du parcours"
+                    ),
+                    risque=coter(PAN, "i18n:constance", dossier),
+                )
+            )
+
+        # (g) LES NOMBRES SERVIS, CONFRONTES A LA DONNEE — TF-0644, decision humaine voie (b).
+        #
+        # LE FAIT : « 8 gites » dans les SEPT langues, francais compris, quand la donnee du
+        # produit en declare 5. Neuf controles projet ne l ont pas vu, dont ce pan meme — il
+        # verifiait la completude des cles, jamais leur CONTENU.
+        #
+        # ET LES CONTROLES (d) A (f) CI-DESSUS N AURAIENT PAS PU LE VOIR : ils comparent les
+        # locales ENTRE ELLES, or les sept disaient toutes « 8 ». Elles etaient parfaitement
+        # coherentes, et toutes fausses. Il faut un point fixe HORS du catalogue — c est
+        # pourquoi ce controle demande une DECLARATION du produit plutot qu une majorite.
+        #
+        # Le mot a chercher par locale vient du GLOSSAIRE du projet (R-53 du pilot) : sans lui,
+        # « 8 gites » et « 8 cottages » ne se rapprochent pas.
+        lu_glossaire = _glossaire.lire(_glossaire.chemin_glossaire(cible))
+        if lu_glossaire["motif"]:
+            motifs.append(f"i18n : nombres NON confrontes — {lu_glossaire['motif']}")
+        else:
+            lus_faits = _glossaire.faits_declares(_glossaire.chemin_faits(cible))
+            if lus_faits["motif"]:
+                motifs.append(f"i18n : {lus_faits['motif']}")
+            # (h) LE TERME RETENU EST-IL EMPLOYE ? — TF-0656.
+            #
+            # LE FAIT, parti EN PRODUCTION dans trois langues sur sept. Un controle de glossaire
+            # rendait « glossaire OK, aucun ecart », puis listait A PART dix regles « non juge — a
+            # relire a l oeil ». Trois portaient le terme d hebergement : le retenu y etait employe
+            # ZERO fois quand le proscrit l etait 82, 79 et 82 fois. Le glossaire avait ete corrige
+            # la veille ; les chaines n ont jamais suivi, et aucun oeil ne l a relu.
+            #
+            # LE POINT N EST PAS QUE LA REGLE SOIT CONDITIONNELLE, c est qu elle soit MESURABLE et
+            # qu on la delegue quand meme. Un terme retenu a zero emploi la ou le concept est
+            # employe 82 fois est un ECHEC, pas une nuance : aucune information supplementaire n est
+            # necessaire pour trancher, donc ce n est pas un arbitrage.
+        # (j) UN DETERMINANT EST-IL RESTE AU GENRE D'ORIGINE ? — TF-0660.
+        #
+        # LE FAIT : onze fautes d'accord — cinq en espagnol, cinq en portugais — sont parties EN
+        # PRODUCTION derriere une CI verte et SIX controleurs au vert. Le run avait substitue le
+        # terme d'hebergement, `gite` (m.) devenant `casa rural` (f.). Les accords ADJACENTS au
+        # nom ont ete traites par la passe de substitution ; ceux qui en etaient SEPARES DE
+        # PLUSIEURS MOTS ont survecu : « NINGUN casa rural disponible ».
+        #
+        # Aucun controleur ne pouvait le voir : ils comparent des arborescences de cles, cherchent
+        # la presence d'un terme, mesurent l'ecart au francais, comptent des caracteres. AUCUN NE
+        # LIT UNE PHRASE. Une langue peut etre structurellement conforme, terminologiquement
+        # exacte, dimensionnee pour la SERP — et fautive.
+        #
+        # CE CONTROLE NE SE DECLENCHE QUE SI LE GLOSSAIRE DECLARE UN `genre`. Sans declaration il
+        # se tait, et c'est la bonne reponse : le genre est le point fixe, et un point fixe
+        # devine ne vaut rien. La colonne est OPTIONNELLE (TF-0660) — son absence n'est pas un
+        # defaut du produit, c'est une mesure qui n'est pas outillee ici.
+        for ecart in _glossaire.confronter_genre(par_locale, lu_glossaire["termes"]):
+            findings.append(
+                Finding(
+                    id=f"i18n:genre:{dossier}:{ecart['locale']}:{ecart['cle']}",
+                    classe=classes.I18N,
+                    localisation=f"{dossier}/{ecart['locale']}.json:{ecart['cle']}",
+                    message=(
+                        f"« {ecart['vu']} » : le determinant « {ecart['determinant']} » est reste "
+                        f"au genre oppose alors que le glossaire declare « {ecart['retenu']} » du "
+                        f"genre {ecart['genre']} en « {ecart['locale']} ». Une substitution de "
+                        f"terme qui "
+                        "change le genre laisse survivre les accords SEPARES du nom — onze sont "
+                        "parties en production derriere une CI verte (TF-0660)"
+                    ),
+                    risque=coter(PAN, "i18n:genre", dossier),
+                )
+            )
+
+        # (i) UNE LOCALE SE CONTREDIT-ELLE AVEC ELLE-MEME ? — TF-0663.
+        #
+        # LE FAIT : un audit a compare six familles de faits sur SEPT LANGUES et rendu ZERO ecart ;
+        # un controle mecanique des nombres l a confirme. La comparaison interlangue etait SAINE, et
+        # elle a laisse passer deux faits FAUX — parce qu ils etaient faux de la MEME FACON dans les
+        # sept langues. Une ville annoncee a 40 minutes dans une cle et a 45 dans deux autres.
+        #
+        # Verifier que sept langues disent la meme chose ne verifie pas qu UNE SEULE soit coherente
+        # avec elle-meme. Ce controle ne compare donc pas les locales entre elles : il regarde DANS
+        # chacune. Il ne demande AUCUNE declaration — la contradiction se lit dans le catalogue.
+        for ecart in _glossaire.confronter_coherence_interne(par_locale):
+            details = " · ".join(
+                f"{v} ({', '.join(cles[:2])})" for v, cles in sorted(ecart["valeurs"].items()))
+            findings.append(
+                Finding(
+                    id=f"i18n:coherence:{dossier}:{ecart['locale']}:{ecart['sujet']}",
+                    classe=classes.I18N,
+                    localisation=f"{dossier}/{ecart['locale']}.json",
+                    message=(
+                        f"« {ecart['locale']} » se contredit sur « {ecart['sujet']} » en "
+                        f"{ecart['unite']}(s) : {details}. Verifier que sept langues disent la "
+                        f"meme chose ne verifie pas qu une seule "
+                        "soit coherente avec elle-meme — un fait faux de la MEME facon partout "
+                        "passe toutes les comparaisons interlangues (TF-0663)"
+                    ),
+                    risque=coter(PAN, "i18n:coherence", dossier),
+                )
+            )
+
+            for ecart in _glossaire.confronter_emploi(par_locale, lu_glossaire["termes"]):
+                findings.append(
+                    Finding(
+                        id=f"i18n:glossaire:{dossier}:{ecart['locale']}:{ecart['pivot']}",
+                        classe=classes.I18N,
+                        localisation=f"{dossier}/{ecart['locale']}.json",
+                        message=(
+                            f"« {ecart['locale']} » : le terme RETENU « {ecart['retenu']} » est "
+                            f"employe ZERO fois, quand le terme PROSCRIT « {ecart['proscrit']} » l "
+                            f"est {ecart['vus_proscrit']} fois. Le glossaire a ete corrige, les "
+                            f"chaines n ont "
+                            "pas suivi — et un terme retenu a zero emploi n est pas une nuance a "
+                            "relire, c est un echec (TF-0656)"
+                        ),
+                        risque=coter(PAN, "i18n:glossaire", dossier),
+                    )
+                )
+            confrontes = _glossaire.confronter(
+                par_locale, lu_glossaire["termes"], lus_faits["faits"])
+            for ecart in confrontes:
+                findings.append(
+                    Finding(
+                        id=f"i18n:nombre:{dossier}:{ecart['locale']}:{ecart['cle']}",
+                        classe=classes.I18N,
+                        localisation=f"{dossier}/{ecart['locale']}.json",
+                        message=(
+                            f"« {ecart['cle']} » en « {ecart['locale']} » annonce {ecart['vu']} "
+                            f"{ecart['terme']}(s) quand la donnee declaree en compte "
+                            f"{ecart['attendu']} — « {ecart['extrait']} ». Un nombre ecrit dans "
+                            "une chaine ne se met pas a jour tout seul, et les locales peuvent "
+                            "toutes s accorder sur le meme chiffre faux"
+                        ),
+                        risque=coter(PAN, "i18n:nombre", dossier),
+                    )
+                )
+
+        # (k) UN NOMBRE QUE RIEN DU DEPOT NE REND — TF-0665, quatrieme controle de la famille.
+        #
+        # LE FAIT : une capacite annoncee a 23 dans la meta et a 30 dans l intro, SUR LA MEME
+        # PAGE, quand la donnee en donne 22 pour les trois hebergements que ce profil selectionne.
+        # 23 ne correspond a AUCUNE SOURCE : ni juste, ni recopie de travers — sans origine.
+        #
+        # POURQUOI LES TROIS CONTROLES CI-DESSUS LE MANQUENT TOUS, chacun pour sa raison : (d)-(f)
+        # comparent les locales entre elles et les sept disaient 23 ; (i) ne juge que distance et
+        # duree — borne DECLAREE, pas oubliee ; (g) ne confronte que les pivots DECLARES au
+        # glossaire, et la capacite n en est pas un.
+        #
+        # CE CONTROLE EST D UNE AUTRE NATURE : les trois lisent un catalogue et comparent, celui-ci
+        # RECALCULE depuis la donnee — la somme des capacites des hebergements que la selection
+        # designe. Sa PRECISION est mesuree (0 % sur 4 886 chaines reelles) et c est elle qui le
+        # tient ETEINT par defaut : sans FORGE_TESTS_ORPHELINS, il compte et DECLARE, il n accuse
+        # pas. Voir `forge_tests/orphelins.py` pour la mesure et pour ce qui manque a le rendre
+        # bloquant.
+        findings_orph, motifs_orph = _findings_orphelins(cible, par_locale, dossier)
+        findings.extend(findings_orph)
+        motifs.extend(motifs_orph)
+    return findings, motifs
+
+
+def _findings_orphelins(
+    cible: Path, par_locale: dict[str, dict[str, str]], dossier: str
+) -> tuple[list[Finding], list[str]]:
+    """TF-0665 — les nombres attaches a un denombrable DECLARE que rien du depot ne rend."""
+    declaration = _orphelins.lire_declaration(_orphelins.chemin_declaration(cible))
+    if declaration["motif"]:
+        return [], [f"i18n : nombres orphelins NON juges — {declaration['motif']}"]
+    fichiers = _orphelins.fichiers_de_donnees(cible)
+    if not fichiers:
+        return [], [
+            "i18n : nombres orphelins NON juges — aucun fichier de donnees declare "
+            f"({_orphelins.VARIABLE_DONNEES}). Deviner rendrait ce controle ACCUSATEUR, pas muet"
+        ]
+    lus, anonymes = _orphelins.enregistrements(fichiers)
+    findings: list[Finding] = []
+    motifs = list(_orphelins.NON_JUGE)
+    if anonymes:
+        motifs.append(
+            f"i18n/orphelins : {len(anonymes)} enregistrement(s) SANS cle nommante — leurs "
+            "valeurs comptent dans les agregats globaux, mais aucune selection declaree ne peut "
+            "les viser"
+        )
+    for nom, denombrable in sorted(declaration["denombrables"].items()):
+        rendues = _orphelins.valeurs_rendues(
+            lus, denombrable["champ"], denombrable.get("selections")
+        )
+        resultat = _orphelins.confronter(par_locale, denombrable, rendues)
+        motifs.append(
+            f"i18n/orphelins : denombrable « {nom} » — {resultat['juges']} nombre(s) attache(s) "
+            f"juge(s) sur {sum(len(v) for v in par_locale.values())} chaine(s), "
+            f"{len(resultat['orphelins'])} sans origine dans la donnee "
+            f"({len(rendues)} valeur(s) rendue(s) par `{denombrable['champ']}` et ses agregats). "
+            + (
+                "Drapeau FORGE_TESTS_ORPHELINS ACTIF : les candidats sortent en findings `signale`"
+                if _orphelins.actif()
+                else "Drapeau FORGE_TESTS_ORPHELINS ABSENT : candidats DECLARES, aucun finding — "
+                f"precision mesuree {_orphelins.PRECISION_MESUREE:.0%}, seuil de publication "
+                f"bloquante {_orphelins.SEUIL_PRECISION_BLOQUANTE:.0%}"
+            )
+        )
+        if not _orphelins.actif():
+            for candidat in resultat["orphelins"][:5]:
+                motifs.append(
+                    f"i18n/orphelins : candidat « {candidat['cle']} » en « {candidat['locale']} » "
+                    f"annonce {candidat['vu']} {candidat['terme']} — aucune valeur, somme, compte "
+                    f"ni borne de la donnee ne rend ce nombre : « {candidat['extrait']} »"
+                )
+            continue
+        for candidat in resultat["orphelins"]:
+            findings.append(
+                Finding(
+                    id=f"i18n:orphelin:{dossier}:{candidat['locale']}:{candidat['cle']}",
+                    classe=classes.I18N,
+                    localisation=f"{dossier}/{candidat['locale']}.json:{candidat['cle']}",
+                    message=(
+                        f"« {candidat['cle']} » en « {candidat['locale']} » annonce "
+                        f"{candidat['vu']} {candidat['terme']}, et AUCUNE source du depot ne rend "
+                        f"ce nombre — ni une valeur de `{denombrable['champ']}`, ni une somme, ni "
+                        f"un compte, ni une borne, ni la somme sur une selection declaree. "
+                        f"« {candidat['extrait']} ». Un nombre que rien ne rend n a pas d origine "
+                        "(TF-0665)"
+                    ),
+                    severite="signale",
+                    risque=coter(PAN, "i18n:orphelin", dossier),
+                )
+            )
+    return findings, motifs
+
+
+def analyser(cible: Path) -> SortieAdaptateur:
+    non_juge = [*NON_JUGE, *_catalogue.NON_JUGE]
+    # TF-0383 — le CATALOGUE se juge d abord, et INDEPENDAMMENT du build servi. C est tout le
+    # sujet : un produit a repli de langue sans prefixe d URL n a rien a montrer au build (toutes
+    # les routes existent partout, remplies par la langue par defaut) et tout a montrer au
+    # catalogue. Avant cette levee, le pan rendait SKIP sur un produit dont 5 locales sur 7
+    # portaient 61 % de trous — mesure du 19/08.
+    findings_catalogue, motifs_catalogue = _findings_catalogue(cible)
+    non_juge.extend(motifs_catalogue)
+
+    # TF-0470 — les ROUTES DECLAREES se jugent AVANT le build, et sans lui. C est tout le sujet :
+    # un produit rendu cote serveur n emet aucune arborescence, et la parite de routes sortait en
+    # SKIP alors que le constat fondateur du pan vivait en production.
+    declarees = routes_de_reference()
+    findings_routes: list[Finding] = []
+    if declarees:
+        constats_decl, motifs_decl = constats_routes_declarees(declarees)
+        non_juge.extend(motifs_decl)
+        for identifiant, message in constats_decl:
+            findings_routes.append(Finding(
+                id=identifiant, classe=classes.DIVERGENCE, localisation="routes declarees",
+                message=message, severite="bloquant",
+                risque=coter(PAN, identifiant, str(cible)),
+            ))
+    else:
+        non_juge.append(
+            "i18n : AUCUNE route declaree (FORGE_TESTS_I18N_ROUTES) — la parite de routes n est "
+            "jugee QUE contre l arborescence servie. Sur un produit rendu cote serveur "
+            "(`output: 'standalone'`), il n y a donc rien de juge : declarer les routes attendues "
+            "par locale dans un fichier JSON versionne, `{\"fr\": [\"/\", …], \"en\": […]}`. "
+            "Rien de declare, rien de juge — le pan ne devine pas les routes d un produit"
+        )
+
+    # TF-2670 — la PÉREMPTION se juge aussi sans build : une traduction dont la source a changé
+    # est bien formée, servie, et fausse ; aucune arborescence ne le montre.
+    constats_peremption, motifs_peremption, peremption_declaree = _peremption.constats(cible)
+    non_juge.extend(motifs_peremption)
+    findings_peremption = [
+        Finding(
+            id=identifiant, classe=classes.I18N, localisation=localisation, message=message,
+            severite="signale", risque=coter(PAN, identifiant, str(cible)),
+        )
+        for identifiant, localisation, message in constats_peremption
+    ]
+
+    # (l) TF-1318 — les bornes SERP se LISENT d'abord : sans build, le rapport doit pouvoir dire
+    # qu'elles étaient déclarées et n'ont pas été jouées, plutôt que se taire.
+    bornes, motif_bornes = bornes_serp()
+
+    build = build_servi(cible)
+    if build is None:
+        if bornes is not None or motif_bornes:
+            non_juge.append(
+                "i18n : dimensionnement SERP (TF-1318) NON joue — "
+                + (motif_bornes or "bornes declarees, mais AUCUN build servi lu : les balises "
+                   "`title` et `description` se mesurent sur les pages servies")
+            )
+        catalogue_a_parle = any("catalogue `" in m for m in motifs_catalogue)
+        if findings_catalogue or findings_routes or catalogue_a_parle or peremption_declaree:
+            # Le catalogue a parle : le pan MESURE, meme sans build. Le build reste nomme comme
+            # ce qui manque pour juger la parite de routes et la langue servie.
+            non_juge.append(
+                "i18n : AUCUN build servi lu — les controles de parite de routes, de navigation "
+                "et de langue du contenu ne sont pas joues ici ; seul le CATALOGUE SOURCE l est. "
+                f"Declarer le dossier construit dans FORGE_TESTS_I18N_BUILD (cherche : "
+                f"{', '.join(DOSSIERS_BUILD)} sous {cible})"
+            )
+            return SortieAdaptateur(
+                NOM, PAN, str(cible),
+                "FAIL" if (findings_catalogue or findings_routes or findings_peremption)
+                else "PASS",
+                findings=[*findings_catalogue, *findings_routes, *findings_peremption],
+                non_juge=non_juge,
+            )
+        motif = sans_objet(cible)
+        if motif:
+            return SortieAdaptateur(
+                NOM, PAN, str(cible), "NA", non_juge=[*non_juge, f"i18n : SANS OBJET — {motif}"]
+            )
+        return SortieAdaptateur(
+            NOM, PAN, str(cible), "SKIP",
+            non_juge=[
+                *non_juge,
+                "i18n : produit multilingue par ses sources, mais AUCUN build servi lu NI "
+                "catalogue de chaines JSON par locale — "
+                f"declarer le dossier construit dans FORGE_TESTS_I18N_BUILD (cherche : "
+                f"{', '.join(DOSSIERS_BUILD)} sous {cible}). Un site rendu côté serveur (FastAPI, "
+                "contenus Markdown…) n'émet aucune arborescence : le pan ne le mesure qu'après un "
+                "export statique — un script du produit qui appelle l'application en process pour "
+                "chaque route et écrit le HTML dans un dossier, désigné ensuite dans "
+                "FORGE_TESTS_I18N_BUILD. Recette : README, section « Site rendu côté serveur »",
+            ],
+        )
+
+    pages = pages_servies(build)
+    locales = locales_servies(pages)
+    if not locales:
+        return SortieAdaptateur(
+            NOM, PAN, str(cible), "NA",
+            non_juge=[*non_juge, f"i18n : SANS OBJET — {sans_objet(cible)}"],
+        )
+
+    par_locale = _par_locale(pages, locales)
+    attendues = sorted({route for routes in par_locale.values() for route in routes})
+    non_juge.append(
+        f"i18n : build lu `{build}` — {len(pages)} page(s) servie(s), locales "
+        f"{', '.join(sorted(nom or 'defaut (sans prefixe)' for nom in par_locale))} ; parite "
+        f"mesuree contre l UNION des routes ({len(attendues)} routes attendues par locale)"
+    )
+    # TF-0295 (levée 3) : QUELS lexiques ont jugé, et ce qui a été écarté. « aucun français
+    # détecté » et « la langue n a été mesurée contre aucun lexique » ne sont pas le même rapport.
+    table = lexiques()
+    declares, motifs_lexique = _lexiques_declares()
+    non_juge.append(
+        "i18n : langue du contenu jugee contre les lexiques "
+        + ", ".join(f"{code} ({len(mots)} mots-outils)" for code, mots in sorted(table.items()))
+        + (
+            f" — dont declares par le projet : {', '.join(sorted(declares))}"
+            if declares
+            else " — aucun lexique declare par le projet (FORGE_TESTS_I18N_LEXIQUES)"
+        )
+    )
+    non_juge.extend(f"i18n : {motif}" for motif in motifs_lexique)
+
+    findings: list[Finding] = [*findings_peremption]
+    tenus: list[str] = []
+
+    # (a) PARITÉ DE ROUTES — une comparaison exacte : la route est servie dans cette locale, ou
+    #     elle ne l est pas. C est le contrôle qui a manqué à la route 201/201 du 15/08.
+    # (c) LANGUE DU CONTENU — heuristique, sur les seules locales non françaises réellement
+    #     servies. Portée sur le MÊME élément de surface que (a) : une route servie dans la
+    #     mauvaise langue n est pas « couverte », elle est servie à côté.
+    for locale in sorted(par_locale):
+        for route in attendues:
+            identifiant = f"i18n:route:{locale or 'defaut'}:{route}"
+            servie = par_locale[locale].get(route)
+            if servie is None:
+                findings.append(
+                    Finding(
+                        id=identifiant,
+                        classe=classes.I18N,
+                        localisation=str(build),
+                        message=(
+                            f"route « {_route_servie(locale, route)} » absente du build : servie "
+                            f"dans {len([1 for autre in par_locale if route in par_locale[autre]])}"
+                            f" locale(s) sur {len(par_locale)}, pas dans "
+                            f"« {locale or 'defaut'} »"
+                        ),
+                        risque=coter(PAN, identifiant, str(build)),
+                    )
+                )
+                continue
+            # TF-0295 (levée 3) : toute locale PRÉFIXÉE est jugée, contre tous les lexiques sauf
+            # le sien. La locale par défaut, elle, n a pas de préfixe et donc pas de langue
+            # opposable — la juger reviendrait à deviner la langue du site.
+            mesure = _constat_de_langue(servie, locale, table) if locale else None
+            if mesure is not None:
+                langue, densite, mots = mesure
+                findings.append(
+                    Finding(
+                        id=identifiant,
+                        classe=classes.I18N,
+                        localisation=str(servie),
+                        message=(
+                            f"page servie sous « /{locale} » dont le contenu est en "
+                            f"« {langue} » : {densite:.0%} de mots-outils {langue} sur {mots} "
+                            f"mots (seuil {SEUIL_DENSITE_FR:.0%}) — heuristique, contestable "
+                            "par déclaration"
+                        ),
+                        risque=coter(PAN, identifiant, str(servie)),
+                    )
+                )
+                continue
+            tenus.append(identifiant)
+
+    # (b) PARITÉ DE NAVIGATION — le menu de la page d accueil de chaque locale. 4 entrées contre
+    #     9, non détecté depuis juin : personne ne comparait deux locales entre elles.
+    #
+    #     TF-0295 (levée 1) : l appariement se fait par ENTRÉE, plus par COMPTE. Deux menus de
+    #     même taille aux entrées DIFFÉRENTES passaient le contrôle — un menu qui a perdu
+    #     « Tarifs » et gagné « Blog » est amputé pour le visiteur, et il l est en silence. La
+    #     clé est la destination délocalisée, seule chose qu on puisse comparer entre deux
+    #     langues, et les entrées manquantes sont NOMMÉES.
+    menus = {
+        locale: entrees_de_menu(_lire(fichier), locales)
+        for locale, routes in par_locale.items()
+        if (fichier := routes.get("/")) is not None
+    }
+    muettes = [locale or "defaut" for locale, menu in menus.items() if not menu]
+    if muettes:
+        non_juge.append(
+            "i18n : aucune entree de navigation lisible (`<nav>`, `<footer>`, role=navigation "
+            "ou contentinfo) sur la page d accueil des locales "
+            f"{', '.join(sorted(muettes))} — parite de navigation NON jugee pour elles"
+        )
+    lisibles = {locale: menu for locale, menu in menus.items() if menu}
+    if len(lisibles) > 1:
+        # La référence est le menu le plus RICHE en entrées distinctes : c est celui qui dit ce
+        # que le produit sait offrir. À égalité, la locale de plus petit nom, pour que deux runs
+        # sur le même build rendent le même verdict.
+        plus_riche = max(sorted(lisibles), key=lambda locale: len(set(lisibles[locale])))
+        reference = dict.fromkeys(lisibles[plus_riche])  # ordre du document, doublons ôtés
+        for locale, menu in sorted(lisibles.items()):
+            manquantes = [entree for entree in reference if entree not in set(menu)]
+            if not manquantes:
+                continue
+            identifiant = f"i18n:navigation:{locale or 'defaut'}"
+            findings.append(
+                Finding(
+                    id=identifiant,
+                    classe=classes.I18N,
+                    localisation=str(par_locale[locale]["/"]),
+                    message=(
+                        f"menu de la locale « {locale or 'defaut'} » : {len(set(menu))} "
+                        f"entree(s) distincte(s) contre {len(reference)} en "
+                        f"« {plus_riche or 'defaut'} » — manquent "
+                        f"{len(manquantes)} entree(s) : "
+                        + ", ".join(f"« {entree} »" for entree in manquantes)
+                    ),
+                    risque=coter(PAN, identifiant, str(par_locale[locale]["/"])),
+                )
+            )
+
+    # (l) DIMENSIONNEMENT SERP — TF-1318. Joué sur le MÊME build, locale par locale, contre des
+    #     bornes DÉCLARÉES. Il ne touche ni à l'inventaire ni à la couverture : une route au titre
+    #     trop long est servie, elle est seulement coupée dans la page de résultats.
+    if bornes is None:
+        non_juge.append(
+            "i18n : dimensionnement SERP (TF-1318) NON juge — "
+            + (motif_bornes or "aucune borne declaree (FORGE_TESTS_SERP_BORNES : JSON {source, "
+               "verifie_le, bornes}). Une borne de troncature est une donnee externe perissable : "
+               "elle se declare, sourcee et datee, elle ne s invente pas dans un controle")
+        )
+    else:
+        hors_bornes, mesure_serp = constats_serp(par_locale, bornes)
+        for locale, route, balise, longueur, sens, borne, texte, fichier in hors_bornes:
+            findings.append(
+                Finding(
+                    id=f"i18n:serp:{locale or 'defaut'}:{route}:{balise}",
+                    classe=classes.I18N,
+                    localisation=str(fichier),
+                    message=(
+                        f"{balise} de « {_route_servie(locale, route)} » (locale "
+                        f"{locale or 'defaut'}) : {longueur} caractere(s), "
+                        + ("au-dela du maximum" if sens == "max" else "en deca du minimum")
+                        + f" declare de {borne} — « {texte[:90]}"
+                        + ("…" if len(texte) > 90 else "") + " ». "
+                        "Une traduction change la longueur du texte, et un titre tronque en SERP "
+                        f"perd ce qui venait apres la coupe (bornes : {bornes['source']}, "
+                        f"verifiees le {bornes['verifie_le']})"
+                    ),
+                    risque=coter(PAN, f"i18n:serp:{locale or 'defaut'}", str(fichier)),
+                )
+            )
+        non_juge.append(
+            f"i18n : dimensionnement SERP (TF-1318) juge contre les bornes declarees — source "
+            f"« {bornes['source']} », verifiees le {bornes['verifie_le']} ; "
+            f"{mesure_serp['pages']} page(s), {mesure_serp['mesurees']['title']} title et "
+            f"{mesure_serp['mesurees']['description']} description(s) mesure(s), "
+            f"{len(hors_bornes)} hors borne ; {sum(mesure_serp['absentes'].values())} balise(s) "
+            "absente(s), non jugee(s) ici. Le compte est en CARACTERES : la troncature d un moteur "
+            "se fait en largeur de pixels, que ce compte approche sans la mesurer"
+        )
+
+    findings.sort(key=lambda finding: finding.risque or 0, reverse=True)
+    total = len(par_locale) * len(attendues)
+    return SortieAdaptateur(
+        adaptateur=NOM,
+        pan=PAN,
+        cible=str(cible),
+        verdict="FAIL" if findings else "PASS",
+        findings=findings,
+        non_juge=non_juge,
+        surface={
+            "inventorie": total,
+            "exerce": len(tenus),
+            "ratio": round(len(tenus) / total, 4) if total else 0.0,
+            "seuil": SEUIL,
+            "elements_exerces": sorted(tenus),
+            "elements_non_exerces": sorted(
+                f"i18n:route:{locale or 'defaut'}:{route}"
+                for locale in par_locale
+                for route in attendues
+                if f"i18n:route:{locale or 'defaut'}:{route}" not in set(tenus)
+            ),
+        },
+    )

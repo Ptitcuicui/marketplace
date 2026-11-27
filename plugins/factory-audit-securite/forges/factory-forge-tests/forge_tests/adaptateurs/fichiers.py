@@ -1,0 +1,141 @@
+"""Adaptateur Fichiers — chemins de parsing par AST (P3), couverture par exécution (P2).
+
+Même bascule que le pan Batch : plus de tuple VARIANTES déclaré dans la source, plus de
+recoupement textuel. Les chemins de parsing sont dérivés de l arbre syntaxique, et « exercé »
+veut dire « ligne réellement exécutée par la suite ».
+"""
+
+from __future__ import annotations
+
+import ast
+from pathlib import Path
+
+from forge_tests.disposition import paquet_sources
+from forge_tests.execution import (
+    executees,
+    motif_indisponibilite,
+    sortie_delai_depasse,
+    sortie_suite_rouge,
+)
+from forge_tests.noyau import Element, SortieAdaptateur, evaluer_surface
+
+NOM, PAN, SEUIL = "fichiers-python", "fichiers", 1.0
+
+# A-5 : ce qu il FAUDRAIT pour couvrir ce pan — publie tel quel au rapport.
+POUR_COUVRIR = (
+    "exposer le module d'import/parsing sous `backend/app/importer.py` (ou un nom portant "
+    "`import`/`parse`/`fichier`) et exercer chacun de ses chemins d'erreur"
+)
+
+# Chapitre(s) de cahier de tests que ce pan alimente. Le cahier et le dashboard les
+# DERIVENT du registre : une liste ecrite ailleurs aurait laisse un pan futur invisible.
+# `decoupe` nomme l axe de sous-chapitrage ; un axe inconnu retombe sur « element », et le
+# repli est DECLARE au cahier plutot que silencieux.
+CHAPITRES = (
+    {"code": "T5", "famille": "technique", "titre": "Fichiers",
+     "decoupe": "format", "axe_cas": "unitaire"},
+)
+
+FICHIER = "importer.py"
+
+NON_JUGE = [
+    "fichiers : les chemins sont les branches du module de parsing ; une variante de format qui "
+    "ne produit aucune branche dédiée (encodage géré par la bibliothèque) reste invisible",
+]
+
+
+def _src(cible: Path) -> Path:
+    # Paquet DECOUVERT, pas suppose `app` — voir `forge_tests.disposition`.
+    racine = paquet_sources(cible)
+    return (racine or cible / "backend" / "app") / FICHIER
+
+
+def inventaire(cible: Path) -> list[Element]:
+    src = _src(cible)
+    if not src.exists():
+        return []
+    arbre = ast.parse(src.read_text(encoding="utf-8"), filename=str(src))
+    elements: list[Element] = []
+    vus: set[int] = set()
+    for noeud in ast.walk(arbre):
+        blocs: list[tuple[str, list[ast.stmt]]] = []
+        if isinstance(noeud, ast.If):
+            blocs = [("condition vraie", noeud.body), ("condition fausse", noeud.orelse)]
+        elif isinstance(noeud, ast.ExceptHandler):
+            blocs = [("repli sur exception", noeud.body)]
+        elif isinstance(noeud, (ast.For, ast.While)):
+            blocs = [("itération", noeud.body)]
+        for libelle, corps in blocs:
+            if not corps or corps[0].lineno in vus:
+                continue
+            ligne = corps[0].lineno
+            vus.add(ligne)
+            elements.append(
+                Element(
+                    f"chemin:{FICHIER}:{ligne}",
+                    PAN,
+                    f"chemin de parsing — {libelle}, ligne {ligne}",
+                    str(src),
+                )
+            )
+    return elements
+
+
+def exerces(cible: Path) -> set[str] | None:
+    lignes = executees(cible, FICHIER)
+    if lignes is None:
+        return None
+    return {
+        e.id for e in inventaire(cible) if int(e.id.rsplit(":", 1)[1]) in lignes
+    }
+
+
+def analyser(cible: Path) -> SortieAdaptateur:
+    # TF-1794 : la preuve d absence se lit AVANT toute exécution. Sans module d import, il n y a
+    # rien à couvrir, et la mesure de la suite n a rien à en dire.
+    motif_sans_objet = sans_objet(cible)
+    if motif_sans_objet:
+        return evaluer_surface(
+            NOM, PAN, str(cible), [], set(), SEUIL, NON_JUGE, sans_objet=motif_sans_objet
+        )
+    couvert = exerces(cible)
+    if couvert is None:
+        # TF-2269 : une suite ROUGE rend FAIL et nomme le test ; TF-2311 : un délai dépassé rend
+        # DELAI_DEPASSE.
+        rouge = sortie_suite_rouge(NOM, PAN, cible, NON_JUGE) or sortie_delai_depasse(
+            NOM, PAN, cible, NON_JUGE
+        )
+        if rouge is not None:
+            return rouge
+        return SortieAdaptateur(
+            NOM,
+            PAN,
+            str(cible),
+            "SKIP",
+            non_juge=[
+                *NON_JUGE,
+                "fichiers : couverture d exécution indisponible — "
+                + motif_indisponibilite(
+                    cible, "backend", "suite rouge ou environnement du projet absent"
+                ),
+            ],
+        )
+    return evaluer_surface(
+        NOM, PAN, str(cible), inventaire(cible), couvert, SEUIL, NON_JUGE,
+        sans_objet=sans_objet(cible),
+    )
+
+
+def sans_objet(cible: Path) -> str | None:
+    """PREUVE d absence de lecture de fichiers (NA, 14/08) — pas une supposition.
+
+    Un produit qui n importe ni ne parse aucun fichier n a pas de chemins de lecture à couvrir.
+    La preuve est positive : le module que ce pan déclare lire n existe pas.
+    """
+    src = _src(cible)
+    if src.exists():
+        return None
+    return (
+        f"aucun module d import/parsing (`{src.name}`) dans les sources : ce projet ne lit "
+        "aucun fichier entrant"
+    )

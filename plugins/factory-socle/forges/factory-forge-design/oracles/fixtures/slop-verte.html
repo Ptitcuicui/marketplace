@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Fixture verte — oracle-slop</title>
+<!-- provenance : chantier forge-design, 04/08/2026. Aucune règle S1-S10 ne doit se déclencher. -->
+<style>
+  :root {
+    --encre: #171a21;
+    --papier: #f3f1ec;
+    --surface: #e9e5dc;
+    --trait: #cfc9bd;
+    --signal: #8a4b2a;
+    /* TF-0426 — une valeur PURE déclarée comme token de charte (ici le blanc de surface que
+       la charte Factory prescrit) est exemptée de S4 : la charte prime, et l'exemption est
+       une liste fermée (les tokens), pas un laissez-passer. Un #000 posé dans .x reste un majeur. */
+    --blanc-charte: #FFFFFF;
+    /* TF-0335 — cette fixture est VERTE pour oracle-slop, et elle doit l être aussi seule
+       sous oracle-motion : une fixture verte qui échoue à un autre oracle du même dépôt
+       est du bruit de fond, la maladie que TF-0228 a coûté cher à éteindre. */
+    --dur-normale: 280ms;
+    --ease-sortie: cubic-bezier(.16, 1, .3, 1);
+  }
+  body {
+    font-family: "Source Serif 4", Georgia, serif;
+    background: var(--papier);
+    color: var(--encre);
+    margin: 0;
+  }
+  h1, h2, h3 { font-family: "Bricolage Grotesque", "Trebuchet MS", sans-serif; }
+
+  /* filet d'une largeur de trait : autorisé */
+  .alerte { border-left: 1px solid var(--trait); padding: 12px 16px; background: var(--surface); }
+
+  /* TF-1056 — triangle CSS (chevron de pliage) : construction canonique du socle
+     factory-page-html (.arbre-glyphe), exemptée de S1 (les quatre conditions
+     à la fois : width:0, height:0, border-top et border-bottom transparents). */
+  .arbre-glyphe { display: inline-block; width: 0; height: 0; border-left: 5px solid currentColor; border-top: 4px solid transparent; border-bottom: 4px solid transparent; }
+
+  /* rayons variés, pas de rectangle arrondi générique */
+  .carte { border-radius: 10px; }
+  .champ { border-radius: 4px; }
+  .bouton { border-radius: 2px; }
+
+  /* décélération exponentielle, sans dépassement */
+  .carte { transition: transform var(--dur-normale) var(--ease-sortie); }
+
+  /* R10 — la révocation, trois lignes, WCAG 2.2 SC 2.3.3. */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+  }
+</style>
+</head>
+<body>
+  <h1>Tableau de bord</h1>
+  <p>Bienvenue sur votre espace. <span class="signal">Trois traitements</span> sont en cours.</p>
+
+  <div class="alerte">Quota bientôt atteint.</div>
+
+  <!-- TF-1056 — chevron de pliage rendu par le triangle CSS ci-dessus -->
+  <button aria-expanded="false"><i class="arbre-glyphe" aria-hidden="true"></i> Déplier</button>
+
+  <!-- trois blocs de même classe mais sans icône : ce n'est pas une grille templatée -->
+  <section class="liste">
+    <div class="ligne"><h3>Rapide</h3><p>Traitement immédiat.</p></div>
+    <div class="ligne"><h3>Fiable</h3><p>Disponibilité tenue.</p></div>
+    <div class="ligne"><h3>Ouvert</h3><p>Interfaces documentées.</p></div>
+  </section>
+
+  <!-- graphique légendé : ce n'est pas de la décoration -->
+  <figure>
+    <svg viewBox="0 0 320 140" role="img" aria-labelledby="t-vol">
+      <title id="t-vol">Volume traité par semaine, 7 dernières semaines</title>
+      <polyline points="0,110 50,92 100,98 150,64 200,72 250,40 300,48" fill="none" stroke="var(--signal)"/>
+      <text x="0" y="132">S1</text>
+      <text x="286" y="132">S7</text>
+    </svg>
+    <figcaption>Volume traité par semaine.</figcaption>
+  </figure>
+  <!-- TF-0436 — contenu CITÉ : un pictogramme dans une source embarquée verbatim n'est pas de
+       l'interface ; S6 doit rester muet ici (et le juger serait falsifier la citation). -->
+  <details><summary>Source citée : registre des décisions</summary>
+    <pre data-cite>D-12 — mapping contexte↔provider : conservé tel quel, ↔ compris.</pre>
+    <blockquote>« Le symbole ☑ figure dans le document d'origine. »</blockquote>
+  </details>
+</body>
+</html>

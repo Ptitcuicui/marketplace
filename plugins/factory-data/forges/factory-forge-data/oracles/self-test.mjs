@@ -10,6 +10,7 @@ import os from "node:os";
 import path from "node:path";
 import zlib from "node:zlib";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { candidats as candidatsSkill } from "./lib/trouver-skill.mjs";
 
 const ici = path.dirname(fileURLToPath(import.meta.url));
 const fx = f => path.join(ici, "..", "fixtures", f);
@@ -435,8 +436,14 @@ console.log(String.fromCharCode(10) + "CV5/CV6 (TF-0911) — le taux de couvertu
 console.log(String.fromCharCode(10) + "TF-0379 — tout oracle cité en non_juge est RÉSOLVABLE" + String.fromCharCode(10));
 {
   // Les racines où un chemin de non_juge peut être résolu : ce dépôt, et les dépôts frères.
+  // Un chemin dans un skill d'une forge (`factory-forge-x/.claude/skills/<skill>/…`) se résout aussi
+  // là où le résolveur du parc trouve ce skill : forge embarquée dans une mallette (27/11/2026),
+  // le skill vit alors dans le plugin du socle, pas dans un dépôt frère.
   const racines = [path.join(ici, ".."), path.join(ici, "..", "..")];
-  const resolvable = chemin => racines.some(r => fs.existsSync(path.join(r, chemin)));
+  const DANS_SKILL = /^factory-forge-[^/]+\/(?:\.claude\/)?skills\/([^/]+)\/(.+)$/;
+  const resolvable = chemin => racines.some(r => fs.existsSync(path.join(r, chemin)))
+    || (DANS_SKILL.test(chemin) && candidatsSkill(DANS_SKILL.exec(chemin)[1], { depuis: ici })
+      .some(c => fs.existsSync(path.join(c.chemin, DANS_SKILL.exec(chemin)[2]))));
   const CITATION = /`([^`]*oracle-[\w.-]+\.(?:mjs|py))`/g;
   const NOM_NU = /\boracle-[\w-]+\b(?![\w.-]*\.(?:mjs|py))/g;
   const fantomesDe = texte => [...texte.matchAll(CITATION)].map(m => m[1]).filter(c => !resolvable(c));

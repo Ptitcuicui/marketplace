@@ -26,7 +26,9 @@
         "factory-forge-agents/.claude/skills/experts-forge",
         "factory-forge-agents/.claude/skills/accueil-factory",
         "factory-forge-design/skills/systeme-de-marque",
-        "factory-forge-agents/.claude/skills/mandat"
+        "factory-forge-agents/.claude/skills/mandat",
+        "factory-forge-agents/.claude/skills/ameliore-un-skill",
+        "factory-forge-agents/.claude/skills/write-a-skill"
       ],
       "agents": "factory-pilot/.claude/agents",
       "extra": "outils/socle",
@@ -53,6 +55,16 @@
           "marqueur": "Copie embarquée de la partie outil du pilot (doctrine, oracles, gabarits, scripts), livrée par la mallette factory-socle. Elle n'est pas un clone : rien ne s'y tire ni ne s'y pousse, et la marketplace la met à jour. Ce que le poste y écrit (TODO, retours) reste sur le poste.",
           "garder": [
             "^\\.claude/agents/"
+          ]
+        },
+        {
+          "depot": "factory-forge-design",
+          "garder": [
+            "^skills/"
+          ],
+          "exclure": [
+            "^(input|output)/",
+            "^TODO\\.md$"
           ]
         }
       ]
@@ -94,6 +106,9 @@
         "factory-forge-design/skills/studio-de-direction",
         "factory-forge-development/.claude/skills/integre-openai-gemini",
         "factory-forge-ops/skills/deploie-et-restaure"
+      ],
+      "forges": [
+        "factory-forge-ops"
       ]
     },
     {
@@ -111,7 +126,20 @@
       ],
       "forges": [
         "factory-forge-agents-security",
-        "factory-forge-websec"
+        "factory-forge-websec",
+        {
+          "depot": "factory-forge-audit",
+          "dependances_npm": true,
+          "garder": [
+            "^\\.github/workflows/"
+          ]
+        },
+        {
+          "depot": "factory-forge-tests",
+          "garder": [
+            "^\\.gitignore$"
+          ]
+        }
       ]
     },
     {
@@ -142,6 +170,14 @@
         "factory-forge-seo-geo/skills/audit-seo-geo",
         "factory-forge-agents/.claude/skills/animation-reseau",
         "factory-forge-design/skills/clip-de-presentation"
+      ],
+      "forges": [
+        {
+          "depot": "factory-forge-seo-geo",
+          "exclure": [
+            "^(input|output)/"
+          ]
+        }
       ]
     }
   ]

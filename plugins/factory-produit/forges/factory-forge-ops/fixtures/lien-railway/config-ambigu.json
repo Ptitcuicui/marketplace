@@ -1,0 +1,7 @@
+{
+  "user": { "token": "jeton-fictif-de-fixture-ne-jamais-afficher" },
+  "projects": {
+    "C:\\dev\\factory.example": { "projectPath": "C:\\dev\\factory.example", "project": "00000000-0000-0000-0000-000000000001" },
+    "c:\\dev\\factory.example": { "projectPath": "c:\\dev\\factory.example", "project": "00000000-0000-0000-0000-000000000005" }
+  }
+}

@@ -1,0 +1,658 @@
+#!/usr/bin/env node
+// oracle-tokens — Domaine « Système de marque : traçabilité des tokens » (déterministe).
+//
+// Règles T0–T8. Ce que l'oracle exige :
+//   T0  au moins un bloc de tokens exploitable (sinon rien n'est jugeable)
+//   T1  aucune couleur littérale hors des blocs qui définissent les tokens
+//   T2  aucune famille de police littérale hors des blocs de tokens
+//   T3  espacements en px multiples de 4 (échelle 4pt)
+//   T4  parité de thèmes : tout token défini en clair l'est aussi en sombre
+//   T5  contraste ≥ 4.5:1 sur les paires réellement posées l'une sur l'autre, par thème
+//   T6  chroma réduit aux extrêmes de luminosité (tokens OKLCH)
+//   T7  contraste NON TEXTUEL ≥ 3:1 des paires d'interface posées (WCAG 1.4.11, GL03)
+//   T8  focus PRESCRIT et contrasté : --focus-anneau / --focus-decalage existent,
+//       l'anneau tient ≥ 3:1 contre les surfaces de la page (RGAA 10.7, WCAG 2.4.7)
+//       — hors surfaces posées seulement sur un pseudo-élément ou dans un sous-arbre en
+//       pointer-events: none (TF-1662) ; T5 écarte de même un ::before/::after sans texte
+//
+// T7 et T8 (TF-0409, option O4 de l'étude RGAA) réutilisent l'appariement de T5 : mêmes
+// poses relevées dans le CSS, même héritage, même échappatoire déclarative — seul le seuil
+// et la nature de la paire changent. T7 se garde de juger ce qu'il ne peut pas qualifier :
+// WCAG 1.4.11 n'exige 3:1 que des frontières NÉCESSAIRES à identifier un composant, jamais
+// d'un séparateur décoratif ; un trait sous 3:1 est donc mesuré, signalé, et son rôle
+// déclaré non jugé — pas refusé à tort.
+//
+// Appariement de T5 — par CO-OCCURRENCE CSS, pas par nommage (TF-0276) :
+//   une règle qui pose color:var(--t) et background:var(--f) déclare la paire (t, f) ;
+//   une règle qui n'en pose qu'un est appariée à l'AMBIANCE (le color / background
+//   posé sur :root, html, body ou *), ce qui couvre l'héritage courant.
+//   Échappatoire explicite pour ce que le CSS ne dit pas :
+//     :root { --paires-contraste: --texte-sur-accent sur --accent, --encre sur --fond; }
+// Une paire jamais posée n'est PAS jugée : elle est déclarée au non_juge. Le produit
+// cartésien texte-* × fond-* sortait --texte-sur-accent en FAIL 1.0:1 sur --fond alors
+// qu'il n'y est jamais posé — l'oracle contredisait references/tokens.md de sa forge.
+// La convention de nommage (texte|text|fg|encre|ink × fond|bg|surface|papier|canvas)
+// ne sert plus qu'à ÉNUMÉRER les paires non jugées, jamais à en fabriquer.
+// Aucune paire résolvable ⇒ T5 déclaré non jugé, jamais approuvé par défaut.
+// Les paires se forment PAR THÈME (TF-2380) : en sombre, une règle [data-theme="dark"] remplace la pose de la
+// règle de base de même sélecteur ; en clair, elle ne pose rien. Une paire déclarée par --paires-contraste retire
+// les paires PRÉSUMÉES de son texte (TF-2381) et le dit au non_juge.
+//
+// Contrat : JSON {oracle,domaine,artefact,verdict,findings[],non_juge[]} · exit 0/1/2.
+// Usage : node oracle-tokens.mjs <fichier.html> [--tokens tokens.css] [--json-only]
+
+import fs from 'node:fs';
+import { parse as parseHtml, css, cssRulesDeep, lineOf } from './lib/html.mjs';
+import { parse as color, hsl, contrast, findColors, resoudreVar, extraireCouleurRaccourci, neutraliserVar } from './lib/color.mjs';
+import { plageDeRegles } from './lib/regles-jouees.mjs';
+// TF-2287 — les règles que l'oracle JOUE, déclarées UNE fois ; la plage citée à la sortie en dérive, jamais écrite en dur.
+// Une règle neuve s'ajoute ici : self-test-regles-jouees.mjs refuse la liste qui s'écarte des règles émises par ce fichier.
+const REGLES_JOUEES = ['T1', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'T8'];
+const REGLES_HORS_PLAGE = ['T0'];   // T0 : aucun token déclaré
+const PLAGE_JOUEE = plageDeRegles(REGLES_JOUEES);
+
+const DOM = 'Système de marque : traçabilité des tokens';
+const args = process.argv.slice(2);
+const file = args.find(a => !a.startsWith('--'));
+const tokensArg = args.includes('--tokens') ? args[args.indexOf('--tokens') + 1] : null;
+const jsonOnly = args.includes('--json-only');
+
+const NJ = [];
+const F = [];
+const add = (sev, regle, msg, where) => F.push({ sev, regle, msg, where });
+
+// TF-2535 — « sans écart » dit qu'un jugement a eu lieu : un SKIP n'a rien jugé, il ne rend jamais cette ligne.
+// TF-2584 — un écart est un constat qui n'est pas info : un constat d'information (T4, thème clair seul) ne remplace pas la ligne, il la précède.
+function sortir(verdict, code) {
+  const sansEcart = verdict !== 'SKIP' && !F.some(f => f.sev !== 'info');
+  process.stdout.write(JSON.stringify({
+    oracle: 'oracle-tokens', domaine: DOM, artefact: file || null,
+    verdict, findings: sansEcart ? [...F, { sev: 'info', regle: '—', msg: `${PLAGE_JOUEE} sans écart`, where: file }] : F,
+    non_juge: NJ,
+  }, null, jsonOnly ? 0 : 2));
+  process.exit(code);
+}
+
+if (!file || !fs.existsSync(file)) { NJ.push('fichier absent'); sortir('SKIP', 2); }
+
+const html = fs.readFileSync(file, 'utf8');
+const root = parseHtml(html);
+let cssText = css(html, root).replace(/\/\*[\s\S]*?\*\//g, ' ');
+if (tokensArg && fs.existsSync(tokensArg)) cssText = fs.readFileSync(tokensArg, 'utf8').replace(/\/\*[\s\S]*?\*\//g, ' ') + '\n' + cssText;
+
+const regles = cssRulesDeep(cssText);
+const estBlocToken = r =>
+  /:root|\[data-theme|^html(\.|:)|\.theme-/i.test(r.selector) || /--[\w-]+\s*:/.test(r.body) && /:root/i.test(r.selector);
+// R-30 du pilot (clair par defaut strict, TF-0158) : un bloc @media (prefers-color-scheme: dark)
+// n'est PAS le theme sombre — check_html G1 le refuse. Ses jetons ne sont lus ni en clair ni en
+// sombre, et la forme auto-sombre se signale en avertissement (troisieme vague du 15/10, suite TF-1771).
+const estAutoSombre = r => r.atRules.some(a => /prefers-color-scheme\s*:\s*dark/i.test(a));
+const estSombre = r => !estAutoSombre(r) && /dark/i.test(r.selector);
+// TF-1057 (mesuré le 11/09 sur Produit-62, RD-16) — un bloc `@media print` peut
+// redéclarer `:root, :root[data-theme="dark"] { --bg:#FFFFFF; … }` pour l'impression :
+// le SÉLECTEUR porte « dark », mais la VALEUR n'appartient à aucun des deux thèmes
+// d'écran. Sans ce filtre, la table « sombre » héritait d'un blanc d'impression, et
+// T5/T8 confrontaient cette valeur aux jetons d'encre sombre réels — un red flag de
+// contraste faux sur toute page qui définit correctement un thème sombre ET un bloc
+// print (la doctrine du socle boilerplate.html). Un bloc print ne décrit ni le thème
+// clair ni le thème sombre d'écran : ses tokens sont écartés de la lecture, pas
+// requalifiés dans l'un ou l'autre.
+const estImpression = r => r.atRules.some(a => /^@media\b[^{]*\bprint\b/i.test(a));
+
+// ── Collecte des tokens déclarés ───────────────────────────────────────────
+const tokens = { clair: new Map(), sombre: new Map() };
+let ecartesImpression = 0;
+let autoSombre = 0;
+for (const r of regles) {
+  if (!estBlocToken(r)) continue;
+  if (estImpression(r)) { ecartesImpression++; continue; }
+  if (estAutoSombre(r)) { autoSombre++; continue; }
+  const cible = estSombre(r) ? tokens.sombre : tokens.clair;
+  const re = /(--[\w-]+)\s*:\s*([^;]+)/g;
+  let m;
+  while ((m = re.exec(r.body))) cible.set(m[1], m[2].trim());
+}
+if (autoSombre > 0) {
+  add('avertissement', 'T4', `${autoSombre} bloc(s) de tokens sous @media (prefers-color-scheme: dark) : auto-sombre hérité de l'OS, retiré par R-30 (clair par défaut strict) et refusé par check_html G1 — ces jetons ne comptent pas comme thème sombre ; les déclarer sous :root[data-theme="dark"]`, 'bloc @media prefers-color-scheme');
+}
+if (ecartesImpression > 0) {
+  NJ.push(`${ecartesImpression} bloc(s) de tokens sous @media print écarté(s) de la lecture clair/sombre (TF-1057) — ils décrivent la mise en page imprimée, pas un thème d'écran ; contraste d'impression non jugé ici`);
+}
+
+if (tokens.clair.size === 0) {
+  add('bloquant', 'T0', 'aucun token déclaré : ni :root, ni [data-theme], ni fichier --tokens exploitable', file);
+  sortir('FAIL', 1);
+}
+
+// ── T1 · couleurs littérales hors blocs de tokens ──────────────────────────
+const PROPS_COULEUR = /(^|[;{\s])(color|background|background-color|border(?:-\w+)?-color|border|outline(?:-color)?|fill|stroke|caret-color|accent-color|text-decoration-color)\s*:\s*([^;]+)/gi;
+for (const r of regles) {
+  if (estBlocToken(r)) continue;
+  let m;
+  PROPS_COULEUR.lastIndex = 0;
+  while ((m = PROPS_COULEUR.exec(r.body))) {
+    const val = m[3];
+    // TF-1123 — le repli d'un var(--jeton, <repli>) n'est jamais la couleur appliquée : ne
+    // jamais chercher de littéral à l'intérieur d'un var(), une couleur hors var() reste jugée.
+    for (const c of findColors(neutraliserVar(val))) {
+      add('bloquant', 'T1', `couleur en dur « ${c.raw} » sur ${m[2]} : passer par var(--token)`,
+        `sélecteur « ${r.selector.slice(0, 60)} », ligne ~${lineOf(cssText, r.start)} du CSS`);
+    }
+  }
+}
+
+// ── T2 · familles de police littérales hors blocs de tokens ────────────────
+for (const r of regles) {
+  if (estBlocToken(r)) continue;
+  const re = /font-family\s*:\s*([^;]+)/gi;
+  let m;
+  while ((m = re.exec(r.body))) {
+    if (/var\(\s*--/.test(m[1])) continue;
+    add('bloquant', 'T2', `famille de police en dur « ${m[1].trim().slice(0, 50)} » : passer par var(--token)`,
+      `sélecteur « ${r.selector.slice(0, 60)} »`);
+  }
+}
+
+// ── T3 · échelle 4pt ───────────────────────────────────────────────────────
+const PROPS_ESPACE = /(^|[;{\s])(margin|padding|gap|row-gap|column-gap)(-top|-right|-bottom|-left|-block|-inline)?\s*:\s*([^;]+)/gi;
+for (const r of regles) {
+  let m;
+  PROPS_ESPACE.lastIndex = 0;
+  while ((m = PROPS_ESPACE.exec(r.body))) {
+    const val = m[4];
+    if (/var\(\s*--|calc\(|clamp\(|auto|%/.test(val)) continue;
+    for (const px of val.matchAll(/(-?[\d.]+)px/g)) {
+      const v = Math.abs(parseFloat(px[1]));
+      if (v !== 0 && v % 4 !== 0) {
+        add('majeur', 'T3', `espacement ${px[1]}px hors échelle 4pt sur ${m[2]}${m[3] || ''}`,
+          `sélecteur « ${r.selector.slice(0, 60)} »`);
+      }
+    }
+  }
+}
+
+// ── T4 · parité de thèmes ──────────────────────────────────────────────────
+// Le thème sombre est OPTIONNEL : la doctrine du socle (factory-page-html) est le thème
+// clair, confirmée par décision humaine du 09/08 (« les fiches HTML doivent être en thème
+// clair »). Un livrable clair seul est conforme ; en revanche, dès qu'un bloc sombre est
+// déclaré, la parité complète et les contrastes des deux thèmes restent exigés — un sombre
+// partiel est pire qu'aucun sombre.
+if (tokens.sombre.size === 0) {
+  add('info', 'T4', 'thème clair seul — conforme à la doctrine du socle (sombre optionnel ; s\'il est déclaré, la parité redevient bloquante)', file);
+} else {
+  const couleurClair = [...tokens.clair].filter(([, v]) => color(v) || /oklch\(/i.test(v)).map(([k]) => k);
+  for (const k of couleurClair) {
+    if (!tokens.sombre.has(k)) add('bloquant', 'T4', `token de couleur « ${k} » défini en clair mais absent du thème sombre`, 'bloc de thème sombre');
+  }
+  for (const k of tokens.sombre.keys()) {
+    if (!tokens.clair.has(k)) add('majeur', 'T4', `token « ${k} » défini en sombre seulement : le thème clair y référera dans le vide`, 'bloc :root');
+  }
+}
+
+// ── T5 · contraste des paires réellement posées l'une sur l'autre ──────────
+const EST_TEXTE = /(^|-)(texte|text|fg|encre|ink)(-|$)/i;
+const EST_SURFACE = /(^|-)(fond|bg|surface|papier|canvas)(-|$)/i;
+const PROP_TEXTE = /(^|[;{\s])color\s*:\s*([^;]+)/gi;
+const PROP_FOND = /(^|[;{\s])background(?:-color)?\s*:\s*([^;]+)/gi;
+// Sélecteur d'ambiance : ce qui habille la page et dont tout le reste hérite.
+const EST_AMBIANCE = s => s.split(',').some(x => /^\s*(:root|html|body|\*)\s*$/i.test(x));
+const varsDe = val => [...val.matchAll(/var\(\s*(--[\w-]+)/g)].map(m => m[1]);
+
+// TF-1662 (retour du 13/10/2026) — UN PSEUDO-ÉLÉMENT SANS CONTENU NE PORTE AUCUN TEXTE. Un
+// `::before { content: ""; background: var(--trait) }` dessine une pastille ou un filet : T5 y
+// présumait le texte hérité de l'ancêtre (« --encre sur --trait ») et en faisait un majeur, sur
+// une paire qui n'existe nulle part au rendu. Une pose sur ::before/::after dont TOUTES les
+// valeurs de `content` (sur ce même pseudo-élément) sont vides, `none`, `normal` ou une seule
+// image `url()` — ou qui n'en a aucune — est écartée de T5. Un pseudo-élément qui porte un texte
+// (chaîne non vide, attr(), counter()) reste jugé.
+const EST_PSEUDO_GENERE = /::?(?:before|after)\s*$/i;
+const decouper = s => s.split(',').map(x => x.trim()).filter(Boolean);
+const contenusPseudo = new Map();
+for (const r of regles) {
+  const m = /(^|[;{\s])content\s*:\s*([^;]+)/i.exec(r.body);
+  if (!m) continue;
+  for (const p of decouper(r.selector)) {
+    if (EST_PSEUDO_GENERE.test(p)) contenusPseudo.set(p, [...(contenusPseudo.get(p) || []), m[2].trim()]);
+  }
+}
+const contenuSansTexte = v => {
+  const t = v.replace(/url\([^)]*\)/gi, '').replace(/!important/i, '').trim();
+  return !t || /^(?:none|normal)$/i.test(t) || /^(?:""|'')(?:\s+(?:""|''))*$/.test(t);
+};
+const pseudoSansTexte = sel => decouper(sel).length > 0 && decouper(sel)
+  .every(p => EST_PSEUDO_GENERE.test(p) && (contenusPseudo.get(p) || []).every(contenuSansTexte));
+let posesPseudoVides = 0;
+
+// TF-2380 (retour du 16/09/2026, RV-200) — LA CASCADE DU THÈME SOMBRE. `.passer { background: var(--blue);
+// color: var(--solid-ink) }` puis `:root[data-theme="dark"] .passer { … }` : en sombre, la seconde règle REMPLACE
+// la propriété posée par la première. T5 jugeait pourtant la paire de base (--solid-ink sur --blue) contre les
+// jetons sombres, une paire qui n'existe nulle part au rendu, et render_page.py rendait PASS sur la même page. La
+// portée sombre d'un sélecteur est lue ici ([data-theme="dark"] ou .theme-dark, avec ou sans :root/html devant) ;
+// la clé d'un sélecteur est ce même sélecteur débarrassé de cette portée, ce qui permet de le rapprocher de sa règle
+// de base. Un bloc @media (prefers-color-scheme: dark) n'est pas le thème sombre (R-30) : il n'est pas lu ici.
+const RE_PORTEE_SOMBRE = /(?:html|:root)?\[data-theme\s*[~|^$*]?=\s*["']?dark["']?\s*\]|\.theme-dark(?![\w-])/i;
+const RE_PORTEE_SOMBRE_G = new RegExp(RE_PORTEE_SOMBRE.source, 'gi');
+const cleDeSelecteur = sel => decouper(sel)
+  .map(p => p.replace(RE_PORTEE_SOMBRE_G, ' ').replace(/\s+/g, ' ').trim() || ':root')
+  .join(', ');
+
+// 1. Relevé des poses : ce que chaque règle met en texte et en fond.
+const poses = [];
+const ambiance = { texte: new Set(), fond: new Set() };
+// Aucune règle n'est écartée ici : une déclaration de token (« --fond: #fff »)
+// ne matche pas ces propriétés, tandis qu'un « :root { color: var(--texte) } »
+// ou un « [data-theme="dark"] .bouton { … } » posent bel et bien des couleurs.
+for (const r of regles) {
+  const t = [], f = [];
+  let m;
+  PROP_TEXTE.lastIndex = 0;
+  while ((m = PROP_TEXTE.exec(r.body))) t.push(...varsDe(m[2]));
+  PROP_FOND.lastIndex = 0;
+  while ((m = PROP_FOND.exec(r.body))) f.push(...varsDe(m[2]));
+  if (!t.length && !f.length) continue;
+  if (pseudoSansTexte(r.selector)) { posesPseudoVides++; continue; }
+  if (EST_AMBIANCE(r.selector)) { for (const x of t) ambiance.texte.add(x); for (const x of f) ambiance.fond.add(x); }
+  // TF-2380 — une pose sous [data-theme="dark"] ne vaut QUE pour le thème sombre, et là elle REMPLACE la
+  // pose de base de même sélecteur : `sombre` et `cle` (le sélecteur débarrassé de sa portée) servent à T5.
+  const sombre = decouper(r.selector).some(p => RE_PORTEE_SOMBRE.test(p));
+  poses.push({ sel: r.selector, t, f, sombre, cle: cleDeSelecteur(r.selector) });
+}
+
+// 2. Héritage : une règle qui ne pose qu'une des deux couleurs complète l'autre
+// par son ANCÊTRE le plus proche dans le CSS (préfixe de sélecteur), et à défaut
+// par l'ambiance. Sans cet étage, un « .toc-d { color: var(--surface) } » niché
+// dans un onglet à fond accentué serait jugé contre le fond de page : une paire
+// qui n'existe nulle part, exactement le défaut que ce chantier corrige.
+const morceaux = s => s.split(',').map(x => x.trim()).filter(Boolean);
+const estAncetre = (a, d) => d.length > a.length && d.startsWith(a) && /[\s>+~]/.test(d[a.length]);
+function heriter(selecteur, sources, defaut, quoi) {
+  let meilleur = null;
+  for (const p of morceaux(selecteur)) {
+    for (const s of sources) {
+      for (const a of morceaux(s.sel)) {
+        if (estAncetre(a, p) && (!meilleur || a.length > meilleur.taille)) meilleur = { taille: a.length, vals: s.vals };
+      }
+    }
+  }
+  return meilleur
+    ? { vals: meilleur.vals, origine: `${quoi} hérité de l'ancêtre CSS` }
+    : { vals: defaut, origine: `${quoi} hérité de l'ambiance` };
+}
+const sourcesFond = poses.filter(p => p.f.length).map(p => ({ sel: p.sel, vals: p.f }));
+const sourcesTexte = poses.filter(p => p.t.length).map(p => ({ sel: p.sel, vals: p.t }));
+
+// 3. Paires : co-occurrence dans la même règle, ou complétée par l'héritage — UNE table par thème.
+// TF-2380 : en thème sombre, la pose d'une règle [data-theme="dark"] REMPLACE, propriété par propriété, celle de la
+// règle de base de même sélecteur (la cascade) ; en thème clair, une règle sombre ne pose rien. Une règle sombre
+// sans règle de base est une pose de plein droit du seul thème sombre.
+function posesDuTheme(theme) {
+  const base = poses.filter(p => !p.sombre);
+  if (theme === 'clair') return base;
+  const surcharge = new Map(); // clé de sélecteur -> { t, f } posés par la règle sombre (la dernière l'emporte)
+  for (const p of poses.filter(x => x.sombre)) {
+    const cur = surcharge.get(p.cle) || { t: [], f: [] };
+    if (p.t.length) cur.t = p.t;
+    if (p.f.length) cur.f = p.f;
+    surcharge.set(p.cle, cur);
+  }
+  const effectives = base.map(p => {
+    const s = surcharge.get(p.cle);
+    return s ? { ...p, t: s.t.length ? s.t : p.t, f: s.f.length ? s.f : p.f } : p;
+  });
+  for (const [cle, s] of surcharge) {
+    if (!base.some(p => p.cle === cle)) effectives.push({ sel: cle, cle, sombre: true, t: s.t, f: s.f });
+  }
+  return effectives;
+}
+function pairesPosees(theme) {
+  const ps = posesDuTheme(theme);
+  const amb = { texte: new Set(), fond: new Set() };
+  for (const p of ps) if (EST_AMBIANCE(p.sel)) { for (const x of p.t) amb.texte.add(x); for (const x of p.f) amb.fond.add(x); }
+  const srcF = ps.filter(p => p.f.length).map(p => ({ sel: p.sel, vals: p.f }));
+  const srcT = ps.filter(p => p.t.length).map(p => ({ sel: p.sel, vals: p.t }));
+  const table = new Map(); // "t|f" -> origine lisible
+  for (const p of ps) {
+    let textes = p.t, fonds = p.f, origine = 'posés par la même règle';
+    if (!textes.length) { const h = heriter(p.sel, srcT, [...amb.texte], 'texte'); textes = h.vals; origine = h.origine; }
+    if (!fonds.length) { const h = heriter(p.sel, srcF, [...amb.fond], 'fond'); fonds = h.vals; origine = h.origine; }
+    for (const a of textes) for (const b of fonds) if (a !== b && !table.has(a + '|' + b)) table.set(a + '|' + b, origine);
+  }
+  return table;
+}
+const pairesParTheme = new Map([['clair', pairesPosees('clair')], ['sombre', pairesPosees('sombre')]]);
+
+// 4. Paires déclarées à la main — pour ce que le CSS du fichier ne dit pas.
+const declarees = new Set(); // "t|f"
+for (const table of [tokens.clair, tokens.sombre]) {
+  const v = table.get('--paires-contraste');
+  if (!v) continue;
+  for (const morceau of v.split(',')) {
+    const m = /(--[\w-]+)\s+sur\s+(--[\w-]+)/i.exec(morceau);
+    if (m) { if (m[1] !== m[2]) declarees.add(m[1] + '|' + m[2]); }
+    else add('avertissement', 'T5', `--paires-contraste : « ${morceau.trim().slice(0, 50)} » illisible (forme attendue : --texte sur --fond)`, 'bloc de tokens');
+  }
+}
+// TF-2381 (retour du 24/09/2026, RV-201) — LA DÉCLARATION LÈVE LA PRÉSOMPTION QU'ELLE EST CENSÉE LEVER. Le message
+// d'une paire PRÉSUMÉE prescrit « déclarer la paire réelle par --paires-contraste » ; la déclaration jugeait bien la
+// paire réelle, mais les paires présumées du même texte restaient avertissement : 4 avant, 4 après sur la page de
+// garde du livret du 24/09. L'auteur qui déclare où se pose un texte a dit où il se pose : les paires PRÉSUMÉES de ce
+// texte (fond hérité de l'ambiance, jamais posé) sont retirées et portées au non_juge, jamais jugées en silence. Une
+// paire déclarée identique à une présumée devient la paire déclarée (jugée en majeur), pas un avertissement.
+const textesDeclares = new Set([...declarees].map(c => c.split('|')[0]));
+const presumeeRetirees = [];
+const estPresumee = origine => /hérité de l'ambiance/.test(origine);
+for (const [theme, table] of pairesParTheme) {
+  for (const cle of declarees) table.set(cle, 'déclarée par --paires-contraste');
+  for (const [cle, origine] of [...table]) {
+    if (!estPresumee(origine) || declarees.has(cle) || !textesDeclares.has(cle.split('|')[0])) continue;
+    table.delete(cle);
+    presumeeRetirees.push(`${cle.split('|')[0]} sur ${cle.split('|')[1]} (${theme})`);
+  }
+}
+// Union des paires jugées ou retirées sur au moins un thème : sert à énumérer ce qu'aucune règle ne pose.
+const paires = new Map();
+for (const table of pairesParTheme.values()) for (const [cle, origine] of table) if (!paires.has(cle)) paires.set(cle, origine);
+
+let pairesTestees = 0;
+let pairesComposees = 0;
+// Une couleur semi-transparente se compose avec ce qu'il y a derrière : son
+// contraste n'est pas décidable sur le seul fichier. La déclarer, ne pas
+// l'inventer — c'est render_page.py V2 qui mesure le rendu composé.
+for (const [theme, table] of [['clair', tokens.clair], ['sombre', tokens.sombre]]) {
+  for (const [cle, origine] of pairesParTheme.get(theme)) {
+    const [kt, ks] = cle.split('|');
+    const vt = table.get(kt), vs = table.get(ks);
+    if (vt === undefined || vs === undefined) continue; // paire absente de ce thème
+    const ct = color(resoudreVar(vt, [n => table.get(n)])), cs = color(resoudreVar(vs, [n => table.get(n)]));
+    if (!ct || !cs) continue;
+    if (ct.a !== 1 || cs.a !== 1) { pairesComposees++; continue; }
+    pairesTestees++;
+    const ratio = contrast(ct, cs);
+    if (ratio < 4.5) {
+      // TF-0427 (lot Produit-05 20260820a, 21/08) : une paire dont le texte est HÉRITÉ DE L'AMBIANCE
+      // n'est pas forcément réalisée — une barre de répartition posée sur --blue ne porte aucun
+      // texte, et le produit cartésien la jugeait « --ink sur --blue » en majeur. Statiquement
+      // indécidable : AVERTISSEMENT nommé, la mesure de vérité est render_page.py V2 (texte réel
+      // sur fond calculé). Une paire posée par la même règle, héritée d'un ancêtre ou déclarée
+      // reste un majeur : là, le texte existe.
+      const presumee = /hérité de l'ambiance/.test(origine);
+      add(presumee ? 'avertissement' : 'majeur', 'T5',
+        `contraste ${ratio.toFixed(2)}:1 < 4.5:1 — ${kt} (${vt}) sur ${ks} (${vs}), thème ${theme} [${origine}]` +
+        (presumee ? ' — paire PRÉSUMÉE (texte hérité, peut-être jamais posé sur ce fond) : mesurer au rendu (render_page.py V2) ou déclarer la paire réelle par --paires-contraste' : ''),
+        `thème ${theme}`);
+    }
+  }
+}
+if (pairesTestees === 0) {
+  // Un PASS silencieux alors qu'aucun contraste n'a été mesuré est le pire des
+  // verdicts : il se lit comme « contraste vérifié ». Le rendre visible.
+  add('avertissement', 'T5', 'aucune paire texte/fond posée par le CSS : AUCUN contraste n\'a été mesuré. Poser les couleurs par var(--token), déclarer les paires par --paires-contraste, ou mesurer par render_page.py V2',
+    'CSS du document');
+  NJ.push('T5 : contraste non mesuré faute de paire posée — le PASS de cet oracle ne vaut pas validation du contraste');
+}
+if (presumeeRetirees.length > 0) {
+  NJ.push(`T5 : ${presumeeRetirees.length} paire(s) PRÉSUMÉE(S) retirée(s) parce que --paires-contraste déclare où se pose leur texte (TF-2381) — non jugée(s) : ${presumeeRetirees.slice(0, 8).join(', ')}${presumeeRetirees.length > 8 ? ', …' : ''}. Un texte déclaré est jugé sur la ou les paires déclarées seulement : la déclaration engage l'auteur`);
+}
+if (posesPseudoVides > 0) {
+  NJ.push(`T5 : ${posesPseudoVides} pose(s) sur un pseudo-élément ::before/::after sans contenu textuel écartée(s) (TF-1662) — aucun texte n'y est rendu, aucune paire n'y est présumée`);
+}
+if (pairesComposees > 0) {
+  NJ.push(`T5 : ${pairesComposees} paire(s) écartée(s) car un token est semi-transparent — contraste composé indécidable sur le fichier, à mesurer par render_page.py V2`);
+}
+// Ce que la co-occurrence n'a PAS jugé : les tokens nommés selon la convention
+// que rien ne pose l'un sur l'autre. Les taire ferait lire le PASS comme
+// « toutes les combinaisons sont sûres » — elles ne sont simplement pas posées.
+{
+  const jamais = [];
+  for (const [theme, table] of [['clair', tokens.clair], ['sombre', tokens.sombre]]) {
+    const textes = [...table].filter(([k, v]) => EST_TEXTE.test(k) && color(v)).map(([k]) => k);
+    const surfaces = [...table].filter(([k, v]) => EST_SURFACE.test(k) && color(v)).map(([k]) => k);
+    for (const kt of textes) for (const ks of surfaces) {
+      if (kt !== ks && !paires.has(kt + '|' + ks)) jamais.push(`${kt} sur ${ks} (${theme})`);
+    }
+  }
+  if (jamais.length) {
+    NJ.push(`T5 : ${jamais.length} paire(s) texte/fond nommée(s) selon la convention mais jamais posée(s) l'une sur l'autre — non jugée(s) : ${jamais.slice(0, 8).join(', ')}${jamais.length > 8 ? ', …' : ''}. Les déclarer par --paires-contraste si elles se rencontrent au rendu.`);
+  }
+}
+NJ.push('T5 : la cascade du thème sombre est approchée par l\'ÉGALITÉ du sélecteur débarrassé de sa portée ([data-theme="dark"] .passer remplace .passer) — une règle sombre dont le sélecteur diffère mais vise le même élément (spécificité, ordre des règles, sélecteur plus long) n\'est pas rapprochée de sa règle de base ; le rendu réel des deux thèmes reste la mesure (render_page.py V2) (TF-2380)');
+NJ.push('T5 : l\'héritage est approché par le préfixe de sélecteur puis par l\'ambiance (:root, html, body, *) — un texte dont le conteneur réel n\'est pas un ancêtre de sélecteur (composition à l\'exécution, portail, classe posée en JS) est jugé contre le fond ambiant, pas contre le sien');
+NJ.push('contraste des couleurs composées (color-mix, superpositions) — déléguer à render_page.py V2 sur les deux thèmes');
+NJ.push('adéquation de la palette et de la voix à la marque — arbitrage commanditaire');
+
+// ── T7 · contraste NON TEXTUEL des paires d'interface posées (WCAG 1.4.11) ─
+// Même appareil que T5 — poses relevées dans le CSS, héritage du fond, échappatoire
+// déclarative — seuls le seuil (3:1) et la nature de la paire changent : un TRAIT
+// (bordure, contour) sur sa surface, pas un texte sur son fond.
+//
+// Ce que T7 se garde de faire. WCAG 1.4.11 n'exige 3:1 que des frontières NÉCESSAIRES à
+// identifier un composant ou son état ; un séparateur décoratif n'est pas concerné, et
+// aucune analyse de CSS ne distingue les deux. Un trait sous 3:1 est donc MESURÉ et
+// SIGNALÉ (avertissement), son rôle déclaré non jugé — refuser à tort ferait désactiver la
+// règle, la taire ferait lire le PASS comme « contrastes d'interface vérifiés ».
+// L'auteur qui SAIT qu'une frontière est nécessaire la déclare par `--paires-interface`
+// (même forme que `--paires-contraste`) : elle devient alors un écart DUR.
+const PROP_TRAIT = /(^|[;{\s])(?:border(?:-[a-z]+)?-color|border(?:-[a-z]+)?|outline(?:-color)?)\s*:\s*([^;]+)/gi;
+const traits = [];
+for (const r of regles) {
+  const t = [];
+  let m;
+  PROP_TRAIT.lastIndex = 0;
+  while ((m = PROP_TRAIT.exec(r.body))) t.push(...varsDe(m[2]));
+  if (!t.length) continue;
+  const f = [];
+  PROP_FOND.lastIndex = 0;
+  let mf;
+  while ((mf = PROP_FOND.exec(r.body))) f.push(...varsDe(mf[2]));
+  let fonds = f, origine = 'trait et fond posés par la même règle';
+  if (!fonds.length) { const h = heriter(r.selector, sourcesFond, [...ambiance.fond], 'fond'); fonds = h.vals; origine = h.origine; }
+  for (const a of t) for (const b of fonds) if (a !== b) traits.push({ trait: a, fond: b, origine });
+}
+
+// Frontières DÉCLARÉES nécessaires : l'auteur prend la responsabilité, la règle durcit.
+const interfaceDeclaree = new Set();
+for (const table of [tokens.clair, tokens.sombre]) {
+  const v = table.get('--paires-interface');
+  if (!v) continue;
+  for (const morceau of v.split(',')) {
+    const m = /(--[\w-]+)\s+sur\s+(--[\w-]+)/i.exec(morceau);
+    if (m) { interfaceDeclaree.add(m[1] + '|' + m[2]); traits.push({ trait: m[1], fond: m[2], origine: 'déclarée par --paires-interface' }); }
+    else add('avertissement', 'T7', `--paires-interface : « ${morceau.trim().slice(0, 50)} » illisible (forme attendue : --trait sur --fond)`, 'bloc de tokens');
+  }
+}
+
+let traitsTestes = 0, traitsSousSeuil = 0;
+const vus7 = new Set();
+for (const [theme, table] of [['clair', tokens.clair], ['sombre', tokens.sombre]]) {
+  for (const { trait, fond, origine } of traits) {
+    const cle = `${trait}|${fond}|${theme}`;
+    if (vus7.has(cle)) continue;
+    vus7.add(cle);
+    const vt = table.get(trait), vf = table.get(fond);
+    if (vt === undefined || vf === undefined) continue;
+    const ct = color(vt), cf = color(vf);
+    if (!ct || !cf || ct.a !== 1 || cf.a !== 1) continue;
+    traitsTestes++;
+    const ratio = contrast(ct, cf);
+    if (ratio >= 3) continue;
+    traitsSousSeuil++;
+    const dure = interfaceDeclaree.has(trait + '|' + fond);
+    add(dure ? 'majeur' : 'avertissement', 'T7',
+      `contraste non textuel ${ratio.toFixed(2)}:1 < 3:1 — ${trait} (${vt}) sur ${fond} (${vf}), thème ${theme} [${origine}]` +
+      (dure ? ' — frontière DÉCLARÉE nécessaire par --paires-interface' : ' — si cette frontière identifie un composant ou son état, la déclarer par --paires-interface : WCAG 1.4.11 l\'exige alors à 3:1'),
+      `thème ${theme}`);
+  }
+}
+if (traitsTestes === 0) {
+  NJ.push('T7 : aucun trait d\'interface (bordure, contour) posé par var(--token) — AUCUN contraste non textuel n\'a été mesuré ; le PASS ne vaut pas validation de WCAG 1.4.11');
+} else if (traitsSousSeuil > 0) {
+  NJ.push(`T7 : ${traitsSousSeuil} trait(s) sous 3:1 mesuré(s) et signalé(s) — leur RÔLE (frontière nécessaire ou séparateur décoratif) n'est pas jugeable depuis le CSS, seule la déclaration --paires-interface le tranche`);
+}
+
+// ── T8 · focus PRESCRIT et contrasté (RGAA 10.7, WCAG 2.4.7 et 1.4.11) ─────
+// Le fait qui la fait naître (TF-0409, O4) : le gabarit posait déjà
+// `outline: 3px solid var(--accent)` et `outline-offset: 2px`, le DESIGN.md généré affirmait
+// « états focus visibles au clavier », et le contrat de tokens ne nommait AUCUN token de
+// focus. Une affordance consommée sans être prescrite est une valeur improvisée par chaque
+// auteur, et une charte qui affirme plus que ce que la marque a fixé.
+//
+// Ce que T8 refuse, et ce qu'il ne fait pas : il ne réclame pas des tokens de focus à un
+// fichier qui ne pose aucun focus — sans quoi il mettrait en échec tout l'existant du parc
+// (R-33 bis) et se ferait désactiver. Il refuse DEUX choses : poser un focus sans le
+// prescrire, et prescrire un anneau qu'on ne voit pas.
+const REGLE_FOCUS = /:focus(-visible|-within)?\b/i;
+const PROP_ANNEAU = /(^|[;{\s])(?:outline(?:-color)?|box-shadow|border(?:-color)?)\s*:\s*([^;]+)/gi;
+const PROP_DECALAGE = /(^|[;{\s])outline-offset\s*:\s*([^;]+)/gi;
+
+const anneau = ['--focus-anneau', '--focus-ring', '--anneau-focus'];
+const decalage = ['--focus-decalage', '--focus-offset', '--focus-ecart'];
+const trouve = (table, noms) => noms.map(n => [n, table.get(n)]).find(([, v]) => v !== undefined);
+const tokenAnneau = trouve(tokens.clair, anneau) || trouve(tokens.sombre, anneau);
+const tokenDecalage = trouve(tokens.clair, decalage) || trouve(tokens.sombre, decalage);
+
+// TF-1058 (mesuré le 11/09 sur Produit-62, RD-17) — EST_SURFACE (ci-dessous) matche tout
+// jeton nommé -fond/-bg/-surface/-papier/-canvas, remplissage de badge de statut compris :
+// une pastille de 20px de haut ne porte jamais d'élément focusable, mais rien dans le CSS ne
+// le dit — le rôle d'une surface (conteneur focusable ou remplissage décoratif) n'est pas
+// décidable depuis la feuille seule, même limite que T7 pour un trait d'interface. Plutôt que
+// deviner par le nom (un renommage a suffi à faire disparaître 12 constats sans qu'une seule
+// couleur change), la feuille déclare les surfaces HORS CHAMP du focus, symétrique de
+// --paires-contraste / --paires-interface : c'est la déclaration qui exempte, jamais le nom.
+const surfaceHorsFocus = new Set();
+for (const table of [tokens.clair, tokens.sombre]) {
+  const v = table.get('--surfaces-hors-focus');
+  if (!v) continue;
+  for (const morceau of v.split(',')) {
+    const n = morceau.trim();
+    if (/^--[\w-]+$/.test(n)) surfaceHorsFocus.add(n);
+    else add('avertissement', 'T8', `--surfaces-hors-focus : « ${morceau.trim().slice(0, 50)} » illisible (forme attendue : --nom-du-jeton)`, 'bloc de tokens');
+  }
+}
+
+// TF-1662 (retour du 13/10/2026) — UNE SURFACE QUE RIEN NE PEUT FOCALISER N'EST PAS UN FOND
+// D'ANNEAU. T8 confrontait l'anneau à --tt-bg et --tt-code-bg, consommés par une seule infobulle
+// en `pointer-events: none` : aucune des 11 couleurs calculées ne tenait 3:1 à la fois sur les
+// fonds pastel et sur ce fond sombre, et T8 restait rouge quelle que soit la charte. Le rôle d'une
+// surface n'est pas lisible par son NOM (TF-1058 l'a établi), mais il l'est ici par la STRUCTURE
+// du CSS : une surface dont CHAQUE pose en fond (directe, ou par un jeton qui la reprend) tombe sur
+// un pseudo-élément, ou dans un sous-arbre en `pointer-events: none` que rien ne réactive, ne
+// reçoit aucun élément focalisable. Elle est écartée et nommée au non_juge. Une surface jamais
+// posée reste jugée comme avant ; une seule pose dans un contexte focalisable suffit à la juger.
+const POINTEUR_NUL = /(^|[;{\s])pointer-events\s*:\s*none\b/i;
+const POINTEUR_ACTIF = /(^|[;{\s])pointer-events\s*:\s*(?!none\b)[a-z]/i;
+const EST_PSEUDO_INERTE = /::?(?:before|after|backdrop|marker|placeholder|selection|first-line|first-letter)\b/i;
+const inertes = regles.filter(r => POINTEUR_NUL.test(r.body)).flatMap(r => morceaux(r.selector));
+const reactives = regles.filter(r => POINTEUR_ACTIF.test(r.body)).flatMap(r => morceaux(r.selector));
+const horsFocusParStructure = p => {
+  if (EST_PSEUDO_INERTE.test(p)) return true;
+  const a = inertes.find(x => x === p || estAncetre(x, p));
+  return !!a && !reactives.some(b => b === a || b === p || estAncetre(a, b));
+};
+const posesFond = new Map(); // jeton -> morceaux de sélecteur qui le posent en fond
+for (const r of regles) {
+  let m;
+  PROP_FOND.lastIndex = 0;
+  while ((m = PROP_FOND.exec(r.body))) {
+    for (const v of varsDe(m[2])) posesFond.set(v, [...(posesFond.get(v) || []), ...morceaux(r.selector)]);
+  }
+}
+const ecartesParStructure = new Set();
+const surfaceInerte = (k, table) => {
+  const sels = [...(posesFond.get(k) || [])];
+  for (const [alias, v] of table) if (alias !== k && varsDe(v).includes(k)) sels.push(...(posesFond.get(alias) || []));
+  if (!sels.length || !sels.every(horsFocusParStructure)) return false;
+  ecartesParStructure.add(k);
+  return true;
+};
+
+const reglesFocus = regles.filter(r => REGLE_FOCUS.test(r.selector));
+let focusImprovise = 0;
+for (const r of reglesFocus) {
+  const vals = [];
+  let m;
+  PROP_ANNEAU.lastIndex = 0;
+  while ((m = PROP_ANNEAU.exec(r.body))) vals.push(m[2]);
+  if (!vals.length) continue;
+  const tokensPoses = vals.flatMap(varsDe);
+  if (tokensPoses.some(t => anneau.includes(t))) continue; // prescrit : rien à dire
+  focusImprovise++;
+  add('majeur', 'T8',
+    `focus POSÉ sans être PRESCRIT — « ${r.selector.trim().slice(0, 60)} » dessine un anneau ` +
+    `(${vals[0].trim().slice(0, 40)}) qui ne vient d'aucun token de focus. Une affordance consommée ` +
+    'sans être prescrite est une valeur improvisée par chaque auteur : poser --focus-anneau et ' +
+    '--focus-decalage au bloc de tokens, et les consommer ici (RGAA 10.7, WCAG 2.4.7)',
+    r.selector.trim().slice(0, 60));
+}
+
+if (tokenAnneau) {
+  // Prescrit : alors il se voit. 3:1 contre CHAQUE surface du thème — un anneau qui tient
+  // 4:1 sur le fond de page peut tomber à 1.6:1 sur une carte sombre.
+  for (const [theme, table] of [['clair', tokens.clair], ['sombre', tokens.sombre]]) {
+    const va = table.get(tokenAnneau[0]);
+    if (va === undefined) continue; // parité : c'est T4 qui la réclame
+    const ca = color(resoudreVar(extraireCouleurRaccourci(va), [n => table.get(n)]));
+    if (!ca || ca.a !== 1) { NJ.push(`T8 : ${tokenAnneau[0]} semi-transparent ou illisible en thème ${theme} — contraste de l'anneau non décidable sur le fichier`); continue; }
+    const surfaces = [...table]
+      .filter(([k]) => EST_SURFACE.test(k) && !surfaceHorsFocus.has(k) && !surfaceInerte(k, table))
+      .map(([k, v]) => [k, resoudreVar(v, [n => table.get(n)])])
+      .filter(([, v]) => color(v) && color(v).a === 1);
+    if (!surfaces.length) { NJ.push(`T8 : aucune surface nommée en thème ${theme} — l'anneau de focus n'a été confronté à rien`); continue; }
+    for (const [ks, vs] of surfaces) {
+      const ratio = contrast(ca, color(vs));
+      if (ratio >= 3) continue;
+      add('majeur', 'T8',
+        `anneau de focus ${ratio.toFixed(2)}:1 < 3:1 — ${tokenAnneau[0]} (${va}) sur ${ks} (${vs}), thème ${theme} : ` +
+        'visible pour l\'auteur, invisible pour l\'utilisateur au clavier (WCAG 1.4.11, RGAA 10.7)',
+        `thème ${theme}`);
+    }
+  }
+  if (!tokenDecalage) {
+    add('majeur', 'T8',
+      `${tokenAnneau[0]} est prescrit mais aucun écart ne l'est — poser --focus-decalage (≥ 2px) : ` +
+      'un anneau collé au contrôle est indiscernable de sa bordure',
+      'bloc de tokens');
+  } else {
+    const px = /(-?[\d.]+)\s*px/.exec(String(tokenDecalage[1]));
+    if (!px) NJ.push(`T8 : ${tokenDecalage[0]} = « ${tokenDecalage[1]} » n'est pas en px — écart non mesuré`);
+    else if (parseFloat(px[1]) < 2) {
+      add('majeur', 'T8',
+        `${tokenDecalage[0]} = ${tokenDecalage[1]} < 2px — un anneau collé au contrôle est indiscernable de sa bordure (WCAG 2.4.13)`,
+        'bloc de tokens');
+    }
+  }
+}
+if (ecartesParStructure.size > 0) {
+  NJ.push(`T8 : surface(s) posée(s) seulement sur un pseudo-élément ou dans un sous-arbre en pointer-events: none, écartée(s) de la confrontation à l'anneau (TF-1662) : ${[...ecartesParStructure].join(', ')} — un élément focalisable placé là au clavier malgré tout n'est pas vu par le CSS`);
+}
+if (surfaceHorsFocus.size > 0) {
+  NJ.push(`T8 : surface(s) déclarée(s) --surfaces-hors-focus, écartée(s) de la confrontation à l'anneau (TF-1058) : ${[...surfaceHorsFocus].join(', ')}`);
+}
+if (!tokenAnneau && !focusImprovise) {
+  // Ni tokens, ni focus posé : rien à refuser, mais le silence serait un faux vert.
+  add('avertissement', 'T8',
+    'aucun token de focus prescrit (--focus-anneau / --focus-decalage) et aucun style de focus posé — ' +
+    'l\'accessibilité au clavier n\'est ni fixée par la marque ni mesurée ici (RGAA 10.7)',
+    'bloc de tokens');
+  NJ.push('T8 : focus ni prescrit ni posé — le PASS ne vaut pas validation du focus visible ; la mesure sur le rendu relève de render_page.py et du pan clavier de forge-tests');
+}
+NJ.push('T8 : la VISIBILITÉ réelle de l\'anneau au rendu (épaisseur, recouvrement par un parent en overflow, ordre de tabulation) n\'est pas jugeable depuis le CSS — elle relève du pan clavier de forge-tests (TF-0409, O3)');
+
+// ── T6 · chroma aux extrêmes de luminosité ─────────────────────────────────
+for (const [theme, table] of [['clair', tokens.clair], ['sombre', tokens.sombre]]) {
+  for (const [k, v] of table) {
+    const m = /oklch\(\s*([\d.]+)%?\s+([\d.]+)\s+([\d.]+)/i.exec(v);
+    if (!m) continue;
+    let L = parseFloat(m[1]); if (L > 1) L /= 100;
+    const C = parseFloat(m[2]);
+    if ((L >= 0.85 || L <= 0.15) && C > 0.10) {
+      add('avertissement', 'T6', `${k} : chroma ${C} à L=${L.toFixed(2)} — réduire le chroma aux extrêmes, sinon rendu criard (thème ${theme})`, `thème ${theme}`);
+    }
+  }
+}
+
+// ── Verdict ────────────────────────────────────────────────────────────────
+F.sort((a, b) => ({ bloquant: 0, majeur: 1, avertissement: 2, info: 3 })[a.sev] - ({ bloquant: 0, majeur: 1, avertissement: 2, info: 3 })[b.sev]);
+const dur = F.filter(f => f.sev === 'bloquant' || f.sev === 'majeur');
+if (!jsonOnly) process.stderr.write(dur.length ? `FAIL — ${dur.length} écart(s) dur(s)\n` : `PASS — ${tokens.clair.size} tokens clairs, ${tokens.sombre.size} sombres, ${pairesTestees} paire(s) de contraste testée(s)\n`);
+if (dur.length) sortir('FAIL', 1);
+sortir('PASS', 0);

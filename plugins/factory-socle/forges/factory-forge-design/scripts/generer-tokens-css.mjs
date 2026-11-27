@@ -1,0 +1,234 @@
+#!/usr/bin/env node
+// generer-tokens-css — transforme une source de tokens W3C DTCG (format stable
+// 2025.10, https://www.designtokens.org/tr/drafts/format/) en tokens.css.
+//
+// Zéro dépendance npm : ce n'est pas un moteur générique façon Style Dictionary,
+// juste la transformation nécessaire à CE fichier de tokens (groupes couleur
+// clair/sombre, typographie, rayon, espacement, alias). Le fichier DTCG devient
+// la SOURCE ; tokens.css devient une SORTIE dérivée, jamais éditée à la main.
+//
+// oracle-dtcg.mjs importe `genererCss` pour vérifier qu'un tokens.css livré est
+// bien la régénération de sa source — c'est la même fonction des deux côtés,
+// donc aucun risque de dérive entre « ce que le générateur produit » et « ce que
+// l'oracle attend ».
+//
+// Usage CLI : node generer-tokens-css.mjs <source.tokens.json> --sortie <tokens.css>
+
+import { readFileSync, writeFileSync } from 'node:fs';
+
+/** Un token « feuille » DTCG porte $value (objet). Les groupes n'en portent pas. */
+export function estFeuille(noeud) {
+  return noeud && typeof noeud === 'object' && '$value' in noeud;
+}
+
+/** Une feuille est un alias si sa valeur est la syntaxe {chemin.pointille}. */
+export function estAlias(noeud) {
+  return estFeuille(noeud) && typeof noeud.$value === 'string' && /^\{[^{}]+\}$/.test(noeud.$value.trim());
+}
+
+/** Résout un chemin pointillé "a.b.c" depuis la racine du document DTCG. */
+export function resoudreChemin(racine, chemin) {
+  const segments = chemin.split('.');
+  let courant = racine;
+  for (const seg of segments) {
+    if (courant == null || typeof courant !== 'object' || !(seg in courant)) return null;
+    courant = courant[seg];
+  }
+  return courant;
+}
+
+/** Liste les [chemin, noeud] de toutes les feuilles sous un groupe. */
+export function feuillesDe(groupe, prefixe = []) {
+  if (!groupe || typeof groupe !== 'object') return [];
+  if (estFeuille(groupe)) return [[prefixe.join('.'), groupe]];
+  const out = [];
+  for (const [k, v] of Object.entries(groupe)) {
+    if (k.startsWith('$')) continue;
+    out.push(...feuillesDe(v, [...prefixe, k]));
+  }
+  return out;
+}
+
+const GENERIQUES = new Set(['system-ui', '-apple-system', 'sans-serif', 'serif', 'monospace',
+  'ui-monospace', 'ui-sans-serif', 'ui-serif']);
+
+function pileDePolices(valeur) {
+  const items = Array.isArray(valeur) ? valeur : [valeur];
+  return items.map(n => (GENERIQUES.has(n) ? n : `"${n}"`)).join(', ');
+}
+
+function valeurCss(noeud) {
+  if (noeud.$type === 'fontFamily') return pileDePolices(noeud.$value);
+  if (noeud.$type === 'cubicBezier') {
+    const p = noeud.$value;
+    if (!Array.isArray(p) || p.length !== 4) throw new Error('token cubicBezier attend quatre nombres');
+    return `cubic-bezier(${p.join(', ')})`;
+  }
+  return String(noeud.$value);
+}
+
+function blocCouleurs(groupe, indent = '  ') {
+  return Object.entries(groupe || {})
+    .filter(([k]) => !k.startsWith('$'))
+    .map(([nom, noeud]) => `${indent}--${nom}: ${valeurCss(noeud)};`)
+    .join('\n');
+}
+
+/** Dérive un nom de sortie plausible quand aucun n'est fourni (affichage de l'en-tête
+ * seulement — n'écrit jamais de fichier). */
+function deriverNomSortie(sourcePath) {
+  if (/\.tokens\.json$/i.test(sourcePath)) return sourcePath.replace(/\.tokens\.json$/i, '.css');
+  return sourcePath.replace(/\.json$/i, '.css');
+}
+
+/**
+ * Transforme un document DTCG (déjà parsé) en tokens.css.
+ * Contrat de groupes attendu (voir corpus/tokens-factory.tokens.json) :
+ *   couleur.clair, couleur.sombre, typographie, rayon, espacement, mouvement, alias, focus.
+ * `focus` (TF-1034) est un groupe MIXTE : chaque entrée peut être un alias {chemin} ou un
+ * littéral, contrairement à `alias` qui n'accepte que des références.
+ * `mouvement` est émis SEULEMENT s'il est présent dans la source : une source
+ * antérieure à TF-0321 se régénère donc à l'octet près, et oracle-dtcg D3 ne
+ * requalifie aucun tokens.css existant.
+ * Un alias { "$value": "{couleur.clair.bg}" } devient `var(--bg)` : le dernier
+ * segment du chemin porte le nom de la custom property, quel que soit le thème
+ * référencé dans la source — la résolution réelle se fait au runtime CSS via
+ * la cascade des blocs de thème, pas à la génération.
+ *
+ * TF-1035 (constat en passant, lot marque Factory du 11/09/2026) — `sourcePath` et
+ * `sortiePath` NOMMENT LA SOURCE RÉELLEMENT LUE : l'en-tête écrivait auparavant un
+ * chemin FIGÉ (« corpus/tokens-factory.tokens.json ») quelle que soit la source
+ * réellement passée en argument — mesuré sur donnees/marque/tokens.css du produit
+ * factory-marketing, généré depuis une tout autre source, et pourtant estampillé
+ * du chemin du corpus de cette forge. Un en-tête qui ment sur la provenance ne se
+ * corrige pas à la main : oracle-dtcg D3 interdit toute dérive manuelle du dérivé.
+ */
+export function genererCss(dtcg, sourcePath = 'corpus/tokens-factory.tokens.json', sortiePath) {
+  const sortieEffective = sortiePath || deriverNomSortie(sourcePath);
+  const preambule = dtcg.$description
+    ? dtcg.$description.split('\n').map(l => ` * ${l}`).join('\n')
+    : ' * Généré depuis une source DTCG.';
+
+  // TF-0796 (01/09/2026) — `color-scheme` est émis PAR THÈME, jamais laissé au
+  // réglage du système. Le fait qui l'impose : une fenêtre `dialog` stylée aux
+  // jetons, verte à la campagne v0.4.0, s'est affichée en boîte sombre aux
+  // boutons natifs sur un poste en mode sombre OS. Sans cette déclaration, le
+  // navigateur peint SES composants (top-layer, contrôles de formulaire, barres
+  // de défilement, `::backdrop`) dans le schéma de l'OS pendant que la page,
+  // elle, obéit à `data-theme` : deux autorités, un rendu bâtard.
+  // Clair STRICT par défaut (doctrine du socle factory-page-html) ; sombre
+  // déclaré seulement si un thème sombre existe dans la source.
+
+  const clair = dtcg.couleur?.clair || {};
+  const sombre = dtcg.couleur?.sombre || {};
+  const typo = dtcg.typographie || {};
+  const rayon = dtcg.rayon || {};
+  const espacement = dtcg.espacement || {};
+  const mouvement = dtcg.mouvement || {};
+  const alias = dtcg.alias || {};
+  const focus = dtcg.focus || {};
+
+  const lignesAlias = Object.entries(alias).map(([nom, noeud]) => {
+    if (!estAlias(noeud)) throw new Error(`alias « ${nom} » sans référence {chemin} exploitable`);
+    const chemin = noeud.$value.trim().slice(1, -1);
+    if (resoudreChemin(dtcg, chemin) == null) throw new Error(`alias « ${nom} » référence un chemin introuvable : ${chemin}`);
+    const cible = chemin.split('.').pop();
+    return `  --${nom}: var(--${cible});`;
+  }).join('\n');
+
+  const lignesTypo = Object.entries(typo).map(([nom, noeud]) => `  --${nom}: ${valeurCss(noeud)};`).join('\n');
+  const lignesRayon = Object.entries(rayon).map(([nom, noeud]) => `  --${nom}: ${valeurCss(noeud)};`).join('\n');
+  const lignesEspace = Object.entries(espacement).map(([nom, noeud]) => `  --${nom}: ${valeurCss(noeud)};`).join('\n');
+
+  // Le mouvement se prescrit là où il se juge : ce bloc est ce que oracle-motion
+  // R4/R8/R9 lisent pour résoudre les durées d'une feuille (TF-0321). Groupe absent
+  // ⇒ bloc absent, à l'octet près : la sortie d'une source antérieure ne bouge pas.
+  const blocMouvement = Object.keys(mouvement).filter(k => !k.startsWith('$')).length
+    ? `\n  /* --- Mouvement : durées par taille de geste, easings nommés, seuils (oracle-motion R4/R8/R9) --- */\n`
+      + Object.entries(mouvement).filter(([k]) => !k.startsWith('$'))
+        .map(([nom, noeud]) => `  --${nom}: ${valeurCss(noeud)};`).join('\n') + '\n'
+    : '';
+
+  // Focus (TF-1034, réalignement du corpus factory sur le socle) : groupe MIXTE — un token
+  // peut y être un ALIAS ({chemin}, ex. --focus-anneau vers la couleur d'accent, pour ne
+  // jamais dupliquer la valeur) ou un littéral (--focus-decalage, une dimension). Même
+  // doctrine que « mouvement » : groupe absent ⇒ bloc absent, à l'octet près — une source
+  // antérieure à ce chantier se régénère donc identique, et oracle-dtcg D3 ne requalifie
+  // rien d'existant.
+  const ligneFocus = ([nom, noeud]) => {
+    if (!estAlias(noeud)) return `  --${nom}: ${valeurCss(noeud)};`;
+    const chemin = noeud.$value.trim().slice(1, -1);
+    if (resoudreChemin(dtcg, chemin) == null) throw new Error(`token « ${nom} » (groupe focus) référence un chemin introuvable : ${chemin}`);
+    return `  --${nom}: var(--${chemin.split('.').pop()});`;
+  };
+  const blocFocus = Object.keys(focus).filter(k => !k.startsWith('$')).length
+    ? `\n  /* --- Focus : anneau et écart PRESCRITS, jamais improvisés à la consommation (RGAA 10.7, oracle-tokens T8) --- */\n`
+      + Object.entries(focus).filter(([k]) => !k.startsWith('$')).map(ligneFocus).join('\n') + '\n'
+    : '';
+
+  const aSombre = Object.keys(sombre).filter(k => !k.startsWith('$')).length > 0;
+  const schemaSombre = aSombre ? 'color-scheme: dark; ' : '';
+
+
+  const sombreUneLigle = Object.entries(sombre).filter(([k]) => !k.startsWith('$'))
+    .map(([nom, noeud]) => `--${nom}: ${valeurCss(noeud)};`).join(' ');
+  const clairUneLigne = Object.entries(clair).filter(([k]) => !k.startsWith('$'))
+    .map(([nom, noeud]) => `--${nom}: ${valeurCss(noeud)};`).join(' ');
+
+  return `/* tokens.css — DÉRIVÉ, ne pas éditer à la main.
+ * Source unique : ${sourcePath} (format W3C DTCG, stable 2025.10).
+ * Régénérer : node scripts/generer-tokens-css.mjs ${sourcePath} --sortie ${sortieEffective}
+ * Vérifié par : node oracles/oracle-dtcg.mjs ${sourcePath} ${sortieEffective}
+ *
+${preambule}
+ */
+
+:root {
+  /* --- Rendu natif : le navigateur peint SES composants (top-layer dialog/popover,
+         contrôles de formulaire, barres de défilement, ::backdrop) dans le schéma
+         déclaré ici, jamais dans celui de l'OS (TF-0796) --- */
+  color-scheme: light;
+
+  /* --- Couleurs, thème clair (référence) --- */
+${blocCouleurs(clair)}
+
+  /* --- Typographie --- */
+${lignesTypo}
+
+  /* --- Rayons --- */
+${lignesRayon}
+
+  /* --- Alias au nommage de la forge (oracle-tokens T5 résout les paires par le nom) --- */
+${lignesAlias}
+
+  /* --- Échelle d'espacement 4pt (oracle-tokens T3) --- */
+${lignesEspace}
+${blocFocus}${blocMouvement}}
+
+/* --- Thème sombre, dérivé : CHOISI par la bascule (data-theme sur <html>), jamais hérité
+       du système — R-30 du pilot, clair par défaut strict (TF-0158, TF-1771) --- */
+:root[data-theme="dark"] { ${schemaSombre}${sombreUneLigle} }
+
+:root[data-theme="light"] { color-scheme: light; ${clairUneLigne} }
+`;
+}
+
+// ---- CLI --------------------------------------------------------------------------------------
+if (import.meta.url === `file://${process.argv[1]}`.replace(/\\/g, '/') || process.argv[1]?.endsWith('generer-tokens-css.mjs')) {
+  const args = process.argv.slice(2);
+  const entree = args.find(a => !a.startsWith('--'));
+  const sortie = args.includes('--sortie') ? args[args.indexOf('--sortie') + 1] : null;
+  if (!entree || !sortie) {
+    console.error('usage : node generer-tokens-css.mjs <source.tokens.json> --sortie <tokens.css>');
+    process.exit(1);
+  }
+  try {
+    const dtcg = JSON.parse(readFileSync(entree, 'utf8'));
+    const css = genererCss(dtcg, entree, sortie);
+    writeFileSync(sortie, css, 'utf8');
+    console.log(`tokens.css généré : ${sortie} (source : ${entree})`);
+  } catch (e) {
+    console.error(`génération impossible : ${e.message}`);
+    process.exit(1);
+  }
+}

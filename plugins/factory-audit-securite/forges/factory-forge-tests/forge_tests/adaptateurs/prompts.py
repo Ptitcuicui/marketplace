@@ -1,0 +1,964 @@
+"""Adaptateur Prompts — inventaire STATIQUE des prompts, des modèles et du corpus (TF-0200).
+
+Verdict O2 de l'étude d'opportunité du 14/08/2026 (`20260814-etude-opportunite-pans-tests-
+prompts.md`) : un pan `prompts` dans forge-tests, **v0 bornée à ce qui se mesure sans appeler
+un modèle**, le coûteux et le sémantique délégués aux briques existantes.
+
+Trois objets, tous dérivés SANS EXÉCUTION et sans la moindre dépense :
+
+  - **les prompts** — fichiers de prompt adressables (`*.prompt`, tout ce qui vit sous
+    `prompts/` ou `gabarits/`, les `SKILL.md`) et constantes de prompt système repérables dans
+    le code Python. Élément `prompt:<chemin>` ;
+  - **les modèles** nommés par le projet. Élément `modele:<nom>`. Un nom qui est un ALIAS
+    mouvant (`*-latest`, `gpt-4o`) plutôt qu'une version épinglée (`nom-AAAAMMJJ`) est un
+    finding `modele-non-epingle` : *un alias change le système sous test sans qu'aucun commit
+    ne bouge* ;
+  - **le corpus de questions / réponses attendues** (`evals/`, `*.eval.jsonl`, `cas.json` au
+    format de `oracle-agent-evals`). Il ne dit pas si un prompt est BON — il dit s'il est
+    EXERCÉ. Un prompt qu'aucun cas ne cite est `non_exerce` ; un corpus DÉCLARÉ mais
+    introuvable rend son prompt `non_testable`, avec ses `champs_requis`.
+
+Un quatrième constat regarde la SUITE DE TESTS du produit (TF-2110) : un fichier de test qui
+appelle le fournisseur LLM réel (OpenAI, Azure OpenAI, Gemini) sans aucun double dépense à chaque
+exécution — classe `appel-fournisseur-llm-reel-dans-un-test`, fichier et ligne.
+
+Le volet EXÉCUTÉ (rejeu N fois pour mesurer la stabilité, jugement sémantique) est **hors v0** :
+il dépense des jetons, donc il relève d'un mandat humain (règle 29 — « dépenses et gates restent
+humains »). `mesure_d_instabilite` ci-dessous en prépare la mesure et la teste sur données
+figées ; elle n'appelle aucun modèle, n'ouvre aucun réseau, et l'audit ne l'invoque jamais.
+
+Ce module LIT des fichiers ; il n'exécute rien et n'écrit rien (G-1).
+"""
+
+from __future__ import annotations
+
+import ast
+import json
+import re
+from pathlib import Path
+
+from forge_tests import classes, exclusions, flaky
+from forge_tests.noyau import (
+    Element,
+    Finding,
+    NonTestable,
+    SortieAdaptateur,
+    evaluer_surface,
+)
+from forge_tests.risque import coter
+
+NOM, PAN, SEUIL = "prompts-statique", "prompts", 1.0
+
+# A-5 : ce qu il FAUDRAIT pour couvrir ce pan — publie tel quel au rapport.
+POUR_COUVRIR = (
+    "rendre les prompts ADRESSABLES (un fichier `*.prompt`, un dossier `prompts/`, un "
+    "`SKILL.md`) et leur adjoindre un corpus de cas versionné (`evals/*.eval.jsonl` ou "
+    "`cas.json` au format de `oracle-agent-evals`) ; le pan est statique, il n'exécute rien"
+)
+
+# Chapitre(s) de cahier de tests que ce pan alimente. Le cahier et le dashboard les
+# DERIVENT du registre : une liste ecrite ailleurs aurait laisse un pan futur invisible.
+# `decoupe` nomme l axe de sous-chapitrage ; un axe inconnu retombe sur « element », et le
+# repli est DECLARE au cahier plutot que silencieux.
+CHAPITRES = (
+    {"code": "T8", "famille": "technique", "titre": "Prompts & modèles",
+     "decoupe": "prompt", "axe_cas": "unitaire"},
+)
+
+# RT-13 : le seul champ qui debloque CE pan — la racine d un corpus de cas qui vit HORS du
+# depot audite. Un compte ou une instance servie ne l auraient jamais rendu mesurable.
+CHAMPS_REQUIS = ("FORGE_TESTS_PROMPTS_CORPUS",)
+
+NON_JUGE = [
+    "prompts : la v0 est STATIQUE et GRATUITE — le volet execute (rejeu N fois pour mesurer la "
+    "stabilite d une reponse, jugement semantique par un juge) est HORS PERIMETRE : il depense "
+    "des jetons, donc il releve d un mandat humain (regle 29). `mesure_d_instabilite` en porte "
+    "la mesure, testee sur donnees figees et JAMAIS appelee par l audit",
+    "prompts : la QUALITE d un prompt n est pas jugee ici — ce pan dit ou vivent les prompts, "
+    "s ils sont exerces et si le modele est epingle, jamais si le prompt est bon (cela releve "
+    "de `prompt-analyzer-l99` et de la revue humaine)",
+    "prompts : la decouverte est bornee aux formes ADRESSABLES reconnues (suffixe `.prompt`, "
+    "dossier `prompts/` ou `gabarits/`, `SKILL.md`, constante Python en MAJUSCULES dont le nom "
+    "porte `PROMPT`, `INSTRUCTIONS`, `SYSTEM` ou `SYSTEME`, en tete de nom comprise — TF-2780) "
+    "— un prompt assemble a l execution par concatenation, ou stocke en base, n est pas "
+    "inventoriable statiquement et le deviner serait mentir ; une constante qui porte ce mot "
+    "sous une autre forme (`_SYSTEM_PROMPT`, `system_prompt`) est NOMMEE au rapport, jamais "
+    "inventoriee",
+    "prompts : l epinglage juge la FORME du nom (suffixe date `-AAAAMMJJ`, `-AAAA-MM-JJ` ou "
+    "`-AAMM`), pas la disponibilite reelle du modele — aucun appel reseau n est fait et aucun "
+    "calendrier de depreciation fournisseur n est consulte ici",
+    "prompts : les noms de modeles sont reconnus par FAMILLE declaree et seulement dans une "
+    "chaine litterale ou une cle `modele:`/`model:` — un fournisseur absent de la table, un nom "
+    "construit par concatenation ou lu d une variable d environnement n est pas vu",
+    "prompts : les artefacts de l AUDITEUR sont exclus de l inventaire de l AUDITE (TF-0257) — "
+    "le dossier de convention `forge\\` du pilot (ledger, contestations, rapports d etape), les "
+    "rapports forge-tests persistes (reconnus a leurs cles de premier niveau) et les livrables "
+    "scelles par la forge. Un projet qui nommerait `forge\\` un dossier de SON produit le "
+    "verrait donc ignore ici : la convention du pilot prime, et elle est declaree",
+    "prompts : le corpus est LU, jamais joue — qu un cas soit pertinent, que sa reponse "
+    "attendue soit juste, et que le jeu couvre les cas limites, restent des jugements humains "
+    "(l execution du corpus est deleguee a `oracle-agent-evals`, cat-agt-05)",
+    "prompts : l appel de fournisseur dans un test (TF-2110) est juge sur la PRESENCE d un double "
+    "dans le fichier ou dans une configuration voisine (`conftest.py` du dossier ou d un parent, "
+    "`vitest.setup.*`, `jest.setup.*`, `setupTests.*`), jamais sur son EFFICACITE : un double "
+    "pose mais qui ne couvre pas l appel, ou un fichier d aide non nomme comme un test "
+    "(`tests/helpers.py`), n est pas vu. Seuls OpenAI, Azure OpenAI et Gemini sont reconnus ; "
+    "une adresse citee en assertion sans double reste un constat",
+]
+
+# Dossiers hors périmètre : dépendances et artefacts (mêmes exclusions que les pans `interface`
+# et `declencheurs` — RT-9/RT-10 du lot Produit-11, convention `output\`/`old\` du pilot).
+#
+# TF-0257, étage 1 — `forge\` est le dossier de convention du PILOT : le run y dépose le ledger,
+# les contestations, les rapports d étape, les dossiers de MEP. Ce sont les artefacts de
+# l ORCHESTRATEUR, pas du produit audité. Les fouiller a un effet mesuré : sur un produit
+# strictement sans LLM, quatre « modèles » fantômes ont été inventoriés — l alias de
+# l orchestrateur lui-même, cité dans son ledger — et il a fallu cinq contestations pour les
+# faire taire. `.forge` (le point) était exclu, `forge` ne l était pas : la convention réelle du
+# pilot est celle SANS point (`CLAUDE.md` : « artefacts sous `forge\` »).
+_EXCLUS = {
+    "node_modules", ".venv", "venv", ".git", "__pycache__", "site-packages", "dist", "build",
+    ".next", ".nuxt", ".svelte-kit", ".visuel", "htmlcov", "coverage", ".tox", ".mypy_cache",
+    ".ruff_cache", ".pytest_cache", "vendor", ".forge", "forge", "output", "old", "Old",
+    ".oracles",
+    # TF-0536/0542/0543 (lot Produit-02 20260823) : le SOCLE commun vient desormais
+    # d'une source unique. Le depot portait DIX listes divergentes (7 a 31 entrees) et
+    # `input` ne figurait dans AUCUNE : sur un audit reel, 12 constats sur 15 portaient sur
+    # `input\` — un site concurrent aspire et une ancienne version du site. Les entrees
+    # ci-dessus restent ecrites ici : elles portent le motif de CE pan.
+    *exclusions.socle(),
+}
+
+# Un fichier au-delà de ce volume n est pas un prompt ni une configuration : c est un artefact.
+# Le plafond borne le coût du pan sur un dépôt réel, et il est déclaré plutôt que silencieux.
+_PLAFOND_OCTETS = 512 * 1024
+
+# --- Ce qui fait qu un fichier est un PROMPT ---------------------------------------------------
+_SUFFIXE_PROMPT = ".prompt"
+_DOUBLE_SUFFIXE_PROMPT = (".prompt.md", ".prompt.txt")
+_DOSSIERS_PROMPT = ("prompts", "gabarits")
+_EXTENSIONS_EN_DOSSIER = (".prompt", ".md", ".txt", ".tmpl")
+_NOMS_PROMPT = ("SKILL.md",)
+
+# Constante Python qui PORTE un prompt système : le nom le dit, et la valeur est un littéral.
+# TF-2780 : le mot-clé peut OUVRIR le nom (`INSTRUCTIONS_REDACTION`). L'ancien motif exigeait une
+# majuscule AVANT lui, et écartait en silence une consigne légitime (pan à 1/19 au lieu de 3/21).
+_MOTS_CLES = ("PROMPT", "INSTRUCTIONS", "SYSTEME", "SYSTEM")
+_NOM_CONSTANTE = re.compile(
+    r"^(?:[A-Z][A-Z0-9_]*)?(?:" + "|".join(_MOTS_CLES) + r")[A-Z0-9_]*$"
+)
+# Un nom qui PORTE un mot-clé sous une autre forme (`_SYSTEM_PROMPT`, `system_prompt`) n'est pas
+# reconnu, mais il est PUBLIÉ au non-jugé : une candidate écartée se nomme, elle ne disparaît pas.
+_MOT_CLE_ANYCASE = re.compile("|".join(_MOTS_CLES), re.IGNORECASE)
+_LONGUEUR_MINIMALE = 40
+
+# --- Ce qui fait qu une chaîne est un NOM DE MODÈLE --------------------------------------------
+# Familles déclarées, donc contestables. Un fournisseur absent d ici n est pas vu (non_juge).
+_FAMILLES = (
+    "claude", "gpt", "o1", "o3", "o4", "gemini", "mistral", "mixtral", "llama", "deepseek",
+    "grok", "qwen", "command-r", "sonar", "phi",
+)
+_MODELE = re.compile(
+    r"^(?:[\w.]+/)?(?:" + "|".join(_FAMILLES) + r")-[a-z0-9][a-z0-9._-]*$", re.IGNORECASE
+)
+# Formes d ÉPINGLAGE reconnues : instantané daté du fournisseur.
+_EPINGLE = re.compile(
+    r"(?:-|@|:)(?:20\d{2}(?:0[1-9]|1[0-2])(?:[0-2]\d|3[01])"
+    r"|20\d{2}-(?:0[1-9]|1[0-2])-(?:[0-2]\d|3[01])"
+    r"|2\d(?:0[1-9]|1[0-2]))$"
+)
+
+# --- TF-1419 : les identifiants que le fournisseur publie SANS variante datée -----------------
+# `_EPINGLE` exige un suffixe daté — une règle juste pour un ALIAS (`claude-haiku-4-5` pointe
+# vers `claude-haiku-4-5-20251001`, et il existe une forme à épingler à sa place). Elle est
+# fausse pour un nom de VERSION dont le fournisseur ne publie aucune variante datée : rien à
+# épingler, et le contrôle poussait quand même vers une forme d'une génération antérieure.
+# Mesuré le 24/09/2026 sur Produit-61 (18 occurrences de `modele:claude-opus-5` contestées le
+# 05/09, contestation non remontée au registre) et confirmé inchangé le 02/10/2026 en rejouant
+# `est_epingle()` directement.
+#
+# Loi n° 4 du pilot — une donnée volatile est une donnée, pas du code : ce référentiel PÉRIME à
+# chaque nouvelle famille de modèle, il vit donc ÉDITABLE, DATÉ et SOURCÉ ici, jamais recopié en
+# dur dans la règle elle-même. `est_epingle` le lit AVANT de conclure à un alias mouvant. Un nom
+# qui pointe réellement vers une forme datée, ou qui porte un suffixe `-latest`, n'y figure PAS
+# et reste signalé : ce référentiel ne fait qu'ôter les faux positifs mesurés, il n'assouplit
+# rien d'autre.
+_IDENTIFIANTS_SANS_FORME_DATEE: tuple[dict[str, str], ...] = (
+    {
+        "nom": "claude-opus-5-5",
+        "releve_le": "2026-10-02",
+        "source": "shared/models.md (skill claude-api, Claude Code 2.1.281) : aucun identifiant "
+        "daté publié pour Opus 5.5",
+    },
+    {
+        "nom": "claude-opus-5",
+        "releve_le": "2026-10-02",
+        "source": "shared/models.md (skill claude-api, Claude Code 2.1.281) : aucun identifiant "
+        "daté publié pour Opus 5",
+    },
+    {
+        "nom": "claude-sonnet-5",
+        "releve_le": "2026-10-02",
+        "source": "shared/models.md (skill claude-api, Claude Code 2.1.281) : aucun identifiant "
+        "daté publié pour Sonnet 5",
+    },
+    {
+        "nom": "claude-fable-5-1",
+        "releve_le": "2026-10-02",
+        "source": "shared/models.md (skill claude-api, Claude Code 2.1.281) : aucun identifiant "
+        "daté publié pour Fable 5.1",
+    },
+)
+_SANS_FORME_DATEE = frozenset(entree["nom"] for entree in _IDENTIFIANTS_SANS_FORME_DATEE)
+_CHAINE = re.compile(r"[\"'`]([^\"'`\n]{3,120})[\"'`]")
+_CLE_MODELE = re.compile(
+    r"(?im)^[\s\-#*>]*(?:mod[eè]les?|models?)\s*[:=]\s*[\"'`]?([^\"'`\n,}\]]+)"
+)
+
+# --- Corpus de questions / réponses attendues --------------------------------------------------
+_DOSSIERS_CORPUS = ("evals", "eval", "evaluations")
+_SUFFIXES_CORPUS = (".eval.jsonl", ".eval.json")
+_NOMS_CORPUS = ("cas.json", "cas.jsonl")
+_EXTENSIONS_CORPUS = (".json", ".jsonl", ".yaml", ".yml")
+_DECLARE_CORPUS = re.compile(
+    r"(?im)^[\s\-#*>]*(?:corpus|eval_set|jeu_de_cas)\s*[:=]\s*[\"'`]?([^\"'`\n]+?)[\"'`]?\s*$"
+)
+_CHAMPS_PROMPT = ("prompt", "prompt_ref", "fichier", "skill")
+_CHAMPS_MODELE = ("modele", "model", "modele_juge")
+
+_EXTENSIONS_LUES = (
+    ".prompt", ".md", ".txt", ".tmpl", ".py", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
+    ".json", ".jsonl", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".env", ".sh", ".ps1",
+)
+# Fichiers de verrouillage de dépendances : ils citent des milliers de noms de paquets et
+# aucun modèle. Les lire produirait du bruit, jamais un fait.
+_NOMS_IGNORES = ("package-lock.json", "uv.lock", "poetry.lock", "yarn.lock", "pnpm-lock.yaml")
+
+# --- TF-0257, étage 2 — le LARSEN de l auditeur ------------------------------------------------
+# ETAPES-RUN EXIGE que le rapport d audit soit persisté dans le projet
+# (`forge\etapes\tests\rapport-forge-tests.json`). Ce rapport contient les MESSAGES du pan
+# prompts, qui citent nommément `claude-opus-4-1-20250805` et `gemini-flash-latest` pour
+# expliquer ce qu est un alias mouvant. Au run suivant, le pan relisait donc son propre rapport
+# et inventoriait ces noms comme des modèles DU PRODUIT : sur un produit strictement sans LLM,
+# quatre alias fantômes et cinq contestations nécessaires — et l audit ne convergeait jamais,
+# puisque chaque run recréait la matière du suivant.
+#
+# La reconnaissance se fait sur la SIGNATURE, pas sur le nom : un projet reste libre de nommer
+# ses fichiers comme il l entend, et un rapport renommé reste un rapport. Deux signatures :
+#
+#   - un rapport forge-tests — objet JSON portant ses clés de premier niveau ;
+#   - un livrable SCELLÉ par la forge (cahiers, dashboard) — son bloc de sceau en tête.
+_CLES_RAPPORT = ("adaptateurs", "couverture_par_pan", "pans_non_couverts", "verdict")
+# Littéral de `forge_tests.livrables.nommage.DEBUT_SCEAU`, recopié pour ne pas importer le
+# paquet `livrables` depuis un adaptateur (`livrables/__init__` importe le REGISTRE des
+# adaptateurs : l import serait circulaire). L égalité des deux est TESTÉE.
+_DEBUT_SCEAU = "<!-- SCEAU FORGE-TESTS"
+
+
+def est_un_artefact_d_auditeur(texte: str) -> bool:
+    """Ce fichier est-il un artefact produit par FORGE-TESTS elle-même ?
+
+    Un audit qui inventorie ses propres livrables mesure l auditeur, pas l audité — et il ne
+    converge pas : chaque run fabrique la matière que le suivant conteste (TF-0257).
+    """
+    debut = texte.lstrip()
+    if debut.startswith(_DEBUT_SCEAU):
+        return True
+    if not debut.startswith("{"):
+        return False
+    # Test bon marché AVANT l analyse : un JSON de projet n a aucune raison de porter ce mot.
+    if '"couverture_par_pan"' not in texte:
+        return False
+    try:
+        charge = json.loads(texte)
+    except (json.JSONDecodeError, RecursionError):
+        return False
+    return isinstance(charge, dict) and all(cle in charge for cle in _CLES_RAPPORT)
+
+
+# --- Parcours ---------------------------------------------------------------------------------
+def _fichiers(cible: Path) -> list[Path]:
+    """Fichiers TEXTE du projet, artefacts de construction et dépendances exclus.
+
+    TF-2118 : dans un dépôt git, seules les sources SUIVIES comptent au produit. Un fichier non
+    suivi est le travail d une autre session sur le même arbre, ou un brouillon : il ne se
+    juge pas, et le pan le NOMME à part (`_non_suivis_porteurs`). Hors dépôt git, rien ne change.
+    """
+    return [c for c in _candidats(cible) if not exclusions.non_suivi_par_git(c, cible)]
+
+
+def _candidats(cible: Path) -> list[Path]:
+    """Fichiers texte du projet avant le filtre « suivi par git » (TF-2118)."""
+    retenus: list[Path] = []
+    for chemin in sorted(cible.rglob("*")):
+        if any(partie in _EXCLUS for partie in exclusions.parties_du_projet(chemin, cible)):
+            continue  # TF-2523 : les segments du projet, pas ceux de son chemin absolu
+        if exclusions.ignore_par_git(chemin, cible):  # TF-1767
+            continue
+        if not chemin.is_file() or chemin.name in _NOMS_IGNORES:
+            continue
+        if chemin.suffix.lower() not in _EXTENSIONS_LUES:
+            continue
+        try:
+            if chemin.stat().st_size > _PLAFOND_OCTETS:
+                continue
+        except OSError:
+            continue
+        retenus.append(chemin)
+    return retenus
+
+
+def _relatif(chemin: Path, cible: Path) -> str:
+    try:
+        return chemin.relative_to(cible).as_posix()
+    except ValueError:
+        return chemin.as_posix()
+
+
+def _texte(chemin: Path) -> str:
+    try:
+        return chemin.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+def _dossiers_du_chemin(chemin: Path, cible: Path | None) -> set[str]:
+    """Les noms de dossier du chemin, en minuscules. Avec `cible` (TF-2577), seuls ceux du
+    PROJET comptent : le dossier où le clone est posé ne dit rien de ce que le fichier est."""
+    parties = chemin.parent.parts if cible is None else exclusions.parties_du_projet(
+        chemin.parent, cible
+    )
+    return {partie.lower() for partie in parties}
+
+
+def est_un_prompt(chemin: Path, cible: Path | None = None) -> bool:
+    """Le fichier est-il un prompt ADRESSABLE ? Trois formes reconnues, aucune devinée."""
+    nom = chemin.name
+    if chemin.suffix.lower() == _SUFFIXE_PROMPT or nom.lower().endswith(_DOUBLE_SUFFIXE_PROMPT):
+        return True
+    if nom in _NOMS_PROMPT:
+        return True
+    dossiers = _dossiers_du_chemin(chemin, cible)
+    return bool(dossiers & set(_DOSSIERS_PROMPT)) and chemin.suffix.lower() in (
+        _EXTENSIONS_EN_DOSSIER
+    )
+
+
+def est_un_corpus(chemin: Path, cible: Path | None = None) -> bool:
+    """Le fichier porte-t-il des cas (question / réponse attendue) ?"""
+    nom = chemin.name.lower()
+    if nom.endswith(_SUFFIXES_CORPUS) or nom in _NOMS_CORPUS:
+        return True
+    dossiers = _dossiers_du_chemin(chemin, cible)
+    return bool(dossiers & set(_DOSSIERS_CORPUS)) and chemin.suffix.lower() in _EXTENSIONS_CORPUS
+
+
+def est_epingle(nom: str) -> bool:
+    """Le nom désigne-t-il une version FIGÉE, ou un alias qui bouge sous nos pieds ?
+
+    TF-1419 : un nom lu dans `_IDENTIFIANTS_SANS_FORME_DATEE` est épinglé par construction — le
+    fournisseur n'en publie aucune variante datée à exiger à sa place.
+    """
+    nom = nom.strip()
+    if nom in _SANS_FORME_DATEE:
+        return True
+    return bool(_EPINGLE.search(nom))
+
+
+def modeles_cites(texte: str) -> list[str]:
+    """Noms de modèles cités par ce texte — littéral de chaîne ou clé `modele:` uniquement.
+
+    Chercher le motif dans la prose donnerait un inventaire de mentions, pas d usages : un
+    document qui PARLE d un modèle ne le fait pas tourner.
+    """
+    trouves: list[str] = []
+    candidats = [*_CHAINE.findall(texte), *_CLE_MODELE.findall(texte)]
+    for brut in candidats:
+        valeur = brut.strip().strip("\"'`").strip()
+        if _MODELE.match(valeur) and valeur not in trouves:
+            trouves.append(valeur)
+    return trouves
+
+
+def _constantes_chaine(chemin: Path, texte: str) -> list[tuple[str, str]]:
+    """(nom, valeur) des constantes Python à valeur littérale assez longue, lues par AST."""
+    try:
+        arbre = ast.parse(texte, filename=str(chemin))
+    except SyntaxError:
+        return []
+    trouves: list[tuple[str, str]] = []
+    for noeud in ast.walk(arbre):
+        cibles: list[ast.expr] = []
+        valeur: ast.expr | None = None
+        if isinstance(noeud, ast.Assign):
+            cibles, valeur = list(noeud.targets), noeud.value
+        elif isinstance(noeud, ast.AnnAssign) and noeud.value is not None:
+            cibles, valeur = [noeud.target], noeud.value
+        if not isinstance(valeur, ast.Constant) or not isinstance(valeur.value, str):
+            continue
+        if len(valeur.value) < _LONGUEUR_MINIMALE:
+            continue
+        for element in cibles:
+            if isinstance(element, ast.Name):
+                trouves.append((element.id, valeur.value))
+    return trouves
+
+
+def _constantes_de_prompt(chemin: Path, texte: str) -> list[tuple[str, str]]:
+    """(nom, valeur) des constantes Python qui portent un prompt système, lues par AST."""
+    return [(nom, v) for nom, v in _constantes_chaine(chemin, texte) if _NOM_CONSTANTE.match(nom)]
+
+
+def _constantes_ecartees(cible: Path) -> list[str]:
+    """`chemin:NOM` des constantes littérales qui portent un mot-clé de prompt sans que le nom soit
+    reconnu (TF-2780) : candidates écartées, publiées plutôt que tues."""
+    trouvees: list[str] = []
+    for chemin in _fichiers(cible):
+        if chemin.suffix.lower() != ".py":
+            continue
+        texte = _texte(chemin)
+        if not texte or est_un_artefact_d_auditeur(texte):
+            continue
+        for nom, _valeur in _constantes_chaine(chemin, texte):
+            if _MOT_CLE_ANYCASE.search(nom) and not _NOM_CONSTANTE.match(nom):
+                trouvees.append(f"{_relatif(chemin, cible)}:{nom}")
+    return trouvees
+
+
+# --- Collecte ----------------------------------------------------------------------------------
+def _collecte(cible: Path) -> dict:
+    """Tout ce que le pan sait lire du projet, en UNE passe : prompts, modèles, cas.
+
+    Retour : `{"prompts": {id: (chemin, source)}, "modeles": {nom: source},
+    "cas": [dict], "corpus_absents": [(id_prompt, source, chemin_declare)]}`.
+    """
+    prompts: dict[str, tuple[Path, str]] = {}
+    modeles: dict[str, str] = {}
+    cas: list[dict] = []
+    corpus_absents: list[tuple[str, str, str]] = []
+
+    for chemin in _fichiers(cible):
+        texte = _texte(chemin)
+        if not texte:
+            continue
+        # TF-0257 : ce que la forge a elle-même écrit ne fait pas partie de la surface de
+        # l audité — sans quoi l audit se mesure lui-même et ne converge jamais.
+        if est_un_artefact_d_auditeur(texte):
+            continue
+        relatif = _relatif(chemin, cible)
+
+        if est_un_prompt(chemin, cible):
+            prompts[f"prompt:{relatif}"] = (chemin, str(chemin))
+            declare = _DECLARE_CORPUS.search(texte)
+            if declare:
+                brut = declare.group(1).strip()
+                if not _resoudre(cible, chemin, brut):
+                    corpus_absents.append((f"prompt:{relatif}", str(chemin), brut))
+        elif chemin.suffix.lower() == ".py":
+            for nom, _valeur in _constantes_de_prompt(chemin, texte):
+                prompts[f"prompt:{relatif}:{nom}"] = (chemin, str(chemin))
+
+        if est_un_corpus(chemin, cible):
+            cas.extend(_cas(texte))
+
+        for nom in modeles_cites(texte):
+            modeles.setdefault(nom, str(chemin))
+
+    return {
+        "prompts": prompts,
+        "modeles": modeles,
+        "cas": cas,
+        "corpus_absents": corpus_absents,
+    }
+
+
+def _resoudre(cible: Path, prompt: Path, declare: str) -> Path | None:
+    """Le corpus DÉCLARÉ par un prompt existe-t-il, à la racine du projet ou à côté du prompt ?"""
+    brut = declare.strip().strip("\"'`").replace("\\", "/")
+    if not brut:
+        return None
+    for candidat in (cible / brut, prompt.parent / brut):
+        try:
+            if candidat.exists():
+                return candidat
+        except OSError:
+            continue
+    return None
+
+
+def _cas(texte: str) -> list[dict]:
+    """Cas portés par un fichier de corpus — JSONL ligne à ligne, ou JSON (liste ou objet)."""
+    trouves: list[dict] = []
+    for ligne in texte.splitlines():
+        ligne = ligne.strip()
+        if not ligne.startswith("{"):
+            continue
+        try:
+            charge = json.loads(ligne)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(charge, dict):
+            trouves.append(charge)
+    if trouves:
+        return trouves
+    try:
+        charge = json.loads(texte)
+    except json.JSONDecodeError:
+        return []
+    if isinstance(charge, list):
+        return [c for c in charge if isinstance(c, dict)]
+    if isinstance(charge, dict):
+        for clef in ("cas", "tests", "evals", "questions"):
+            valeur = charge.get(clef)
+            if isinstance(valeur, list):
+                return [c for c in valeur if isinstance(c, dict)]
+    return []
+
+
+def _designe(reference: str, identifiant: str) -> bool:
+    """Un cas qui cite `reference` désigne-t-il l élément `prompt:<chemin>` ?"""
+    reference = (reference or "").strip().replace("\\", "/").lower()
+    if not reference:
+        return False
+    chemin = identifiant[len("prompt:") :].lower()
+    if reference in (chemin, Path(chemin).name, Path(chemin).stem):
+        return True
+    return chemin.endswith("/" + reference)
+
+
+# --- Contrat d adaptateur ----------------------------------------------------------------------
+def inventaire(cible: Path) -> list[Element]:
+    """Prompts adressables et modèles nommés. Les prompts NON TESTABLES ici en sont exclus.
+
+    Un prompt dont le corpus déclaré est introuvable n est pas « jamais exercé » : personne ne
+    POUVAIT l exercer ici (RT-6). Le laisser dans la surface l accuserait à tort d un trou de
+    couverture ; il sort en `non_testable`, avec ses `champs_requis`.
+    """
+    collecte = _collecte(cible)
+    hors_portee = {identifiant for identifiant, _, _ in collecte["corpus_absents"]}
+    elements = [
+        Element(identifiant, PAN, f"prompt adressable {identifiant[len('prompt:'):]}", source)
+        for identifiant, (_chemin, source) in sorted(collecte["prompts"].items())
+        if identifiant not in hors_portee
+    ]
+    elements.extend(
+        Element(
+            f"modele:{nom}",
+            PAN,
+            f"modèle « {nom} » ({'épinglé' if est_epingle(nom) else 'alias mouvant'})",
+            source,
+        )
+        for nom, source in sorted(collecte["modeles"].items())
+    )
+    return elements
+
+
+def exerces(cible: Path) -> set[str]:
+    """Éléments cités par AU MOINS UN cas du corpus. Aucun appel de modèle n est fait.
+
+    « Exercé » veut dire ici « un cas versionné le désigne », pas « une réponse a été obtenue » :
+    obtenir la réponse coûte des jetons et relève du volet mandaté (règle 29).
+    """
+    collecte = _collecte(cible)
+    hors_portee = {identifiant for identifiant, _, _ in collecte["corpus_absents"]}
+    couverts: set[str] = set()
+    for cas in collecte["cas"]:
+        for champ in _CHAMPS_PROMPT:
+            reference = cas.get(champ)
+            if not isinstance(reference, str):
+                continue
+            for identifiant in collecte["prompts"]:
+                if identifiant not in hors_portee and _designe(reference, identifiant):
+                    couverts.add(identifiant)
+        for champ in _CHAMPS_MODELE:
+            nom = cas.get(champ)
+            if isinstance(nom, str) and f"modele:{nom.strip()}" in {
+                f"modele:{m}" for m in collecte["modeles"]
+            }:
+                couverts.add(f"modele:{nom.strip()}")
+    return couverts
+
+
+def _findings_modeles(cible: Path) -> list[Finding]:
+    """Modèles désignés par un ALIAS — un défaut de reproductibilité, pas un trou de test."""
+    collecte = _collecte(cible)
+    findings: list[Finding] = []
+    for nom, source in sorted(collecte["modeles"].items()):
+        if est_epingle(nom):
+            continue
+        identifiant = f"modele:{nom}"
+        findings.append(
+            Finding(
+                id=identifiant,
+                classe=classes.MODELE_NON_EPINGLE,
+                localisation=source,
+                message=(
+                    f"modèle « {nom} » désigné par un ALIAS mouvant, jamais par une version "
+                    "épinglée (forme `nom-AAAAMMJJ`) — un alias change le système sous test "
+                    "sans qu'aucun commit ne bouge : `claude-opus-4-1-20250805` a été retiré "
+                    "le 2026-08-05, et Google remappe ses alias `-latest` à dates fixes "
+                    "(`gemini-flash-latest` -> `gemini-3.5-flash` le 2026-05-19)"
+                ),
+                risque=coter(PAN, identifiant, source),
+            )
+        )
+    return findings
+
+
+# --- TF-2110 — un test qui appelle le fournisseur LLM RÉEL -------------------------------------
+# Un test de produit OpenAI ou Gemini qui appelle le fournisseur dépense à chaque exécution de
+# recette, sans qu aucun commit ne le dise. Produit-12 porte le bon modèle : un double HTTP par
+# `monkeypatch` qui vérifie l ADRESSE appelée sans rien dépenser. Le constat se juge par
+# fichier : un appel, aucun double dans le fichier ni dans une configuration de test voisine.
+# Formes reconnues, déclarées donc contestables : un fournisseur absent d ici n est pas vu.
+_APPEL_FOURNISSEUR = re.compile(
+    r"api\.openai\.com|\.openai\.azure\.com|generativelanguage\.googleapis\.com"
+    r"|(?<![A-Za-z0-9_])(?:Async)?(?:Azure)?OpenAI\s*\("
+    r"|(?<![A-Za-z0-9_])GoogleGenAI\s*\("
+    r"|(?<![A-Za-z0-9_])genai\.Client\s*\("
+)
+# `responses` est un mot ordinaire (`responses = []`) : seul le PAQUET compte comme double.
+_DOUBLE_DE_FOURNISSEUR = re.compile(
+    r"monkeypatch|unittest\.mock|unittest\s+import\s[^\n]*\bmock\b|\bpatch\s*\(|\bpatch\.(?:object|dict)\s*\(|\brespx\b"
+    r"|MockTransport|(?:^|\s)(?:import|from)\s+responses\b"
+    r"|\bresponses\.(?:activate|add|add_callback|start|RequestsMock)\b"
+    r"|\bvcr\b|vcrpy|pytest_recording|[Cc]assette|\bnock\b|\bmsw\b"
+    r"|\b(?:vi|jest)\.(?:do)?[Mm]ock\s*\(",
+    re.MULTILINE,
+)
+_TEST_JAVASCRIPT = re.compile(r"(?:\.test|\.spec)\.[cm]?[jt]sx?$")
+_EXTENSIONS_JAVASCRIPT = (".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx")
+# Configuration de test qui s applique à tout un dossier : pytest (`conftest.py`) et les
+# amorces de jest / vitest.
+_CONFIG_DE_TEST = re.compile(
+    r"^(?:conftest\.py|(?:jest|vitest)\.(?:config|setup)\.[cm]?[jt]s|setup-?tests?\.[cm]?[jt]sx?"
+    r"|test-?setup\.[cm]?[jt]sx?|setup\.[cm]?[jt]sx?)$",
+    re.IGNORECASE,
+)
+_DEBUT_DE_COMMENTAIRE = ("#", "//", "*", "/*")
+
+
+def est_un_fichier_de_test(chemin: Path, cible: Path | None = None) -> bool:
+    """Nommage d un fichier de TEST : `test_*.py`, `*_test.py`, `*.test.*`, `*.spec.*`.
+
+    Un fichier sous `__tests__/` compte pour JavaScript et TypeScript. Un fichier d aide qui ne
+    porte pas ces noms (`tests/helpers.py`) n est pas un test : il est déclaré non jugé.
+    """
+    nom, extension = chemin.name, chemin.suffix.lower()
+    if extension == ".py":
+        return nom.startswith("test_") or chemin.stem.endswith("_test")
+    if extension in _EXTENSIONS_JAVASCRIPT:
+        parties = chemin.parts if cible is None else exclusions.parties_du_projet(chemin, cible)
+        return bool(_TEST_JAVASCRIPT.search(nom)) or "__tests__" in parties
+    return False
+
+
+def _double_dans_la_configuration(dossier: Path, memo: dict[Path, bool]) -> bool:
+    """Un fichier de configuration de test de CE dossier pose-t-il un double ?"""
+    if dossier not in memo:
+        trouve = False
+        try:
+            voisins = sorted(f for f in dossier.iterdir() if f.is_file())
+        except OSError:
+            voisins = []
+        for voisin in voisins:
+            if _CONFIG_DE_TEST.match(voisin.name) and _DOUBLE_DE_FOURNISSEUR.search(_texte(voisin)):
+                trouve = True
+                break
+        memo[dossier] = trouve
+    return memo[dossier]
+
+
+def _double_voisin(chemin: Path, cible: Path, memo: dict[Path, bool]) -> bool:
+    """Configuration de test voisine : celle du dossier du fichier ou d un dossier parent.
+
+    On ne remonte pas au-delà de la racine auditée, et on ne descend jamais dans un dossier
+    frère : le double d un autre sous-projet ne bouche pas celui-ci.
+    """
+    dossier = chemin.parent
+    while True:
+        if _double_dans_la_configuration(dossier, memo):
+            return True
+        if dossier == cible or dossier.parent == dossier:
+            return False
+        dossier = dossier.parent
+
+
+def _findings_appels_reels(cible: Path) -> list[Finding]:
+    """Fichiers de test qui appellent le fournisseur LLM réel sans aucun double (TF-2110)."""
+    findings: list[Finding] = []
+    memo: dict[Path, bool] = {}
+    for chemin in _fichiers(cible):
+        if not est_un_fichier_de_test(chemin, cible):
+            continue
+        texte = _texte(chemin)
+        if not texte or est_un_artefact_d_auditeur(texte):
+            continue
+        appels: list[tuple[int, str]] = []
+        for numero, ligne in enumerate(texte.splitlines(), start=1):
+            if ligne.lstrip().startswith(_DEBUT_DE_COMMENTAIRE):
+                continue
+            trouve = _APPEL_FOURNISSEUR.search(ligne)
+            if trouve:
+                appels.append((numero, trouve.group(0).strip()))
+        if not appels or _DOUBLE_DE_FOURNISSEUR.search(texte):
+            continue
+        if _double_voisin(chemin, cible, memo):
+            continue
+        relatif = _relatif(chemin, cible)
+        identifiant = f"appel-fournisseur:{relatif}"
+        lignes = ", ".join(str(numero) for numero, _ in appels)
+        findings.append(
+            Finding(
+                id=identifiant,
+                classe=classes.APPEL_FOURNISSEUR_REEL_DANS_UN_TEST,
+                localisation=f"{relatif}:{appels[0][0]}",
+                message=(
+                    f"appel de fournisseur LLM RÉEL dans un test (« {appels[0][1]} », "
+                    f"ligne(s) {lignes}) : ni ce fichier ni une configuration de test voisine "
+                    "ne pose de double (`monkeypatch`, `unittest.mock`, `respx`, "
+                    "`httpx.MockTransport`, `responses`, `vcr`, `nock`, `msw`, `vi.mock`, "
+                    "`jest.mock`). Chaque exécution de la suite DÉPENSE des jetons chez le "
+                    "fournisseur sans qu'aucun commit ne le dise, et la recette dépend du "
+                    "réseau et d'une clé : poser un double HTTP qui vérifie l'adresse appelée, "
+                    "comme le fait Produit-12"
+                ),
+                risque=coter(PAN, identifiant, str(chemin)),
+            )
+        )
+    return findings
+
+
+def _non_testables(cible: Path) -> list[NonTestable]:
+    """Prompts dont le corpus DÉCLARÉ est introuvable — un manque de configuration, pas un trou."""
+    return [
+        NonTestable(
+            element=identifiant,
+            champs_requis=list(CHAMPS_REQUIS),
+            pan=PAN,
+            motif=(
+                f"prompts : le corpus déclaré « {declare} » est introuvable — fournir le jeu de "
+                f"cas (ou {CHAMPS_REQUIS[0]} vers sa racine), puis `--reprendre` le rapport"
+            ),
+        )
+        for identifiant, _source, declare in sorted(_collecte(cible)["corpus_absents"])
+    ]
+
+
+# TF-1794 (Produit-83 RE-5, 15/10/2026) : sur un produit sans prompt ni modèle, le pan sortait
+# SKIP, « surface non énumérable », compté parmi les pans NON COUVERTS. Un inventaire vide n est
+# pas une preuve ; l absence de tout client de modèle dans les manifestes de dépendances en est
+# une. Liste déclarée, donc contestable : un client absent d ici laisse le pan en SKIP.
+_CLIENTS_DE_MODELE = (
+    "openai", "anthropic", "mistralai", "google-generativeai", "google-genai", "vertexai",
+    "langchain", "llama-index", "llama_index", "litellm", "cohere", "groq", "ollama",
+    "transformers", "@anthropic-ai/sdk", "@mistralai/", "@google/generative-ai", "@google/genai",
+    "@ai-sdk/", "@langchain/",
+)
+_MANIFESTES = ("pyproject.toml", "package.json", "Pipfile", "setup.cfg", "setup.py")
+
+
+def _manifestes(cible: Path) -> list[Path]:
+    """Manifestes de dépendances à la racine et un niveau sous elle, hors dossiers exclus."""
+    trouves: list[Path] = []
+    for dossier in [cible, *(d for d in sorted(cible.iterdir()) if d.is_dir())]:
+        if dossier != cible and (dossier.name in _EXCLUS or dossier.name.startswith(".")):
+            continue
+        if dossier != cible and exclusions.ignore_par_git(dossier, cible):
+            continue
+        for fichier in sorted(dossier.iterdir()):
+            nom = fichier.name
+            if fichier.is_file() and (
+                nom in _MANIFESTES or (nom.startswith("requirements") and nom.endswith(".txt"))
+            ):
+                trouves.append(fichier)
+    return trouves
+
+
+def sans_objet(cible: Path) -> str | None:
+    """PREUVE que le projet n appelle aucun modèle : des manifestes lus, aucun client déclaré."""
+    if not cible.is_dir():
+        return None
+    manifestes = _manifestes(cible)
+    if not manifestes:
+        return None
+    for manifeste in manifestes:
+        try:
+            texte = manifeste.read_text(encoding="utf-8", errors="replace").lower()
+        except OSError:
+            return None
+        for client in _CLIENTS_DE_MODELE:
+            if re.search(rf"(?<![\w@/]){re.escape(client)}(?!\w)", texte):
+                return None
+    lus = ", ".join(f"`{m.relative_to(cible).as_posix()}`" for m in manifestes)
+    return (
+        "aucun prompt adressable, aucun modèle nommé, et aucun client de modèle déclaré dans "
+        f"{lus} : ce projet n appelle aucun modèle"
+    )
+
+
+# TF-2118 — fichiers non suivis par git que le pan a rencontrés et PORTERAIENT quelque chose.
+_MAX_NON_SUIVIS_NOMMES = 20
+
+
+def _non_suivis_porteurs(cible: Path) -> list[str]:
+    """Chemins relatifs des fichiers NON SUIVIS qui auraient été inventoriés ou jugés par ce pan :
+    prompt, corpus, nom de modèle, constante de prompt, ou appel de fournisseur dans un test.
+
+    Ils ne comptent pas au produit (`_fichiers`), mais les taire ferait disparaître ce qui a été
+    lu : ils sont nommés au rapport, à part.
+    """
+    trouves: list[str] = []
+    for chemin in _candidats(cible):
+        if not exclusions.non_suivi_par_git(chemin, cible):
+            continue
+        texte = _texte(chemin)
+        if not texte or est_un_artefact_d_auditeur(texte):
+            continue
+        if (
+            est_un_prompt(chemin, cible)
+            or est_un_corpus(chemin, cible)
+            or modeles_cites(texte)
+            or (chemin.suffix.lower() == ".py" and _constantes_de_prompt(chemin, texte))
+            or (est_un_fichier_de_test(chemin, cible) and _APPEL_FOURNISSEUR.search(texte))
+        ):
+            trouves.append(_relatif(chemin, cible))
+    return trouves
+
+
+def _mention_non_suivis(non_suivis: list[str]) -> list[str]:
+    """La ligne `non_juge` qui publie les fichiers non suivis écartés ; vide s il n y en a pas."""
+    if not non_suivis:
+        return []
+    total = len(non_suivis)
+    nommes = ", ".join(non_suivis[:_MAX_NON_SUIVIS_NOMMES])
+    reste = total - _MAX_NON_SUIVIS_NOMMES
+    suite = f" et {reste} autres" if reste > 0 else ""
+    pluriel = "s" if total > 1 else ""
+    return [
+        f"prompts : {total} fichier{pluriel} non suivi{pluriel} par git rencontre{pluriel} et "
+        f"ecarte{pluriel} du produit (travail d une autre session sur le meme arbre, ou brouillon "
+        f"; ni inventorie{pluriel} ni juge{pluriel}) : {nommes}{suite} — les ajouter a l index "
+        "git pour qu ils soient juges"
+    ]
+
+
+def _mention_ecartees(ecartees: list[str]) -> list[str]:
+    """La ligne `non_juge` qui publie les constantes écartées par la FORME de leur nom (TF-2780)."""
+    if not ecartees:
+        return []
+    total = len(ecartees)
+    nommees = ", ".join(ecartees[:_MAX_NON_SUIVIS_NOMMES])
+    reste = total - _MAX_NON_SUIVIS_NOMMES
+    suite = f" et {reste} autres" if reste > 0 else ""
+    pluriel = "s" if total > 1 else ""
+    verbe = "portent" if total > 1 else "porte"
+    sort = "sont ecartees" if total > 1 else "est ecartee"
+    return [
+        f"prompts : {total} constante{pluriel} Python a valeur litterale longue {verbe} un "
+        "mot-cle de prompt (PROMPT, INSTRUCTIONS, SYSTEM, SYSTEME) sous une forme de nom non "
+        f"reconnue (minuscules, ou tiret bas en tete) et {sort} de l inventaire : "
+        f"{nommees}{suite} — si l une porte un prompt, la renommer en MAJUSCULES sans tiret "
+        "bas en tete"
+    ]
+
+
+def analyser(cible: Path) -> SortieAdaptateur:
+    non_testables = _non_testables(cible)
+    elements = inventaire(cible)
+    findings_modeles = _findings_modeles(cible)
+    findings_appels = _findings_appels_reels(cible)
+    non_suivis = _non_suivis_porteurs(cible)
+    mention = [*_mention_non_suivis(non_suivis), *_mention_ecartees(_constantes_ecartees(cible))]
+    if not elements:
+        # Un test qui appelle le fournisseur prouve le CONTRAIRE d « aucun modèle appelé » : un
+        # appel HTTP direct n a besoin d aucun client déclaré au manifeste (TF-2110). Il en va de
+        # même d un fichier non suivi qui nomme un modèle (TF-2118) : il n est pas jugé, mais il
+        # interdit de PROUVER l absence de tout modèle.
+        motif_sans_objet = None if findings_appels or non_suivis else sans_objet(cible)
+        if motif_sans_objet:
+            sortie = evaluer_surface(
+                NOM, PAN, str(cible), [], set(), SEUIL, NON_JUGE, sans_objet=motif_sans_objet
+            )
+            sortie.non_testables.extend(non_testables)
+            return sortie
+        # Un modèle nommé EST un élément : un inventaire vide implique qu aucun modèle n a été
+        # trouvé, donc aucun constat d épinglage à porter : seul le constat d appel réel dans un
+        # test (TF-2110), indépendant de l inventaire, peut faire FAIL ici.
+        return SortieAdaptateur(
+            NOM,
+            PAN,
+            str(cible),
+            "FAIL" if findings_appels else "SKIP",
+            findings=findings_appels,
+            non_juge=[
+                *NON_JUGE,
+                "prompts : aucun prompt adressable ni modèle nommé trouvé — surface non "
+                "énumérable sur ce projet",
+                *mention,
+            ],
+            non_testables=non_testables,
+        )
+    sortie = evaluer_surface(NOM, PAN, str(cible), elements, exerces(cible), SEUIL, NON_JUGE)
+    # Copie : `evaluer_surface` peut rendre la liste `NON_JUGE` du module telle quelle.
+    sortie.non_juge = [*sortie.non_juge, *mention]
+    sortie.non_testables.extend(non_testables)
+    if findings_modeles or findings_appels:
+        sortie.findings = [*findings_modeles, *findings_appels, *sortie.findings]
+        sortie.verdict = "FAIL"
+    return sortie
+
+
+# --- TF-0201 — volet stabilité : PRÉPARÉ, jamais exécuté ---------------------------------------
+def mesure_d_instabilite(reponses: list[dict], repetitions: int | None = None) -> dict:
+    """Instabilité d un jeu de réponses DÉJÀ OBTENUES — aucun appel modèle, aucun réseau.
+
+    TF-0201, volet préparé et NON branché à l audit : obtenir les réponses coûte des jetons,
+    c est-à-dire une dépense, c est-à-dire un mandat humain (règle 29). Cette fonction ne les
+    obtient pas — elle prend ce qu un rejeu mandaté a produit ailleurs et le MESURE, en
+    réutilisant littéralement la logique de `forge_tests.flaky` : à entrée identique, un
+    verdict (ou une valeur) qui varie d un rejeu à l autre est une instabilité.
+
+    Entrée — une liste de réponses, chacune portant :
+
+        {"cas": "<identifiant du cas>", "rejeu": <entier>, "verdict": "<passant|…>",
+         "reponse": "<texte rendu>"}
+
+    `verdict` prime quand il est fourni (c est le jugement) ; sinon la RÉPONSE elle-même sert de
+    valeur observée, normalisée sur les espaces — deux textes identiques au blanc près sont la
+    même réponse, et prétendre le contraire ferait crier à l instabilité sur du formatage.
+
+    Sortie — même forme que `flaky.rejouer`, plus le taux de stabilité :
+
+        {"repetitions", "cas_instables": {cas: [valeurs...]}, "tous_ids", "stabilite"}
+
+    `cas_instables` est vide si rien n a varié — jamais l absence de la clé, pour que l appelant
+    n ait pas à distinguer « non mesuré » de « rien trouvé ». Un rejeu où le cas n apparaît pas
+    vaut `absent` : une réponse manquante EST une variation, la taire serait un vert offert.
+    """
+    rejeux: dict[object, dict[str, str]] = {}
+    for entree in reponses:
+        cas = str(entree.get("cas") or entree.get("id") or "")
+        if not cas:
+            continue
+        rang = entree.get("rejeu", entree.get("repetition", len(rejeux)))
+        verdict = entree.get("verdict")
+        if verdict is None:
+            verdict = " ".join(str(entree.get("reponse") or "").split())
+        rejeux.setdefault(rang, {})[cas] = str(verdict)
+
+    releves = [rejeux[rang] for rang in sorted(rejeux, key=str)]
+    total = repetitions if repetitions is not None else len(releves)
+    if total < 2:
+        raise ValueError(
+            "la mesure d instabilite exige au moins 2 rejeux du meme cas : une reponse unique "
+            "ne prouve rien sur la stabilite"
+        )
+    instables = flaky.variations(releves)
+    tous_ids = sorted({cas for releve in releves for cas in releve})
+    return {
+        "repetitions": total,
+        "cas_instables": instables,
+        "tous_ids": tous_ids,
+        "stabilite": round(1 - len(instables) / len(tous_ids), 4) if tous_ids else 1.0,
+    }

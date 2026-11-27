@@ -2,42 +2,42 @@
   "factory-propale": {
     "depot": "factory-forge-agents",
     "chemin": ".claude/skills/factory-propale",
-    "commit": "200f72de09668324bc4d891922e1eff5e0d51e77"
+    "commit": "751595346464da69bc1249741f8c4eb52ee531bc"
   },
   "factory-propale-review": {
     "depot": "factory-forge-agents",
     "chemin": ".claude/skills/factory-propale-review",
-    "commit": "200f72de09668324bc4d891922e1eff5e0d51e77"
+    "commit": "751595346464da69bc1249741f8c4eb52ee531bc"
   },
   "factory-pptx": {
     "depot": "factory-forge-agents",
     "chemin": ".claude/skills/factory-pptx",
-    "commit": "200f72de09668324bc4d891922e1eff5e0d51e77"
+    "commit": "751595346464da69bc1249741f8c4eb52ee531bc"
   },
   "factory-docx": {
     "depot": "factory-forge-agents",
     "chemin": ".claude/skills/factory-docx",
-    "commit": "200f72de09668324bc4d891922e1eff5e0d51e77"
+    "commit": "751595346464da69bc1249741f8c4eb52ee531bc"
   },
   "factory-pdf": {
     "depot": "factory-forge-agents",
     "chemin": ".claude/skills/factory-pdf",
-    "commit": "200f72de09668324bc4d891922e1eff5e0d51e77"
+    "commit": "751595346464da69bc1249741f8c4eb52ee531bc"
   },
   "factory-schemas": {
     "depot": "factory-forge-agents",
     "chemin": ".claude/skills/factory-schemas",
-    "commit": "200f72de09668324bc4d891922e1eff5e0d51e77"
+    "commit": "751595346464da69bc1249741f8c4eb52ee531bc"
   },
   "factory-cv-review": {
     "depot": "factory-forge-agents",
     "chemin": ".claude/skills/factory-cv-review",
-    "commit": "200f72de09668324bc4d891922e1eff5e0d51e77"
+    "commit": "751595346464da69bc1249741f8c4eb52ee531bc"
   },
   "plan-d-amelioration": {
     "depot": "factory-forge-agents",
     "chemin": ".claude/skills/plan-d-amelioration",
-    "commit": "200f72de09668324bc4d891922e1eff5e0d51e77"
+    "commit": "751595346464da69bc1249741f8c4eb52ee531bc"
   },
   "qualifie-l-entrant": {
     "depot": "factory-forge-conception",

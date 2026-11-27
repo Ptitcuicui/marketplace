@@ -1,0 +1,103 @@
+{
+  "$description": "tokens-factory — mode « factory » de systeme-de-marque. SOURCE au format W3C DTCG (stable 2025.10, https://www.designtokens.org/tr/drafts/format/). corpus/tokens-factory.css est un DÉRIVÉ, régénéré par scripts/generer-tokens-css.mjs — ne pas éditer ce .css à la main, éditer ce .json puis régénérer.\nRéalignée le 14/09/2026 (TF-1034, constat en passant du 11/09) sur le socle factory-page-html : ~/.claude/skills/factory-page-html/assets/boilerplate.html (bloc :root clair et bascule :root[data-theme=\"dark\"], S-G1) et references/charte-et-tokens.md (registre *-solid, TF-0910). L'empreinte de ces deux sources est scellée dans $fraicheur (oracle-dtcg D4) : un socle qui bouge sans réalignement du corpus se voit désormais, au lieu de se périmer en silence comme la date « extraite le 04/08/2026 » qui précédait ce chantier.\nAjouts de ce réalignement, mesurés absents le 11/09 : (1) le registre red/red-fill/red-line (TF-0755) ; (2) les six fonds pleins de badges *-solid à encre blanche (TF-0910) — LIGHT THEME SEUL, aucune variante sombre n'est documentée par le socle à ce jour, l'écart n'est pas comblé par une valeur inventée ; (3) le groupe focus (--focus-anneau, alias de blue ; --focus-decalage, 2px) que le boilerplate prescrit et qu'oracle-tokens T8 exige, absent du corpus jusqu'ici. Le thème sombre reprend désormais À L'IDENTIQUE le bloc S-G1 réel du boilerplate (#0B1220, #121B2E, #7DA2F5…) : le corpus ne recalcule plus une projection sombre qui divergeait de celle qui s'exécute réellement (#0E1219, #171C25, #6FA0FF… avant ce chantier) — ce n'est plus une extension de la forge, c'est la valeur du socle.\nDEUX CONFLITS CONNUS AVEC LES ORACLES DE LA FORGE — déclarés, non masqués :\n 1. oracle-slop S4 se déclenche sur --card et --surface (#FFFFFF, blanc pur). La règle S4 vient d'impeccable (« pure black/white never appears in nature »). La charte Factory la contredit frontalement. Arbitrage : sur un livrable Factory, la charte gagne et le finding S4 est accepté comme exception déclarée dans la restitution. Sur un livrable client, le mode « client » s'applique et la question ne se pose pas.\n 2. oracle-tokens T4 (parité clair/sombre) se déclenche en bloquant sur les six *-solid : le socle ne documente AUCUNE variante sombre de ce registre (charte-et-tokens.md est light-theme only, C4), et $fraicheur ne peut sceller une valeur qui n'existe nulle part en amont. Inventer un sombre non sourcé serait pire que l'absence : arbitrage identique à S4, exception déclarée sur un livrable Factory, revue dès que le socle documente ce registre en sombre.\nMOUVEMENT (TF-0321) : le groupe « mouvement » PRESCRIT ce que oracles/oracle-motion.mjs juge. Ses valeurs sont dérivées des règles R1-R7, pas choisies : le plafond de 300 ms est celui de R4, l'échelle d'entrée de 0.96 est la fourchette 0.95-0.97 de R2, les trois courbes décélèrent sans dépassement (R3, et slop S8 sur le rebond déguisé). Prescription et jugement partagent donc le même seuil ; changer l'un sans l'autre est un défaut, pas un réglage. Le mouvement ne dépend pas du thème : un seul jeu, aucun jumeau sombre (T4 ne porte que sur la couleur).",
+  "couleur": {
+    "clair": {
+      "bg":           { "$type": "color", "$value": "#FAFBFF" },
+      "card":         { "$type": "color", "$value": "#FFFFFF" },
+      "surface":      { "$type": "color", "$value": "#FFFFFF" },
+      "ink":          { "$type": "color", "$value": "#0F172A" },
+      "muted":        { "$type": "color", "$value": "#64748B" },
+      "faint":        { "$type": "color", "$value": "#94A3B8" },
+      "line":         { "$type": "color", "$value": "#E6EAF2" },
+      "blue":         { "$type": "color", "$value": "#2563EB" },
+      "green":        { "$type": "color", "$value": "#15803D" },
+      "green-fill":   { "$type": "color", "$value": "#F2FCF5" },
+      "green-line":   { "$type": "color", "$value": "#CFEEDD" },
+      "amber":        { "$type": "color", "$value": "#D97706" },
+      "amber-fill":   { "$type": "color", "$value": "#FFFBEB" },
+      "amber-line":   { "$type": "color", "$value": "#FDE9C8" },
+      "teal":         { "$type": "color", "$value": "#0E9488" },
+      "teal-fill":    { "$type": "color", "$value": "#EFFDFB" },
+      "teal-line":    { "$type": "color", "$value": "#C7F0EA" },
+      "red":          { "$type": "color", "$value": "#B91C1C" },
+      "red-fill":     { "$type": "color", "$value": "#FEF2F2" },
+      "red-line":     { "$type": "color", "$value": "#F6CFCF" },
+      "green-solid":  { "$type": "color", "$value": "#166534" },
+      "teal-solid":   { "$type": "color", "$value": "#0F5F8F" },
+      "amber-solid":  { "$type": "color", "$value": "#92400E" },
+      "red-solid":    { "$type": "color", "$value": "#B91C1C" },
+      "slate-solid":  { "$type": "color", "$value": "#4B5563" },
+      "violet-solid": { "$type": "color", "$value": "#7E22CE" }
+    },
+    "sombre": {
+      "bg":         { "$type": "color", "$value": "#0B1220" },
+      "card":       { "$type": "color", "$value": "#121B2E" },
+      "surface":    { "$type": "color", "$value": "#121B2E" },
+      "ink":        { "$type": "color", "$value": "#EEF2F8" },
+      "muted":      { "$type": "color", "$value": "#A9B4C4" },
+      "faint":      { "$type": "color", "$value": "#7C8AA0" },
+      "line":       { "$type": "color", "$value": "#263248" },
+      "blue":       { "$type": "color", "$value": "#7DA2F5" },
+      "green":      { "$type": "color", "$value": "#7BE0A0" },
+      "green-fill": { "$type": "color", "$value": "#0F2A1B" },
+      "green-line": { "$type": "color", "$value": "#1C4A30" },
+      "amber":      { "$type": "color", "$value": "#FBBF6D" },
+      "amber-fill": { "$type": "color", "$value": "#2B2210" },
+      "amber-line": { "$type": "color", "$value": "#4A3A18" },
+      "teal":       { "$type": "color", "$value": "#5FE6D6" },
+      "teal-fill":  { "$type": "color", "$value": "#0E2A27" },
+      "teal-line":  { "$type": "color", "$value": "#164E48" },
+      "red":        { "$type": "color", "$value": "#F5A3A3" },
+      "red-fill":   { "$type": "color", "$value": "#2C1416" },
+      "red-line":   { "$type": "color", "$value": "#4C1F22" }
+    }
+  },
+  "typographie": {
+    "head": { "$type": "fontFamily", "$value": ["Montserrat", "Roboto", "system-ui", "-apple-system", "Segoe UI", "sans-serif"] },
+    "sans": { "$type": "fontFamily", "$value": ["Inter", "DM Sans", "system-ui", "-apple-system", "Segoe UI", "sans-serif"] },
+    "mono": { "$type": "fontFamily", "$value": ["JetBrains Mono", "ui-monospace", "Consolas", "monospace"] }
+  },
+  "rayon": {
+    "r":    { "$type": "dimension", "$value": "12px" },
+    "r-sm": { "$type": "dimension", "$value": "8px" }
+  },
+  "espacement": {
+    "espace-xs":  { "$type": "dimension", "$value": "4px" },
+    "espace-sm":  { "$type": "dimension", "$value": "8px" },
+    "espace-md":  { "$type": "dimension", "$value": "16px" },
+    "espace-lg":  { "$type": "dimension", "$value": "24px" },
+    "espace-xl":  { "$type": "dimension", "$value": "32px" },
+    "espace-2xl": { "$type": "dimension", "$value": "48px" }
+  },
+  "focus": {
+    "focus-anneau":   { "$value": "{couleur.clair.blue}" },
+    "focus-decalage": { "$type": "dimension", "$value": "2px" }
+  },
+  "mouvement": {
+    "dur-etat":         { "$type": "duration", "$value": "120ms" },
+    "dur-local":        { "$type": "duration", "$value": "160ms" },
+    "dur-ancre":        { "$type": "duration", "$value": "200ms" },
+    "dur-surface":      { "$type": "duration", "$value": "280ms" },
+    "dur-plafond":      { "$type": "duration", "$value": "300ms" },
+    "ease-apparition":  { "$type": "cubicBezier", "$value": [0.16, 1, 0.3, 1] },
+    "ease-disparition": { "$type": "cubicBezier", "$value": [0.4, 0, 1, 1] },
+    "ease-deplacement": { "$type": "cubicBezier", "$value": [0.4, 0, 0.2, 1] },
+    "echelle-entree":   { "$type": "number", "$value": 0.96 }
+  },
+  "alias": {
+    "fond":           { "$value": "{couleur.clair.bg}" },
+    "surface-carte":  { "$value": "{couleur.clair.card}" },
+    "texte":          { "$value": "{couleur.clair.ink}" },
+    "texte-faible":   { "$value": "{couleur.clair.muted}" },
+    "trait":          { "$value": "{couleur.clair.line}" },
+    "accent":         { "$value": "{couleur.clair.blue}" }
+  },
+  "$fraicheur": {
+    "verifie_le": "2026-10-15",
+    "sources": [
+      { "cle": "boilerplate:root-clair", "chemin": "~/.claude/skills/factory-page-html/assets/boilerplate.html", "empreinte": "d985f79c3883c8b66069d3700fefd2b8d6a9e5236eea8ab968de9e6df674a4bb" },
+      { "cle": "boilerplate:root-dark",  "chemin": "~/.claude/skills/factory-page-html/assets/boilerplate.html", "empreinte": "4c9ba2cd38f00fcfc26e7bcfed92d0372093531417b2cd6e921e4ce6a07898be" },
+      { "cle": "charte:root-solid",      "chemin": "~/.claude/skills/factory-page-html/references/charte-et-tokens.md", "empreinte": "d009f0b1effbf81ecb4d67b702752708e039ba31f8a85e4ce59b0b3c4197cdd6" }
+    ]
+  }
+}

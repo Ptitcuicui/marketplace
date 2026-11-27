@@ -1,0 +1,77 @@
+{
+  "banc-de-preuves.template.md": {
+    "id": "gd-banc-de-preuves-auditcore",
+    "version": "1.0.1",
+    "empreinte": "623c257f86a78f2374ac67b6574221c7ab0835d1a8d2966af4616a3f24052f98"
+  },
+  "checklist-go-prod.template.md": {
+    "id": "gd-checklist-go-prod-auditcore",
+    "version": "1.0.0",
+    "empreinte": "2643a0b5133e4ff2a2b753681e2c17685d0c6be05a81a76a41d8ec5d893d0b64"
+  },
+  "fiche-securite.template.en.md": {
+    "id": "gd-fiche-securite-auditcore",
+    "version": "1.1.1",
+    "empreinte": "36db5ab70c9612bbd3d7b31026bf9aaea4a00022f82e7720f30f90a5fe8cc309"
+  },
+  "fiche-securite.template.md": {
+    "id": "gd-fiche-securite-auditcore",
+    "version": "1.1.1",
+    "empreinte": "e8cd8a5c05001a7093e98e7430800b33df36ee15e3be2b32dd94c878987420d9"
+  },
+  "matrice-tracabilite.template.md": {
+    "id": "gd-matrice-tracabilite-auditcore",
+    "version": "1.0.0",
+    "empreinte": "9d3f783ad96a0402d47a7e3f560327f697f55793da5c698ec8facc179ef2463e"
+  },
+  "methodologie.template.en.md": {
+    "id": "gd-methodologie-auditcore",
+    "version": "1.0.0",
+    "empreinte": "68ae54686c1e31e3b7dc1991a62b7aa2bb6fe648f84c773726f6e79379cb5b78"
+  },
+  "methodologie.template.md": {
+    "id": "gd-methodologie-auditcore",
+    "version": "1.0.0",
+    "empreinte": "9f602dd6160f506a0864f9a009c20fe389d0331b9c5b66533db1e9a730b207e9"
+  },
+  "modele-maturite.template.md": {
+    "id": "gd-modele-maturite-auditcore",
+    "version": "1.0.0",
+    "empreinte": "371146ca1622613036a3f35956a5479d3c3411a1668271703670af7b97178f07"
+  },
+  "plan-remediation.template.md": {
+    "id": "gd-plan-remediation-auditcore",
+    "version": "1.0.0",
+    "empreinte": "0262fc9b5f368241410e02c53afb5760ee082dce38c2ede2a9d4fc87f7a70808"
+  },
+  "presentation-autorite.template.md": {
+    "id": "gd-presentation-autorite-auditcore",
+    "version": "1.0.0",
+    "empreinte": "b5dfdd7ed2b22315f35008854af2b37216293f50213659783d0a2075682aae5f"
+  },
+  "rapport-audit-poc-to-prod.template.html": {
+    "id": "gd-rapport-audit-poc-to-prod",
+    "version": "1.0.2",
+    "empreinte": "d074bac9a78f99b2b9ea47e20b3762bb8c2ea6fbb01fff9f30ec8168f6c62670"
+  },
+  "rapport-audit.template.md": {
+    "id": "gd-rapport-audit-auditcore",
+    "version": "1.0.0",
+    "empreinte": "97859c2183f9b5fdab58d3e5782544ec7e558087910e40c56bac6db25ffbb97a"
+  },
+  "registre-risques.template.md": {
+    "id": "gd-registre-risques-auditcore",
+    "version": "1.0.0",
+    "empreinte": "c75b4d8807f12b93d7fc0b9f670f586e9b133e477cade1ea5eb3b7ce0a568b16"
+  },
+  "synthese-executive.template.md": {
+    "id": "gd-synthese-executive-auditcore",
+    "version": "1.0.0",
+    "empreinte": "80d39d7705e91fed8e7c8cf87ed7124ba73cb663b87781e0187830b57bc70d44"
+  },
+  "tableau-bord-post-remediation.template.md": {
+    "id": "gd-tableau-bord-post-remediation-auditcore",
+    "version": "1.0.0",
+    "empreinte": "2b22a3cf0fb4297881952b2e177dd0249180d858e87145c5487cd37ab684acd9"
+  }
+}

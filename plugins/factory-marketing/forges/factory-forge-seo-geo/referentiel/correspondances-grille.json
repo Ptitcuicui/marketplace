@@ -1,0 +1,313 @@
+{
+  "objet": "Registre des évolutions de la grille et des correspondances d'identifiants.",
+  "pourquoi": "Une évolution de grille sans table de correspondance réassigne silencieusement les constats : le passage de 82 à 87 nœuds a déplacé 14 identifiants, et une étude ouverte avant ce passage a continué de citer les anciens numéros — chaque constat pointant dès lors un autre nœud que celui mesuré. Rien ne le signalait. Depuis TF-0048, toute évolution de grille exige son entrée ici, et validate.py refuse une étude dont la version de grille diffère de celle de la forge sans table applicable.",
+  "contrat": [
+    "version_courante est l'empreinte de referentiel/grille-noeuds.md telle que validate.py la calcule. Le contrôle 12 du référentiel échoue tant qu'elle ne suit pas la grille : on ne peut donc pas faire évoluer la grille sans passer ici.",
+    "Chaque évolution porte de, vers, date, motif, correspondances (ancien_id -> nouvel_id, uniquement les identifiants qui BOUGENT), identifiants_retires et identifiants_nouveaux.",
+    "Un identifiant retiré ne se réaffecte JAMAIS à un autre nœud : il sort, il ne se recycle pas.",
+    "Les évolutions se chaînent. Une étude qui a sauté plusieurs versions est récupérable tant qu'une suite d'entrées relie sa version à la version courante."
+  ],
+  "version_courante": "7ebe97e92dea",
+  "evolutions": [
+    {
+      "de": "3d0af44aae9a",
+      "vers": "4c6e353fc86e",
+      "date": "2026-08-11",
+      "motif": "TF-0072 : normalisation des fins de ligne dans le hachage de la grille (CRLF->LF avant sha256). La grille elle-meme est INCHANGEE : meme contenu, memes 87 noeuds, memes identifiants — seule la methode de calcul de l empreinte devient independante du poste (l ancienne hachait les octets bruts servis par git, donc CRLF sous Windows et LF sous Linux pour un meme fichier).",
+      "correspondances": {},
+      "identifiants_retires": [],
+      "identifiants_nouveaux": []
+    },
+    {
+      "de": "4c6e353fc86e",
+      "vers": "a18e7e10aab6",
+      "date": "2026-08-11",
+      "motif": "TF-0093 (3 decisions humaines du 11/08) : noeud 58 « Acces & Directives IA » insere en branche GEO — posture par defaut AUTORISE pour les agents IA de recherche (tout blocage = decision consignee), llms.txt ADOPTE par decision (standard emergent, consommation a reverifier datee a chaque run), blocages CDN/WAF controles sur logs. Le noeud 44 (Trafic Referent) est ETENDU a la part IA (referents chatgpt/perplexity/copilot/gemini/claude, liste a rafraichir au run) — id inchange. Renumerotation declaree : 30 identifiants decales.",
+      "correspondances": {
+        "58": "59",
+        "59": "60",
+        "60": "61",
+        "61": "62",
+        "62": "63",
+        "63": "64",
+        "64": "65",
+        "65": "66",
+        "66": "67",
+        "67": "68",
+        "68": "69",
+        "69": "70",
+        "70": "71",
+        "71": "72",
+        "72": "73",
+        "73": "74",
+        "74": "75",
+        "75": "76",
+        "76": "77",
+        "77": "78",
+        "78": "79",
+        "79": "80",
+        "80": "81",
+        "81": "82",
+        "82": "83",
+        "83": "84",
+        "84": "85",
+        "85": "86",
+        "86": "87",
+        "87": "88"
+      },
+      "identifiants_retires": [],
+      "identifiants_nouveaux": [
+        58
+      ]
+    },
+    {
+      "de": "a18e7e10aab6",
+      "vers": "0adef2177300",
+      "date": "2026-08-15",
+      "motif": "TF-0247 : citations inter-noeuds corrigees dans la grille. Trois cellules renvoyaient a des identifiants perimes, herites de numerotations anterieures et jamais transposees : noeud 25 `critere_verdict` « nœud 74 » -> 75 (Optimisation / Pages A Fusionner, la cible que le sens appelle pour une page programmatique sans contenu propre) ; noeud 85 `source_requise` « nœuds 66 et 46 » -> « 72 et 46 » (72 = Mesure / Leads, source attendue pour Leads Entrants — 66 designait Automatisation / Monitoring) ; noeud 86 `source_requise` « nœuds 8 et 67 » -> « 8 et 73 » (73 = Mesure / Revenu Par Page, source attendue pour Ventes — 67 designait Automatisation / Generation De Pages). AUCUN identifiant ne bouge : ni insertion, ni retrait, ni renumerotation. Seul le TEXTE de trois renvois change, donc l'empreinte de la grille change et toute etude ouverte sur a18e7e10aab6 doit passer par cette table pour rester validable. Les constats, verdicts et actions des etudes existantes restent valables tels quels.",
+      "correspondances": {},
+      "identifiants_retires": [],
+      "identifiants_nouveaux": []
+    },
+    {
+      "de": "0adef2177300",
+      "vers": "11c22421e42d",
+      "date": "2026-08-26",
+      "motif": "TF-0636 (lot Produit-02 20260825c) : le noeud 58 « Acces & Directives IA » jugeait la PRESENCE des directives IA et jamais leur EXACTITUDE. Sa question porte sur l'acces ET les directives ; son constat sur un projet reel portait entierement sur l'acces — « le serveur repond HTTP 200 et 17 421 octets a l'identique a un navigateur, a GPTBot, a ClaudeBot et a PerplexityBot ». Exact, et sans rapport avec le contenu. Mesure : la chaine « llms » n'apparaissait que DEUX FOIS dans tout le code Python de la forge, jamais pour en lire le contenu. Un llms.txt annoncant des tarifs perimes, des capacites fausses ou des URLs mortes passait donc le noeud sans une remarque — et ce fichier existe precisement pour etre repris SANS verification par des modeles de langue, ou une erreur porte plus loin qu'ailleurs. METHODE et CRITERE DE VERDICT renforces : le contenu se LIT, la presence et l'accessibilite ne valent pas verification. AUCUN IDENTIFIANT NE BOUGE : ni insertion, ni retrait, ni renumerotation — la grille compte toujours 88 noeuds, et une etude ouverte sur la version precedente reste lisible sans table de correspondance.",
+      "correspondances": {},
+      "identifiants_retires": [],
+      "identifiants_nouveaux": []
+    },
+    {
+      "de": "11c22421e42d",
+      "vers": "6245d81445b9",
+      "date": "2026-08-26",
+      "motif": "TF-0653 : les TROIS tables de synthese de la grille se contredisaient avec la grille qu'elles resument, et depuis QUINZE JOURS. Elles annoncaient toutes « Total 87 » pour 88 noeuds ; la table par branche faisait chevaucher GEO 53-58 et Local 58-62 et sautait le 73 ; la table par statut comptait SD 53 pour 54 ; celle par volet TRANSVERSAL 51 pour 52. CAUSE : l'insertion du noeud 58 le 11/08 (TF-0093) a bien produit sa table de CORRESPONDANCE — 30 identifiants decales, declares — mais aucune des trois syntheses LISIBLES n'a suivi. Le contrat de ce registre exige une table de correspondance ; il n'exigeait rien de la synthese. CE QUE CA COUTAIT : quiconque lit ces tables pour PLANIFIER une evolution — inserer un noeud dans une branche, par exemple — calcule contre une carte fausse. Corrige contre la mesure du manifeste, et un controle neuf (13) confronte desormais les trois tables a la grille. AUCUN IDENTIFIANT NE BOUGE : seules les syntheses changent, la grille porte les memes 88 noeuds.",
+      "correspondances": {},
+      "identifiants_retires": [],
+      "identifiants_nouveaux": []
+    },
+    {
+      "de": "6245d81445b9",
+      "vers": "27e2527398eb",
+      "date": "2026-08-26",
+      "motif": "TF-0638 (lot Produit-02 20260825d, decision humaine « 1a » du 26/08) : insertion du noeud 21 « Adequation Lexicale par Marche » en branche MOTS CLES. LE FAIT : la grille traitait le multilingue sous l'angle TECHNIQUE — hreflang, canoniques, sitemap, parite des routes, acces des agents IA — tous conformes sur un projet reel (204 pages avec hreflang, x-default sur 203, reciprocite verifiee). Aucun noeud ne demandait si le VOCABULAIRE EMPLOYE est celui que le marche cible utilise. Mesure : la page allemande disait HUIT FOIS « Gite » et JAMAIS « Ferienhaus » ; la page italienne employait un mot designant des excursions. Techniquement irreprochable, commercialement muet. BRANCHE MOTS CLES et non GEO : le defaut porte sur ce que les gens TAPENT, objet de cette branche ; le placement a ete tranche par l'humain, le nombre d'identifiants deplaces n'etant pas le critere — un noeud mal place coute plus longtemps qu'une renumerotation large. RENUMEROTATION : 68 identifiants decales, 21..88 -> 22..89. Verifiee par NOM et non par arithmetique : les 88 noeuds et les 27 numeros cites en prose ont ete resolus AVANT et APRES, et chacun designe le meme noeud. Corriges aussi : cinq renvois de la table « Portee par modele », dont DEUX etaient deja faux avant ce jour — decales depuis l'insertion du 11/08, jamais rattrapes. La grille passe de 88 a 89 noeuds.",
+      "correspondances": {
+        "21": 22,
+        "22": 23,
+        "23": 24,
+        "24": 25,
+        "25": 26,
+        "26": 27,
+        "27": 28,
+        "28": 29,
+        "29": 30,
+        "30": 31,
+        "31": 32,
+        "32": 33,
+        "33": 34,
+        "34": 35,
+        "35": 36,
+        "36": 37,
+        "37": 38,
+        "38": 39,
+        "39": 40,
+        "40": 41,
+        "41": 42,
+        "42": 43,
+        "43": 44,
+        "44": 45,
+        "45": 46,
+        "46": 47,
+        "47": 48,
+        "48": 49,
+        "49": 50,
+        "50": 51,
+        "51": 52,
+        "52": 53,
+        "53": 54,
+        "54": 55,
+        "55": 56,
+        "56": 57,
+        "57": 58,
+        "58": 59,
+        "59": 60,
+        "60": 61,
+        "61": 62,
+        "62": 63,
+        "63": 64,
+        "64": 65,
+        "65": 66,
+        "66": 67,
+        "67": 68,
+        "68": 69,
+        "69": 70,
+        "70": 71,
+        "71": 72,
+        "72": 73,
+        "73": 74,
+        "74": 75,
+        "75": 76,
+        "76": 77,
+        "77": 78,
+        "78": 79,
+        "79": 80,
+        "80": 81,
+        "81": 82,
+        "82": 83,
+        "83": 84,
+        "84": 85,
+        "85": 86,
+        "86": 87,
+        "87": 88,
+        "88": 89
+      },
+      "identifiants_retires": [],
+      "identifiants_nouveaux": [
+        21
+      ]
+    },
+    {
+      "de": "27e2527398eb",
+      "vers": "7ebe97e92dea",
+      "date": "2026-10-21",
+      "motif": "TF-1894 (decision humaine D-41 (a) du 19/10/2026) : les syntheses LISIBLES de la grille annoncaient encore « 53 noeuds sur 87 » (61 %) et « les 87 noeuds » pour une grille de 89 noeuds, dont 55 instrumentes (62 %). Meme defaut que TF-0653, un cran plus loin : le controle 13 juge les trois tables, pas la phrase qui les suit. Corrige contre la mesure du manifeste ; le controle 15 juge desormais aussi cette phrase et les textes hors matrice (README, methode, cadrage, grille, gabarits). AUCUN IDENTIFIANT NE BOUGE : seule la phrase de synthese change, la grille porte les memes 89 noeuds.",
+      "correspondances": {},
+      "identifiants_retires": [],
+      "identifiants_nouveaux": []
+    }
+  ],
+  "historique_anterieur_au_registre": {
+    "objet": "Table de correspondance des identifiants pour les deux evolutions anterieures au registre (82 -> 87 -> 88), etablie par preuve git sur les TITRES de noeuds. Ne remplace pas `limite_connue` : les EMPREINTES d'epoque restent irreconstituables, mais les IDENTIFIANTS le sont, parce que les titres de noeuds sont conserves dans l'historique.",
+    "etabli_le": "2026-08-15",
+    "par": "campagne mandatee TF-0248",
+    "preuves": [
+      "54d25d0 `.claude/skills/seo-audit-strategie/references/grille-82-noeuds.md` — grille a 82 noeuds, telle qu'ecrite a l'init de la forge",
+      "278f37a — insertion de la branche Local (5 noeuds) ; le fichier est renomme grille-noeuds.md (R082)",
+      "7027351 `referentiel/grille-noeuds.md` — grille a 87 noeuds apres l'inversion skill -> projet",
+      "66d7ea4 — TF-0093, insertion du noeud 58 « Acces & Directives IA » en branche GEO ; grille a 88 noeuds"
+    ],
+    "decalages": [
+      {
+        "de": "grille 82",
+        "vers": "grille 87",
+        "cause": "insertion de la branche Local (5 noeuds) aux places 58 a 62",
+        "regle": "tout identifiant >= 58 recoit +5 ; les identifiants 1 a 57 sont inchanges"
+      },
+      {
+        "de": "grille 87",
+        "vers": "grille 88",
+        "cause": "insertion du noeud 58 « Acces & Directives IA » en branche GEO (TF-0093)",
+        "regle": "tout identifiant >= 58 recoit +1 ; deja declare dans `evolutions` (4c6e353fc86e -> a18e7e10aab6)"
+      }
+    ],
+    "cumul_82_vers_88": "tout identifiant >= 58 de la grille a 82 noeuds recoit +6 dans la grille a 88 noeuds ; les identifiants 1 a 57 sont inchanges.",
+    "table_verifiee_par_les_titres": {
+      "commentaire": "Verification faite titre a titre sur les trois branches que le noeud Machine SEO prend pour source. Aucun titre n'a change, aucun noeud n'a ete retire : le decalage est purement positionnel.",
+      "Automatisation": [
+        {
+          "g82": 58,
+          "g87": 63,
+          "g88": 64,
+          "titre": "Agents IA"
+        },
+        {
+          "g82": 59,
+          "g87": 64,
+          "g88": 65,
+          "titre": "Audits Massifs"
+        },
+        {
+          "g82": 60,
+          "g87": 65,
+          "g88": 66,
+          "titre": "Monitoring"
+        },
+        {
+          "g82": 61,
+          "g87": 66,
+          "g88": 67,
+          "titre": "Generation De Pages"
+        },
+        {
+          "g82": 62,
+          "g87": 67,
+          "g88": 68,
+          "titre": "Detection Opportunites"
+        }
+      ],
+      "Mesure": [
+        {
+          "g82": 63,
+          "g87": 68,
+          "g88": 69,
+          "titre": "Impressions"
+        },
+        {
+          "g82": 64,
+          "g87": 69,
+          "g88": 70,
+          "titre": "Clics"
+        },
+        {
+          "g82": 65,
+          "g87": 70,
+          "g88": 71,
+          "titre": "Positions"
+        },
+        {
+          "g82": 66,
+          "g87": 71,
+          "g88": 72,
+          "titre": "Leads"
+        },
+        {
+          "g82": 67,
+          "g87": 72,
+          "g88": 73,
+          "titre": "Revenu Par Page"
+        }
+      ],
+      "Optimisation": [
+        {
+          "g82": 68,
+          "g87": 73,
+          "g88": 74,
+          "titre": "Contenus A Renforcer"
+        },
+        {
+          "g82": 69,
+          "g87": 74,
+          "g88": 75,
+          "titre": "Pages A Fusionner"
+        },
+        {
+          "g82": 70,
+          "g87": 75,
+          "g88": 76,
+          "titre": "Pages A Supprimer"
+        },
+        {
+          "g82": 71,
+          "g87": 76,
+          "g88": 77,
+          "titre": "Tests SEO"
+        },
+        {
+          "g82": 72,
+          "g87": 77,
+          "g88": 78,
+          "titre": "Boucles D'Amelioration"
+        }
+      ]
+    },
+    "arbitrage_noeud_mesure": {
+      "question_posee": "Une etude d'epoque (Produit-02, ouverte sur la numerotation a 82 noeuds) justifie le score du noeud Machine SEO en nommant sept noeuds : « 58 Agents IA, 59 Audits massifs, 60 Monitoring, 61 Mesure, 62 Detection d'opportunites, 71 Tests SEO, 72 Boucles d'amelioration ». Six titres se retrouvent dans la grille courante ; le septieme, « Mesure », n'a pas de contrepartie. Deux mandats successifs (TF-0240 puis TF-0247) ont laisse la citation non transposee, faute de pouvoir trancher entre « noeud perdu » et « capacite deplacee ».",
+      "verdict": "AUCUN NOEUD N'A ETE PERDU, et aucune capacite n'a ete deplacee. La grille a 82 noeuds ne contient, a aucune de ses versions, de noeud intitule « Mesure » dans la branche Automatisation. La place 61 y porte « Generation De Pages » (54d25d0, ligne 199) — exactement le titre qu'elle porte aujourd'hui a la place 67. « Mesure » est le nom d'une BRANCHE (les places 63 a 67 de la grille 82, 69 a 73 aujourd'hui), jamais celui d'un noeud.",
+      "diagnostic": "Erreur de plume d'epoque, non evolution de grille. L'auteur du constat, en enumerant la branche Automatisation, a etiquete la place 61 du nom de la branche voisine et y a porte une observation qui appartient a la branche Mesure (« aucun evenement de conversion GA4 » — c'est la substance du noeud Leads, place 66 en grille 82, 72 aujourd'hui, dont la fiche de la meme etude porte le meme constat).",
+      "consequence_sur_la_transposition": "La plage EST transposable, integralement et sans invention : « 58 a 62, 71 et 72 » devient « 64 a 68, 77 et 78 ». Six des sept titres cites confirment le decalage +6 un a un ; le septieme ne le contredit pas — il ne designe simplement pas ce que son etiquette annonce. L'objection retenue par TF-0247 (« transposer en bloc affirmerait que Generation De Pages a justifie le score, ce que le constat contredit ») tombe : Generation De Pages occupait deja cette place au moment ou le constat a ete ecrit. La transposition ne deplace donc aucun sens ; elle revele une etiquette fausse qui l'etait deja.",
+      "regle_qui_en_sort": "Une citation d'epoque se transpose sur les IDENTIFIANTS et se verifie sur les TITRES. Quand un titre cite ne correspond pas au noeud designe, c'est la citation qui est en defaut, pas la grille — le corriger exige de le DIRE dans le texte reecrit, jamais de le transposer en silence."
+    }
+  },
+  "limite_connue": "Les évolutions antérieures à ce registre — dont le passage de 82 à 87 nœuds — n'y figurent pas : leurs empreintes de grille ne sont pas reconstituables de façon fiable (les fichiers sont stockés en LF et lus en CRLF sur poste Windows, l'empreinte diffère donc de celle qu'une étude de l'époque a figée). Le mécanisme commence ici ; il n'invente pas un passé qu'il ne peut pas prouver."
+}

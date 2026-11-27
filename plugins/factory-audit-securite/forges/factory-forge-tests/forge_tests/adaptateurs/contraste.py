@@ -1,0 +1,258 @@
+"""Adaptateur Contraste (Q4) — cablage de la mesure V2 de `render_page.py`, sur le RENDU servi.
+
+Pourquoi ce pan existe (TF-0409, option O3). La mesure existait et n etait jouee par personne.
+`render_page.py` du socle factory-page-html porte V2 — contraste WCAG calcule sur les styles
+REELLEMENT rendus, texte large distingue du texte courant — et elle avait deja tourne contre
+des ecrans produits le 11/08/2026. Elle n etait cablee comme pan de forge-tests NULLE PART :
+elle ne tournait que si quelqu un y pensait. Le `non_juge` du pan accessibilite le declarait
+mot pour mot depuis le 20/08 (« une mesure existante mais NON CABLEE a cet audit »).
+Un controle qui existe sans etre joue n existe pas.
+
+Ce que ce pan ne fait PAS, et qui explique sa forme. Il ne recopie pas la mesure : il charge
+`MEASURE_JS` depuis le script du socle et l evalue dans la page vivante. La formule de
+luminance reste a UN seul endroit du parc ; si le socle la corrige, ce pan en herite sans une
+ligne. Et il ne mesure pas un fichier : un DOM capture puis relu depuis le disque perd ses
+feuilles de style (les `<link>` pointent vers le serveur), et un contraste mesure sur une page
+non stylee est un faux vert — noir sur blanc, toujours conforme, jamais reel.
+"""
+
+from __future__ import annotations
+
+import importlib.util
+from pathlib import Path
+from typing import Any
+
+from forge_tests import classes
+from forge_tests.adaptateurs import accessibilite
+from forge_tests.adaptateurs._parcours import parcourir
+from forge_tests.disposition import racine_front
+from forge_tests.execution import motif_front_non_servi
+from forge_tests.noyau import Element, Finding, SortieAdaptateur
+from forge_tests.risque import coter
+from forge_tests.stabilite import (
+    attendre_animations_finies,
+    figer_animations_infinies,
+    note_si_instable,
+)
+from forge_tests.trouver_skill import dossier_skill  # résolveur de skills du parc (25/11/2026)
+
+NOM, PAN = "contraste-wcag", "contraste"
+
+# A-5 : ce qu il FAUDRAIT pour couvrir ce pan — publie tel quel au rapport.
+POUR_COUVRIR = (
+    "servir le front (build présent et `npm`/navigateur disponibles) ou déclarer l'instance "
+    "SERVIE dans FORGE_TESTS_BASE_URL, ET disposer du socle factory-page-html installé "
+    "(`scripts/render_page.py`, dont la mesure V2 est chargée ici) : le pan juge les styles "
+    "RENDUS, il n'a rien à mesurer sur un fichier dont les feuilles de style ne se chargent pas"
+)
+
+CHAPITRES = (
+    {"code": "F4", "famille": "fonctionnel", "titre": "Accessibilité",
+     "decoupe": "ecran", "axe_cas": "contraste"},
+)
+
+CHAMPS_REQUIS = (
+    "FORGE_TESTS_BASE_URL",
+    "FORGE_TESTS_LOGIN",
+    "FORGE_TESTS_PASSWORD",
+)
+
+_SOCLE = dossier_skill("factory-page-html") / "scripts" / "render_page.py"
+
+NON_JUGE = [
+    "contraste : mesure a l etat INITIAL de chaque route — les etats atteints apres "
+    "interaction (menu ouvert, modale, message d erreur) ne sont pas mesures",
+    "contraste : un texte pose sur une IMAGE de fond n est pas mesurable par calcul — la "
+    "mesure le declare `non mesure` au lieu de l approuver, et il reste a verifier a l oeil",
+    "contraste : le seuil applique est WCAG AA (4.5:1, ou 3:1 pour le texte large tel que le "
+    "socle le qualifie). AAA (7:1) n est pas jugé ici",
+    "contraste : la NAVIGATION CLAVIER et les pieges de focus relevent du pan `clavier` ; "
+    "l ARIA avance (roles, ordre de focus) n est couvert par aucun oracle du parc a ce jour",
+    "contraste : l audit RGAA complet reste un livrable HUMAIN — un tiers des criteres n est "
+    "pas mecanisable, la machine prepare l audit, elle ne rend pas la declaration",
+    # TF-2313 : un contraste lu au milieu d une transition CSS (1,53:1 mesure sur un toast qui en
+    # tient 7,16 affiche) est celui de l image prise, pas de la page.
+    "contraste : la mesure attend la fin des animations et transitions FINIES, 5 s au plus ; "
+    "une animation SANS FIN (spinner, pulsation) ou en pause n est pas attendue, elle est "
+    "ANNULEE (TF-2698) : le verdict est celui de la page figee a son style de repos, et un "
+    "texte qui n echoue que pendant la boucle est nomme au non-juge (« mesure en cours de "
+    "transition »), jamais compte bloquant — une page qui porte encore une animation finie "
+    "apres 5 s est mesuree dans cet etat, ce que le rapport dit route par route",
+]
+
+# TF-2698 : constats lus pendant une animation sans fin et absents de la page figee.
+_CLE_EN_MOUVEMENT = "en_mouvement"
+
+
+def reconcilier_mouvement(en_boucle: Any, figee: Any) -> Any:
+    """Mesure de la page figée à son repos, plus ce que la lecture en boucle a vu en plus.
+
+    Le verdict est celui de la page FIGÉE (`figee`) : un texte qui échoue à son repos échoue.
+    Un écart lu seulement pendant la boucle (même élément, absent des écarts de la page figée) est
+    rangé sous `en_mouvement`, pour être nommé au non-jugé : « mesure en cours de transition ».
+    Une lecture illisible de l'un des deux côtés rend l'autre telle quelle, rien n'est assoupli.
+    """
+    if not isinstance(figee, dict):
+        return en_boucle
+    if not isinstance(en_boucle, dict):
+        return figee
+    au_repos = {str(e.get("what", "element")) for e in figee.get("v2_contrast", [])}
+    # Depuis TF-2700, le socle range lui-meme en `unmeasured` (marque « (TF-2700) ») un texte
+    # qu'une animation en boucle fait varier, au lieu de le compter en `v2_contrast`. Les deux
+    # formes sont des lectures en boucle : la page figee les fait disparaitre, elles se nomment.
+    lus_en_boucle = [
+        *en_boucle.get("v2_contrast", []),
+        *(e for e in en_boucle.get("unmeasured", []) if "(TF-2700)" in str(e.get("detail", ""))),
+    ]
+    vus_en_boucle = [e for e in lus_en_boucle if str(e.get("what", "element")) not in au_repos]
+    return {**figee, _CLE_EN_MOUVEMENT: vus_en_boucle}
+
+
+def _mesure_js() -> str | None:
+    """Charge `MEASURE_JS` depuis le script du socle. None si le socle n est pas installe.
+
+    Import par chemin plutot que copie : la formule de luminance reste a UN endroit du parc.
+    Le module s importe sans effet de bord (son `main()` n est appele que sous `__main__`).
+    """
+    if not _SOCLE.exists():
+        return None
+    try:
+        spec = importlib.util.spec_from_file_location("_socle_render_page", _SOCLE)
+        if spec is None or spec.loader is None:
+            return None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        # TF-1093 (20/09/2026) — `MEASURE_JS` est un GABARIT, pas une mesure. Il porte des
+        # jetons (`__ALIGN_TOL__`, `__L2_MIN_VIEWPORT__`…) que le socle remplacait chez lui,
+        # dans son propre `run()`. Lu ici tel quel, il LEVE dans le navigateur :
+        #   Page.evaluate: ReferenceError: __ALIGN_TOL__ is not defined
+        # — et le garde de `_parcours` transformait cette levee en « route visitee mais non
+        # mesuree », route par route : deux pans qui ne mesuraient plus rien, sans un mot de
+        # plus qu'un motif par route. Le socle PUBLIE desormais sa mesure prete (`mesure_js`),
+        # comme il publie sa table de familles. Le repli sur la constante reste, pour une copie
+        # du socle anterieure a cette porte.
+        pret = getattr(module, "mesure_js", None)
+        if callable(pret):
+            mesure = pret()
+            if isinstance(mesure, str) and mesure.strip():
+                return mesure
+        mesure = getattr(module, "MEASURE_JS", None)
+        return mesure if isinstance(mesure, str) and mesure.strip() else None
+    except Exception:  # noqa: BLE001 — socle illisible : le pan se declare non mesure
+        return None
+
+
+def sans_objet(cible: Path) -> str | None:
+    """Meme frontiere que le pan accessibilite : pas d interface, pas de contraste."""
+    return accessibilite.sans_objet(cible)
+
+
+def inventaire(cible: Path) -> list[Element]:
+    routes, _ = accessibilite.routes_a_auditer(cible)
+    return [
+        Element(id=f"contraste:{route}", pan=PAN, libelle=f"contraste de {route}",
+                source=str(racine_front(cible)))
+        for route in routes
+    ]
+
+
+def analyser(cible: Path) -> SortieAdaptateur:
+    mesure = _mesure_js()
+    if mesure is None:
+        return SortieAdaptateur(
+            NOM, PAN, str(cible), "SKIP",
+            non_juge=[
+                *NON_JUGE,
+                f"contraste : mesure V2 introuvable — {_SOCLE} absent ou illisible. Le pan ne "
+                "recopie pas la formule : sans le socle, il se declare non mesure",
+            ],
+        )
+    routes, provenance = accessibilite.routes_a_auditer(cible)
+    if not routes:
+        return accessibilite.verdict_sans_route(NOM, PAN, cible, NON_JUGE)
+
+    limites: list[str] = []  # TF-2313 : routes mesurees sans avoir pu etre vues stables
+
+    def action(page: Any, route: str) -> tuple[Any, str | None]:
+        # TF-2313 : on attend la FIN des animations finies (5 s au plus) AVANT de mesurer.
+        note = note_si_instable(attendre_animations_finies(page), "contraste", route)
+        if note is not None:
+            limites.append(note)
+        page.wait_for_timeout(150)  # styles et polices posees avant de mesurer
+        en_boucle = page.evaluate(mesure)
+        # TF-2698 : une animation SANS FIN n'a pas d'etat final a attendre ; un texte qu'elle porte
+        # se lisait a la phase de l'image prise (« projet » a 1,01:1). On l'annule, et la mesure se
+        # rejoue sur la page figee a son repos : c'est elle qui juge.
+        figees = figer_animations_infinies(page)
+        if figees is None:
+            limites.append(
+                f"contraste : route {route} — les animations sans fin n'ont pas pu etre figees, la "
+                "mesure est celle de la page en mouvement"
+            )
+            return en_boucle, None
+        if not figees:
+            return en_boucle, None
+        page.wait_for_timeout(50)
+        return reconcilier_mouvement(en_boucle, page.evaluate(mesure)), None
+
+    resultats, motifs = parcourir(cible, routes, action, prefixe="contraste")
+    socle = [
+        *NON_JUGE,
+        f"contraste : {len(routes)} route(s) a mesurer — provenance : "
+        + (provenance or "inventaire fourni a l adaptateur"),
+    ]
+    if not resultats and not motifs:
+        return SortieAdaptateur(
+            NOM, PAN, str(cible), "SKIP",
+            non_juge=[*socle, motif_front_non_servi(cible)],
+        )
+
+    findings: list[Finding] = []
+    non_juge = [*socle, *motifs, *limites]
+    mesurees: list[str] = []
+    for route, issues in resultats.items():
+        if not isinstance(issues, dict):
+            non_juge.append(f"contraste : route {route} — mesure illisible, page non jugee")
+            continue
+        mesurees.append(route)
+        for ecart in issues.get("v2_contrast", []):
+            quoi = str(ecart.get("what", "element"))
+            detail = str(ecart.get("detail", ""))
+            identifiant = f"contraste:{route}:{quoi[:40]}"
+            findings.append(
+                Finding(
+                    id=identifiant,
+                    classe=classes.ACCESSIBILITE,
+                    localisation=route,
+                    # Le seuil WCAG AA n est pas un gout : un texte sous 4.5:1 est illisible
+                    # pour une partie des utilisateurs, et pour un site public francais
+                    # l ecart se declare au dossier MEP.
+                    message=f"[{route}] contraste WCAG AA — {quoi} : {detail}",
+                    severite="bloquant",
+                    risque=coter(PAN, identifiant, str(racine_front(cible))),
+                )
+            )
+        # TF-2698 : lu en boucle, absent a l'arret — nomme, jamais bloquant, jamais tu.
+        for ecart in issues.get(_CLE_EN_MOUVEMENT, []):
+            non_juge.append(
+                f"contraste : [{route}] {ecart.get('what', 'element')} — {ecart.get('detail', '')} "
+                "— mesure en cours de transition : texte porte par une animation SANS FIN, lu "
+                "pendant la boucle ; la page figee a son repos ne porte pas cet ecart, il n'est "
+                "pas compte bloquant"
+            )
+        # `unmeasured` est la part HONNETE de la mesure : ce que le calcul ne peut pas trancher
+        # (texte sur image de fond). La taire ferait lire le PASS comme « tout est conforme ».
+        for inconnu in issues.get("unmeasured", []):
+            non_juge.append(
+                f"contraste : [{route}] {inconnu.get('what', 'element')} — "
+                f"{inconnu.get('detail', 'non mesurable par calcul')}"
+            )
+
+    if not mesurees:
+        return SortieAdaptateur(NOM, PAN, str(cible), "SKIP", non_juge=sorted(set(non_juge)))
+    non_juge.append(f"contraste : routes mesurees — {', '.join(mesurees)}")
+    return SortieAdaptateur(
+        adaptateur=NOM, pan=PAN, cible=str(cible),
+        verdict="FAIL" if findings else "PASS",
+        findings=findings, non_juge=sorted(set(non_juge)),
+    )

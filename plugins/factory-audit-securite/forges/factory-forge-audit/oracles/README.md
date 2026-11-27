@@ -1,0 +1,86 @@
+# `oracles/` — contrôles d'audit exécutés contre le système audité
+
+> Distinction structurante du produit :
+> **`tools/`** produit et vérifie les **livrables d'audit** (rapport, catalogue, kit, fiche).
+> **`oracles/`** vérifie le **système audité lui-même** — code, base, pipeline, environnements
+> déployés. Ces scripts sont autoportants (Node ≥ 18, aucune dépendance externe) et sont
+> embarqués dans le kit remis au projet.
+
+Loi commune : *un ✓ sans oracle exécuté n'est pas un ✓*. Le format conforme et un gate CI vert
+**ne prouvent pas** que l'application fonctionne — seule l'exécution du parcours contre
+l'environnement déployé le prouve.
+
+## Les oracles
+
+<!-- LE COMPTE NE S'ÉCRIT PAS DANS LE TITRE (TF-1246, constat annexe de la campagne du 20/09/2026,
+     corrigé le 22/09/2026). Ce titre annonçait « sept oracles » au-dessus d'un tableau qui en
+     comptait NEUF : `verifier-modele-semantique.mjs` (TF-0862) et `verifier-rapport-pbir.mjs`
+     (TF-1183) sont entrés sans que le nombre bouge. Le remède n'est pas de réécrire « neuf » —
+     un compte affirmé au lieu d'être dérivé mentira au prochain ajout, exactement comme le
+     « 11/11 » de `bootstrap.test.mjs` a menti dans le pilot le 23/08. Le titre ne porte donc plus
+     de nombre : le tableau ci-dessous EST le compte. -->
+
+
+| Script | Ce qu'il prouve | Sortie non nulle |
+|---|---|---|
+| `verifier-schema-modele.mjs` | dérive **schéma ORM ↔ base cible** | colonne/table lue par le modèle, absente en base |
+| `smoke-parcours.mjs` | **appel réel** des endpoints critiques contre l'env déployé | un 5xx sur un parcours principal (3 = non vérifié) |
+| `verifier-migrations.mjs` | le **pipeline applique** les migrations | DDL orphelines, ou aucune étape de migration |
+| `verifier-dependances-env.mjs` | dépendances runtime **provisionnées par env** + smokes sur la ressource réelle | dev-only, manuel, smoke absent/échoué, dérive de parité |
+| `verifier-couverture-fonctionnelle.mjs` | inventaire fonctionnel → **matrice de couverture** | ✓ adossé à build/lint/unit seul, endpoint orphelin, régression de ratchet |
+| `verifier-roundtrip.mjs` | **régénérer reproduit** la version validée à l'identique | delta manqué, placeholder résiduel |
+| `maj-versions.mjs` | fraîcheur des dépendances **pilotée par driver** | (rapport d'inventaire, exit 0) |
+| `verifier-modele-semantique.mjs` | **modèle sémantique Power BI jugé sur ses fichiers TMDL** (projet PBIP) — mesure définie une fois, relations non ambiguës, table de dates marquée, mode de stockage déclaré, rôles de sécurité (MS1-MS6, mécanise CTL-D16-01/02, CTL-D05-02/04/10/13/14, CTL-D01-03 sans point de terminaison XMLA — TF-0862). **Son OK ne vaut PAS « livrable vérifié »** : il déclare le RENDU du rapport non jugé, nomme les `*.Report` du projet laissés de côté et imprime le geste manquant (TF-1175) | mesure dupliquée, deux relations actives sur une paire, table de dates absente, partition sans mode |
+| `verifier-rapport-pbir.mjs` | **la FORME native des expressions d'un rapport Power BI** (définition PBIR d'un projet PBIP) — référence de source résoluble, alias de `From` uniques, aucune projection désactivée, en-tête de colonne déclaré (PB1-PB4, mécanise CTL-D08-01 et CTL-D11-01 — TF-1183, reste déclaré de TF-1175). C'est le contrôle qui manquait le 17/09 : 29 contrôles PASS sur un rapport qui ne rendait aucun visuel. **Son OK ne vaut PAS davantage « livrable vérifié »** : une forme valide ne prouve pas qu'un lecteur voit quelque chose, et il le déclare | `SourceRef { Entity, Name }`, alias non résolu, alias dupliqué, projection `active: false`, en-tête absent, dossier sans définition |
+
+Chacun documente son usage complet dans son en-tête. Tous écrivent un JSON structuré
+(`schema: auditcore.<domaine>/vN`) exploitable par le rapport d'audit.
+
+Ce tableau est écrit à la main, et il l'a déjà montré : au relevé du 23/09/2026, trois oracles du
+dossier n'y figurent pas (`verifier-fiche-securite`, `verifier-parite-gabarits`, `verifier-pdf`).
+La liste qui fait foi pour le juge d'enclenchement du pilot est LUE SUR LE DISQUE —
+`node oracles/decouvrir-oracles.mjs` (TF-1319, contrat commun `factory/decouverte-oracles@1`) :
+tout script `.mjs` du premier niveau de ce dossier, sans exception à tenir.
+
+## Invariant d'acquisition à 3 issues
+
+Toute acquisition de donnée — commande locale **ou** requête réseau — a **exactement trois**
+issues, jamais deux :
+
+1. **mesure réelle** sur le périmètre attendu ;
+2. **mesure impossible** → `non vérifié` **+ trace des tentatives** (jamais un « 0 » ou un
+   « conforme » par défaut) ;
+3. **mesure partielle** → **explicitement étiquetée** (`transitif_non_couvert`, `eol_verifie:false`).
+
+Un échec ou une couverture incomplète ne doit **jamais** se présenter comme (1), et ce pour
+*chaque* driver — sécurité directe **et** transitive, EOL, version, dépréciation.
+
+## Échelle de résolution des blocages
+
+« Non vérifié » est un **dernier recours**, pas un premier réflexe. Face à un blocage (outil absent
+du PATH, service indisponible), descendre les barreaux dans l'ordre, sans en sauter :
+
+1. méthode primaire → 2. **invocation alternative** du même outil → 3. **outil alternatif** →
+4. **source alternative** → 5. **provision éphémère** sûre et **hors projet audité** →
+6. `non vérifié — tentatives : […]`.
+
+Garde-fous : ne jamais inventer ni mettre « 0/conforme » par défaut ; ne jamais **muter le projet
+audité** ; timeout par tentative ; journaliser la voie retenue.
+
+## Preuve
+
+<!-- LE COMPTE NE S'ÉCRIT PAS ICI (TF-1332, 26/09/2026). Ce paragraphe affichait « 41 tests »
+     pendant que la batterie en comptait 162 (mesuré le 26/09/2026 : `node --test
+     tests/oracles/*.test.mjs`, résumé imprimé par Node en fin de run) — la même dérive que celle
+     déjà réglée sur le titre du tableau ci-dessus (TF-1246) : un compte écrit à la main ne bouge
+     pas au prochain fichier de test ajouté sous `tests/oracles/`, et personne ne le voit. Le
+     remède est le même : ne plus écrire le nombre, renvoyer à ce qui le calcule. -->
+
+`tests/oracles/*.test.mjs`, exécutés par la CI produit sur **matrice {ubuntu, windows}**. Le
+compte de tests ne s'écrit pas ici : il se lit dans le résumé que Node imprime lui-même en fin de
+run (`tests` / `pass` / `fail` / `skipped`) — `node --test tests/oracles/*.test.mjs`. La matrice
+n'est pas décorative : les gardes d'exécution de `runCmd` sont spécifiques à Windows et une
+régression y est invisible sur un seul OS.
+
+Règle de contribution : voir [CONTRIBUTING.md](CONTRIBUTING.md). Aide à l'écriture des tests
+fonctionnels côté projet audité : [aide-tests-fonctionnels.md](aide-tests-fonctionnels.md).

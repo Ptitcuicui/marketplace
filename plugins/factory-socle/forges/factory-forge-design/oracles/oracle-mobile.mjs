@@ -1,0 +1,430 @@
+#!/usr/bin/env node
+// oracle-mobile — Domaine « Cible mobile : contrat d'usage tactile » (déterministe).
+//
+// Règles M1–M9, décidables sur le fichier :
+//   M1  viewport déclaré, zoom non bridé
+//   M2  cibles tactiles déclarées ≥ 44 px sur les éléments interactifs
+//   M3  safe-area-inset utilisé dès qu'une barre fixe borde l'écran
+//   M4  reflow des tables sous 768 px dès qu'une table existe
+//   M5  orientation paysage traitée
+//   M6  prefers-reduced-motion respecté dès qu'il y a du mouvement
+//   M7  un état saisi survit à la navigation qui recharge le document
+//   M8  une barre basse hors flux vit dans une coquille défilante
+//   M9  un bandeau collé en haut d'écran ne retire pas plus d'un quart de l'écran
+//       une fois le défilement passé (TF-1355)
+//
+// Deux règles d'AVERTISSEMENT, extraites de textes tiers (TF-1911, voie taste-skill ;
+// attribution : `regles-importees-vercel-emil.md`) :
+//   M10 la page porte des contrôles (button, lien, role=button) mais ne pose ni
+//       `touch-action: manipulation` ni `-webkit-tap-highlight-color` : délai de tap et
+//       éclair gris/bleu du navigateur (Vercel Web Interface Guidelines l.104-105 ;
+//       Emil Kowalski, mobile-native §2 et §5 ; UI/UX Pro Max n° 25)
+//   M11 document sans `<meta name="theme-color">` : la barre d'état ne suit pas la page
+//       (Vercel l.121 ; mobile-native §10)
+//
+// Ce qui exige un rendu réel (taille effective après cascade, gestes, débordements
+// au breakpoint) est déclaré non jugé et délégué à render_page.py.
+//
+// Contrat : JSON {oracle,domaine,artefact,verdict,findings[],non_juge[]} · exit 0/1/2.
+// Usage : node oracle-mobile.mjs <fichier.html> [--json-only] [--si-cible-mobile [--mobile]]
+//
+// --si-cible-mobile (TF-1322, 23/09/2026) : ne juge que si la page est une CIBLE MOBILE au sens de
+// lib/cible-mobile.mjs — la règle du point d'entrée de cette forge — et rend sinon SKIP, exit 2,
+// avec le motif « sans objet ». C'est l'option que le registre de quality-oracles passe au lanceur
+// général : sans elle, il jugeait toute page HTML contre un contrat tactile qui ne la visait pas.
+// Appelé sans l'option, l'oracle juge comme avant : le point d'entrée a déjà décidé pour lui.
+
+import fs from 'node:fs';
+import { parse as parseHtml, arbres, elements, css, cssRulesDeep, lineOf } from './lib/html.mjs';
+import { estCibleMobile, MOTIF_SANS_OBJET } from './lib/cible-mobile.mjs';
+import { correspond } from './lib/selecteurs.mjs';
+import { plageDeRegles } from './lib/regles-jouees.mjs';
+// TF-2287 — les règles que l'oracle JOUE, déclarées UNE fois ; la plage citée à la sortie en dérive, jamais écrite en dur.
+// Une règle neuve s'ajoute ici : self-test-regles-jouees.mjs refuse la liste qui s'écarte des règles émises par ce fichier.
+const REGLES_JOUEES = ['M1', 'M2', 'M3', 'M4', 'M5', 'M6', 'M7', 'M8', 'M9', 'M10', 'M11'];
+const PLAGE_JOUEE = plageDeRegles(REGLES_JOUEES);
+
+const DOM = 'Cible mobile : contrat d\'usage tactile';
+const args = process.argv.slice(2);
+const file = args.find(a => !a.startsWith('--'));
+const jsonOnly = args.includes('--json-only');
+
+const NJ = [
+  'taille tactile effective après cascade et héritage — déléguer à render_page.py au breakpoint 390 px',
+  'gestes réels (swipe, pull-to-refresh, retour geste) — parcours à exécuter',
+  'M10 : cherche la déclaration dans toute la feuille, sans vérifier qu\'elle atteint chaque contrôle (cascade, héritage) ; M11 : présence de la balise seulement, pas l\'accord de sa couleur avec le fond de la page',
+  'débordements et chevauchements aux breakpoints — render_page.py V1/V4',
+  'pertinence des patterns natifs choisis (bottom sheet vs modale) — jugement produit',
+  // TF-0875 : la SURVIE effective de l'état ne se lit pas sur le fichier — elle se mesure au
+  // navigateur, sur le produit RENDU, jamais sur la maquette mono-fichier où la navigation ne
+  // recharge rien. M7 juge le support déclaré ; le parcours C13 joué sur le produit fait foi.
+  'survie effective de l\'état saisi après navigation — parcours C13 exécuté au navigateur sur le PRODUIT RENDU, pas sur la maquette mono-fichier',
+  // TF-1355 : M9 lit la hauteur DÉCLARÉE ou, à défaut, une ESTIMATION par rangées — jamais la
+  // hauteur réelle (wrap exact du texte, métriques de police, cascade), et jamais la preuve
+  // qu'un élément focus est effectivement recouvert après un défilement réel.
+  'hauteur réelle d\'un bandeau collant après rendu (wrap exact, métriques de police, cascade) et confirmation qu\'un élément reçoit effectivement le focus sous lui après défilement (WCAG 2.2 2.4.11) — déléguer à render_page.py et à un parcours clavier exécuté au navigateur',
+];
+const F = [];
+const add = (sev, regle, msg, where) => F.push({ sev, regle, msg, where });
+
+// TF-2535 — « sans écart » dit qu'un jugement a eu lieu : un SKIP n'a rien jugé, il ne rend jamais cette ligne.
+// TF-2584 — un écart est un constat qui n'est pas info : un constat d'information (M4, repli en cartes du socle) ne remplace pas la ligne, il la précède.
+function sortir(verdict, code) {
+  const sansEcart = verdict !== 'SKIP' && !F.some(f => f.sev !== 'info');
+  process.stdout.write(JSON.stringify({
+    oracle: 'oracle-mobile', domaine: DOM, artefact: file || null,
+    verdict, findings: sansEcart ? [...F, { sev: 'info', regle: '—', msg: `${PLAGE_JOUEE} sans écart`, where: file }] : F,
+    non_juge: NJ,
+  }, null, jsonOnly ? 0 : 2));
+  process.exit(code);
+}
+
+if (!file || !fs.existsSync(file)) { NJ.push('fichier absent'); sortir('SKIP', 2); }
+
+const html = fs.readFileSync(file, 'utf8');
+if (args.includes('--si-cible-mobile') && !estCibleMobile(html, args)) {
+  add('info', '—', `SANS OBJET — ${MOTIF_SANS_OBJET}`, file);
+  NJ.push('contrat tactile non joué : la page n\'est pas une cible mobile (règle de lib/cible-mobile.mjs, partagée avec run-oracles-design)');
+  sortir('SKIP', 2);
+}
+const root = parseHtml(html);
+const cssText = css(html, root).replace(/\/\*[\s\S]*?\*\//g, ' ');
+const regles = cssRulesDeep(cssText);
+
+// ── M1 · viewport ──────────────────────────────────────────────────────────
+{
+  const meta = elements(root, 'meta').find(m => (m.attrs.name || '').toLowerCase() === 'viewport');
+  if (!meta) {
+    add('bloquant', 'M1', 'aucune balise <meta name="viewport"> : la page sera rendue en largeur desktop puis dézoomée', 'head');
+  } else {
+    const c = (meta.attrs.content || '').toLowerCase();
+    if (!/width\s*=\s*device-width/.test(c)) add('bloquant', 'M1', `viewport sans width=device-width : « ${c} »`, 'ligne ' + lineOf(html, meta.start));
+    if (/user-scalable\s*=\s*(no|0)/.test(c)) add('bloquant', 'M1', 'user-scalable=no : zoom bridé, exclusion des usages malvoyants', 'ligne ' + lineOf(html, meta.start));
+    if (/maximum-scale\s*=\s*1(\.0)?\b/.test(c)) add('majeur', 'M1', 'maximum-scale=1 : zoom bridé de fait', 'ligne ' + lineOf(html, meta.start));
+  }
+}
+
+// ── M2 · cibles tactiles déclarées ─────────────────────────────────────────
+{
+  const INTERACTIF = /(^|[\s,>+~])(a|button|input|select|summary)\b|\[role\s*=\s*["']?button|\.(btn|bouton|lien|chip|tab|onglet|icone|icon-btn)\b/i;
+  for (const r of regles) {
+    if (!INTERACTIF.test(r.selector)) continue;
+    for (const m of r.body.matchAll(/(?:^|[;{\s])(min-height|height|min-width|width)\s*:\s*([\d.]+)px/g)) {
+      const v = parseFloat(m[2]);
+      if (v > 0 && v < 44) {
+        add('majeur', 'M2', `${m[1]}: ${m[2]}px < 44px sur un élément interactif`,
+          `sélecteur « ${r.selector.slice(0, 60)} »`);
+      }
+    }
+  }
+}
+
+// ── M3 · safe areas ────────────────────────────────────────────────────────
+{
+  const barreFixe = regles.some(r =>
+    // Garde de chiffre (TF-0438, 21/08) : `: 0` nu matchait AUSSI « bottom: 0.5rem » — une
+    // barre qui ne colle pas au bord était comptée comme collée, et M3 réclamait une safe-area
+    // sans motif. `\b` n'aurait pas suffi (frontière entre « 0 » et « . ») : il faut la garde.
+    /position\s*:\s*(fixed|sticky)/.test(r.body) && /(^|[;{\s])(bottom|top)\s*:\s*0(?![0-9.])/.test(r.body));
+  const safe = /env\(\s*safe-area-inset-/.test(cssText);
+  const viewportFit = elements(root, 'meta').some(m =>
+    (m.attrs.name || '').toLowerCase() === 'viewport' && /viewport-fit\s*=\s*cover/i.test(m.attrs.content || ''));
+  if (barreFixe && !safe) {
+    add('majeur', 'M3', 'barre fixe collée à un bord sans env(safe-area-inset-*) : passage sous l\'encoche ou l\'indicateur de home', 'feuille de style');
+  }
+  if (safe && !viewportFit) {
+    add('majeur', 'M3', 'env(safe-area-inset-*) utilisé sans viewport-fit=cover : les insets vaudront 0', 'meta viewport');
+  }
+}
+
+// ── M4 · reflow des tables ─────────────────────────────────────────────────
+{
+  // Les tables d'une maquette sont rendues à l'exécution : les chercher aussi
+  // dans les gabarits JS, sinon M4 se tait sur une table qu'il croit absente.
+  const ARBRES = arbres(html, root);
+  const tables = ARBRES.flatMap(r => elements(r, 'table'));
+  if (tables.length) {
+    const reflow = regles.some(r => {
+      // TF-1129 (13/09/2026, Produit-64) — un `@media (max-width: Npx)` s'applique à TOUTE
+      // largeur ≤ N : pour couvrir la mesure à 768px, il faut N ≥ 768 (une bascule à 900px, le
+      // seuil du boilerplate du socle TF-0900, couvre 768 aussi bien qu'une bascule à 768 pile).
+      // Le sens INVERSE (N ≤ 768) exigeait un seuil PLUS ÉTROIT que la mesure — une bascule à
+      // 600px, par exemple, aurait satisfait ce test tout en laissant la table débordante à
+      // 768px, puisque `max-width: 600px` ne s'applique déjà plus à cette largeur. La règle
+      // avait le sens de comparaison inversé : elle acceptait un seuil insuffisant et refusait
+      // un seuil qui couvre le cas mesuré. render_page.py confirme à 768px : zéro débordement
+      // (V1) dès que N ≥ 768.
+      const sousMobile = r.atRules.some(a => {
+        const m = /max-width\s*:\s*(\d+)px/.exec(a);
+        return m && parseInt(m[1], 10) >= 768;
+      });
+      // Un display:none sur une cellule n'est pas un reflow : c'est une amputation.
+      // Seul un passage en flux bloc/grille/flex vaut reflow en cartes.
+      return sousMobile && /(^|[\s,>])(table|thead|tbody|tr|td|th)\b/i.test(r.selector)
+        && /display\s*:\s*(block|grid|flex|inline-block)/i.test(r.body);
+    });
+    if (!reflow) {
+      add('bloquant', 'M4', `${tables.length} table(s) sans reflow en cartes sous 768 px : défilement horizontal forcé`,
+        'feuille de style');
+    }
+    // TF-0857 (constat du 04/09, arbitré le 08/09) — RÈGLE AMENDÉE, pas exemptée. « Colonnes
+    // masquées » condamnait aussi le `thead` masqué par le REPLI EN CARTES, qui est le motif
+    // prescrit par le socle factory (composants.md §6) et écrit dans son boilerplate : sous le
+    // seuil, `thead` disparaît et chaque cellule reprend son étiquette par
+    // `td::before { content: attr(data-label) }`. Rien n'est amputé — l'en-tête change de place.
+    // Un oracle qui refuse ce que le socle qu'il juge PRESCRIT rend « Refondre » par
+    // construction, et le verdict cesse d'être un défaut du produit pour devenir un désaccord
+    // entre juges. L'amendement vaut pour tout le monde, socle ou pas : ce qui rend le repli
+    // légitime est la RESTITUTION des étiquettes, pas la provenance du gabarit.
+    const restitueLesEtiquettes = regles.some(r =>
+      r.atRules.some(a => /max-width\s*:\s*\d+px/.test(a))
+      && /::before/i.test(r.selector)
+      && /content\s*:\s*attr\(\s*data-label\s*\)/i.test(r.body));
+    const neMasqueQueLeThead = sel => sel.split(',').every(p => /(^|[\s>+~])thead\s*$/i.test(' ' + p.trim()));
+    const cache = regles.some(r => {
+      if (!r.atRules.some(a => /max-width\s*:\s*(\d|[1-7]\d\d)px/.test(a))) return false;
+      if (!/(^|[\s,>])(table|td|th)\b/i.test(r.selector) || !/display\s*:\s*none/.test(r.body)) return false;
+      if (neMasqueQueLeThead(r.selector) && restitueLesEtiquettes) return false;
+      return true;
+    });
+    if (cache) add('majeur', 'M4', 'colonnes masquées en mobile : adapter l\'interface, ne pas l\'amputer', 'feuille de style');
+    else if (regles.some(r => /display\s*:\s*none/.test(r.body) && neMasqueQueLeThead(r.selector)) && restitueLesEtiquettes)
+      add('info', 'M4', 'thead masqué sous le seuil, mais les étiquettes sont restituées cellule par cellule (content: attr(data-label)) : c\'est le repli en cartes prescrit par le socle factory, pas une amputation (TF-0857)', 'feuille de style');
+  }
+}
+
+// ── M5 · orientation paysage ───────────────────────────────────────────────
+{
+  const paysage = regles.some(r => r.atRules.some(a => /orientation\s*:\s*landscape/i.test(a)))
+    || /orientation\s*:\s*landscape/i.test(cssText);
+  const hauteurFixe = regles.some(r => /(^|[;{\s])height\s*:\s*100vh\b/.test(r.body));
+  if (!paysage && hauteurFixe) {
+    add('majeur', 'M5', 'height: 100vh sans traitement du paysage : contenu coupé en orientation paysage sur mobile', 'feuille de style');
+  } else if (!paysage) {
+    add('avertissement', 'M5', 'aucune règle @media (orientation: landscape) : le rendu paysage n\'est pas traité explicitement', 'feuille de style');
+  }
+}
+
+// ── M6 · mouvement réduit ──────────────────────────────────────────────────
+{
+  const mouvement = /(^|[;{\s])(transition|animation)\s*:/.test(cssText) || /@keyframes/.test(cssText);
+  const respecte = regles.some(r => r.atRules.some(a => /prefers-reduced-motion/i.test(a)))
+    || /prefers-reduced-motion/i.test(cssText);
+  if (mouvement && !respecte) {
+    add('bloquant', 'M6', 'transitions ou animations sans @media (prefers-reduced-motion: reduce)', 'feuille de style');
+  }
+}
+
+// ── M7 · un état saisi survit à la navigation ──────────────────────────────
+// TF-0875 (lot Produit-61, 06/09) : un panier rendu par le serveur se vidait après
+// « Aide » puis « La carte » — quantité 2 → 0, mesuré au navigateur sur qualif — alors
+// que dix-huit pages passaient les oracles et que le parcours C13 était 3/3 SUR LA
+// MAQUETTE MONO-FICHIER, où la navigation de la barre basse ne recharge jamais le
+// document. Aucune règle ne rapprochait « il y a de la saisie » de « il y a une
+// navigation qui recharge ». C'est ce rapprochement, et lui seul, que M7 juge.
+{
+  const ARBRES = arbres(html, root);
+  // Un bouton, une case cochée par le gabarit, un champ masqué ne portent pas d'état SAISI.
+  const SANS_SAISIE = new Set(['hidden', 'submit', 'button', 'reset', 'image']);
+  const champs = ARBRES.flatMap(r => [
+    ...elements(r, 'input').filter(e => !SANS_SAISIE.has(String(e.attrs.type || 'text').toLowerCase())),
+    ...elements(r, 'textarea'),
+    ...elements(r, 'select'),
+  ]);
+  // Ce qui RECHARGE le document : un lien vers un autre document du produit, ou une
+  // assignation de location. Une ancre (#…) et un routeur JS ne rechargent rien — la
+  // maquette mono-fichier ne relève donc pas de M7, et c'est exactement pourquoi elle
+  // passait : la règle ne peut se déclencher que là où le défaut est possible.
+  const HORS_DOCUMENT = /^\s*(?:https?:|mailto:|tel:|javascript:|data:|#|$)/i;
+  const liensDocument = ARBRES.flatMap(r => elements(r, 'a'))
+    .filter(a => typeof a.attrs.href === 'string' && !HORS_DOCUMENT.test(a.attrs.href));
+  const rechargeJs = /(?:window\s*\.\s*)?location\s*\.\s*(?:href\s*=|assign\s*\(|replace\s*\()/.test(html);
+  // Deux liens au moins : une NAVIGATION (barre basse, menu), pas le lien isolé d'un pied de page.
+  const navigation = liensDocument.length >= 2 || rechargeJs;
+  // Ce qui SURVIT à un rechargement : un stockage client, ou un support déclaré par
+  // data-etat-persiste (session serveur, cookie). Un <form action> ne prouve RIEN :
+  // le panier du 06/09 était précisément un formulaire rendu par le serveur.
+  const persiste = /\b(?:sessionStorage|localStorage|indexedDB)\b/.test(html)
+    || /data-etat-persiste/i.test(html);
+  if (champs.length && navigation && !persiste) {
+    add('majeur', 'M7',
+      `${champs.length} champ(s) de saisie et une navigation qui RECHARGE le document `
+      + `(${liensDocument.length} lien(s) vers un autre document${rechargeJs ? ', assignation de location' : ''}) `
+      + 'sans aucun support de survie : l\'état saisi est perdu au premier aller-retour. '
+      + 'Confier l\'état à sessionStorage/localStorage, ou déclarer le support serveur par '
+      + 'data-etat-persiste sur le formulaire — un <form action> ne prouve rien, le panier '
+      + 'perdu du 06/09 en était un',
+      liensDocument.length ? `lien « ${String(liensDocument[0].attrs.href).slice(0, 40)} »` : 'scripts de la page');
+  }
+}
+
+// ── M8 · coquille défilante sous une barre basse hors flux ─────────────────
+// TF-0846 (lot Produit-61, 05/09) : DIX-HUIT pages réelles en FAIL V4 (chevauchement) au
+// premier passage 5 bis, à quatre largeurs, pour un seul et même motif — la barre basse
+// `position: fixed` recouvrait le bas du contenu. La maquette mono-fichier, elle, passait
+// V4 : sa mise en page propre laissait par hasard assez de vide sous le dernier bloc.
+// Une barre hors flux ne prend pas de place ; il faut donc la lui donner, et la doctrine
+// est la COQUILLE DÉFILANTE — un écran borné dont le contenu défile à l'intérieur, la
+// barre vivant hors de ce flux. La réserve explicite (padding sous le contenu) reste admise.
+{
+  const estBarreBasse = r => /position\s*:\s*(fixed|sticky)/.test(r.body)
+    && /(^|[;{\s])bottom\s*:\s*0(?![0-9.])/.test(r.body);
+  const barresBasses = regles.filter(estBarreBasse);
+  if (barresBasses.length) {
+    const selecteursBarre = new Set(barresBasses.map(r => r.selector));
+    // Une coquille : une zone qui DÉFILE et dont la hauteur est bornée. Les deux dans la
+    // même règle — un overflow sans hauteur bornée ne défile pas, il déborde.
+    const coquille = regles.some(r => !selecteursBarre.has(r.selector)
+      && /(^|[;{\s])overflow(-y|-block)?\s*:\s*(auto|scroll)/i.test(r.body)
+      && /(^|[;{\s])(height|min-height|max-height|block-size|flex)\s*:/.test(r.body));
+    // La réserve : de la place rendue sous le contenu, hors de la barre elle-même, et
+    // au moins de la hauteur d'une cible tactile (44px) — sinon c'est un liseré, pas une place.
+    const reserve = regles.some(r => {
+      if (selecteursBarre.has(r.selector)) return false;
+      const m = /(^|[;{\s])(padding-bottom|margin-bottom|scroll-padding-bottom|padding-block-end)\s*:\s*([^;]+)/i.exec(r.body);
+      if (!m) return false;
+      const val = m[3].trim();
+      if (/var\(|calc\(|env\(/i.test(val)) return true; // valeur composée : la place est pensée
+      const px = /(-?[\d.]+)px/.exec(val);
+      return px !== null && parseFloat(px[1]) >= 44;
+    });
+    if (!coquille && !reserve) {
+      add('majeur', 'M8',
+        `barre basse hors flux (« ${barresBasses[0].selector.slice(0, 40)} ») sans coquille défilante `
+        + 'ni réserve de place sous le contenu : elle recouvre le bas du dernier bloc à toutes les '
+        + 'largeurs (V4). Poser la coquille — un écran borné (100dvh) dont le contenu défile dans '
+        + 'une zone à overflow-y: auto — ou réserver la hauteur de la barre en bas du contenu',
+        'feuille de style');
+    }
+  }
+}
+
+// ── M9 · bandeau collant : part d'écran retirée après défilement ──────────
+// TF-1355 (mesuré sur un livrable réel) : un bandeau position:sticky collé en haut d'écran
+// mesurait 717px de hauteur sur 844px disponibles à 390px de large (85 % de l'écran, mesure
+// RÉELLE au navigateur) — M1-M8 rendaient PASS alors que l'élément qui reçoit le focus après
+// ce bandeau est caché sous lui une fois le défilement passé : WCAG 2.2 2.4.11 « Focus not
+// obscured » (AA) est en jeu. Aucune règle ne rapprochait « collé en haut d'écran » de
+// « combien de place ça prend ».
+//
+// Un sticky top:0 devient PINNÉ dès qu'on défile au-delà de son origine — nul besoin de
+// rejouer un défilement pour SAVOIR qu'il va se fixer, c'est la définition même de la
+// propriété. Ce qui reste INDÉCIDABLE sur le fichier, c'est sa hauteur une fois fixé : elle
+// dépend de la cascade, du wrap réel du texte, des métriques de police — même doctrine que
+// M2 pour la taille tactile EFFECTIVE, déléguée à render_page.py. M9 juge donc ce qui EST
+// décidable sur le fichier : la hauteur EXPLICITEMENT déclarée (height/min-height), et à
+// défaut une ESTIMATION du nombre de rangées d'un bandeau en flex-wrap à partir du nombre
+// d'items qu'il porte — une estimation déclarée comme telle, jamais confondue avec une mesure.
+//
+// Largeurs de téléphone : 390 — la plus petite largeur de corpus/grille-viewports.json (la
+// seule grille catalographiée de cette forge, lue par run-oracles-design.mjs) — complétée de
+// 360 et 414, les deux autres largeurs les plus courantes du parc (Android médian, iPhone
+// Plus/Max) : cette forge ne catalogue pas de grille mobile dédiée, ces trois largeurs sont
+// donc écrites ici, au même titre que le seuil de 768px que M4 porte en dur.
+// Hauteur de viewport : 844px, celle du cas mesuré (iPhone à 390×844) — aucune grille de
+// hauteurs n'existe côté corpus, cette forge ne rend jamais réellement l'écran.
+// Seuil : 25 % de la hauteur de viewport (211px). Un bandeau logo + une rangée d'onglets
+// tient en 10 à 15 % ; au-delà d'un quart d'écran, l'espace de lecture utile recule au point
+// où un élément qui reçoit le focus a de bonnes chances d'être recouvert après le défilement
+// qui l'amène en vue — le cas mesuré (85 %) est très au-dessus de ce seuil, qui laisse une
+// marge généreuse à un bandeau raisonnable.
+{
+  const LARGEURS_TEL = [390, 360, 414];
+  const HAUTEUR_VP = 844;
+  const SEUIL = 0.25;
+  const LARGEUR_ITEM_EST = 110; // cible tactile 44px (M2/M8) + libellé court
+  const RANGEE_HAUTEUR_EST = 52; // cible tactile 44px + espacement 8px (doctrine mobile)
+
+  const estAncreHaut = r => /position\s*:\s*(fixed|sticky)/.test(r.body)
+    && /(^|[;{\s])top\s*:\s*0(?![0-9.])/.test(r.body);
+  const bandeaux = regles.filter(estAncreHaut);
+
+  if (bandeaux.length) {
+    const ARBRES = arbres(html, root);
+    const INTERACTIF_ITEM = /^(a|button|li)$/;
+    let hauteurCumulee = 0;
+    let estimee = false;
+    const detail = [];
+
+    for (const r of bandeaux) {
+      let h = null;
+      for (const m of r.body.matchAll(/(?:^|[;{\s])(height|min-height)\s*:\s*([\d.]+)px/g)) h = parseFloat(m[2]);
+      if (h !== null) {
+        hauteurCumulee += h;
+        detail.push(`« ${r.selector.slice(0, 40)} » : ${h}px déclaré(e)s`);
+        continue;
+      }
+      if (!/display\s*:\s*flex/.test(r.body) || !/flex-wrap\s*:\s*wrap/.test(r.body)) continue;
+      // Pas de hauteur déclarée, mais un flex-wrap : estimer le nombre de rangées à partir
+      // du nombre d'items que le bandeau porte dans le DOM (statique + gabarits JS).
+      const parts = String(r.selector).split(',').map(s => s.trim());
+      let items = 0;
+      for (const arbre of ARBRES) {
+        for (const el of elements(arbre)) {
+          if (!parts.some(p => correspond(el, p))) continue;
+          items += (el.children || []).filter(c => !c.tag.startsWith('#') && INTERACTIF_ITEM.test(c.tag)).length;
+        }
+      }
+      if (!items) continue;
+      estimee = true;
+      let hPireCas = null;
+      for (const largeur of LARGEURS_TEL) {
+        const parRangee = Math.max(1, Math.floor(largeur / LARGEUR_ITEM_EST));
+        const rangees = Math.ceil(items / parRangee);
+        const hEst = rangees * RANGEE_HAUTEUR_EST;
+        if (hPireCas === null || hEst > hPireCas) hPireCas = hEst;
+      }
+      hauteurCumulee += hPireCas;
+      detail.push(`« ${r.selector.slice(0, 40)} » : ${items} item(s) en flex-wrap, ~${hPireCas}px estimé(e)s `
+        + `(pire cas des largeurs ${LARGEURS_TEL.join('/')} px)`);
+    }
+
+    const pourcentage = hauteurCumulee / HAUTEUR_VP;
+    if (hauteurCumulee > 0 && pourcentage > SEUIL) {
+      add('bloquant', 'M9',
+        `bandeau(x) collé(s) en haut d'écran : ${Math.round(hauteurCumulee)}px cumulés sur ${HAUTEUR_VP}px `
+        + `(${Math.round(pourcentage * 100)} %, seuil ${Math.round(SEUIL * 100)} %) une fois le défilement passé`
+        + `${estimee ? ' (estimation par rangées, hauteur réelle non rendue ici)' : ''} — ${detail.join(' ; ')}. `
+        + 'Un élément qui reçoit le focus sous ce bandeau risque d\'être recouvert (WCAG 2.2 2.4.11 AA)',
+        'feuille de style');
+    }
+  }
+}
+
+// ── M10 · délai de tap et éclair du navigateur (avertissement, TF-1911) ─────
+// Page-level : la déclaration est cherchée dans toute la feuille, sans résoudre la cascade
+// jusqu'au contrôle (non_juge). `touch-action: manipulation` est cherché avec sa valeur :
+// un `touch-action: pan-y` de carrousel ne supprime pas le délai de tap des boutons.
+{
+  const controles = arbres(html, root).flatMap(r => elements(r)).filter(e =>
+    e.tag === 'button' || (e.tag === 'a' && e.attrs.href !== undefined)
+    || String(e.attrs.role || '').toLowerCase() === 'button'
+    || (e.tag === 'input' && ['button', 'submit', 'reset'].includes(String(e.attrs.type || '').toLowerCase())));
+  const poseTouch = /touch-action\s*:\s*manipulation/i.test(cssText);
+  const poseSurbrillance = /-webkit-tap-highlight-color\s*:/i.test(cssText);
+  if (controles.length && !poseTouch && !poseSurbrillance) {
+    add('avertissement', 'M10',
+      `${controles.length} contrôle(s) tactile(s) sans touch-action: manipulation ni -webkit-tap-highlight-color posé : ` +
+      'délai de tap sur certains navigateurs mobiles et éclair gris/bleu non voulu — poser l\'un des deux, globalement ou sur les contrôles',
+      'feuille de style');
+  }
+}
+
+// ── M11 · theme-color absent (avertissement, TF-1911) ───────────────────────
+{
+  const estDocument = elements(root, 'head').length > 0 || elements(root, 'html').length > 0;
+  const themeColor = elements(root, 'meta').some(m => (m.attrs.name || '').toLowerCase() === 'theme-color');
+  if (estDocument && !themeColor) {
+    add('avertissement', 'M11',
+      'aucune balise <meta name="theme-color"> : la barre d\'état et le cadre du navigateur mobile ne suivent pas la couleur de la page ' +
+      '(une valeur par schéma de couleur si la page en porte deux)',
+      'head');
+  }
+}
+
+// ── Verdict ────────────────────────────────────────────────────────────────
+F.sort((a, b) => ({ bloquant: 0, majeur: 1, avertissement: 2, info: 3 })[a.sev] - ({ bloquant: 0, majeur: 1, avertissement: 2, info: 3 })[b.sev]);
+const dur = F.filter(f => f.sev === 'bloquant' || f.sev === 'majeur');
+if (!jsonOnly) process.stderr.write(dur.length ? `FAIL — ${dur.length} écart(s) dur(s)\n` : `PASS — ${PLAGE_JOUEE} sans écart dur\n`);
+if (dur.length) sortir('FAIL', 1);
+sortir('PASS', 0);

@@ -1,0 +1,301 @@
+{
+  "titre": "Rapport pilote",
+  "date": "2026-08-10",
+  "tenant": "ACME",
+  "dimensions": [
+    {
+      "id": "D00",
+      "score": 3,
+      "gate1b": "go",
+      "preuves": [
+        "src/x.py:10"
+      ],
+      "resume": "Périmètre : suivi des commandes ; hors périmètre : facturation. Valeur métier : délai de préparation."
+    },
+    {
+      "id": "D01",
+      "score": 3,
+      "gate1b": "go",
+      "preuves": [
+        "src/x.py:11"
+      ]
+    },
+    {
+      "id": "D02",
+      "score": 3,
+      "gate1b": "go",
+      "preuves": [
+        "src/x.py:12"
+      ]
+    },
+    {
+      "id": "D03",
+      "score": 3,
+      "gate1b": "go",
+      "preuves": [
+        "src/x.py:13"
+      ]
+    },
+    {
+      "id": "D04",
+      "score": 3,
+      "gate1b": "go",
+      "preuves": [
+        "src/x.py:14"
+      ]
+    },
+    {
+      "id": "D05",
+      "score": 3,
+      "gate1b": "go",
+      "preuves": [
+        "src/x.py:15"
+      ]
+    },
+    {
+      "id": "D06",
+      "score": 3,
+      "gate1b": "go",
+      "preuves": [
+        "src/x.py:16"
+      ]
+    },
+    {
+      "id": "D07",
+      "score": 3,
+      "gate1b": "go",
+      "preuves": [
+        "src/x.py:17"
+      ]
+    },
+    {
+      "id": "D08",
+      "score": 3,
+      "gate1b": "go",
+      "preuves": [
+        "src/x.py:18"
+      ]
+    },
+    {
+      "id": "D09",
+      "score": 3,
+      "gate1b": "go",
+      "preuves": [
+        "src/x.py:19"
+      ]
+    },
+    {
+      "id": "D10",
+      "score": 3,
+      "gate1b": "go",
+      "preuves": [
+        "src/x.py:20"
+      ]
+    },
+    {
+      "id": "D11",
+      "score": 3,
+      "gate1b": "go",
+      "preuves": [
+        "src/x.py:21"
+      ]
+    },
+    {
+      "id": "D12",
+      "score": 3,
+      "gate1b": "go",
+      "preuves": [
+        "src/x.py:22"
+      ]
+    },
+    {
+      "id": "D13",
+      "score": 3,
+      "gate1b": "go",
+      "preuves": [
+        "src/x.py:23"
+      ]
+    },
+    {
+      "id": "D14",
+      "score": 3,
+      "gate1b": "go",
+      "preuves": [
+        "src/x.py:24"
+      ]
+    },
+    {
+      "id": "D15",
+      "score": 3,
+      "gate1b": "go",
+      "preuves": [
+        "src/x.py:25"
+      ]
+    },
+    {
+      "id": "D16",
+      "score": 3,
+      "gate1b": "go",
+      "preuves": [
+        "src/x.py:26"
+      ]
+    },
+    {
+      "id": "D17",
+      "score": 3,
+      "gate1b": "go",
+      "preuves": [
+        "src/x.py:27"
+      ]
+    }
+  ],
+  "regles": [
+    {
+      "id": "CTL-D02-01",
+      "verdict": "conforme"
+    },
+    {
+      "id": "CTL-D06-01",
+      "verdict": "sans_objet",
+      "motif": "pas de périmètre data dans ce projet"
+    },
+    {
+      "id": "CTL-D05-01",
+      "verdict": "non_conforme",
+      "criticite": "Majeur",
+      "preuve": "aucun scan de secrets dans le pipeline",
+      "possible": "Ajouter une étape de scan de secrets bloquante au pipeline",
+      "verification_cloture": "le pipeline échoue sur un secret injecté volontairement (test de non-régression)"
+    }
+  ],
+  "constats": [
+    {
+      "titre": "Secret en clair",
+      "preuves": [
+        {
+          "ref": "config.py:12"
+        }
+      ],
+      "id": "C-D02-1",
+      "dimension": "D02"
+    },
+    {
+      "id": "C-D05-1",
+      "dimension": "D05",
+      "titre": "Aucun contrôle de la fraîcheur des données",
+      "severite": "Majeur",
+      "desc": "Les jeux de données ne portent aucune date de dernière mise à jour.",
+      "preuves": [
+        {
+          "ref": "etl/charge.py:41"
+        }
+      ]
+    }
+  ],
+  "actions": [
+    {
+      "titre": "Purger le secret",
+      "desc": "Retirer la valeur en clair et la reprendre depuis le coffre.",
+      "dimension": "D02",
+      "tag": "urgent",
+      "effort": "0.5j",
+      "severite": "Bloquant",
+      "adr": [
+        "ADR0201"
+      ],
+      "verification": "git log -p sur le fichier ne montre plus la valeur ET l'application démarre en lisant le coffre",
+      "activation": {
+        "mode": "forge-assisted",
+        "reason": "substitution mécanique, relecture humaine du coffre requise"
+      }
+    },
+    {
+      "id": "REM-D05-090",
+      "titre": "Horodater chaque jeu de données à sa publication",
+      "desc": "Ajouter la date de dernière mise à jour au catalogue.",
+      "dimension": "D05",
+      "tag": "prio",
+      "effort": "1j",
+      "severite": "Majeur",
+      "constat_ref": "C-D05-1",
+      "verification": "chaque jeu du catalogue porte une date de mise à jour de moins de 24 h"
+    }
+  ],
+  "moteur_audit_llm": {
+    "modele": "Modèle générique d'audit",
+    "modele_id": "exemple-model-1",
+    "editeur": "éditeur",
+    "date": "2026-08-10"
+  },
+  "tests": [
+    {
+      "type": "integration",
+      "portee": "endpoints du service",
+      "resultat": "42/42",
+      "couverture": "78 %"
+    }
+  ],
+  "analyses": [
+    {
+      "outil": "scanner de dépendances",
+      "categorie": "SCA",
+      "version_utilisee": "3.2.1",
+      "resultat": "0 vulnérabilité directe"
+    }
+  ],
+  "composants": [
+    {
+      "nom": "bibliothèque de sérialisation",
+      "version_resolue": "2.4.0",
+      "version_actuelle": "2.6.1",
+      "statut": "reco_correctif",
+      "reco_flag": "Oui",
+      "perimetre": "direct"
+    }
+  ],
+  "gate": {
+    "verdict": "GO"
+  },
+  "syntheses": {
+    "fonctionnelle": "Application de suivi de commandes pour les équipes logistiques ; trois profils d'utilisateurs.",
+    "technique": "Service web et base relationnelle, déployés en conteneurs sur un seul environnement.",
+    "audit": "Audit conduit le 10/08/2026 : deux scans automatisés, revue statique et inspections manuelles.",
+    "audit_bloque": "Aucune dimension ne bloque la mise en production à ce stade ; les écarts relevés se corrigent sans reprise d'architecture.",
+    "audit_commencer": "Commencer par le plan de remédiation, actions urgentes d'abord ; le lecteur technique ouvre la vue des règles.",
+    "audit_limites": "Audit sans accès à la production : les constats portent sur le code, la configuration et l'environnement de recette."
+  },
+  "architecture": {
+    "bandes": [
+      {
+        "key": "app",
+        "label": "Application"
+      },
+      {
+        "key": "data",
+        "label": "Données"
+      }
+    ],
+    "nodes": [
+      {
+        "id": "api",
+        "bande": "app",
+        "label": "API",
+        "sub": "service",
+        "style": "purple"
+      },
+      {
+        "id": "db",
+        "bande": "data",
+        "label": "Base",
+        "sub": "relationnelle",
+        "style": "teal"
+      }
+    ],
+    "edges": [
+      {
+        "from": "api",
+        "to": "db"
+      }
+    ]
+  }
+}

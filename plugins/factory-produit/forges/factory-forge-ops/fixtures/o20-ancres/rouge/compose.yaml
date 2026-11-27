@@ -1,0 +1,22 @@
+# Fixture ROUGE O-20 (TF-2657) : les deux défauts n'existent qu'APRÈS résolution des ancres, ce qui prouve que
+# les services sont lus et jugés, et non écartés. base : la fusion apporte un volume sur /var/lib/postgresql,
+# pas sur le chemin des données de postgres 16. cache : la clé écrite dans le service (volumes) l'emporte sur
+# celle de la fusion et monte le volume ailleurs que sur /data.
+x-commun: &commun
+  volumes:
+    - base-donnees:/var/lib/postgresql
+x-redis: &redis
+  image: redis:7
+  volumes:
+    - cache-donnees:/data
+services:
+  base:
+    image: postgres:16
+    <<: *commun
+  cache:
+    <<: *redis
+    volumes:
+      - cache-donnees:/autre
+volumes:
+  base-donnees:
+  cache-donnees:

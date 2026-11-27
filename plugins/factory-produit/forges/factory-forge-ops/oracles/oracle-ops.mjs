@@ -1,0 +1,2938 @@
+#!/usr/bin/env node
+// oracle-ops — Domaine « Exploitation : cible déployée saine et restaurable » (déterministe).
+// Quatre règles O1-O4 sur une CIBLE d'exploitation réelle (jamais sur le code générateur) :
+//   O1  COURANT existe et pointe une release présente sur disque ;
+//       (SANS_OBJET si la cible porte un fichier PLATEFORME — pointeur tenu par une
+//       plateforme externe, ex. railway ; jamais déduit du nom du dossier, TF-0844) ;
+//   O2  la release courante repasse son healthcheck (exécution réelle de sante.mjs) ;
+//   O3  journal.jsonl intègre : JSON valide, seq strictement croissant depuis 1, types connus ;
+//       (même SANS_OBJET que O1 si PLATEFORME est déclaré — l'historique aussi est tenu
+//       par la plateforme, TF-0844) ;
+//   O4  rollback prouvable : s'il existe une release antérieure à la courante, elle est
+//       toujours présente (capacité de restauration réelle) ET le dernier événement du
+//       journal désigne la release courante (cohérence pointeur ↔ histoire).
+//   O5  --plan <fichier>       : plan cloud complet (TF-0081, cf. plus bas). Plan azure : région de repli
+//       <REGION_REPLI> déclarée et sonde de capacité (scripts/sonder-capacite.mjs) AVANT `az group create` (TF-2129).
+//   O6  --drift <fichier> <cible> : état déclaré (`ops.mjs etat --sortie`) vs constaté
+//       maintenant — troncature/réécriture du journal, déploiement furtif (TF-0107).
+//   O7  --empreinte <cible> : fichiers de la release COURANTE vs empreinte scellée par
+//       `ops.mjs deployer` OU `ops.mjs canary` (TF-0298, sha256 par fichier) — fichier
+//       modifié/supprimé/ajouté en place après coup ; SKIP motivé si aucune empreinte
+//       (déploiement antérieur au contrôle ou passé hors ops.mjs) (TF-0288).
+//   O8  --planifie <racine>   : toute définition PLANIFIÉE du dépôt porte un mode d'exercice à
+//       la demande, CÂBLÉ et distinct de sa cadence (TF-0527) — un travail qu'on ne peut
+//       déclencher qu'à sa prochaine échéance se découvre cassé au moment où l'on compte dessus.
+//       Un worker qui planifie EN CODE se lit aussi, par sa déclaration `exercice_a_la_demande:`
+//       (avertissement sans elle, TF-1806).
+//   O10 --manifeste-servi <fichier> : chaque paquet épinglé par version (`==`) dans un
+//       requirements.txt SERVI (image finale) porte au moins une empreinte `--hash=` (TF-1042) —
+//       une version republiée sous le même numéro entre sinon sans être vue.
+//   O11 --sonde-disponibilite <racine> : une sonde de disponibilité Terraform (web_test/
+//       availability) ne vise jamais l'origine (`.ingress[0].fqdn`) sans variable de repli
+//       (TF-1121) — sinon elle mesure une adresse que l'utilisateur n'ouvre jamais.
+//   O17 --prerequis-environnement <racine> : chaque bloc `data "<type>" "<nom>"` des fichiers .tf
+//       sous <racine> (même parcours qu'O11) figure dans l'artefact de la pile
+//       <racine>/PREREQUIS-ENVIRONNEMENT.md, table markdown aux colonnes « Ressource » (adresse
+//       Terraform `data.<type>.<nom>`), « Propriétaire » et « Commande de vérification », les deux
+//       dernières renseignées (TF-1122). Pile sans bloc data : SANS_OBJET (SKIP). Blocs data sans
+//       artefact : FAIL qui nomme les blocs.
+//   O18 --revisions-actives <fichier.json> : sortie CAPTURÉE de `az containerapp revision list
+//       -o json` ; chaque application ne garde actives que ses révisions servies (trafic > 0) et
+//       UNE N-1 saine à 0 % — toute autre révision active est nommée avec sa commande de
+//       désactivation (TF-1639). Capture vide ou introuvable : SKIP.
+//   O19 --sauvegarde <declaration.json> [--le AAAA-MM-JJ] : déclaration `forge-ops/sauvegarde@1` ;
+//       chaque actif de données critique porte RPO, RTO, mécanisme, fréquence (≤ RPO) et
+//       configuration de sauvegarde, et un exercice de restauration réussi depuis ≤ 12 mois, de
+//       durée ≤ RTO et d'intégrité constatée ; `actifs: []` exige `aucun_actif_critique` motivé
+//       (TF-1212 : CTL-D05-09, CTL-D12-06, CTL-D16-09 du référentiel d'audit). Introuvable : SKIP.
+//   O20 --conteneurs-a-etat <racine> [--composants <COMPOSANTS-OPS.md>] : chaque `docker run` et
+//       chaque service compose d'une image à état (référentiel references/CONTENEURS-A-ETAT.json ou
+//       table « Composants à état » de COMPOSANTS-OPS.md) monte un volume nommé ou un dossier de
+//       l'hôte sur le chemin exact de ses données de travail ; chaque `docker start` vise un
+//       conteneur dont la commande de création est écrite ; la table déclare volume et commande de
+//       création de chaque composant à état (TF-1986). Rien à juger : SKIP. Depuis TF-2657 : les ancres, alias et
+//       fusions (<<) d'un fichier compose sont résolus ; le périmètre exclu par git n'est pas lu ; une ligne de la
+//       table qui nomme une plateforme gérée et porte un script existant ou sa CLI est acceptée (volume non confronté).
+//   O21 --workflow-deploiement <fichier.yml> [--environnement <nom>] [--protection <capture.json>] :
+//       un job qui déploie référence un environnement ; le job de l'environnement de production
+//       (`production` par défaut) a son GO humain prouvé, par un job de garde qui lit l'environnement
+//       par l'API ou par la capture de `gh api …/environments/<nom>` ; il est couvert par un groupe de
+//       concurrence sans cancel-in-progress: true ; id-token: write ne va qu'à lui (TF-2003).
+//   O22 --mise-en-service <COMPOSANTS-OPS.md> [--le AAAA-MM-JJ[ HH:MM]] : une tâche planifiée ou
+//       récurrente déclarée « en service » (« actif », « partagé » ou « en service ») porte la lecture
+//       d'une première exécution RÉELLE (identifiant ou URL de la publication, date et heure de lecture,
+//       postérieure à la date de sa mise en service, colonne « En service depuis », TF-2560) et sa
+//       prochaine échéance ; une échéance dépassée sans lecture plus récente est un constat
+//       (D-108 (b)). Aucune tâche désignée ou aucune en service : SKIP.
+//   O23 --reseau-docker <pile ou fichier.tf> : chaque `docker_network` à `ipam_config` pose `lifecycle {
+//       ignore_changes = [ipam_config] }` et tient son `subnet` d'un relevé des plages prises (`data
+//       "external"` qui appelle scripts/plages-docker.mjs), jamais d'un CIDR écrit à la main (TF-2164).
+//   O24 --frontal-nginx <fichier.conf ou dossier> : chaque `proxy_pass`, `fastcgi_pass`, `uwsgi_pass`,
+//       `scgi_pass` et `grpc_pass` vers un nom d'hôte passe par une variable avec un `resolver` qui porte
+//       `valid=` ; un groupe `upstream` à serveur nommé porte `resolve` et son resolver dans son bloc ou dans
+//       http — sinon l'adresse de l'amont est figée au chargement et le frontal rend 502 après sa recréation
+//       (TF-2165, étendu aux quatre autres directives par TF-2177).
+//   O25 --identifiants-test <fichier.json> [--journal <journal.jsonl>] : sur un fichier `forge-ops/identifiants-test@1`,
+//       le mot de passe de chaque compte tient en 20 caractères au moins d'un alphabet sans sosie (0 O 1 l I) ni
+//       signe — le verdict nomme le compte et la position du défaut, jamais la valeur (TF-2167) ; avec le journal
+//       de scripts/identifiants-test.mjs, un mot de passe n'est renouvelé que sur demande de l'humain, n'est créé
+//       que si le fichier ou le compte manque, et ce qui est créé ou renouvelé est suivi d'une connexion réussie
+//       (TF-2166).
+//   O26 --version-servie <capture.json> [--depot <dossier git>] [--attendu <commit>] : la réponse /healthz d'une instance
+//       porte un champ `commit` de 7 à 40 caractères hexadécimaux ; avec `--depot`, c'est un commit du dépôt ; avec
+//       `--attendu`, c'est le commit que le dossier de MEP annonce. La capture se prend par `scripts/version-servie.mjs
+//       lire <url> --sortie capture.json` ; les plans azure, aws, gcp et railway passent le commit à l'image (TF-2201, TF-2244).
+//   O27 --inventaire-a-jour <COMPOSANTS-OPS.md> --etat <genre>:<fichier> [--etat …] : chaque composant que les sorties
+//       d'état nomment (terraform state list, docker ps, az resource list, export noms) figure mot pour mot dans l'inventaire ;
+//       un composant présent et non inventorié refuse « prêt » (FAIL). Sans sortie d'état : SKIP (TF-2209).
+//   O28 --reglages-plateforme <releve.json> [--registre <fichier>] [--ecarts <fichier>] : chaque réglage des plateformes que le
+//       relevé déclare (Supabase, GitHub, Cloudflare) est LU et conforme à l'`attendu` du registre du pilot
+//       (`references/REGLAGES-SURS-PAR-DEFAUT.json`, lu par `$FORGE_ROOT`) ; un réglage non lu, en échec de lecture ou hors de
+//       son attendu sans décision enregistrée refuse « prêt » (FAIL bloquant). Un écart décidé par l'humain (`--ecarts`, ses
+//       mots, sa date, la valeur lue qu'il accepte) se vérifie tel que décidé. Le relevé se prend par
+//       `scripts/relever-reglages.mjs <Plateforme> --executer`. Le plan O5 d'une cible qui touche le registre le prescrit ; un
+//       plan supabase déclare aussi que `supabase db push` est incompatible avec la restriction réseau depuis un exécuteur (TF-2230).
+//   O29 --convergence <capture> : la capture du plan pris juste après l'apply (`terraform show -json <plan>` ou la sortie
+//       texte de `terraform plan`) est VIDE ; un plan qui change encore une ressource refuse la chaîne (FAIL, une ressource
+//       par constat, avec ses attributs et `terraform apply -replace='<adresse>'`), une capture illisible aussi. La capture
+//       se prend par `scripts/convergence-terraform.mjs verifier <pile>` (TF-2271).
+//   O30 --etat-servi <releve.json> : le relevé `forge-ops/etat-servi@1` que prend gabarits/smoke-mise-en-production.mjs
+//       prouve que le test de mise en production a LU l'état servi avant ses épreuves, l'a RELU après la dernière, et que
+//       le corps de la réponse de santé (chemin `sante.chemin` du gabarit, `/healthz` par défaut), ou les champs que le test
+//       déclare, est identique : un champ changé est un constat bloquant, une relecture absente aussi (TF-2308, classe
+//       etat-servi-non-relu-apres-epreuve). Relevé introuvable : SKIP.
+//   O31 --application-terraform <racine ou fichier de chaîne> [--racine <dépôt>] [--releve <application.json>] : si une pile de la racine pose
+//       `supabase_settings` (directement ou par un module local), aucune chaîne ne l'applique par un `terraform apply` direct
+//       (bloquant, avec la commande de remplacement `scripts/appliquer-terraform.mjs … --executer --sortie`) ; l'outil appelé avec
+//       `--executer` sans `--sortie` est un constat majeur ; le relevé `forge-ops/application@1` que l'outil écrit prouve l'apply
+//       abouti, la santé lue saine avant (ou `--sans-sonde` dit) et des étapes cohérentes avec son verdict (TF-2397).
+//   O32 --porte-version <releve.json> : le relevé `forge-ops/porte-version@1` d'une version qui touche une fonction centrale (IA,
+//       courrier) prouve la porte COMPLÈTE (audit et qualification nommés, jamais l'oracle léger), un appel RÉEL au fournisseur
+//       dans le smoke (une boîte simulée ou une clé factice est bloquante) et, pour le courrier, la comparaison du CONTENU du
+//       brouillon d'essai de l'activation à son modèle, sans écart (TF-2771, classe mise-en-production-sur-porte-allegee).
+//       Relevé introuvable : SKIP.
+//   O12 (implicite, cible .md à `remediation_securite:` déclaré) : la fiche liste les
+//       ENVIRONNEMENTS où elle a été rejouée (TF-1115) — sans quoi « appliquée » ne dit rien
+//       de son périmètre réel.
+//   O13 (implicite, toute cible .md) : un item de liste portant un verbe destructif à
+//       l'infinitif (supprimer/retirer/fermer/purger/détruire) porte sa MATURITÉ (éprouvé/
+//       déduit, TF-1116) et sa MESURE DE NON-RÉGRESSION (TF-1118) — jugées indépendamment.
+//   O14 --inventaire-composants <export.json> <doc.md> : chaque nom d'un export machine du
+//       parc figure LITTÉRALEMENT dans le document d'inventaire (TF-1114) — un « idem » ou
+//       une accolade {a,b} n'est jamais un nom.
+//   O15 --statut-composants <export.json> <doc.md> : sens inverse d'O14 (TF-1113 + TF-1117) —
+//       un composant de Statut « actif » ou « partagé » figure dans l'export ; tout Statut est
+//       pris au vocabulaire fermé ; une ligne « supprimable » de la section « Composants
+//       inutilisés » dit ce qui cesse de fonctionner si on la supprime (« rien » exige une mesure).
+//   O16 (implicite, toute cible .md qui DÉCLARE un nettoyage d'infrastructure : frontmatter
+//       `nettoyage_infrastructure:`, OU un titre markdown portant « nettoyage » avec
+//       « infrastructure », « composant(s) », « ressource(s) » ou « environnement(s) ») : les
+//       trois questions de clôture y figurent, chacune avec « Réponse : » et « Preuve : » non
+//       vides, ou en ligne d'une table à colonnes Réponse et Preuve (TF-1120).
+//   R   --verdict-rollback <mesures> --seuils <fichier> : RECOMMANDATION seule (pas un
+//       oracle de conformité) — seuils SLO humains vs mesures post-bascule (TF-0107).
+// Contrat : JSON {oracle,domaine,artefact,verdict,findings,non_juge} · exit 0/1/2.
+// Usage : node oracle-ops.mjs <cible> [--json-only]
+// Une cible .md est un DOCUMENT : seules O9, O12, O13 et O16 la jugent, jamais O1-O4 (TF-1804).
+import fs from "node:fs";
+import path from "node:path";
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { correspond, hacherFichier } from "../scripts/lib-empreinte.mjs";
+import { lireYaml } from "../scripts/lib-yaml.mjs";
+import { defautsDuSecret } from "../scripts/lib-secret-humain.mjs";
+import { jugerVersionServie } from "../scripts/lib-version-servie.mjs";
+import { jugerSante } from "../scripts/lib-sante.mjs";
+import { jugerPorteVersion } from "../scripts/lib-porte-version.mjs";
+import { jugerEtatServi } from "../scripts/lib-etat-servi.mjs";
+import { lireCapture, commandeRemplacement } from "../scripts/lib-convergence.mjs";
+import { jugerChaineApplication, jugerReleveApplication } from "../scripts/lib-application-chaine.mjs";
+import { chargerRegistre, cheminRegistreDuPilot, jugerReglages } from "../scripts/lib-reglages.mjs";
+import { fileURLToPath } from "node:url";
+
+const DOM = "Exploitation : cible déployée saine et restaurable";
+const NON_JUGE = [
+  "santé applicative au-delà du healthcheck déclaré par la release (parcours réels, charge)",
+  "GO de mise en production — décision humaine, jamais un verdict d'oracle",
+  "supervision continue / alerting (hors périmètre v0)",
+  "secrets et configuration d'environnement — jamais transportés par la forge",
+  "cible dont pointeur/historique sont tenus par une plateforme externe (fichier PLATEFORME) : preuve d'exécution laissée à O-5 (plan) et aux verdicts propres de la plateforme (TF-0844)",
+  "O16 : la VÉRITÉ des réponses et des preuves de clôture d'un nettoyage — l'oracle juge qu'elles sont écrites, jamais qu'elles sont justes ; et un nettoyage raconté sans frontmatter `nettoyage_infrastructure:` ni titre qui le déclare n'est pas détecté (TF-1120)",
+];
+// TF-2013 : les quatre types de `ops.mjs reinitialiser-base` (refus, étape, réussite, échec) sont des types
+// connus d'O3 ; O4 ne les lit pas, il ne suit que deploiement, restauration et canary_promotion.
+const TYPES = ["deploiement", "deploiement_refuse", "restauration", "canary_etape", "canary_promotion", "canary_annulation",
+  "base_reinitialisation_refusee", "base_reinitialisation_etape", "base_reinitialisation", "base_reinitialisation_echec"];
+
+const args = process.argv.slice(2);
+// TF-0281 (propagation de TF-0245) : la cible est résolue en absolu ICI, une seule fois.
+// O2 exécute sante.mjs avec cwd=releaseDir : une cible restée relative rend le chemin du
+// script relatif lui aussi, résolu par node contre ce NOUVEAU cwd — chemin doublé,
+// « Cannot find module », exit 1 rapporté comme « healthcheck en échec » : un faux échec
+// sur une release saine. Les autres chemins d'argument (--plan, --drift, --seuils,
+// --verdict-rollback) ne sont lus que par fs depuis le cwd du process, jamais sous un cwd
+// changé : ils restent tels quels, pas de rustine par usage.
+const cibleArg = args.find(a => !a.startsWith("--"));
+const cible = cibleArg ? path.resolve(cibleArg) : cibleArg;
+const jsonOnly = args.includes("--json-only");
+const iPlan = args.indexOf("--plan");
+const planPath = iPlan >= 0 ? args[iPlan + 1] : null;
+const F = [];
+const add = (sev, regle, msg, where) => F.push({ sev, regle, msg, where });
+
+// ── O5 · mode plan : un plan cloud est complet et cohérent (TF-0081) ────────
+// Vérifie un fichier produit par `ops.mjs plan` : 4 phases non vides, rollback réel,
+// commandes cohérentes avec la CLI de la cible, aucun credential en clair.
+if (planPath) {
+  const DOM5 = "Exploitation : plan de déploiement cloud complet (O-5)";
+  const NJ5 = [
+    "exécution réelle du plan (run MEP, environnement authentifié fourni par l'humain, GO humain)",
+    "validité des valeurs substituées aux placeholders <...> au moment du run",
+    "coûts réels de la cible — ordres de grandeur documentés par la fiche expert",
+  ];
+  const fin5 = (verdict, code) => {
+    process.stdout.write(JSON.stringify({ oracle: "oracle-ops", domaine: DOM5, artefact: planPath, verdict, findings: F.length ? F : [{ sev: "info", regle: "O5", msg: "plan complet — 4 phases, rollback présent, CLI cohérente", where: planPath }], non_juge: NJ5 }, null, jsonOnly ? 0 : 2));
+    process.exit(code);
+  };
+  if (!fs.existsSync(planPath)) { add("info", "O5", "plan introuvable", String(planPath)); fin5("SKIP", 2); }
+  let p = null;
+  try { p = JSON.parse(fs.readFileSync(planPath, "utf8")); } catch { add("bloquant", "O5", "JSON invalide", planPath); fin5("FAIL", 1); }
+  // TF-0865 : deux cibles de produit data — bundle déclaratif Databricks (CLI `databricks bundle`)
+  // et espace de travail Power BI alimenté par un projet PBIP (CLI Fabric `fab`).
+  // 16/10/2026 : cible supabase (CLI `supabase`, migrations poussées par `supabase db push`).
+  // 28/10/2026 : cible cloudflare-workers (CLI `wrangler`, versions téléversées par `wrangler versions upload`).
+  const CLI = { railway: "railway", gcp: "gcloud", azure: "az ", aws: "aws ", "databricks-bundle": "databricks bundle", "powerbi-workspace": "fab ", supabase: "supabase ", "cloudflare-workers": "wrangler " };
+  if (p.format !== "forge-ops/plan@1") add("bloquant", "O5", `format inconnu « ${p.format} » (attendu forge-ops/plan@1)`, planPath);
+  if (!CLI[p.cible]) add("bloquant", "O5", `cible inconnue « ${p.cible} »`, planPath);
+  for (const ph of ["provision", "deploiement", "healthcheck", "rollback"]) {
+    const l = p.phases?.[ph];
+    if (!Array.isArray(l) || l.length === 0)
+      add("bloquant", "O5", `phase « ${ph} » absente ou vide — un plan sans ${ph === "rollback" ? "retour arrière n'est pas un plan MEP" : "cette phase est incomplet"}`, planPath);
+  }
+  if (CLI[p.cible] && Array.isArray(p.phases?.deploiement) && !p.phases.deploiement.some(c => String(c).includes(CLI[p.cible])))
+    add("bloquant", "O5", `aucune commande de déploiement n'utilise la CLI attendue « ${CLI[p.cible].trim()} » pour la cible ${p.cible}`, planPath);
+  if (Array.isArray(p.phases?.healthcheck) && !p.phases.healthcheck.some(c => /sante|health/i.test(String(c))))
+    add("majeur", "O5", "la phase healthcheck ne référence aucun contrôle de santé (/sante attendu)", planPath);
+  // TF-2201 (Produit-86, lot 20261105b RP-21) : un plan qui CONSTRUIT une image (azure, aws) passe le commit à sa
+  // construction (--build-arg COMMIT_SHA=…) et relit, après la bascule, le commit que l'instance sert
+  // (scripts/version-servie.mjs lire). Sans l'un, /healthz n'a rien à rendre ; sans l'autre, le dossier de MEP
+  // reconstitue la version. TF-2244 : gcp (fichier de construction et substitution _COMMIT_SHA, `builds submit --tag`
+  // n'acceptant aucun argument de construction) et railway (variable de service COMMIT_SHA lue par ARG) sont jugés de même ;
+  // ce qui n'en est pas éprouvé se dit au non-jugé d'O26.
+  const PASSE_LE_COMMIT = {
+    azure: [/--build-arg\s+COMMIT_SHA=/, "--build-arg COMMIT_SHA=<COMMIT>"],
+    aws: [/--build-arg\s+COMMIT_SHA=/, "--build-arg COMMIT_SHA=<COMMIT>"],
+    gcp: [/--substitutions\s+\S*_COMMIT_SHA=/, "--config <FICHIER_CONSTRUCTION> --substitutions _COMMIT_SHA=<COMMIT>"],
+    railway: [/variables?\s+(?:set\s+COMMIT_SHA=|--set\s+COMMIT_SHA=)/, "railway variable set COMMIT_SHA=<COMMIT> --skip-deploys"],
+  };
+  if (PASSE_LE_COMMIT[p.cible] && p.phases && typeof p.phases === "object") {
+    const lignesDep = (Array.isArray(p.phases.deploiement) ? p.phases.deploiement : []).map(String);
+    const lignesSante = (Array.isArray(p.phases.healthcheck) ? p.phases.healthcheck : []).map(String);
+    if (!lignesDep.some(c => PASSE_LE_COMMIT[p.cible][0].test(c)))
+      add("majeur", "O5", `la construction de l'image ne passe pas le commit (${PASSE_LE_COMMIT[p.cible][1]}) : /healthz n'a aucun commit à rendre, et la version servie se reconstitue au lieu de se lire (TF-2201${p.cible === "gcp" || p.cible === "railway" ? ", TF-2244" : ""})`, planPath);
+    if (!lignesSante.some(c => /version-servie\.mjs\s+lire\b/.test(c)))
+      add("majeur", "O5", `la phase healthcheck ne relit pas la version servie (node <FORGE_OPS>/scripts/version-servie.mjs lire <URL> --attendu <COMMIT>) : le dossier de MEP citerait un commit reconstitué, pas lu (TF-2201)`, planPath);
+  }
+  // TF-2230 (D-178 (a), 06/11/2026) : un plan qui touche une plateforme du registre des réglages sûrs par défaut du pilot (supabase,
+  // cloudflare-workers) RELÈVE ces réglages dans sa phase provision et les COMPARE à l'attendu (O-28, bloquant avant la MEP). Et
+  // un plan supabase qui pousse ses migrations par `supabase db push` déclare que cette voie est incompatible avec la restriction
+  // réseau depuis un exécuteur hébergé (connexion directe à Postgres, que la restriction filtre) et nomme la voie compatible.
+  const PLATEFORME_DU_REGISTRE = { supabase: "Supabase", "cloudflare-workers": "Cloudflare" };
+  if (PLATEFORME_DU_REGISTRE[p.cible] && p.phases && typeof p.phases === "object") {
+    const nom = PLATEFORME_DU_REGISTRE[p.cible];
+    const prov = (Array.isArray(p.phases.provision) ? p.phases.provision : []).map(String);
+    if (!prov.some(c => new RegExp(`relever-reglages\\.mjs\\s+\\S*${nom}\\b`).test(c)))
+      add("majeur", "O5", `la phase provision ne relève pas les réglages ${nom} du registre du pilot (node <FORGE_OPS>/scripts/relever-reglages.mjs ${nom} --executer) : un réglage non lu n'est pas vérifié à la livraison (TF-2230)`, planPath);
+    if (!prov.some(c => /oracle-ops\.mjs\s+--reglages-plateforme\b/.test(c)))
+      add("majeur", "O5", `la phase provision ne compare pas les réglages relevés à l'attendu du registre (node <FORGE_OPS>/oracles/oracle-ops.mjs --reglages-plateforme <relevé> : O-28, bloquant avant la MEP) : un écart nu passerait à la MEP (TF-2230)`, planPath);
+  }
+  if (p.cible === "supabase" && p.phases && typeof p.phases === "object") {
+    const toutes = Object.values(p.phases).flat().map(String);
+    if (toutes.some(c => /supabase\s+db\s+push/.test(c)) && !toutes.some(c => /INCOMPATIBLE/.test(c) && /db push/.test(c) && /network-restrictions/.test(c) && /database\/query/.test(c)))
+      add("majeur", "O5", "le plan pousse les migrations par `supabase db push` sans déclarer cette voie INCOMPATIBLE avec la restriction réseau (network-restrictions) depuis un exécuteur hébergé, ni nommer la voie compatible (API de gestion, POST …/database/query) : `db push` ouvre une connexion directe à Postgres, que la restriction filtre (TF-2230)", planPath);
+  }
+  const brut = JSON.stringify(p);
+  if (/AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{20,}|sk-[a-zA-Z0-9]{20,}|BEGIN [A-Z ]*PRIVATE KEY/.test(brut))
+    add("bloquant", "O5", "motif de credential détecté dans le plan — un plan ne transporte jamais de secret", planPath);
+  // TF-1217 : le motif ci-dessus cherche des FORMATS de clé réelle (entropie, préfixes connus)
+  // — il laisse passer un secret TRIVIAL écrit en clair dans un champ nommé mot de passe/
+  // secret/jeton (ex. "password": "azerty123") : zéro entropie, aucun préfixe connu, mais un
+  // secret quand même. Détection par NOM DE CHAMP suivi d'une affectation à une chaîne
+  // littérale non vide (JSON `"champ":"valeur"` ou style code `champ = "valeur"`), jamais sur
+  // un placeholder `<...>` (résolu par l'environnement du run, cf. NJ5 ci-dessus).
+  // Exemption déclarée (une fixture de test n'est pas un secret réel) : plan situé sous un
+  // dossier `fixtures/` — même convention que les fixtures des autres oracles (self-test.mjs).
+  const champSecret = /\b(mot_de_passe|password|secret|jeton|token)\w*["'`]?\s*[:=]\s*["'`]([^"'`<>]{3,})["'`]/i;
+  const sousFixtures = String(planPath).split(/[\\/]/).includes("fixtures");
+  if (champSecret.test(brut) && !sousFixtures)
+    add("bloquant", "O5", "secret trivial en clair dans un champ mot de passe/secret/jeton — un plan ne transporte jamais de secret (TF-1217)", planPath);
+  // TF-2007 (29/10/2026, étude du pilot du 28/10, ligne S2) : un plan supabase porte les garde-fous que la plateforme
+  // ne révèle qu'au déploiement. Lus dans l'ordre des phases (provision, déploiement, healthcheck ; le rollback rejoue
+  // un push correctif et n'est pas lu ici), sur la commande en tête de ligne, avant son commentaire « # » :
+  //   - le push des migrations suit leur rejeu sur une base locale vide (supabase db reset --local) ;
+  //   - le push suit le contrôle de dérive du projet distant (supabase db diff --linked) ;
+  //   - le déploiement des fonctions suit la pose de leurs secrets (supabase secrets set) ;
+  //   - la voie de déploiement est tranchée face à l'intégration GitHub (« Deploy to production »).
+  if (p.cible === "supabase" && p.phases && typeof p.phases === "object") {
+    const lignes5 = ["provision", "deploiement", "healthcheck"].flatMap(ph => (Array.isArray(p.phases[ph]) ? p.phases[ph] : []).map(String));
+    const commande = (l) => l.split("#")[0];
+    const rang = (re) => lignes5.findIndex(l => re.test(commande(l)));
+    const iPush = rang(/^supabase\s+db\s+push\b(?![^#]*--dry-run)/);
+    const iReset = rang(/^supabase\s+db\s+reset\b.*--local\b/);
+    const iDiff = rang(/^supabase\s+db\s+diff\b.*--linked\b/);
+    const iFonctions = rang(/^supabase\s+functions\s+deploy\b/);
+    const iSecrets = rang(/^supabase\s+secrets\s+set\b/);
+    if (iPush >= 0 && (iReset < 0 || iReset > iPush))
+      add("majeur", "O5", "plan supabase : migrations poussées sans rejeu préalable sur une base locale vide (`supabase db reset --local`, « Resets the local database with local migrations. ») — une migration qui ne passe que sur la base de développement échoue en production (TF-2007)", planPath);
+    if (iPush >= 0 && (iDiff < 0 || iDiff > iPush))
+      add("majeur", "O5", "plan supabase : migrations poussées sans contrôle de dérive du projet distant (`supabase db diff --linked`, « Diffs local migration files against the linked project. ») — un changement fait au tableau de bord reste hors des migrations (TF-2007)", planPath);
+    if (iFonctions >= 0 && (iSecrets < 0 || iSecrets > iFonctions))
+      add("majeur", "O5", "plan supabase : fonctions déployées avant la pose de leurs secrets (`supabase secrets set`) — une fonction appelée avant que son secret existe échoue (TF-2007)", planPath);
+    if (!lignes5.some(l => /Deploy to production/.test(l)))
+      add("majeur", "O5", "plan supabase : la voie de déploiement n'est pas tranchée face à l'intégration GitHub de Supabase (option « Deploy to production ») — deux voies appliqueraient les mêmes migrations, dont une sans le GO de la chaîne (TF-2007)", planPath);
+  }
+  // TF-2129 (lot Produit-86 20261103d, RO-1) : un plan azure déclare une région de repli et joue la sonde de
+  // capacité AVANT de créer le groupe, donc avant tout réseau (un réseau ne se déplace pas d'une région à l'autre) :
+  //   - le jeton <REGION_REPLI> est déclaré dans `placeholders` ET employé par une commande de provision ;
+  //   - une ligne de provision appelle scripts/sonder-capacite.mjs, avant `az group create`.
+  if (p.cible === "azure" && p.phases && typeof p.phases === "object") {
+    const prov5 = (Array.isArray(p.phases.provision) ? p.phases.provision : []).map(String);
+    const iGroupe = prov5.findIndex(l => /^az\s+group\s+create\b/.test(l.split("#")[0].trim()));
+    const iSonde = prov5.findIndex(l => /sonder-capacite\.mjs/.test(l));
+    if (!(Array.isArray(p.placeholders) && p.placeholders.includes("<REGION_REPLI>")) || !prov5.some(l => l.includes("<REGION_REPLI>")))
+      add("majeur", "O5", "plan azure : aucune région de repli déclarée (jeton <REGION_REPLI> absent des placeholders ou jamais employé en provision) — la région de convention de la souscription peut manquer de capacité (SkuNotAvailable alors que `az vm list-skus` ne montre aucune restriction) et le plan n'a alors aucune issue (TF-2129)", planPath);
+    if (iSonde < 0 || (iGroupe >= 0 && iSonde > iGroupe))
+      add("majeur", "O5", "plan azure : la sonde de capacité (scripts/sonder-capacite.mjs) manque ou suit `az group create` — un réseau créé avant la sonde reste orphelin quand la machine échoue, un réseau ne se déplaçant pas d'une région à l'autre (TF-2129)", planPath);
+  }
+  const durs5 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
+  fin5(durs5.length ? "FAIL" : "PASS", durs5.length ? 1 : 0);
+}
+
+// ── O6 · dérive état déclaré ↔ état constaté (TF-0107) ──────────────────────────────
+// Compare un instantané DÉCLARÉ (produit par `ops.mjs etat <cible> --sortie fichier.json`,
+// hash du journal inclus) à l'état RÉEL de la cible maintenant. Comble un angle mort d'O1-O4
+// (self-cohérence interne du journal courant, jamais vérifiée contre un témoin extérieur) :
+//   - journal tronqué/purgé après la déclaration (moins d'événements que déclaré) ;
+//   - historique réécrit en conservant seq/types valides (hash du segment déclaré altéré) ;
+//   - déploiement furtif : release présente sur disque, absente de tout événement journal.
+// La correction de la dérive n'est jamais automatique — c'est un constat, pas un geste.
+const iDrift = args.indexOf("--drift");
+const driftPath = iDrift >= 0 ? args[iDrift + 1] : null;
+if (driftPath) {
+  const DOM6 = "Exploitation : dérive entre état déclaré et état constaté (O-6)";
+  const NJ6 = [
+    "cause du changement manuel (accès disque direct, script tiers...) — hors périmètre",
+    "état déclaré issu d'un plan cloud jamais exécuté réellement — O-6 juge une cible réelle",
+    "correction de la dérive — un constat, jamais un geste automatique",
+  ];
+  const fin6 = (verdict, code) => {
+    process.stdout.write(JSON.stringify({ oracle: "oracle-ops", domaine: DOM6, artefact: cible || null, verdict, findings: F.length ? F : [{ sev: "info", regle: "O6", msg: "aucune dérive : état constaté conforme à l'état déclaré", where: cible }], non_juge: NJ6 }, null, jsonOnly ? 0 : 2));
+    process.exit(code);
+  };
+  if (!cible || !fs.existsSync(cible)) { add("info", "O6", "cible introuvable", String(cible)); fin6("SKIP", 2); }
+  if (!fs.existsSync(driftPath)) { add("bloquant", "O6", "état déclaré introuvable", driftPath); fin6("FAIL", 1); }
+  let declare = null;
+  try { declare = JSON.parse(fs.readFileSync(driftPath, "utf8")); } catch { add("bloquant", "O6", "état déclaré illisible (JSON invalide)", driftPath); fin6("FAIL", 1); }
+
+  const jp6 = path.join(cible, "journal.jsonl");
+  const contenuNow = fs.existsSync(jp6) ? fs.readFileSync(jp6, "utf8") : "";
+  const lignesNow = contenuNow.split("\n").filter(Boolean);
+  const declEven = declare.evenements ?? 0;
+
+  if (lignesNow.length < declEven) {
+    add("bloquant", "O6", `journal régressé : ${lignesNow.length} événement(s) constaté(s) contre ${declEven} déclaré(s) — troncature ou purge`, "journal.jsonl");
+  } else if (declare.journal_sha256) {
+    const prefixe = declEven ? lignesNow.slice(0, declEven).join("\n") + "\n" : "";
+    if (createHash("sha256").update(prefixe).digest("hex") !== declare.journal_sha256)
+      add("bloquant", "O6", "historique du journal modifié après la déclaration (segment déclaré altéré)", "journal.jsonl");
+  }
+
+  const releasesDisque = fs.existsSync(path.join(cible, "releases")) ? fs.readdirSync(path.join(cible, "releases")) : [];
+  const releasesJournalisees = new Set(lignesNow.map(l => { try { return JSON.parse(l).release; } catch { return null; } }).filter(Boolean));
+  for (const r of releasesDisque)
+    if (!releasesJournalisees.has(r))
+      add("majeur", "O6", `release « ${r} » présente sur disque mais absente de tout le journal — déploiement furtif (hors ops.mjs)`, "releases/" + r);
+
+  const durs6 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
+  fin6(durs6.length ? "FAIL" : "PASS", durs6.length ? 1 : 0);
+}
+
+// ── O7 · empreinte de déploiement : le servi correspond au scellé (TF-0288, étendu TF-0298) ─
+// Compare les fichiers de la release COURANTE, maintenant, à l'empreinte scellée par
+// `ops.mjs deployer` OU `ops.mjs canary` au moment de la promotion (`empreintes/<release>.json`,
+// sha256 par fichier). Comble le volet PRÉVENTION resté ouvert par O-6 (qui juge le journal,
+// jamais le CONTENU d'une release déjà journalisée) : un fichier édité en place dans
+// releases/<release>/ après coup — sans nouveau déploiement, sans trace au journal — est
+// invisible à O1-O4 et à O-6, visible ici. SKIP (jamais FAIL rétroactif) si la release
+// n'a pas d'empreinte : déploiement antérieur au contrôle, ou passé hors `ops.mjs` (les deux
+// voies de promotion scellent désormais — TF-0298 a fermé le trou canary déclaré par TF-0288).
+if (args.includes("--empreinte")) {
+  const DOM7 = "Exploitation : empreinte de déploiement — servi conforme au scellé (O-7)";
+  const NJ7 = [
+    "déploiement passé hors `ops.mjs` (deployer et canary scellent tous deux — TF-0298) — aucune empreinte n'y est scellée",
+    "cause de la modification en place (accès disque direct, script tiers...) — hors périmètre",
+    "correction de l'écart — un constat, jamais un geste automatique",
+  ];
+  const fin7 = (verdict, code) => {
+    process.stdout.write(JSON.stringify({ oracle: "oracle-ops", domaine: DOM7, artefact: cible || null, verdict, findings: F.length ? F : [{ sev: "info", regle: "O7", msg: "aucune dérive : fichiers de la release conformes à l'empreinte scellée", where: cible }], non_juge: NJ7 }, null, jsonOnly ? 0 : 2));
+    process.exit(code);
+  };
+  if (!cible || !fs.existsSync(cible)) { add("info", "O7", "cible introuvable", String(cible)); fin7("SKIP", 2); }
+  const cp7 = path.join(cible, "COURANT");
+  const courant7 = fs.existsSync(cp7) ? fs.readFileSync(cp7, "utf8").trim() : null;
+  if (!courant7) { add("info", "O7", "aucun COURANT — rien à comparer", "COURANT"); fin7("SKIP", 2); }
+  const releaseDir7 = path.join(cible, "releases", courant7);
+  if (!fs.existsSync(releaseDir7)) { add("bloquant", "O7", `COURANT pointe une release inexistante : ${courant7}`, "COURANT"); fin7("FAIL", 1); }
+  const empreintePath = path.join(cible, "empreintes", `${courant7}.json`);
+  if (!fs.existsSync(empreintePath)) {
+    add("info", "O7", `aucune empreinte scellée pour la release ${courant7} — déploiement antérieur au contrôle ou passé hors ops.mjs (deployer/canary)`, empreintePath);
+    fin7("SKIP", 2);
+  }
+  let empreinte = null;
+  try { empreinte = JSON.parse(fs.readFileSync(empreintePath, "utf8")); }
+  catch { add("bloquant", "O7", "empreinte illisible (JSON invalide)", empreintePath); fin7("FAIL", 1); }
+  const attendus = empreinte.fichiers || {};
+  const surDisque = new Set();
+  (function lister(dir, base) {
+    for (const nom of fs.readdirSync(dir)) {
+      const p = path.join(dir, nom);
+      if (fs.statSync(p).isDirectory()) lister(p, base);
+      else surDisque.add(path.relative(base, p).split(path.sep).join("/"));
+    }
+  })(releaseDir7, releaseDir7);
+  for (const [rel, hachAttendu] of Object.entries(attendus)) {
+    const p = path.join(releaseDir7, rel);
+    if (!fs.existsSync(p)) { add("bloquant", "O7", `fichier supprimé après scellement : ${rel}`, rel); continue; }
+    // TF-0615 : `correspond` accepte la forme NORMALISEE (celle ecrite depuis le 25/08) ET la
+    // forme BRUTE (releases scellees avant). Sans cette tolerance, la correction ferait echouer
+    // d'un coup toutes les releases deja scellees : un faux rouge echange contre un autre. Une
+    // VRAIE modification ne correspond ni a l'une ni a l'autre, donc O7 garde ses dents.
+    if (!correspond(p, hachAttendu)) add("bloquant", "O7", `fichier modifié après scellement : ${rel} (haché actuel ≠ empreinte)`, rel);
+  }
+  for (const rel of surDisque)
+    if (!(rel in attendus)) add("majeur", "O7", `fichier présent mais absent de l'empreinte scellée : ${rel}`, rel);
+  const durs7 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
+  fin7(durs7.length ? "FAIL" : "PASS", durs7.length ? 1 : 0);
+}
+
+// ── O8 · un travail PLANIFIÉ porte un MODE D'EXERCICE à la demande (TF-0527, 23/08/2026) ──
+//
+// MESURE QUI A FAIT NAÎTRE LE CONTRÔLE. Une définition de veille mensuelle venait d'être créée et
+// enregistrée ; le relevé remis à l'humain annonçait « la veille est en place ». Son premier
+// passage a rendu « Pas le premier lundi du mois — rien à faire » et s'est terminé EN SUCCÈS. Le
+// script n'avait donc JAMAIS tourné sur un agent : ni ses dépendances, ni son accès réseau, ni la
+// présence de son interpréteur n'avaient été éprouvés. Le premier passage réel aurait eu lieu
+// QUINZE JOURS plus tard — au moment précis où l'on compte dessus. Après ajout d'un paramètre
+// d'exécution forcée, distinct de la cadence, le script a tourné pour de vrai : trois contrôles
+// rendus, tous verts, en 40 secondes, dont un qui a réellement interrogé le registre de paquets.
+//
+// C'est le pendant exact de « un ✓ sans oracle exécuté n'est pas un ✓ », appliqué aux traitements
+// différés : UN MÉCANISME QUI N'A JAMAIS TOURNÉ N'EST PAS UN MÉCANISME, c'est une intention
+// planifiée. Et la première loi transverse le dit déjà d'une autre manière — une affordance est
+// câblée ou elle n'existe pas : c'est pourquoi un paramètre DÉCLARÉ MAIS JAMAIS LU est jugé ici
+// aussi durement qu'un paramètre absent. Il donne la même impression et ne fait rien.
+//
+// Ce que l'oracle voit, et ce qu'il ne verra jamais : il lit des DÉFINITIONS, pas un historique
+// de passages. Il peut donc prouver que le mode d'exercice EXISTE et qu'il est CÂBLÉ ; il ne peut
+// pas prouver qu'on s'en est servi. La déclaration `# exerce_le: AAAA-MM-JJ` comble cette moitié
+// par un fait daté dans le fichier (loi n° 4 : une donnée volatile est une donnée, datée, sourcée)
+// et reste un AVERTISSEMENT — un fichier antérieur au contrôle n'a rien fait de mal.
+if (args.includes("--planifie")) {
+  const DOM8 = "Exploitation : un travail planifié est exerçable à la demande (O-8)";
+  const NJ8 = [
+    "l'EXERCICE lui-même — l'oracle lit des définitions, jamais un historique de passages ; la déclaration `# exerce_le:` est un fait déclaré, pas un fait mesuré (l'historique du système d'intégration reste la source)",
+    "la JUSTESSE de la cadence (le bon jour, la bonne heure) — un choix humain, jamais un verdict",
+    "les définitions hors des emplacements connus (.github/workflows/, azure-pipelines*.yml, pipelines/) — une définition rangée ailleurs reste invisible",
+    "les planifications posées HORS dépôt (interface web du système d'intégration, tâche planifiée d'un serveur, cron d'une machine) : elles ne laissent aucun fichier à lire",
+  ];
+  const fin8 = (verdict, code) => {
+    process.stdout.write(JSON.stringify({ oracle: "oracle-ops", domaine: DOM8, artefact: cible || null, verdict, findings: F.length ? F : [{ sev: "info", regle: "O8", msg: "aucune définition planifiée trouvée aux emplacements connus — rien à juger", where: cible }], non_juge: NJ8 }, null, jsonOnly ? 0 : 2));
+    process.exit(code);
+  };
+  if (!cible || !fs.existsSync(cible)) { add("info", "O8", "racine introuvable", String(cible)); fin8("SKIP", 2); }
+
+  // Emplacements connus. Bornés par choix : une descente libre sur un dépôt produit lirait des
+  // milliers de fichiers pour trouver ce qui vit toujours aux deux ou trois mêmes endroits.
+  const candidats = [];
+  const ajouterDossier = (dir, prof = 0) => {
+    if (prof > 2 || !fs.existsSync(dir)) return;
+    for (const nom of fs.readdirSync(dir)) {
+      const q = path.join(dir, nom);
+      if (fs.statSync(q).isDirectory()) ajouterDossier(q, prof + 1);
+      else if (/\.ya?ml$/i.test(nom)) candidats.push(q);
+    }
+  };
+  ajouterDossier(path.join(cible, ".github", "workflows"));
+  ajouterDossier(path.join(cible, "pipelines"));
+  ajouterDossier(path.join(cible, ".azuredevops"));
+  if (fs.statSync(cible).isDirectory()) {
+    for (const nom of fs.readdirSync(cible)) {
+      // Les deux graphies de racine rencontrées dans le parc : la convention du système
+      // d'intégration (`azure-pipelines*.yml`) et le fichier nommé d'après son travail
+      // (`…veille.yml`, `…planifie.yml`). Ce qui est rangé ailleurs est déclaré au non_juge.
+      if (/^azure-pipelines.*\.ya?ml$/i.test(nom)
+        || /^[a-z0-9._-]*(veille|planifie|scheduled|cron)[a-z0-9._-]*\.ya?ml$/i.test(nom))
+        candidats.push(path.join(cible, nom));
+    }
+  }
+
+  let planifiees = 0;
+  for (const f of candidats) {
+    const texte = fs.readFileSync(f, "utf8");
+    const ou = path.relative(cible, f).split(path.sep).join("/");
+    // Une planification se reconnaît à son cron. Les deux dialectes du parc l'écrivent pareil :
+    // `- cron: "..."` sous `schedules:` (Azure) ou sous `on: schedule:` (GitHub).
+    if (!/^\s*-?\s*cron\s*:/m.test(texte)) continue;
+    planifiees++;
+    const dispatch = /^\s*workflow_dispatch\s*:/m.test(texte);
+    // Un paramètre n'est un mode d'exercice que s'il est LU. Déclaré et jamais lu, il donne la
+    // même impression qu'un vrai bouton et ne fait rien : c'est la première loi transverse.
+    const declares = [...texte.matchAll(/^\s*-\s*name\s*:\s*([A-Za-z0-9_]+)\s*$/gm)].map((m) => m[1]);
+    const lus = declares.filter((n) => new RegExp("parameters\\." + n + "\\b").test(texte));
+    if (dispatch || lus.length) {
+      // La cadence reste la cadence : un mode d'exercice qui la REMPLACE n'exerce pas le même
+      // travail. On ne le juge pas — on ne saurait pas le lire — mais on le dit au non_juge.
+      const exerce = /^\s*#\s*exerce_le\s*:\s*(\d{4}-\d{2}-\d{2})/m.exec(texte);
+      if (!exerce)
+        add("info", "O8", `mode d'exercice câblé, mais AUCUN exercice déclaré : ajouter « # exerce_le: AAAA-MM-JJ » le jour où le passage forcé a réellement tourné. Sans lui, « en place » reste une intention — le premier passage réel aura lieu à la prochaine cadence, au moment précis où l'on compte dessus`, ou);
+      else
+        add("info", "O8", `mode d'exercice câblé et exercé le ${exerce[1]}`, ou);
+      continue;
+    }
+    if (declares.length && !lus.length)
+      add("bloquant", "O8", `définition planifiée dont le seul paramètre déclaré n'est JAMAIS LU (${declares.join(", ")}) : l'affordance existe à l'écran et ne fait rien — une affordance est câblée ou elle n'existe pas (loi n° 1). Lire le paramètre dans la garde de cadence, sinon le passage forcé ne fera rien de plus que le passage hors cadence`, ou);
+    else
+      add("bloquant", "O8", `définition planifiée SANS mode d'exercice à la demande : elle ne peut être éprouvée qu'à sa prochaine cadence, donc elle se découvrira cassée au moment où l'on compte dessus. Ajouter un déclencheur manuel (workflow_dispatch) ou un paramètre d'exécution forcée LU dans la garde de cadence — distinct de la cadence, qui ne change pas`, ou);
+  }
+  // TF-1806 (lot Produit-83 du 15/10/2026) : un WORKER qui planifie lui-même ne laisse aucun
+  // fichier cron. Mesuré : trois tâches à cadence (boucle `while True` à intervalles `timedelta`),
+  // un mode d'exercice à la demande écrit, et O-8 rendait « rien à juger ». Le code se lit donc
+  // aussi, borné : sources .py/.js/.mjs/.ts à 4 niveaux au plus, hors dépendances, tests et
+  // interface. O-8 ne sait pas lire un mode d'exercice dans du code : il lit sa DÉCLARATION
+  // (`exercice_a_la_demande: <commande>`, en commentaire ou docstring du fichier qui planifie).
+  // Sans elle : AVERTISSEMENT nommé, verdict SKIP — la règle neuve ne bloque pas.
+  const PLANIF_CODE = [
+    /\b(BlockingScheduler|BackgroundScheduler|AsyncIOScheduler)\b/,
+    /\.add_job\(/,
+    /\bschedule\.every\(/,
+    /\bbeat_schedule\b/,
+    /\bcron\.schedule\(/,
+    /\bnew CronJob\(/,
+  ];
+  const BOUCLE_A_INTERVALLES = t => /^\s*while True\s*:/m.test(t) && /\btimedelta\(\s*(seconds|minutes|hours|days|weeks)\s*=/.test(t);
+  const EXCLUS = new Set(["node_modules", ".venv", "venv", ".git", "dist", "build", "__pycache__", "tests", "test", "e2e", "fixtures", "vendor", "frontend", ".next"]);
+  const sources = [];
+  const ajouterSources = (dir, prof = 0) => {
+    if (prof > 4) return;
+    let noms = [];
+    try { noms = fs.readdirSync(dir); } catch { return; }
+    for (const nom of noms) {
+      if (EXCLUS.has(nom)) continue;
+      const q = path.join(dir, nom);
+      let st; try { st = fs.statSync(q); } catch { continue; }
+      if (st.isDirectory()) ajouterSources(q, prof + 1);
+      else if (/\.(py|js|mjs|ts)$/i.test(nom) && !/\.(test|spec)\./i.test(nom)) sources.push(q);
+    }
+  };
+  if (fs.statSync(cible).isDirectory()) ajouterSources(cible);
+  let enCodeMuets = 0;
+  for (const f of sources) {
+    let texte; try { texte = fs.readFileSync(f, "utf8"); } catch { continue; }
+    if (!PLANIF_CODE.some(re => re.test(texte)) && !BOUCLE_A_INTERVALLES(texte)) continue;
+    const ou = path.relative(cible, f).split(path.sep).join("/");
+    const declaree = /exercice_a_la_demande\s*:\s*(\S.*)$/m.exec(texte);
+    if (!declaree) {
+      enCodeMuets++;
+      add("info", "O8", `planification EN CODE détectée (worker à intervalles ou bibliothèque de planification) sans déclaration « exercice_a_la_demande: <commande> » : O-8 ne lit pas un mode d'exercice dans du code. Écrire, en commentaire ou docstring de ce fichier, la commande qui exerce la tâche hors cadence, puis « exerce_le: AAAA-MM-JJ » le jour où elle a tourné (AVERTISSEMENT, TF-1806)`, ou);
+      continue;
+    }
+    planifiees++;
+    const exerce = /exerce_le\s*:\s*(\d{4}-\d{2}-\d{2})/m.exec(texte);
+    if (!exerce)
+      add("info", "O8", `planification en code, mode d'exercice déclaré (${declaree[1].trim().slice(0, 80)}), mais AUCUN exercice déclaré : ajouter « exerce_le: AAAA-MM-JJ » le jour où la commande a réellement tourné`, ou);
+    else
+      add("info", "O8", `planification en code, mode d'exercice déclaré (${declaree[1].trim().slice(0, 80)}) et exercé le ${exerce[1]}`, ou);
+  }
+  if (!planifiees && enCodeMuets) fin8("SKIP", 2);
+  if (!planifiees) { add("info", "O8", `aucune définition planifiée parmi ${candidats.length} fichier(s) aux emplacements connus ni dans le code — rien à juger`, path.basename(String(cible))); fin8("SKIP", 2); }
+  const durs8 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
+  fin8(durs8.length ? "FAIL" : "PASS", durs8.length ? 1 : 0);
+}
+
+// ── O10 · manifeste de dépendances SERVI épinglé à l'EMPREINTE (TF-1042, mesure Produit-11
+// du 11/09/2026) ─────────────────────────────────────────────────────────────────────────
+//
+// LE FAIT. Le manifeste qui composait l'image SERVIE (requirements.txt copié par le
+// Dockerfile) épinglait chaque paquet à une VERSION (`paquet==x.y.z`) mais AUCUN à une
+// EMPREINTE de contenu (`--hash=sha256:...`) — 37 paquets, zéro hash. Un numéro de version
+// ne verrouille rien sur un registre qui permet la republication sous le même numéro : seule
+// l'empreinte du contenu le fait. C'est le même principe qu'O-7 (déployé = scellé),
+// appliqué un cran plus tôt — au manifeste qui construit l'image, avant même le déploiement.
+//
+// CE QUI EST JUGÉ : la PRÉSENCE d'au moins une empreinte `--hash=` sur chaque ligne déjà
+// épinglée par version exacte (`==`). Une ligne sans `==` (URL, plage, `-r`, `-e`,
+// commentaire, vide) n'épingle rien : hors périmètre, rien à verrouiller. Périmètre v0
+// borné au format `requirements.txt` (pip) — c'est le format de la mesure fondatrice ;
+// poetry.lock/uv.lock/package-lock.json ont leurs propres mécanismes de verrou, non jugés ici.
+if (args.includes("--manifeste-servi")) {
+  const manifestePath = args[args.indexOf("--manifeste-servi") + 1];
+  const DOM10 = "Exploitation : manifeste de dépendances SERVI épinglé à l'empreinte (O-10)";
+  const NJ10 = [
+    "l'intégrité réelle contre le registre de paquets (PyPI...) — l'oracle vérifie la PRÉSENCE d'une empreinte dans le manifeste, jamais sa validité cryptographique face au paquet publié",
+    "les formats de verrou hors requirements.txt (poetry.lock, uv.lock, package-lock.json...) — périmètre v0 borné au format de la mesure fondatrice (Produit-11)",
+  ];
+  const fin10 = (verdict, code) => {
+    process.stdout.write(JSON.stringify({ oracle: "oracle-ops", domaine: DOM10, artefact: manifestePath || null, verdict, findings: F.length ? F : [{ sev: "info", regle: "O10", msg: "tous les paquets épinglés par version portent une empreinte", where: manifestePath }], non_juge: NJ10 }, null, jsonOnly ? 0 : 2));
+    process.exit(code);
+  };
+  if (!manifestePath || !fs.existsSync(manifestePath)) { add("bloquant", "O10", "manifeste introuvable", String(manifestePath)); fin10("donnees_insuffisantes", 2); }
+  const lignes = fs.readFileSync(manifestePath, "utf8").split(/\r?\n/);
+  let paquetsEpingles = 0;
+  for (const ligneBrute of lignes) {
+    const ligne = ligneBrute.trim();
+    if (!ligne || ligne.startsWith("#") || ligne.startsWith("-")) continue; // commentaire, -r/-e/--index-url...
+    const m = /^([A-Za-z0-9._-]+)\s*==\s*[^\s;]+/.exec(ligne);
+    if (!m) continue; // pas un épinglage de version exacte : hors périmètre (URL, plage, extra sans version...)
+    paquetsEpingles++;
+    if (!/--hash=(sha256|sha512):[0-9a-f]{16,}/i.test(ligne))
+      add("bloquant", "O10", `paquet épinglé par version SANS empreinte : '${m[1]}' — une version republiée sous le même numéro entrerait sans être vue`, m[1]);
+  }
+  if (!paquetsEpingles) { add("info", "O10", "aucun paquet épinglé par version (==) dans ce manifeste — rien à contrôler", path.basename(String(manifestePath))); fin10("SKIP", 2); }
+  const durs10 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
+  fin10(durs10.length ? "FAIL" : "PASS", durs10.length ? 1 : 0);
+}
+
+// ── O11 · une sonde de disponibilité vise l'adresse SERVIE, jamais l'origine (TF-1121,
+// mesure Produit-11 du 14/09/2026) ──────────────────────────────────────────────────────
+//
+// LE FAIT. `infra-tf/monitoring.tf` posait `url = "https://${azurerm_container_app.front.
+// ingress[0].fqdn}/"` — le nom de domaine de l'ORIGINE. En qualification, l'environnement
+// d'exécution porte `publicNetworkAccess=Disabled` : cette adresse n'est joignable par
+// personne, la sonde était pourtant `Enabled` et son alerte (sévérité 1) s'est déclenchée
+// dans la semaine. En production, seul le préfixe AzureFrontDoor.Backend est autorisé en
+// entrée : la même sonde y serait refusée pour la même raison. Le défaut produit du BRUIT DE
+// SÉVÉRITÉ 1 sur deux environnements sur trois — il désensibilise au lieu d'informer.
+//
+// CE QUI EST JUGÉ, contrôle STATIQUE (coïncidence de motif Terraform, aucune exécution) :
+// dans un bloc de ressource dont le type évoque une sonde de disponibilité (`web_test`,
+// `availability`), l'attribut `url` ne référence jamais directement l'origine
+// (`.ingress[0].fqdn`, `.default_hostname`) SANS passer par une variable (`var.*`) — la
+// variable est le point où une adresse SERVIE (front door, domaine public) peut remplacer
+// l'origine quand un frontal existe. Même doctrine que le paramètre O-8 : une sonde qui vise
+// l'origine sans variable de repli est câblée sur ce qui n'est jamais ouvert à l'utilisateur.
+if (args.includes("--sonde-disponibilite")) {
+  const racineSonde = args[args.indexOf("--sonde-disponibilite") + 1];
+  const DOM11 = "Exploitation : une sonde de disponibilité vise l'adresse SERVIE, jamais l'origine (O-11)";
+  const NJ11 = [
+    "la joignabilité RÉELLE de l'adresse — l'oracle lit du texte Terraform, jamais un appel réseau",
+    "les formats de sonde hors azurerm_*web_test*/azurerm_*availability* — périmètre v0 borné aux types de la mesure fondatrice",
+    "la justesse de la variable substituée (nom, valeur) — l'oracle juge sa PRÉSENCE dans l'expression, jamais son contenu",
+  ];
+  const fin11 = (verdict, code) => {
+    process.stdout.write(JSON.stringify({ oracle: "oracle-ops", domaine: DOM11, artefact: racineSonde || null, verdict, findings: F.length ? F : [{ sev: "info", regle: "O11", msg: "aucune sonde ne vise l'origine sans variable de repli", where: racineSonde }], non_juge: NJ11 }, null, jsonOnly ? 0 : 2));
+    process.exit(code);
+  };
+  if (!racineSonde || !fs.existsSync(racineSonde)) { add("info", "O11", "racine introuvable", String(racineSonde)); fin11("SKIP", 2); }
+  const fichiersTf = listerTf(racineSonde);
+  const BLOC_SONDE = /resource\s+"(\w*(?:web_test|availability)\w*)"\s+"([^"]+)"\s*\{([\s\S]*?)\n\}/gi;
+  let sondesTrouvees = 0;
+  for (const f of fichiersTf) {
+    const texte = fs.readFileSync(f, "utf8");
+    const ou = path.relative(racineSonde, f).split(path.sep).join("/");
+    let m;
+    BLOC_SONDE.lastIndex = 0;
+    while ((m = BLOC_SONDE.exec(texte))) {
+      const [, typeRes, nomRes, corps] = m;
+      // Capture le reste de la ligne après `url =` telle quelle (jamais seulement une chaîne
+      // simple entre guillemets) : une adresse SERVIE s'écrit souvent en ternaire
+      // (`var.x != "" ? "..." : "..."`), et la variable de repli doit rester visible.
+      const urlM = /^[ \t]*url\s*=\s*(.+)$/m.exec(corps);
+      if (!urlM) continue;
+      sondesTrouvees++;
+      const urlExpr = urlM[1];
+      const viseOrigine = /\.ingress\[0\]\.fqdn|\.default_hostname/.test(urlExpr);
+      const passeParVariable = /var\./.test(urlExpr);
+      if (viseOrigine && !passeParVariable)
+        add("bloquant", "O11", `sonde ${typeRes}.${nomRes} : url vise l'origine (${urlExpr}) sans variable de repli — mesure une adresse que l'utilisateur n'ouvre jamais, refusée par le même pare-feu que le vrai trafic`, ou);
+    }
+  }
+  if (!sondesTrouvees) { add("info", "O11", `aucune sonde de disponibilité (web_test/availability) parmi ${fichiersTf.length} fichier(s) .tf — rien à juger`, racineSonde); fin11("SKIP", 2); }
+  const durs11 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
+  fin11(durs11.length ? "FAIL" : "PASS", durs11.length ? 1 : 0);
+}
+
+// Parcours des fichiers .tf d'une pile, partagé par O11 et O17 : profondeur 3, sans descendre
+// dans .terraform, node_modules ni .git (déclaration hissée, appelable depuis O11 plus haut).
+function listerTf(racine) {
+  const fichiers = [];
+  (function lister(dir, prof = 0) {
+    if (prof > 3 || !fs.existsSync(dir)) return;
+    for (const nom of fs.readdirSync(dir)) {
+      if (nom === ".terraform" || nom === "node_modules" || nom === ".git") continue;
+      const p = path.join(dir, nom);
+      let st; try { st = fs.statSync(p); } catch { continue; }
+      if (st.isDirectory()) lister(p, prof + 1);
+      else if (/\.tf$/i.test(nom)) fichiers.push(p);
+    }
+  })(racine);
+  return fichiers;
+}
+
+// ── O14 · l'inventaire documenté contient chaque nom de l'export RÉEL (TF-1114, mesure
+// Produit-11 du 14/09/2026) ─────────────────────────────────────────────────────────────
+//
+// LE FAIT. `docs/projet/COMPOSANTS-OPS.md` portait `verifie_le: 2026-08-11` alors qu'entre
+// temps 2 comptes de stockage, 2 tâches planifiées, 16 ressources de supervision et les 35
+// ressources d'un second groupe de ressources sont nées — un oracle de présence de sections
+// (R-20, côté pilot) rendait PASS sans jamais confronter le document au parc réel. Contrôle
+// joué à la main en 40 lignes le 14/09 : export du parc, chaque nom cherché LITTÉRALEMENT
+// dans le document → 7 absents (dont cinq alertes écrites « idem », un nom entre accolades) ;
+// 0 après correction.
+//
+// CE QUI EST JUGÉ, sur le modèle d'O-6 (état déclaré vs constaté, jamais un appel réseau) :
+// chaque nom d'un EXPORT MACHINE (produit hors de cet oracle — `az graph query`, `ops.mjs
+// etat --sortie`) figure LITTÉRALEMENT dans le document d'inventaire. Un « idem » ou une
+// accolade `{a,b}` n'est jamais lu comme un nom — coïncidence de sous-chaîne stricte.
+if (args.includes("--inventaire-composants")) {
+  const iInv = args.indexOf("--inventaire-composants");
+  const exportPath = args[iInv + 1];
+  const docPath = args[iInv + 2];
+  const DOM14 = "Exploitation : l'inventaire documenté contient chaque nom de l'export réel (O-14)";
+  const NJ14 = [
+    "la fraîcheur de l'EXPORT lui-même — l'oracle confronte deux fichiers, jamais le parc cloud en direct",
+    "la nature de la correspondance — une coïncidence de sous-chaîne stricte, jamais une correspondance structurelle (tableau, section)",
+  ];
+  const fin14 = (verdict, code) => {
+    process.stdout.write(JSON.stringify({ oracle: "oracle-ops", domaine: DOM14, artefact: docPath || null, verdict, findings: F.length ? F : [{ sev: "info", regle: "O14", msg: "chaque nom de l'export figure dans le document d'inventaire", where: docPath }], non_juge: NJ14 }, null, jsonOnly ? 0 : 2));
+    process.exit(code);
+  };
+  if (!exportPath || !fs.existsSync(exportPath)) { add("bloquant", "O14", "export introuvable", String(exportPath)); fin14("donnees_insuffisantes", 2); }
+  if (!docPath || !fs.existsSync(docPath)) { add("bloquant", "O14", "document d'inventaire introuvable", String(docPath)); fin14("donnees_insuffisantes", 2); }
+  let exportData = null;
+  try { exportData = JSON.parse(fs.readFileSync(exportPath, "utf8")); } catch { add("bloquant", "O14", "export illisible (JSON invalide)", exportPath); fin14("FAIL", 1); }
+  const noms = Array.isArray(exportData?.noms) ? exportData.noms : [];
+  if (!noms.length) { add("info", "O14", "export sans aucun nom — rien à confronter", exportPath); fin14("SKIP", 2); }
+  const docTexte = fs.readFileSync(docPath, "utf8");
+  for (const nom of noms) {
+    if (!docTexte.includes(nom))
+      add("bloquant", "O14", `ressource « ${nom} » présente dans l'export réel mais ABSENTE, littéralement, du document d'inventaire — un « idem » ou une accolade {a,b} n'est pas un nom`, nom);
+  }
+  const durs14 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
+  fin14(durs14.length ? "FAIL" : "PASS", durs14.length ? 1 : 0);
+}
+
+// ── Lecture partagée O15-O17 : tables markdown, graphies accentuées OU non ─────────────────
+// Les documents des produits s'écrivent souvent sans accents (« partage », « inutilises ») :
+// toute comparaison de vocabulaire ou d'en-tête passe par `_norm`, qui retire les accents, la
+// casse, les marques de code et de gras, et unifie l'apostrophe. Un NOM de composant, lui, ne
+// se normalise jamais au-delà des marques markdown : `_valeurCellule`.
+const _valeurCellule = s => String(s ?? "").replace(/`/g, "").replace(/\*\*/g, "").trim().replace(/\.$/, "").trim();
+const _sansAccents = s => String(s ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[’‘]/g, "'").toLowerCase().replace(/\s+/g, " ").trim();
+const _norm = s => _sansAccents(_valeurCellule(s));
+// Une cellule VIDE au sens du contrôle : rien, un tiret, un point d'interrogation, « n/a »,
+// « à compléter » ou un marqueur de gabarit `{…}` non instancié.
+const _vide = s => { const n = _norm(s); return !n || /^[-—–?]+$/.test(n) || n === "n/a" || n === "a completer" || /^\{.*\}$/.test(n); };
+// Tables markdown d'un texte, chacune avec la pile des titres sous lesquels elle vit. Les blocs
+// de code (```) sont sautés : un exemple de table n'est pas une table.
+function _tablesMarkdown(texte) {
+  const lignes = String(texte).split(/\r?\n/);
+  const tables = [];
+  const pile = [];
+  let dansCode = false;
+  const cellules = l => l.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map(c => c.trim());
+  for (let i = 0; i < lignes.length; i++) {
+    const l = lignes[i];
+    if (/^\s*```/.test(l)) { dansCode = !dansCode; continue; }
+    if (dansCode) continue;
+    const h = /^(#{1,6})\s+(.*)$/.exec(l);
+    if (h) {
+      while (pile.length && pile[pile.length - 1].niveau >= h[1].length) pile.pop();
+      pile.push({ niveau: h[1].length, titre: h[2] });
+      continue;
+    }
+    if (/^\s*\|/.test(l) && i + 1 < lignes.length && /^\s*\|?\s*:?-{2,}/.test(lignes[i + 1])) {
+      const t = { ligne: i + 1, entetes: cellules(l), lignes: [], titres: pile.map(p => p.titre) };
+      i += 2;
+      while (i < lignes.length && /^\s*\|/.test(lignes[i])) { t.lignes.push(cellules(lignes[i])); i++; }
+      i--;
+      tables.push(t);
+    }
+  }
+  return tables;
+}
+const _colonne = (t, ...noms) => t.entetes.findIndex(e => noms.includes(_norm(e)));
+
+// ── O15 · le Statut déclaré d'un composant est confronté à l'export RÉEL, et un « supprimable »
+// dit ce qu'il casse (TF-1113 + TF-1117, mesures Produit-11 du 14/09/2026) ───────────────────
+//
+// LE FAIT (TF-1113). Dix éléments sans consommateur coexistaient avec un document d'inventaire
+// CONFORME : aucune colonne ne distinguait ce qui sert de ce qui ne sert plus, et deux
+// suppressions « évidentes d'après le nom » auraient tué le produit. O-14 confrontait déjà
+// l'export au document dans UN sens (tout nom du parc est écrit) ; le sens inverse — ce qu'on
+// DÉCLARE en service existe dans le parc — attendait un Statut à vocabulaire fermé.
+//
+// LE FAIT (TF-1117). Sur dix lignes « inutilisées » avec preuve d'absence de consommateur, CINQ
+// n'étaient pas supprimables : l'adresse d'une règle de pare-feu était celle du poste en
+// service, deux connexions de service étaient les seules identités capables d'appliquer la pile.
+// L'absence de consommateur ouvre une question, elle ne rend pas un verdict : la colonne qui
+// protège est « ce qui cesse de fonctionner si on le supprime ».
+//
+// CE QUI EST JUGÉ (deux fichiers, aucun appel réseau, même posture qu'O-14) :
+//   (1) toute table portant une colonne « Statut » : chaque valeur appartient au vocabulaire
+//       fermé (actif / partagé / déclaré / inutilisé / hors périmètre), et un composant « actif »
+//       ou « partagé » figure dans l'export (`noms`) — nom lu dans la colonne Composant/Nom/
+//       Ressource, sinon la première ;
+//   (2) toute table sous le titre « Composants inutilisés… » : le statut de supprimabilité
+//       appartient au vocabulaire fermé (supprimable / non supprimable, droit absent / non
+//       supprimable, décision / non supprimable, tiers propriétaire), et une ligne « supprimable »
+//       renseigne « ce qui cesse de fonctionner si on le supprime » — ni vide, ni « rien »/
+//       « aucun » sans mesure citée (une commande entre accents graves, ou « mesuré… » suivi
+//       d'une date AAAA-MM-JJ ou de deux-points).
+// Graphies accentuées et non accentuées acceptées, pour les valeurs comme pour les en-têtes.
+const _STATUTS_O15 = ["actif", "partage", "declare", "inutilise", "hors perimetre"];
+const _SUPPRIMABILITE_O15 = ["supprimable", "non supprimable, droit absent", "non supprimable, decision", "non supprimable, tiers proprietaire"];
+const _MESURE_CITEE_O15 = /`[^`]+`|\bmesur\w*\b[^|]*?(\d{4}-\d{2}-\d{2}|:\s*\S)/;
+if (args.includes("--statut-composants")) {
+  const iSt = args.indexOf("--statut-composants");
+  const exportPath = args[iSt + 1];
+  const docPath = args[iSt + 2];
+  const DOM15 = "Exploitation : le Statut déclaré d'un composant tient face à l'export réel, un « supprimable » dit ce qu'il casse (O-15)";
+  const NJ15 = [
+    "la fraîcheur et le PÉRIMÈTRE de l'export — un composant « partagé » vit souvent dans un groupe de ressources d'une autre application : si l'export ne couvre pas ce groupe, l'oracle le dit absent ; élargir l'export, jamais le Statut",
+    "la JUSTESSE d'un Statut — « actif » présent dans l'export peut être inutile ; seul le consommateur résolu (image, secretRef, identité, appel) le prouve, et il ne se lit dans aucun des deux fichiers",
+    "la vérité de « ce qui cesse de fonctionner » — l'oracle juge que la colonne est renseignée et qu'un « rien » cite sa mesure, jamais que la mesure est juste",
+    "la présence des colonnes preuve d'inutilité, créé par quoi, geste et titulaire du droit, et de la section « Composants inutilisés » elle-même — jugée par R-20 côté pilot ; O-15 exige seulement les deux colonnes qu'il lit",
+    "un nom écrit avec sa description dans la même cellule — la cellule entière, marques markdown retirées, est lue comme le nom",
+  ];
+  const fin15 = (verdict, code) => {
+    process.stdout.write(JSON.stringify({ oracle: "oracle-ops", domaine: DOM15, artefact: docPath || null, verdict, findings: F.length ? F : [{ sev: "info", regle: "O15", msg: "chaque Statut est au vocabulaire fermé, chaque composant actif ou partagé est dans l'export, chaque « supprimable » dit ce qu'il casse", where: docPath }], non_juge: NJ15 }, null, jsonOnly ? 0 : 2));
+    process.exit(code);
+  };
+  if (!exportPath || !fs.existsSync(exportPath)) { add("bloquant", "O15", "export introuvable", String(exportPath)); fin15("donnees_insuffisantes", 2); }
+  if (!docPath || !fs.existsSync(docPath)) { add("bloquant", "O15", "document d'inventaire introuvable", String(docPath)); fin15("donnees_insuffisantes", 2); }
+  let exportData = null;
+  try { exportData = JSON.parse(fs.readFileSync(exportPath, "utf8")); } catch { add("bloquant", "O15", "export illisible (JSON invalide)", exportPath); fin15("FAIL", 1); }
+  const noms = new Set((Array.isArray(exportData?.noms) ? exportData.noms : []).map(String));
+  const tables = _tablesMarkdown(fs.readFileSync(docPath, "utf8"));
+  const tablesStatut = tables.filter(t => _colonne(t, "statut") >= 0);
+  const tablesInutiles = tables.filter(t => t.titres.some(h => _norm(h).startsWith("composants inutilises")));
+  if (!tablesStatut.length && !tablesInutiles.length) {
+    add("info", "O15", "aucune colonne « Statut » ni table sous « Composants inutilisés » — document antérieur au gabarit : rien à confronter (leur présence relève de R-20, côté pilot)", docPath);
+    fin15("SKIP", 2);
+  }
+  if (!noms.size && tablesStatut.length)
+    add("info", "O15", "export sans aucun nom — la présence des composants actifs ou partagés n'est pas confrontée", exportPath);
+  for (const t of tablesStatut) {
+    const iStatut = _colonne(t, "statut");
+    const iNom = Math.max(0, _colonne(t, "composant", "nom", "ressource"));
+    for (const l of t.lignes) {
+      const nom = _valeurCellule(l[iNom]);
+      const statut = _norm(l[iStatut]);
+      if (!_STATUTS_O15.includes(statut))
+        add("bloquant", "O15", `Statut « ${_valeurCellule(l[iStatut])} » de « ${nom} » hors du vocabulaire fermé (actif / partagé / déclaré / inutilisé / hors périmètre) — un statut libre ne distingue plus ce qui sert de ce qui peut partir (TF-1113)`, nom);
+      else if ((statut === "actif" || statut === "partage") && noms.size && !noms.has(nom))
+        add("bloquant", "O15", `composant « ${nom} » déclaré « ${_valeurCellule(l[iStatut])} » mais ABSENT de l'export réel — un composant dit en service que le parc ne connaît pas est un nom mort, une faute de frappe ou un export trop étroit (TF-1113)`, nom);
+    }
+  }
+  const COL_CESSE = "ce qui cesse de fonctionner si on le supprime";
+  const COL_SUPP = "statut de supprimabilite";
+  for (const t of tablesInutiles) {
+    const iCesse = _colonne(t, COL_CESSE);
+    const iSupp = _colonne(t, COL_SUPP);
+    const manquantes = [iCesse < 0 ? "ce qui cesse de fonctionner si on le supprime" : null, iSupp < 0 ? "statut de supprimabilité" : null].filter(Boolean);
+    if (manquantes.length) {
+      add("bloquant", "O15", `table de la section « Composants inutilisés » (ligne ${t.ligne}) sans colonne ${manquantes.map(c => `« ${c} »`).join(" ni ")} — la colonne qui protège d'une suppression dangereuse n'a rien à lire (TF-1117)`, `${path.basename(docPath)}:${t.ligne}`);
+      continue;
+    }
+    const iNom = Math.max(0, _colonne(t, "composant", "nom", "ressource"));
+    for (const l of t.lignes) {
+      const nom = _valeurCellule(l[iNom]);
+      // Une ligne qui déclare la section vide (« aucun composant inutilisé ») n'est pas un composant.
+      if (_vide(l[iSupp]) && _vide(l[iCesse]) && /^aucun/.test(_norm(nom))) continue;
+      const supp = _norm(l[iSupp]);
+      if (!_SUPPRIMABILITE_O15.includes(supp)) {
+        add("bloquant", "O15", `statut de supprimabilité « ${_valeurCellule(l[iSupp])} » de « ${nom} » hors du vocabulaire fermé (supprimable / non supprimable, droit absent / non supprimable, décision / non supprimable, tiers propriétaire) — sans consommateur n'est pas supprimable (TF-1117)`, nom);
+        continue;
+      }
+      if (supp !== "supprimable") continue;
+      const cesse = l[iCesse];
+      if (_vide(cesse))
+        add("bloquant", "O15", `« ${nom} » déclaré supprimable avec « ce qui cesse de fonctionner si on le supprime » VIDE — l'absence de consommateur ouvre une question, elle ne rend pas un verdict (TF-1117)`, nom);
+      else if (/^(rien|aucun|aucune|neant)\b/.test(_norm(cesse)) && !_MESURE_CITEE_O15.test(_sansAccents(cesse)))
+        add("bloquant", "O15", `« ${nom} » déclaré supprimable avec « ${_valeurCellule(cesse)} » comme effet, sans mesure citée — « rien » se prouve par une commande ou une mesure datée, jamais par l'absence de consommateur connu (TF-1117)`, nom);
+    }
+  }
+  const durs15 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
+  fin15(durs15.length ? "FAIL" : "PASS", durs15.length ? 1 : 0);
+}
+
+// ── O17 · une ressource LUE par la pile est un prérequis d'environnement DÉCLARÉ (TF-1122,
+// mesure Produit-11 du 14/09/2026) ───────────────────────────────────────────────────────
+//
+// LE FAIT. `infra-tf/*.tf` portait SEPT blocs `data` (groupe de ressources, environnement
+// d'exécution, registre d'images, coffre, serveur de base, espace de journaux, télémétrie) que
+// la pile lit et ne crée jamais : c'est la pile d'une AUTRE application qui les a créés sur les
+// deux environnements existants. Aucun document opposable ni aucune garde de pipeline ne le
+// disait. En production, le groupe n'existait pas : le premier déploiement aurait échoué sur la
+// résolution des sources de données, sans message qui nomme ce qui manque. La garde de cible du
+// pipeline vérifiait le GROUPE et s'arrêtait à la coquille.
+//
+// CE QUI EST JUGÉ, contrôle STATIQUE (coïncidence de motif Terraform, aucune exécution) : chaque
+// bloc `data "<type>" "<nom>"` d'un fichier .tf sous la racine (ligne qui commence par `data`,
+// une ligne commentée n'en est pas un) a sa ligne dans l'artefact de la pile.
+//
+// L'ARTEFACT, référentiel versionné (loi n° 4) : `<racine>/PREREQUIS-ENVIRONNEMENT.md`, à côté
+// des fichiers .tf, portant une table markdown dont l'en-tête a les colonnes « Ressource »,
+// « Propriétaire » et « Commande de vérification » (accents facultatifs, autres colonnes libres,
+// plusieurs tables admises). Une ligne par bloc lu : la cellule Ressource porte l'adresse
+// Terraform `data.<type>.<nom>` ; Propriétaire et Commande de vérification sont renseignées —
+// c'est la commande que la garde de cible du pipeline joue pour chaque prérequis.
+// Placée après la lecture partagée O15-O17 : ses constantes doivent être initialisées quand
+// O17 s'exécute (le parcours `listerTf`, déclaration hissée, reste à côté d'O11).
+const PREREQUIS_O17 = "PREREQUIS-ENVIRONNEMENT.md";
+if (args.includes("--prerequis-environnement")) {
+  const racinePre = args[args.indexOf("--prerequis-environnement") + 1];
+  const DOM17 = "Exploitation : chaque ressource LUE par la pile est un prérequis d'environnement déclaré (O-17)";
+  const NJ17 = [
+    "la PRÉSENCE réelle des ressources sur un environnement — l'oracle lit du texte, jamais un appel réseau ; la commande de vérification déclarée est celle que la garde de cible du pipeline doit jouer",
+    "la justesse du propriétaire et de la commande — l'oracle juge qu'ils sont renseignés, jamais qu'ils sont vrais",
+    "le sens inverse : une ligne de l'artefact qui ne correspond plus à aucun bloc data (prérequis périmé) n'est pas jugée",
+    "les blocs data d'un module rangé hors de la racine (source ../, registre, git) ou placés dans un commentaire bloc /* */ — seul le texte .tf sous la racine est lu, profondeur 3, comme O-11",
+  ];
+  const fin17 = (verdict, code) => {
+    process.stdout.write(JSON.stringify({ oracle: "oracle-ops", domaine: DOM17, artefact: racinePre || null, verdict, findings: F.length ? F : [{ sev: "info", regle: "O17", msg: "chaque bloc data de la pile est déclaré en prérequis d'environnement, avec propriétaire et commande de vérification", where: racinePre }], non_juge: NJ17 }, null, jsonOnly ? 0 : 2));
+    process.exit(code);
+  };
+  if (!racinePre || !fs.existsSync(racinePre)) { add("info", "O17", "racine introuvable", String(racinePre)); fin17("SKIP", 2); }
+  const fichiersTf = listerTf(racinePre);
+  const BLOC_DATA = /^[ \t]*data\s+"([^"]+)"\s+"([^"]+)"\s*\{/gm;
+  const blocs = new Map();
+  for (const f of fichiersTf) {
+    const texte = fs.readFileSync(f, "utf8");
+    const ou = path.relative(racinePre, f).split(path.sep).join("/");
+    let m;
+    BLOC_DATA.lastIndex = 0;
+    while ((m = BLOC_DATA.exec(texte))) {
+      const adresse = `data.${m[1]}.${m[2]}`;
+      if (!blocs.has(adresse)) blocs.set(adresse, ou);
+    }
+  }
+  if (!blocs.size) { add("info", "O17", `SANS_OBJET : aucun bloc data parmi ${fichiersTf.length} fichier(s) .tf — la pile ne lit rien qu'elle ne crée`, racinePre); fin17("SKIP", 2); }
+  const liste = [...blocs.keys()].join(", ");
+  const artefact = path.join(racinePre, PREREQUIS_O17);
+  if (!fs.existsSync(artefact)) {
+    add("bloquant", "O17", `la pile LIT ${blocs.size} ressource(s) sans les créer et ne porte aucun artefact ${PREREQUIS_O17} à sa racine : ${liste} — sur un environnement neuf qui en manque, le premier déploiement échoue à la résolution des sources de données, sans message qui nomme ce qui manque (TF-1122)`, PREREQUIS_O17);
+    fin17("FAIL", 1);
+  }
+  const tablesPre = _tablesMarkdown(fs.readFileSync(artefact, "utf8"))
+    .filter(t => _colonne(t, "ressource") >= 0 && _colonne(t, "proprietaire") >= 0 && _colonne(t, "commande de verification") >= 0);
+  if (!tablesPre.length) {
+    add("bloquant", "O17", `${PREREQUIS_O17} ne porte aucune table aux colonnes « Ressource », « Propriétaire », « Commande de vérification » — blocs lus non déclarés : ${liste} (TF-1122)`, PREREQUIS_O17);
+    fin17("FAIL", 1);
+  }
+  const declarees = tablesPre.flatMap(t => {
+    const iR = _colonne(t, "ressource"), iP = _colonne(t, "proprietaire"), iC = _colonne(t, "commande de verification");
+    return t.lignes.map(l => ({ ressource: _valeurCellule(l[iR]).split(/[\s,;]+/), proprietaire: l[iP], commande: l[iC] }));
+  });
+  for (const [adresse, ou] of blocs) {
+    const d = declarees.find(x => x.ressource.includes(adresse));
+    if (!d) {
+      add("bloquant", "O17", `bloc ${adresse} (${ou}) lu par la pile, ABSENT de ${PREREQUIS_O17} — une dépendance contractuelle non écrite se découvre le jour de la mise en production (TF-1122)`, adresse);
+      continue;
+    }
+    if (_vide(d.proprietaire))
+      add("bloquant", "O17", `prérequis ${adresse} sans PROPRIÉTAIRE — personne n'est désigné pour le créer sur un environnement neuf (TF-1122)`, adresse);
+    if (_vide(d.commande))
+      add("bloquant", "O17", `prérequis ${adresse} sans COMMANDE DE VÉRIFICATION — la garde de cible n'a rien à jouer pour lui (TF-1122)`, adresse);
+  }
+  const durs17 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
+  fin17(durs17.length ? "FAIL" : "PASS", durs17.length ? 1 : 0);
+}
+
+// ── O18 · les révisions ACTIVES d'une application Container Apps sont bornées (TF-1639, mesure
+// Produit-64 du 12/10/2026) ──────────────────────────────────────────────────────────────────
+//
+// LE FAIT. La prescription azure imposait le mode multiple révisions pour le retour instantané et
+// ne prescrivait aucune désactivation. Sur Container Apps, une révision ACTIVE garde ses
+// minReplicas facturés à 0 % de trafic : le 28/09/2026, 68 replicas d'API et 63 de front
+// tournaient en même temps sur 100 et 90 révisions actives ; septembre 2026 a coûté 1 552,23 EUR
+// pour un budget de 100, dont 73,6 % facturés au repos. O-1 à O-4 étaient PASS : ils jugent que
+// le retour arrière est POSSIBLE, jamais combien de révisions restent actives. La dérive a duré
+// 34 jours sans qu'aucun contrôle la voie.
+//
+// CE QUI EST JUGÉ, sur une sortie `az containerapp revision list -o json` CAPTURÉE en fichier
+// (aucun appel réseau, même posture qu'O-14) : pour chaque application, les révisions actives se
+// limitent aux révisions SERVIES (trafic > 0) plus UNE révision saine à 0 % (N-1, la plus récente
+// qui n'est pas « Unhealthy ») ; dans le cas courant, deux. Toute autre révision active est un
+// constat bloquant qui la nomme, avec la commande de désactivation — réversible par `az containerapp
+// revision activate`, donc O-4 tient. Même règle que l'étape de ménage du plan azure (`ops.mjs`).
+if (args.includes("--revisions-actives")) {
+  const revPath = args[args.indexOf("--revisions-actives") + 1];
+  const DOM18 = "Exploitation : révisions actives d'une application Container Apps bornées à N servie + N-1 saine (O-18)";
+  const NJ18 = [
+    "la FRAÎCHEUR de la capture — l'oracle lit un fichier, jamais la plateforme ; une révision activée à la main après la capture n'y est pas",
+    "le COÛT réel — l'oracle compte des révisions actives et leurs replicas déclarés, jamais une facture ; minReplicas 0 rend une révision active presque gratuite, elle reste jugée",
+    "la santé applicative réelle de N-1 — « saine » se lit au champ healthState de la capture (toute valeur sauf Unhealthy), jamais par un appel",
+    "une entrée sans booléen properties.active est comptée active (sortie par défaut de `revision list`, sans --all, qui ne liste que les actives)",
+  ];
+  const fin18 = (verdict, code) => {
+    process.stdout.write(JSON.stringify({ oracle: "oracle-ops", domaine: DOM18, artefact: revPath || null, verdict, findings: F.length ? F : [{ sev: "info", regle: "O18", msg: "chaque application porte ses seules révisions servies et une N-1 saine", where: revPath }], non_juge: NJ18 }, null, jsonOnly ? 0 : 2));
+    process.exit(code);
+  };
+  if (!revPath || !fs.existsSync(revPath)) { add("info", "O18", "capture de `az containerapp revision list` introuvable", String(revPath)); fin18("SKIP", 2); }
+  let revisions = null;
+  try { revisions = JSON.parse(fs.readFileSync(revPath, "utf8").replace(/^﻿/, "")); }
+  catch { add("bloquant", "O18", "capture illisible (JSON invalide) — attendu la sortie de `az containerapp revision list -o json`", revPath); fin18("FAIL", 1); }
+  if (!Array.isArray(revisions)) { add("bloquant", "O18", "capture qui n'est pas un tableau de révisions — attendu la sortie de `az containerapp revision list -o json`", revPath); fin18("FAIL", 1); }
+  if (!revisions.length) { add("info", "O18", "aucune révision dans la capture — rien à juger", revPath); fin18("SKIP", 2); }
+  // Une capture peut réunir plusieurs applications (sorties concaténées) : l'application se lit à
+  // l'identifiant de ressource, sinon au préfixe du nom de révision (`<app>--<suffixe>`).
+  const parApp = new Map();
+  for (const r of revisions) {
+    const nom = String(r?.name ?? "");
+    const app = /\/containerApps\/([^/]+)\/revisions\//i.exec(String(r?.id ?? ""))?.[1] || nom.split("--")[0] || "?";
+    if (!parApp.has(app)) parApp.set(app, []);
+    parApp.get(app).push(r);
+  }
+  for (const [app, revs] of parApp) {
+    const actives = revs.filter(r => r?.properties?.active !== false);
+    if (!actives.length) continue;
+    const trafic = r => Number(r?.properties?.trafficWeight) || 0;
+    const date = r => String(r?.properties?.createdTime ?? "");
+    const recentes = [...actives].sort((a, b) => (date(a) < date(b) ? 1 : date(a) > date(b) ? -1 : 0));
+    let servies = actives.filter(r => trafic(r) > 0);
+    // Sans révision qui porte du trafic (application sans entrée HTTP), la plus récente tient lieu de N.
+    if (!servies.length) servies = [recentes[0]];
+    const aZero = recentes.filter(r => !servies.includes(r));
+    const garde = aZero.find(r => String(r?.properties?.healthState ?? "") !== "Unhealthy") || null;
+    const enTrop = aZero.filter(r => r !== garde);
+    const rg = revs.find(r => r?.resourceGroup)?.resourceGroup || "<RG>";
+    if (!garde && aZero.length === 0)
+      add("info", "O18", `application ${app} : ${actives.length} révision(s) active(s), aucune N-1 active — le retour arrière passera par \`az containerapp revision activate\` avant la bascule`, app);
+    for (const r of enTrop) {
+      const rep = r?.properties?.replicas;
+      add("bloquant", "O18", `application ${app} : révision ${r.name} ACTIVE à 0 % de trafic${typeof rep === "number" ? `, ${rep} replica(s)` : ""}, en plus de N servie et de N-1 ${garde ? garde.name : "(aucune saine)"} — une révision active garde ses minReplicas facturés sans servir personne (${actives.length} actives pour une borne de ${servies.length + (garde ? 1 : 0)}). Désactiver : az containerapp revision deactivate --name ${app} --resource-group ${rg} --revision ${r.name} (réversible par revision activate) (TF-1639)`, r.name);
+    }
+  }
+  const durs18 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
+  fin18(durs18.length ? "FAIL" : "PASS", durs18.length ? 1 : 0);
+}
+
+// ── O19 · la SAUVEGARDE de chaque actif de données critique est déclarée, tient son RPO, et sa
+// restauration a été exercée depuis moins de 12 mois (TF-1212, décision humaine D-3 (a) du 17/10/2026) ──
+//
+// LE FAIT. Le 09/09/2026, un produit déclaré prêt (cinq étapes closes, oracles au vert, O-1 à O-4
+// PASS) a échoué 12 contrôles fatals sur 175 au référentiel d'audit de la maison ; trois d'entre eux
+// exigent la sauvegarde, et AUCUN contrôle de l'oracle de mise en production ne la regardait. O-4
+// prouve qu'on peut revenir à la release N-1 ; il ne dit rien des DONNÉES, qu'un retour de release
+// ne restaure pas. Les trois contrôles fatals, texte exact (forge-audit, core/controls, pack 1.0.0) :
+//   CTL-D05-09 « Chaque actif de données critique est sauvegardé conformément à un objectif de perte
+//              de données (RPO) explicitement déclaré, et la restauration est testée périodiquement. »
+//   CTL-D12-06 « Un objectif de perte de données tolérée (RPO) et de délai de restauration (RTO) est
+//              déclaré pour chaque actif critique, et la capacité de restauration est testée
+//              périodiquement avec preuve de conformité. »
+//   CTL-D16-09 « La base de données fait l'objet de sauvegardes régulières conformes à un RPO déclaré,
+//              et la procédure de restauration est testée périodiquement avec preuve de conformité au
+//              RTO. »
+// Leur grille commune : conforme = objectifs déclarés et restauration testée avec succès ≤ 12 mois.
+//
+// CE QUI EST JUGÉ, sur une DÉCLARATION `forge-ops/sauvegarde@1` (JSON, aucun appel réseau, même posture
+// qu'O-14 et O-18) : `actifs[]` porte pour chaque actif critique son RPO, son RTO, le mécanisme, la
+// fréquence et la configuration effective de la sauvegarde, et le dernier exercice de restauration
+// (date, résultat, durée, intégrité constatée). Une fréquence plus lâche que le RPO, une durée de
+// restauration mesurée au-delà du RTO, un exercice en échec, absent ou de plus de 12 mois sont des
+// constats bloquants. `actifs: []` n'est recevable qu'avec `aucun_actif_critique: "<motif>"` : « aucun »
+// est une réponse valide, le silence n'en est pas une. Déclaration introuvable : SKIP.
+//
+// SÉVÉRITÉ. Le mode rend son verdict brut (FAIL, exit 1), comme O-18 : c'est une preuve, consommée par
+// la porte M-17 de l'étape MEP du pilot, qui la lit en AVERTISSEMENT tant que l'humain n'en a pas fait
+// un blocage (règle neuve, précédent D-70 (b)). Taux d'accusation mesuré à l'entrée : 0 déclaration de
+// sauvegarde sur le poste, donc 0 accusée — c'est la porte du pilot qui porte la mesure du parc.
+if (args.includes("--sauvegarde")) {
+  const savPath = args[args.indexOf("--sauvegarde") + 1];
+  const iLe = args.indexOf("--le");
+  const leArg = iLe >= 0 ? args[iLe + 1] : null;
+  const DOM19 = "Exploitation : sauvegarde des actifs de données critiques déclarée, conforme au RPO, restauration exercée (O-19)";
+  const NJ19 = [
+    "la VÉRITÉ de la déclaration — l'oracle lit un fichier, jamais la plateforme : une sauvegarde déclarée « continue » qu'aucune politique ne tient passe O-19 ; la configuration citée est la preuve à relire, pas à croire",
+    "la CRITICITÉ des actifs — c'est au produit de dire quels actifs sont critiques ; un actif omis de la déclaration n'est pas vu",
+    "la cohérence du RPO/RTO avec la tolérance métier — l'oracle exige qu'ils soient déclarés et tenus, jamais qu'ils soient bien choisis",
+    "le RESTAURÉ lui-même — durée et intégrité se lisent au rapport d'exercice déclaré, jamais par une restauration rejouée ici",
+  ];
+  const fin19 = (verdict, code) => {
+    process.stdout.write(JSON.stringify({ oracle: "oracle-ops", domaine: DOM19, artefact: savPath || null, verdict, findings: F.length ? F : [{ sev: "info", regle: "O19", msg: "chaque actif critique porte RPO, RTO, sauvegarde effective conforme au RPO et restauration exercée avec succès depuis moins de 12 mois", where: savPath }], non_juge: NJ19 }, null, jsonOnly ? 0 : 2));
+    process.exit(code);
+  };
+  if (!savPath || !fs.existsSync(savPath)) { add("info", "O19", "déclaration de sauvegarde introuvable — rien à juger", String(savPath)); fin19("SKIP", 2); }
+  let d = null;
+  try { d = JSON.parse(fs.readFileSync(savPath, "utf8").replace(/^﻿/, "")); }
+  catch { add("bloquant", "O19", "déclaration illisible (JSON invalide) — attendu le format forge-ops/sauvegarde@1", savPath); fin19("FAIL", 1); }
+  if (!d || typeof d !== "object" || Array.isArray(d)) { add("bloquant", "O19", "déclaration qui n'est pas un objet — attendu le format forge-ops/sauvegarde@1", savPath); fin19("FAIL", 1); }
+  if (d.format !== "forge-ops/sauvegarde@1") add("bloquant", "O19", `format inconnu « ${d.format} » (attendu forge-ops/sauvegarde@1)`, savPath);
+  // Le jour de référence : `--le AAAA-MM-JJ` (bancs reproductibles), sinon aujourd'hui.
+  const jour = /^\d{4}-\d{2}-\d{2}$/.test(String(leArg || "")) ? leArg : new Date().toISOString().slice(0, 10);
+  // Une durée en minutes : « 35 min », « 4h », « 1 j », « continue » (0). null si illisible.
+  const minutes = (v) => {
+    const s = String(v ?? "").trim().toLowerCase();
+    if (/^continu/.test(s) || /^continuous/.test(s)) return 0;
+    const m = /^(\d+(?:[.,]\d+)?)\s*(s|sec|secondes?|min|minutes?|h|heures?|j|jours?|d|days?|sem|semaines?)$/.exec(s);
+    if (!m) return null;
+    const n = Number(m[1].replace(",", "."));
+    const u = m[2];
+    return /^s/.test(u) && !/^sem/.test(u) ? n / 60 : /^min/.test(u) ? n : /^h/.test(u) ? n * 60 : /^(j|d)/.test(u) ? n * 1440 : n * 10080;
+  };
+  const vide = (v) => typeof v !== "string" || !v.trim();
+  const actifs = Array.isArray(d.actifs) ? d.actifs : null;
+  if (!actifs) add("bloquant", "O19", "champ `actifs` absent ou qui n'est pas une liste — chaque actif de données critique s'y déclare, ou `actifs: []` avec `aucun_actif_critique: \"<motif>\"`", savPath);
+  else if (!actifs.length) {
+    const motif = String(d.aucun_actif_critique ?? "").trim();
+    if (motif.length < 10) add("bloquant", "O19", "aucun actif déclaré et aucun motif : `aucun_actif_critique: \"<motif>\"` est une réponse valide, le silence n'en est pas une (CTL-D05-09, CTL-D12-06, CTL-D16-09)", savPath);
+    else add("info", "O19", `aucun actif de données critique déclaré : ${motif}`, savPath);
+  }
+  for (const a of actifs || []) {
+    const nom = vide(a?.nom) ? "(actif sans nom)" : a.nom.trim();
+    const ko = (msg) => add("bloquant", "O19", `actif « ${nom} » : ${msg}`, nom);
+    if (vide(a?.nom)) ko("actif sans nom — un actif qu'on ne nomme pas ne se restaure pas");
+    const rpo = minutes(a?.rpo), rto = minutes(a?.rto);
+    if (rpo === null) ko(`RPO non déclaré ou illisible (« ${a?.rpo ?? ""} ») — non conforme à CTL-D05-09 : « absence de RPO déclaré » ; attendu une durée (« 1h », « 24h », « continue »)`);
+    if (rto === null) ko(`RTO non déclaré ou illisible (« ${a?.rto ?? ""} ») — non conforme à CTL-D12-06 et CTL-D16-09, qui exigent RPO ET RTO déclarés`);
+    const s = a?.sauvegarde || {};
+    if (vide(s.mecanisme)) ko("mécanisme de sauvegarde non déclaré (`sauvegarde.mecanisme`)");
+    const freq = minutes(s.frequence);
+    if (freq === null) ko(`fréquence de sauvegarde non déclarée ou illisible (« ${s.frequence ?? ""} »)`);
+    if (vide(s.configuration)) ko("configuration effective de la sauvegarde non citée (`sauvegarde.configuration` : la commande ou le fichier qui la prouve) — preuve attendue par CTL-D16-09");
+    if (freq !== null && rpo !== null && freq > rpo) ko(`fréquence de sauvegarde « ${s.frequence} » plus lâche que le RPO « ${a.rpo} » : on perdrait jusqu'à la fréquence, pas le RPO déclaré (CTL-D05-09 : « RPO déclaré et respecté »)`);
+    const r = a?.derniere_restauration;
+    if (!r || typeof r !== "object") { ko("aucun exercice de restauration déclaré (`derniere_restauration`) — une sauvegarde jamais restaurée n'est pas une sauvegarde ; grille commune des trois contrôles : conforme = restauration testée avec succès ≤ 12 mois"); continue; }
+    const date = String(r.date ?? "");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) ko(`date du dernier exercice de restauration absente ou illisible (« ${date} », attendu AAAA-MM-JJ)`);
+    else {
+      const ecartJours = (Date.parse(jour) - Date.parse(date)) / 86400000;
+      if (ecartJours < 0) ko(`exercice de restauration daté du ${date}, après le jour de référence ${jour} — une preuve datée du futur n'en est pas une`);
+      else if (ecartJours > 365) ko(`dernier exercice de restauration le ${date}, il y a ${Math.round(ecartJours)} jours : plus de 12 mois — « partiel » au référentiel (objectifs déclarés sans test récent) ; rejouer l'exercice`);
+    }
+    if (!/^(succes|succès|reussi|réussi|ok|pass)$/i.test(String(r.resultat ?? "").trim())) ko(`dernier exercice de restauration au résultat « ${r.resultat ?? ""} » — « dernier test en échec non corrigé » est non conforme aux trois contrôles ; corriger puis rejouer`);
+    const duree = minutes(r.duree);
+    if (duree === null) ko("durée de la restauration non mesurée (`derniere_restauration.duree`) — la preuve de conformité au RTO est une durée constatée (CTL-D16-09)");
+    else if (rto !== null && duree > rto) ko(`restauration mesurée en « ${r.duree} », au-delà du RTO déclaré « ${a.rto} » — la preuve de conformité au RTO manque (CTL-D16-09)`);
+    if (vide(r.integrite)) ko("intégrité des données restaurées non constatée (`derniere_restauration.integrite`) — CTL-D12-06 exige la mesure de la durée ET de l'intégrité");
+  }
+  const durs19 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
+  fin19(durs19.length ? "FAIL" : "PASS", durs19.length ? 1 : 0);
+}
+
+// ── O20 · un conteneur À ÉTAT garde ses données dans un VOLUME, et sa commande de création est
+// écrite (TF-1986, lot Produit-85 du 24/10/2026) ──────────────────────────────────────────────────
+//
+// LE FAIT. Un conteneur de traitement photogrammétrique tournait sans volume, et sa commande de
+// création n'était écrite nulle part : le README ne donnait que `docker start`. Docker Desktop a
+// redémarré à 19:59:42 ; la tâche de 612 photos, à 7 % après 3 h, a été perdue. Aucun mode de cet
+// oracle ne lisait un volume ni un `docker run` (note du registre du pilot, 27/10/2026).
+//
+// CE QUI EST JUGÉ, statique (aucune commande Docker exécutée, aucun appel réseau) :
+//   (1) chaque `docker run` / `docker container run` écrit dans les fichiers du produit (Markdown,
+//       scripts, sources) et chaque service d'un fichier compose, dont l'image est à état — image du
+//       référentiel references/CONTENEURS-A-ETAT.json, ou composant de la table « Composants à
+//       état » de COMPOSANTS-OPS.md —, monte un volume nommé ou un dossier de l'hôte EXACTEMENT sur
+//       le chemin de ses données de travail. Un volume anonyme, un tmpfs ou un volume posé sur un
+//       autre chemin n'en tiennent pas lieu (faits Docker cités au référentiel ; postgres 17 monté
+//       sur /var/lib/postgresql « WILL NOT PERSIST » selon la documentation de l'image) ;
+//   (2) chaque `docker start` / `docker restart` vise un conteneur dont la commande de création est
+//       écrite : un `docker run --name` lu, un service compose, ou une ligne de la table ;
+//   (3) la table « Composants à état » (colonnes Composant, Volume, Commande de création ; Image et
+//       Données de travail facultatives) déclare, pour chaque composant à état, son volume et sa
+//       commande de création, et cette commande monte le volume déclaré sur le chemin des données ;
+//       un composant à état lancé sans ligne dans la table est nommé.
+// Le chemin des données se lit dans la colonne « Données de travail », sinon au référentiel.
+const _VALEUR_RUN_O20 = new Set(["--add-host", "--annotation", "-a", "--attach", "--blkio-weight", "--blkio-weight-device",
+  "--cap-add", "--cap-drop", "--cgroup-parent", "--cgroupns", "--cidfile", "-c", "--cpu-shares", "--cpu-period", "--cpu-quota",
+  "--cpu-rt-period", "--cpu-rt-runtime", "--cpus", "--cpuset-cpus", "--cpuset-mems", "--detach-keys", "--device",
+  "--device-cgroup-rule", "--device-read-bps", "--device-read-iops", "--device-write-bps", "--device-write-iops", "--dns",
+  "--dns-option", "--dns-search", "--domainname", "--entrypoint", "-e", "--env", "--env-file", "--expose", "--gpus",
+  "--group-add", "--health-cmd", "--health-interval", "--health-retries", "--health-start-interval", "--health-start-period",
+  "--health-timeout", "-h", "--hostname", "--ip", "--ip6", "--ipc", "--isolation", "--kernel-memory", "-l", "--label",
+  "--label-file", "--link", "--link-local-ip", "--log-driver", "--log-opt", "--mac-address", "-m", "--memory",
+  "--memory-reservation", "--memory-swap", "--memory-swappiness", "--mount", "--name", "--network", "--net",
+  "--network-alias", "--oom-score-adj", "--pid", "--pids-limit", "--platform", "-p", "--publish", "--pull", "--restart",
+  "--runtime", "--security-opt", "--shm-size", "--stop-signal", "--stop-timeout", "--storage-opt", "--sysctl", "--tmpfs",
+  "--ulimit", "-u", "--user", "--userns", "--uts", "-v", "--volume", "--volume-driver", "--volumes-from", "-w", "--workdir"]);
+const _COURTES_BOOL_O20 = new Set(["d", "i", "t", "P", "q"]);
+const _EXCLUS_O20 = new Set(["node_modules", ".git", ".venv", "venv", "dist", "build", "vendor", "__pycache__", ".next",
+  "coverage", "tests", "test", "e2e", "fixtures", ".terraform"]);
+const _FICHIER_LU_O20 = /(\.(md|sh|bash|zsh|ps1|psm1|cmd|bat|mk|mjs|cjs|js|ts|py|ya?ml|txt)$)|^(Makefile|justfile|Taskfile)$/i;
+const _COMPOSE_O20 = /^(docker-)?compose(\.[\w.-]+)?\.ya?ml$/i;
+// Un fichier de test cite des commandes en données de test, il ne lance rien : il n'est pas lu (même borne
+// qu'O-8). Une ligne de commentaire de code non plus : elle cite, elle ne commande pas.
+const _FICHIER_TEST_O20 = /(^|[._-])(test|tests|spec)([._-]|$)/i;
+const _COMMENTAIRE_O20 = /^\s*(\/\/|\/\*|\*|#|<#|rem\s|::)/i;
+// Un nom de conteneur : lettres, chiffres, « _ », « . », « - » (un mot de prose n'en est pas un).
+const _NOM_CONTENEUR_O20 = /^[a-zA-Z0-9][a-zA-Z0-9_.-]+$/;
+// Une commande commence une instruction : en tête de ligne, après un opérateur de shell, une invite « $ », un
+// `run:` de workflow ou un tiret de liste YAML ; dans du code, en tête de chaîne. « relancer : docker start
+// (voir le guide) » au milieu d'une phrase n'est pas une commande.
+const _DEBUT_SHELL_O20 = /(^|&&|\|\||[;|(`&$]|\$\(|\bsudo|\bexec|\bcall|\brun:|^\s*-|\bthen|\bdo|\belse)\s*$/;
+const _DEBUT_CODE_O20 = /["'`]$/;
+const _CODE_O20 = /\.(mjs|cjs|js|ts|py)$/i;
+
+// Découpe une commande en mots, guillemets simples et doubles respectés ; s'arrête à un opérateur de
+// shell (&&, ||, ;, |, >, <) ou à un accent grave (fin d'un code en ligne Markdown).
+function _motsCommandeO20(texte) {
+  const mots = [];
+  let cur = "", q = null, a = false;
+  for (let k = 0; k < texte.length; k++) {
+    const ch = texte[k];
+    if (q) { if (ch === q) q = null; else cur += ch; continue; }
+    if (ch === '"' || ch === "'") { q = ch; a = true; continue; }
+    if (ch === "`") break;
+    if (/\s/.test(ch)) { if (a) { mots.push(cur); cur = ""; a = false; } continue; }
+    if (!a && /[;&|<>]/.test(ch)) break;
+    if (a && /[;|<>]/.test(ch)) { mots.push(cur); cur = ""; a = false; break; }
+    if (a && ch === "&" && texte[k + 1] === "&") { mots.push(cur); cur = ""; a = false; break; }
+    cur += ch; a = true;
+  }
+  if (a) mots.push(cur);
+  // Fin d'une chaîne de code (`execSync("docker run … img")`) : la ponctuation de clôture n'est pas l'image.
+  return mots.map(m => m.replace(/["')`;,\]}]+$/, "")).filter(m => m !== "");
+}
+
+// Un montage de `-v` / `--volume` ou d'un volume compose court : source:cible[:options], une lettre de
+// lecteur Windows en tête de la source étant gardée.
+function _montageCourtO20(valeur) {
+  let s = String(valeur), lecteur = "";
+  if (/^[A-Za-z]:[\\/]/.test(s)) { lecteur = s.slice(0, 2); s = s.slice(2); }
+  const parts = s.split(":");
+  if (parts.length === 1) return { type: "anonyme", cible: _cheminO20(lecteur + parts[0]) };
+  return { type: "volume", source: lecteur + parts[0], cible: _cheminO20(parts[1]) };
+}
+function _montageLongO20(valeur) {
+  const champs = {};
+  for (const part of String(valeur).split(",")) {
+    const i = part.indexOf("=");
+    if (i > 0) champs[part.slice(0, i).trim().toLowerCase()] = part.slice(i + 1).trim();
+  }
+  const type = (champs.type || "volume").toLowerCase();
+  const cible = _cheminO20(champs.target || champs.destination || champs.dst || "");
+  const source = champs.source || champs.src || "";
+  if (type === "tmpfs") return { type: "tmpfs", cible };
+  if (type === "volume" && !source) return { type: "anonyme", cible };
+  return { type: "volume", source, cible };
+}
+const _cheminO20 = (p) => { const s = String(p ?? "").trim().replace(/\\/g, "/"); return s.length > 1 ? s.replace(/\/+$/, "") : s; };
+
+// Lecture des options d'un `docker run` : nom, --rm, montages, image.
+function _lireRunO20(mots) {
+  const r = { nom: null, rm: false, montages: [], volumesFrom: [], image: null };
+  for (let k = 0; k < mots.length; k++) {
+    const m = mots[k];
+    if (m === "--") { r.image = mots[k + 1] ?? null; break; }
+    if (m.startsWith("--")) {
+      const eg = m.indexOf("=");
+      const nom = eg > 0 ? m.slice(0, eg) : m;
+      let val = eg > 0 ? m.slice(eg + 1) : null;
+      if (val === null && _VALEUR_RUN_O20.has(nom)) val = mots[++k] ?? "";
+      if (nom === "--rm") r.rm = true;
+      else if (nom === "--name") r.nom = val;
+      else if (nom === "--volume") r.montages.push(_montageCourtO20(val));
+      else if (nom === "--mount") r.montages.push(_montageLongO20(val));
+      else if (nom === "--tmpfs") r.montages.push({ type: "tmpfs", cible: _cheminO20(String(val).split(":")[0]) });
+      else if (nom === "--volumes-from") r.volumesFrom.push(val);
+      continue;
+    }
+    if (m.startsWith("-") && m.length > 1) {
+      const lettre = m[1];
+      const opt = "-" + lettre;
+      if (_VALEUR_RUN_O20.has(opt)) {
+        const val = m.length > 2 ? m.slice(2) : (mots[++k] ?? "");
+        if (opt === "-v") r.montages.push(_montageCourtO20(val));
+        continue;
+      }
+      // Grappe de drapeaux sans valeur (-d, -it, -dit) ; un drapeau inconnu est lu sans valeur.
+      continue;
+    }
+    r.image = m;
+    break;
+  }
+  return r;
+}
+
+// Référence d'image normalisée : dépôt sans registre Docker Hub ni « library/ », étiquette, majeure.
+function _imageO20(ref) {
+  const brut = String(ref ?? "").trim();
+  if (!brut || /[$%{]/.test(brut)) return { brut, depot: null, etiquette: null, majeure: null };
+  let s = brut.split("@")[0];
+  let etiquette = null;
+  const dernierSlash = s.lastIndexOf("/");
+  const deuxPoints = s.lastIndexOf(":");
+  if (deuxPoints > dernierSlash) { etiquette = s.slice(deuxPoints + 1); s = s.slice(0, deuxPoints); }
+  s = s.toLowerCase().replace(/^(docker\.io|index\.docker\.io|registry-1\.docker\.io)\//, "").replace(/^library\//, "");
+  const mj = /^(\d+)/.exec(etiquette || "");
+  return { brut, depot: s, etiquette, majeure: mj ? Number(mj[1]) : null };
+}
+
+// Plateformes gérées dont le volume se crée par leur API, et CLI qui le crée (TF-2657).
+const _PLATEFORME_GEREE_O20 = /\b(railway|cloud\s*run|container\s*apps?|app\s*runner|azure|gcp|google\s*cloud|aws|fly\.io|flyctl|heroku|scalingo|clever\s*cloud|koyeb|digitalocean|supabase)\b/i;
+const _CLI_PLATEFORME_O20 = /^(railway|gcloud|az|aws|flyctl|fly|heroku|scalingo|clever|koyeb|doctl|supabase)\s/i;
+if (args.includes("--conteneurs-a-etat")) {
+  const racine20 = args[args.indexOf("--conteneurs-a-etat") + 1];
+  const iComp = args.indexOf("--composants");
+  const DOM20 = "Exploitation : un conteneur à état garde ses données dans un volume, et sa commande de création est écrite (O-20)";
+  const NJ20 = [
+    "les plateformes GÉRÉES (Railway, Container Apps, Cloud Run, App Runner…) : leurs volumes se déclarent dans la plateforme, hors des fichiers lus ici ; une ligne de la table qui nomme la plateforme et porte un script existant ou la CLI de la plateforme est acceptée, sans que le volume soit confronté au chemin des données (TF-2657)",
+    "le périmètre exclu par git (.gitignore) : ses fichiers ne sont pas lus ; sans dépôt git lisible sur la racine, tous les fichiers le sont (TF-2657)",
+    "une image hors du référentiel references/CONTENEURS-A-ETAT.json et absente de la table « Composants à état » : elle n'est pas reconnue à état — c'est au produit de la déclarer",
+    "une image ou un nom résolus par une variable ($IMAGE, %NOM%) : le conteneur n'est reconnu que par son --name déclaré dans la table",
+    "la VÉRITÉ du chemin déclaré en « Données de travail » et la persistance effective côté hôte (disque, droits, sauvegarde : O-19)",
+    "une commande construite dynamiquement dans du code, ou une option de `docker run` inconnue suivie d'une valeur, qui peut fausser la lecture de l'image",
+    "un conteneur créé hors des fichiers du produit (à la main, par un outil tiers) : seul l'écrit se lit — c'est l'écart que la règle (2) fait voir",
+  ];
+  const fin20 = (verdict, code) => {
+    process.stdout.write(JSON.stringify({ oracle: "oracle-ops", domaine: DOM20, artefact: racine20 || null, verdict, findings: F.length ? F : [{ sev: "info", regle: "O20", msg: "chaque composant à état monte un volume sur le chemin de ses données, et sa commande de création est écrite et déclarée", where: racine20 }], non_juge: NJ20 }, null, jsonOnly ? 0 : 2));
+    process.exit(code);
+  };
+  if (!racine20 || !fs.existsSync(racine20) || !fs.statSync(racine20).isDirectory()) { add("info", "O20", "racine du produit introuvable (un dossier est attendu)", String(racine20)); fin20("SKIP", 2); }
+  let ref20 = null;
+  try { ref20 = JSON.parse(fs.readFileSync(new URL("../references/CONTENEURS-A-ETAT.json", import.meta.url), "utf8")); }
+  catch (e) { add("bloquant", "O20", `référentiel references/CONTENEURS-A-ETAT.json illisible (${String(e.message).slice(0, 80)}) : aucune image à état n'est reconnue, verdict refusé`, "references/CONTENEURS-A-ETAT.json"); fin20("FAIL", 1); }
+  const entreeRef = (img) => (ref20.images || []).find(e => e.image === img.depot
+    && (e.majeure_max === undefined || (img.majeure !== null && img.majeure <= e.majeure_max))
+    && (e.majeure_min === undefined || (img.majeure !== null ? img.majeure >= e.majeure_min : !!e.sans_majeure)));
+  const rel = (f) => path.relative(racine20, f).split(path.sep).join("/");
+
+  // (3) La déclaration : table « Composants à état » de COMPOSANTS-OPS.md.
+  const declPath = iComp >= 0 ? args[iComp + 1] : path.join(racine20, "docs", "projet", "COMPOSANTS-OPS.md");
+  const declaration = { existe: fs.existsSync(declPath), table: false, lignes: [] };
+  if (declaration.existe) {
+    for (const t of _tablesMarkdown(fs.readFileSync(declPath, "utf8"))) {
+      const iC = _colonne(t, "composant"), iV = _colonne(t, "volume"), iK = _colonne(t, "commande de creation");
+      if (iC < 0 || iV < 0 || iK < 0) continue;
+      declaration.table = true;
+      const iI = _colonne(t, "image"), iD = _colonne(t, "donnees de travail");
+      t.lignes.forEach((l, n) => {
+        const composant = _valeurCellule(l[iC]);
+        if (!composant || /^aucun/.test(_norm(composant))) return;
+        declaration.lignes.push({ composant, image: iI >= 0 ? _valeurCellule(l[iI]) : "", donnees: iD >= 0 ? _cheminO20(_valeurCellule(l[iD])) : "",
+          volume: _valeurCellule(l[iV]), commande: String(l[iK] ?? "").replace(/`/g, "").trim(), ligne: t.ligne + 2 + n });
+      });
+    }
+  }
+  // Une ligne se reconnaît à son nom (--name, service, container_name). Sans nom, à son image, si une
+  // seule ligne la porte : deux conteneurs de la même image ne se confondent jamais.
+  const ligneDe = (nom, img) => {
+    if (nom) return declaration.lignes.find(d => _norm(d.composant) === _norm(nom)) || null;
+    const memeImage = img?.depot ? declaration.lignes.filter(d => d.image && _imageO20(d.image).depot === img.depot) : [];
+    return memeImage.length === 1 ? memeImage[0] : null;
+  };
+  const cheminsDonnees = (decl, img) => decl?.donnees ? [decl.donnees] : (img?.depot ? (entreeRef(img)?.donnees || []).map(_cheminO20) : []);
+
+  // Lecture des fichiers du produit : commandes Docker et fichiers compose.
+  const fichiers = [];
+  (function parcourir(dir, prof) {
+    if (prof > 4) return;
+    let noms = [];
+    try { noms = fs.readdirSync(dir); } catch { return; }
+    for (const nom of noms) {
+      if (_EXCLUS_O20.has(nom)) continue;
+      const q = path.join(dir, nom);
+      let st; try { st = fs.statSync(q); } catch { continue; }
+      if (st.isDirectory()) parcourir(q, prof + 1);
+      else if (st.size < 2_000_000 && (_FICHIER_LU_O20.test(nom) || _COMPOSE_O20.test(nom)) && !(_FICHIER_TEST_O20.test(nom) && !_COMPOSE_O20.test(nom))) fichiers.push(q);
+    }
+  })(racine20, 0);
+
+  // Le périmètre exclu par git n'est pas celui du produit (TF-2657) : un clone amont en lecture seule, ignoré par
+  // `.gitignore`, porte ses propres `docker run` et fichiers compose. Sont lus les fichiers que git suit ou ne
+  // suit pas encore sans les ignorer. Racine hors dépôt git, git absent ou liste vide : rien n'est écarté.
+  const suivis = (() => {
+    const g = spawnSync("git", ["-C", racine20, "ls-files", "-z", "--cached", "--others", "--exclude-standard"], { encoding: "utf8", maxBuffer: 256 * 1024 * 1024 });
+    if (g.error || g.status !== 0) return null;
+    const s = new Set(String(g.stdout).split("\0").filter(Boolean));
+    return s.size ? s : null;
+  })();
+  if (suivis) {
+    const ecartes = fichiers.filter(q => !suivis.has(rel(q)));
+    if (ecartes.length) {
+      const dossiers = [...new Set(ecartes.map(q => rel(q).split("/")[0]))].slice(0, 5);
+      add("info", "O20", `${ecartes.length} fichier(s) exclus par git (.gitignore) non lus, premiers dossiers : ${dossiers.join(", ")}`, racine20);
+      for (const q of ecartes) fichiers.splice(fichiers.indexOf(q), 1);
+    }
+  }
+
+  const runs = [], starts = [], services = [];
+  for (const f of fichiers) {
+    let texte; try { texte = fs.readFileSync(f, "utf8"); } catch { continue; }
+    if (_COMPOSE_O20.test(path.basename(f))) {
+      let doc = null;
+      try { doc = lireYaml(texte, { ancres: true }).valeur; }
+      catch (e) { add("majeur", "O20", `fichier compose non lu par le lecteur de l'oracle (${String(e.message).slice(0, 90)}${e.ligne ? `, ligne ${e.ligne}` : ""}) : ses services ne sont pas jugés — un fichier non lu ne vaut jamais PASS`, rel(f)); continue; }
+      const sv = doc && typeof doc === "object" && doc.services && typeof doc.services === "object" ? doc.services : {};
+      for (const [nomService, s] of Object.entries(sv)) {
+        if (!s || typeof s !== "object") continue;
+        const montages = [];
+        for (const v of Array.isArray(s.volumes) ? s.volumes : []) {
+          if (typeof v === "string") montages.push(_montageCourtO20(v));
+          else if (v && typeof v === "object") {
+            const type = String(v.type || "volume").toLowerCase();
+            const cible = _cheminO20(v.target || "");
+            if (type === "tmpfs") montages.push({ type: "tmpfs", cible });
+            else if (type === "volume" && !v.source) montages.push({ type: "anonyme", cible });
+            else montages.push({ type: "volume", source: String(v.source ?? ""), cible });
+          }
+        }
+        for (const t of [].concat(s.tmpfs ?? [])) if (typeof t === "string") montages.push({ type: "tmpfs", cible: _cheminO20(t.split(":")[0]) });
+        services.push({ ou: `${rel(f)} (service ${nomService})`, nom: nomService, conteneur: typeof s.container_name === "string" ? s.container_name : null,
+          image: _imageO20(s.image), rm: false, montages, volumesFrom: [].concat(s.volumes_from ?? []) });
+      }
+      continue;
+    }
+    // La table de la déclaration est jugée par la règle (3) : ses commandes ne se relisent pas ici.
+    if (declaration.existe && path.resolve(f) === path.resolve(declPath)) continue;
+    // Lignes logiques : continuation shell « \ », PowerShell « ` », cmd « ^ ». Dans un Markdown, seul
+    // le code se lit (bloc clôturé ou code en ligne) : une phrase qui cite « docker start » n'est pas
+    // une commande.
+    const estMd = /\.md$/i.test(f);
+    let dansBloc = false;
+    const brutes = texte.split(/\r?\n/);
+    for (let n = 0; n < brutes.length; n++) {
+      let ligne = brutes[n];
+      const debut = n;
+      if (estMd && /^\s*(```|~~~)/.test(ligne)) { dansBloc = !dansBloc; continue; }
+      if (!estMd && _COMMENTAIRE_O20.test(ligne)) continue;
+      while (/(\\|`|\^)\s*$/.test(ligne) && n + 1 < brutes.length && !(estMd && !dansBloc)) { ligne = ligne.replace(/(\\|`|\^)\s*$/, " ") + brutes[++n].trim(); }
+      const segments = !estMd || dansBloc ? [ligne] : [...ligne.matchAll(/`([^`]+)`/g)].map(x => x[1]);
+      for (const segment of segments) {
+      const re = /\bdocker(?:\.exe)?\s+(?:container\s+)?(run|start|restart)\s+([^\n]*)/g;
+      let m;
+      while ((m = re.exec(segment))) {
+        if (!(_CODE_O20.test(f) ? _DEBUT_CODE_O20 : _DEBUT_SHELL_O20).test(segment.slice(0, m.index))) continue;
+        const mots = _motsCommandeO20(m[2]);
+        const ou = `${rel(f)}:${debut + 1}`;
+        if (m[1] === "run") { const r = _lireRunO20(mots); runs.push({ ou, ...r, image: _imageO20(r.image) }); }
+        else {
+          const noms = [];
+          for (let k = 0; k < mots.length; k++) {
+            const w = mots[k];
+            if (/^(--detach-keys|--checkpoint|--checkpoint-dir|-t|--time|-s|--signal)$/.test(w)) { k++; continue; }
+            if (w.startsWith("-")) continue;
+            noms.push(w);
+          }
+          starts.push({ ou, verbe: m[1], noms });
+        }
+      }
+      }
+    }
+  }
+  if (!runs.length && !starts.length && !services.length && !declaration.lignes.length) {
+    if (!F.length) add("info", "O20", `aucun docker run, docker start, service compose ni composant à état déclaré parmi ${fichiers.length} fichier(s) lus — rien à juger`, racine20);
+    const dursVides = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
+    fin20(dursVides.length ? "FAIL" : "SKIP", dursVides.length ? 1 : 2);
+  }
+
+  // (1) Le volume, sur le chemin exact des données de travail.
+  const sansLigne = [];
+  let etatJuges = 0, startsJuges = 0;
+  const jugerMontages = (c, genre) => {
+    const decl = ligneDe(c.nom || c.conteneur, c.image) || (c.conteneur ? ligneDe(c.conteneur, null) : null);
+    const ref = c.image.depot ? entreeRef(c.image) : null;
+    if (!decl && !ref) return;
+    etatJuges++;
+    const chemins = cheminsDonnees(decl, c.image);
+    const qui = `${genre} ${c.image.brut || "(image non résolue)"}${c.nom ? ` (${c.nom})` : ""}`;
+    if (!decl) sansLigne.push({ qui, ou: c.ou });
+    if (!chemins.length) { add("majeur", "O20", `${qui} : composant à état dont le chemin des données de travail n'est ni déclaré (colonne « Données de travail ») ni au référentiel — le volume ne peut pas être confronté à son chemin`, c.ou); return; }
+    const montes = c.montages.filter(x => x.type === "volume" && chemins.includes(x.cible));
+    if (montes.length) return;
+    const citation = ref?.citation ? ` ; documentation de l'image (${ref.source}, lue le ${ref.lu_le}) : « ${ref.citation} »` : "";
+    const anonyme = c.montages.find(x => x.type === "anonyme" && chemins.includes(x.cible));
+    const tmpfs = c.montages.find(x => x.type === "tmpfs" && chemins.includes(x.cible));
+    const ailleurs = c.montages.filter(x => x.type === "volume");
+    if (tmpfs) add("bloquant", "O20", `${qui} : ${chemins.join(" ou ")} est un tmpfs — « When the container stops, the tmpfs mount is removed, and files written there won't be persisted. » (docs.docker.com/engine/storage/tmpfs/, lue le 29/10/2026) ; monter un volume nommé : -v <volume>:${chemins[0]} (TF-1986)`, c.ou);
+    else if (anonyme && c.rm) add("bloquant", "O20", `${qui} : volume ANONYME sur ${chemins[0]} avec --rm — il est détruit à l'arrêt du conteneur (« the anonymous volume associated with the container is destroyed », docs.docker.com/engine/storage/volumes/, lue le 29/10/2026) ; nommer le volume : -v <volume>:${chemins[0]} (TF-1986)`, c.ou);
+    else if (anonyme) add("majeur", "O20", `${qui} : volume ANONYME sur ${chemins[0]} — sans nom, le prochain docker run ne le rattache pas et les données restent dans un volume que rien ne désigne ; nommer le volume : -v <volume>:${chemins[0]} (TF-1986)`, c.ou);
+    else if (c.volumesFrom.length) add("info", "O20", `${qui} : volumes hérités de ${c.volumesFrom.join(", ")} (--volumes-from) — non confrontés au chemin ${chemins[0]}`, c.ou);
+    else if (ailleurs.length) add("bloquant", "O20", `${qui} : volume monté sur ${ailleurs.map(x => x.cible).join(", ")}, pas sur le chemin des données ${chemins.join(" ou ")} — les données restent dans la couche éphémère du conteneur${citation} (TF-1986)`, c.ou);
+    else add("bloquant", "O20", `${qui} : composant à état SANS -v ni --mount — « Data written to the container layer doesn't persist when the container is destroyed. » (docs.docker.com/engine/storage/, lue le 29/10/2026)${c.rm ? " ; avec --rm, le conteneur est retiré à son arrêt" : ""} ; monter un volume nommé : -v <volume>:${chemins[0]} (TF-1986)`, c.ou);
+  };
+  for (const r of runs) jugerMontages(r, "docker run");
+  for (const s of services) jugerMontages(s, "service compose");
+
+  // (2) Un conteneur démarré a sa commande de création écrite.
+  const crees = new Set([...runs.map(r => r.nom), ...services.flatMap(s => [s.nom, s.conteneur])].filter(Boolean).map(_norm));
+  for (const s of starts) for (const nom of s.noms) {
+    if (/[$%]/.test(nom) || !_NOM_CONTENEUR_O20.test(nom)) continue;
+    startsJuges++;
+    if (crees.has(_norm(nom)) || ligneDe(nom, null)) continue;
+    add("majeur", "O20", `docker ${s.verbe} ${nom} : la commande qui CRÉE ce conteneur n'est écrite nulle part (aucun docker run --name ${nom}, aucun service compose, aucune ligne de la table « Composants à état ») — s'il porte un état, son volume ne peut pas être vérifié, et le conteneur ne se recrée pas à l'identique (TF-1986)`, s.ou);
+  }
+
+  // (3) La table déclare volume et commande de création, et la commande monte le volume déclaré.
+  for (const d of declaration.lignes) {
+    const ou = `${path.basename(declPath)}:${d.ligne}`;
+    if (_vide(d.volume)) add("bloquant", "O20", `composant à état « ${d.composant} » sans VOLUME déclaré (TF-1986)`, ou);
+    if (_vide(d.commande)) { add("bloquant", "O20", `composant à état « ${d.composant} » sans COMMANDE DE CRÉATION déclarée — le fait du 24/10/2026 : un README qui ne donne que docker start (TF-1986)`, ou); continue; }
+    const mRun = /\bdocker(?:\.exe)?\s+(?:container\s+)?run\s+(.*)$/.exec(d.commande);
+    if (!mRun) {
+      if (/\bdocker[\s-]compose\b/.test(d.commande)) add("info", "O20", `composant à état « ${d.composant} » créé par compose : son service est jugé dans le fichier compose`, ou);
+      else {
+        // Plateforme GÉRÉE (TF-2657) : le volume se crée par l'API de la plateforme, au travers d'un script ou d'une CLI.
+        // La ligne doit nommer la plateforme (composant, volume ou commande) ET porter une commande de création : un script
+        // qui existe parmi les fichiers lus, ou la CLI de la plateforme. Un script introuvable reste refusé.
+        const plateforme = _PLATEFORME_GEREE_O20.exec([d.composant, d.volume, d.commande].join(" "));
+        const mScript = /(?:^|[\s"'=])((?:\.{0,2}[\\/])?[\w@.\\/-]+\.(?:py|mjs|cjs|js|ts|sh|bash|ps1|cmd|bat))(?=$|[\s"'])/i.exec(d.commande);
+        const script = mScript ? mScript[1].replace(/\\/g, "/").replace(/^\.\//, "") : null;
+        const cli = _CLI_PLATEFORME_O20.test(d.commande.trim().replace(/^(?:python3?|node|bash|sh|pwsh|powershell)\s+/i, "")) && !script;
+        if (plateforme && script && !fichiers.some(q => { const r = rel(q); return r === script || r.endsWith("/" + script); }))
+          add("majeur", "O20", `composant à état « ${d.composant} » créé sur la plateforme gérée « ${plateforme[1]} » : le script de création déclaré « ${script} » n'existe pas parmi les fichiers du produit lus (hors périmètre exclu par git) — la commande ne peut pas être confrontée à un fichier (TF-2657)`, ou);
+        else if (plateforme && (script || cli))
+          add("info", "O20", `composant à état « ${d.composant} » créé sur la plateforme gérée « ${plateforme[1]} » par ${script ? `le script ${script}` : "sa CLI"} : le volume se déclare dans la plateforme, il n'est pas confronté au chemin des données (non jugé, TF-2657)`, ou);
+        else add("majeur", "O20", `composant à état « ${d.composant} » : la commande de création déclarée n'est ni un docker run ni un docker compose${plateforme ? " ni un script existant ni la CLI de la plateforme nommée" : " et la ligne ne nomme aucune plateforme gérée (Railway, Cloud Run, Container Apps, App Runner…)"} — le volume ne peut pas y être lu (TF-1986, TF-2657)`, ou);
+      }
+      continue;
+    }
+    const r = _lireRunO20(_motsCommandeO20(mRun[1]));
+    const img = _imageO20(r.image || d.image);
+    const chemins = cheminsDonnees(d, img);
+    if (!chemins.length) { add("majeur", "O20", `composant à état « ${d.composant} » : chemin des données de travail ni déclaré (colonne « Données de travail ») ni au référentiel pour l'image ${img.brut || "(inconnue)"} (TF-1986)`, ou); continue; }
+    const monte = r.montages.find(x => x.type === "volume" && chemins.includes(x.cible));
+    if (!monte) { add("bloquant", "O20", `composant à état « ${d.composant} » : sa commande de création déclarée ne monte aucun volume sur ${chemins.join(" ou ")} (TF-1986)`, ou); continue; }
+    if (!_vide(d.volume) && _cheminO20(monte.source) !== _cheminO20(d.volume))
+      add("majeur", "O20", `composant à état « ${d.composant} » : le volume déclaré « ${d.volume} » n'est pas celui que monte sa commande de création (« ${monte.source} ») (TF-1986)`, ou);
+  }
+  if (sansLigne.length) {
+    const liste = sansLigne.map(s => `${s.qui} [${s.ou}]`).join(" ; ");
+    if (!declaration.existe) add("majeur", "O20", `${sansLigne.length} composant(s) à état lancé(s) et aucune déclaration (${rel(declPath)} absent) : volume et commande de création ne sont écrits nulle part d'opposable — ${liste} (TF-1986)`, rel(declPath));
+    else if (!declaration.table) add("majeur", "O20", `${path.basename(declPath)} sans table « Composants à état » (colonnes Composant, Volume, Commande de création) alors que ${sansLigne.length} composant(s) à état sont lancés — ${liste} (TF-1986)`, path.basename(declPath));
+    else for (const s of sansLigne) add("majeur", "O20", `${s.qui} : composant à état lancé sans ligne dans la table « Composants à état » de ${path.basename(declPath)} (TF-1986)`, s.ou);
+  }
+  const durs20 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
+  // Des commandes Docker lues, mais aucune d'une image à état, aucun docker start, aucune ligne déclarée : rien
+  // n'a été jugé, et un PASS affirmerait une conformité vide.
+  if (!durs20.length && !etatJuges && !startsJuges && !declaration.lignes.length) {
+    add("info", "O20", `${runs.length} docker run et ${services.length} service(s) compose lus, aucun d'une image à état reconnue (référentiel ou table) — rien à juger`, racine20);
+    fin20("SKIP", 2);
+  }
+  fin20(durs20.length ? "FAIL" : "PASS", durs20.length ? 1 : 0);
+}
+
+// ── O21 · le GO humain d'un déploiement de production par GitHub Actions est une porte d'approbation
+// PROUVÉE (TF-2003, étude du pilot du 28/10/2026, ligne G3) ───────────────────────────────────────
+//
+// LE FAIT. Les plans de forge-ops donnent les commandes, jamais le workflow qui les porte ; D-3 (a) du
+// 17/10/2026 (porte M-16 du pilot) pose le GO humain en porte d'approbation de la chaîne. Sur GitHub,
+// cette porte est un environnement protégé. Or un environnement nommé et jamais réglé est CRÉÉ sans
+// règle au premier run (« the newly created environment will not have any protection rules or secrets
+// configured. », page manage-environments lue le 29/10/2026) : le fichier a l'air protégé et ne l'est pas.
+//
+// CE QUI EST JUGÉ, statique sur le YAML (lecteur scripts/lib-yaml.mjs), plus une capture facultative de
+// l'API, sans aucun appel réseau : (1) un job qui déploie sans référencer d'environnement ; (2) le GO du
+// job de production prouvé par un job de garde qui lit l'environnement par l'API, ou par la capture
+// `--protection` ; (3) un groupe de concurrence sans `cancel-in-progress: true` ; (4) `id-token: write`
+// réservé au job de production. Faits et gabarit : references/WORKFLOW-DEPLOIEMENT.md.
+const _CLI_DEPLOIEMENT_O21 = [
+  /\brailway\s+up\b/, /\bgcloud\s+run\s+(deploy|services\s+update-traffic)\b/,
+  /\baz\s+containerapp\s+(update|ingress\s+traffic\s+set|revision\s+activate)\b/, /\baz\s+webapp\s+deploy\b/,
+  /\baws\s+apprunner\s+update-service\b/, /\bsupabase\s+db\s+push\b(?![^\n]*--dry-run)/, /\bsupabase\s+functions\s+deploy\b/,
+  /\bsupabase\s+secrets\s+set\b/, /\bwrangler\s+deploy\b(?![^\n]*--dry-run)/, /\bwrangler\s+versions\s+(deploy|upload)\b/,
+  /\bwrangler\s+rollback\b/, /\bdatabricks\s+bundle\s+deploy\b/, /\bfab\s+import\b/, /\bkubectl\s+apply\b/,
+  /\bhelm\s+upgrade\b/, /\bterraform\s+apply\b/,
+];
+const _ACTIONS_DEPLOIEMENT_O21 = /^(cloudflare\/wrangler-action|azure\/webapps-deploy|azure\/container-apps-deploy-action|azure\/arm-deploy|google-github-actions\/deploy-cloudrun|aws-actions\/amazon-ecs-deploy-task-definition)@/i;
+const _SRC_ENV_O21 = "docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments, lue le 29/10/2026";
+const _SRC_CONC_O21 = "docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency, lue le 29/10/2026";
+const _SRC_OIDC_O21 = "docs.github.com/en/actions/reference/security/oidc, lue le 29/10/2026";
+if (args.includes("--workflow-deploiement")) {
+  const wfPath = args[args.indexOf("--workflow-deploiement") + 1];
+  const iEnv21 = args.indexOf("--environnement");
+  const envProd = (iEnv21 >= 0 ? String(args[iEnv21 + 1] ?? "") : "production").trim().toLowerCase() || "production";
+  const iProt = args.indexOf("--protection");
+  const protPath = iProt >= 0 ? args[iProt + 1] : null;
+  const DOM21 = "Exploitation : le GO humain d'un déploiement de production GitHub Actions est une approbation d'environnement prouvée (O-21)";
+  const NJ21 = [
+    "les réglages RÉELS de l'environnement, sans capture `--protection` ni garde exécutée : l'oracle lit un fichier, jamais GitHub",
+    "la confiance fédérée côté cloud : son sujet (repo:<org>/<dépôt>:environment:<nom>) se lit dans le cloud, pas dans le workflow",
+    "l'épinglage des actions par SHA et le secret long d'une action de connexion : WF-2 et WF-5 d'oracle-workflows de forge-websec",
+    "la justesse des commandes du plan collées dans les étapes : O-5 juge le plan",
+    "un job qui appelle un workflow réutilisable (`jobs.<id>.uses`) : ses étapes vivent dans l'autre fichier",
+    "un environnement nommé par une expression ${{ … }} : il n'est pas reconnu comme la production",
+    "la garde est LUE, pas exécutée : une garde qui ne fait pas échouer son job (`|| true`, `continue-on-error`) passe la lecture",
+  ];
+  const ou21 = (id) => `${path.basename(String(wfPath))} (job ${id})`;
+  const fin21 = (verdict, code) => {
+    process.stdout.write(JSON.stringify({ oracle: "oracle-ops", domaine: DOM21, artefact: wfPath || null, verdict, findings: F.length ? F : [{ sev: "info", regle: "O21", msg: `le job de production vise ${envProd}, son GO est prouvé, il ne s'interrompt pas et garde seul le droit de demander un jeton du cloud`, where: wfPath }], non_juge: NJ21 }, null, jsonOnly ? 0 : 2));
+    process.exit(code);
+  };
+  if (!wfPath || !fs.existsSync(wfPath)) { add("info", "O21", "workflow introuvable", String(wfPath)); fin21("SKIP", 2); }
+  let wf = null;
+  try { wf = lireYaml(fs.readFileSync(wfPath, "utf8")).valeur; }
+  catch (e) { add("majeur", "O21", `workflow non lu par le lecteur de l'oracle (${String(e.message).slice(0, 90)}${e.ligne ? `, ligne ${e.ligne}` : ""}) : un fichier non lu ne vaut jamais PASS`, String(wfPath)); fin21("FAIL", 1); }
+  const jobs = wf && typeof wf === "object" && wf.jobs && typeof wf.jobs === "object" && !Array.isArray(wf.jobs) ? wf.jobs : null;
+  if (!jobs) { add("info", "O21", "aucun bloc jobs: — rien à juger", String(wfPath)); fin21("SKIP", 2); }
+  const ids = Object.keys(jobs).filter(id => jobs[id] && typeof jobs[id] === "object");
+  const nomEnv = (j) => { const e = j?.environment; if (typeof e === "string") return e; if (e && typeof e === "object" && typeof e.name === "string") return e.name; return null; };
+  const estProd = (j) => (nomEnv(j) || "").trim().toLowerCase() === envProd;
+  const etapes = (j) => (Array.isArray(j?.steps) ? j.steps : []).filter(s => s && typeof s === "object");
+  const deploie = (j) => etapes(j).some(s => (typeof s.run === "string" && _CLI_DEPLOIEMENT_O21.some(re => re.test(s.run)))
+    || (typeof s.uses === "string" && _ACTIONS_DEPLOIEMENT_O21.test(s.uses)));
+  const besoins = (j) => [].concat(j?.needs ?? []).filter(x => typeof x === "string");
+  const dependances = (id) => {
+    const vus = new Set(), pile = [...besoins(jobs[id])];
+    while (pile.length) { const n = pile.pop(); if (vus.has(n) || !jobs[n]) continue; vus.add(n); pile.push(...besoins(jobs[n])); }
+    return [...vus];
+  };
+  // Un job de garde lit l'environnement de production par l'API et teste ses relecteurs et l'auto-approbation.
+  const estGarde = (j) => etapes(j).some(s => {
+    const texte = `${s.run ?? ""}\n${JSON.stringify(s.env ?? {})}`;
+    return /environments\//.test(texte) && /\breviewers\b/.test(texte) && /prevent_self_review/.test(texte) && texte.toLowerCase().includes(envProd);
+  });
+  const idToken = (p) => p === "write-all" || (p && typeof p === "object" && String(p["id-token"] ?? "").trim().toLowerCase() === "write");
+
+  // (1) Un job qui déploie a une porte.
+  for (const id of ids) {
+    if (!deploie(jobs[id])) continue;
+    if (!nomEnv(jobs[id])) add("bloquant", "O21", `job « ${id} » : il déploie sans référencer d'environnement — le GO humain n'a pas de porte où se poser ; poser environment: ${envProd} sur ce job (TF-2003)`, ou21(id));
+    else if (!estProd(jobs[id])) add("info", "O21", `job « ${id} » : il déploie vers l'environnement « ${nomEnv(jobs[id])} », pas vers « ${envProd} » — non jugé comme production (--environnement <nom> pour un autre nom)`, ou21(id));
+  }
+  const prod = ids.filter(id => estProd(jobs[id]));
+  if (!prod.length) {
+    const durs0 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
+    if (!durs0.length) add("info", "O21", `aucun job ne référence l'environnement « ${envProd} » — rien à juger comme déploiement de production`, String(wfPath));
+    fin21(durs0.length ? "FAIL" : "SKIP", durs0.length ? 1 : 2);
+  }
+
+  // (2) Le GO est prouvé : une garde dans les dépendances, ou la capture de l'environnement.
+  let capture = null;
+  if (protPath) {
+    try { capture = JSON.parse(fs.readFileSync(protPath, "utf8").replace(/^﻿/, "")); }
+    catch { add("bloquant", "O21", `capture --protection illisible (${protPath}) : attendu la sortie JSON de gh api repos/<org>/<dépôt>/environments/${envProd}`, String(protPath)); }
+  }
+  for (const id of prod) {
+    const gardes = dependances(id).filter(n => estGarde(jobs[n]));
+    if (gardes.length) add("info", "O21", `job « ${id} » : GO gardé par le job « ${gardes[0]} », qui lit l'environnement ${envProd} par l'API et refuse sans relecteur requis`, ou21(id));
+    else if (!capture) add("bloquant", "O21", `job « ${id} » : GO humain NON PROUVÉ — un environnement que personne n'a réglé est créé sans règle au premier run (« the newly created environment will not have any protection rules or secrets configured. », ${_SRC_ENV_O21}) ; mettre dans ses needs le job garde-go de gabarits/workflow-deploiement-production.yml, ou fournir --protection <sortie de gh api repos/<org>/<dépôt>/environments/${envProd}> (TF-2003)`, ou21(id));
+  }
+  if (capture && typeof capture === "object") {
+    const regles = Array.isArray(capture.protection_rules) ? capture.protection_rules : [];
+    const ouCap = path.basename(String(protPath));
+    if (typeof capture.name === "string" && capture.name.trim().toLowerCase() !== envProd)
+      add("majeur", "O21", `capture de l'environnement « ${capture.name} », pas de « ${envProd} » : elle ne prouve rien pour le job de production`, ouCap);
+    if (!regles.some(r => Array.isArray(r?.reviewers) && r.reviewers.length))
+      add("bloquant", "O21", `environnement ${envProd} sans relecteur requis (aucune règle de protection à « reviewers » non vide) : le job part sans approbation humaine, le GO (R-38) n'existe pas ; Settings > Environments > ${envProd} > Required reviewers (« Only one of the required reviewers needs to approve the job for it to proceed. », ${_SRC_ENV_O21}) (TF-2003)`, ouCap);
+    else if (!regles.some(r => r?.prevent_self_review === true))
+      add("majeur", "O21", `environnement ${envProd} sans « Prevent self-review » : l'auteur du run peut approuver son propre déploiement, le GO n'est plus un second regard (${_SRC_ENV_O21}) (TF-2003)`, ouCap);
+    if (capture.deployment_branch_policy === null || capture.deployment_branch_policy === undefined)
+      add("majeur", "O21", `environnement ${envProd} sans restriction de branche (deployment_branch_policy null) : toute branche peut demander un déploiement de production (TF-2003)`, ouCap);
+  }
+
+  // (3) Un déploiement à la fois, jamais interrompu.
+  const annule = (c) => c && typeof c === "object" ? String(c["cancel-in-progress"] ?? "false").trim() : "false";
+  for (const id of prod) {
+    const groupes = [["du job", jobs[id].concurrency], ["du workflow", wf.concurrency]].filter(([, c]) => c !== undefined && c !== null);
+    if (!groupes.length) add("majeur", "O21", `job « ${id} » : aucun groupe de concurrence (ni au job ni au workflow) — deux déploiements de production peuvent se chevaucher (« only a single job or workflow using the same concurrency group will run at a time », ${_SRC_CONC_O21}) ; poser concurrency avec cancel-in-progress: false (TF-2003)`, ou21(id));
+    for (const [niveau, c] of groupes) {
+      const v = annule(c);
+      if (/^true$/i.test(v)) add("bloquant", "O21", `job « ${id} » : groupe de concurrence ${niveau} à cancel-in-progress: true — un déploiement en cours est annulé à mi-chemin par le suivant, la cible reste dans un état que ni N ni N-1 ne décrit (« To also cancel any currently running job or workflow in the same concurrency group, specify cancel-in-progress: true. », ${_SRC_CONC_O21}) ; poser cancel-in-progress: false (TF-2003)`, ou21(id));
+      else if (/\$\{\{/.test(v)) add("info", "O21", `job « ${id} » : cancel-in-progress ${niveau} calculé par une expression (${v}) — non jugé`, ou21(id));
+    }
+  }
+
+  // (4) Le droit de demander un jeton du cloud reste au job qui a passé la porte.
+  if (idToken(wf.permissions))
+    add("majeur", "O21", `id-token: write posé au niveau du workflow : chaque job peut demander un jeton OIDC, y compris ceux qui ne passent par aucune porte d'approbation (« Without id-token: write, the OIDC JWT ID token cannot be requested. », ${_SRC_OIDC_O21}) ; le poser sur le seul job de production (TF-2003)`, path.basename(String(wfPath)));
+  for (const id of ids) {
+    if (prod.includes(id) || !idToken(jobs[id].permissions)) continue;
+    add("majeur", "O21", `job « ${id} » : id-token: write sans référencer l'environnement ${envProd} — son sujet OIDC est la branche (« The subject claim includes the environment name when the job references an environment. », ${_SRC_OIDC_O21}) : une confiance cloud qui l'accepte contourne la porte d'approbation (TF-2003)`, ou21(id));
+  }
+  const durs21 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
+  fin21(durs21.length ? "FAIL" : "PASS", durs21.length ? 1 : 0);
+}
+
+// ── O22 · « EN SERVICE » d'une tâche planifiée ou récurrente est une affirmation qui porte la lecture
+// d'une première exécution RÉELLE, et son échéance suivante (D-108 (b), décision humaine du 29/10/2026) ──
+//
+// LE FAIT. Le 21/10/2026, chez un produit, une tâche planifiée de publication sur un réseau social a été
+// déclarée « C'est en service » à la mise en service. L'essai avait passé. Pourtant aucune publication n'a
+// eu lieu du 20 au 25/10, et la vérification prévue à 18 h 45 n'a pas été faite. Rien dans la forge
+// n'empêchait la déclaration, rien ne signalait l'échéance manquée : O-8 lit la DÉFINITION d'une
+// planification (jamais un passage), O-15 lit le Statut face à l'export (jamais une exécution).
+//
+// CE QUI EST JUGÉ, sur un DOCUMENT (le COMPOSANTS-OPS.md du produit, tables markdown, aucun appel réseau) :
+// une ligne de tâche planifiée ou récurrente dont le Statut est « en service » (« actif » ou « partagé »
+// au vocabulaire fermé d'O-15, ou la graphie « en service ») porte (1) la preuve d'une première exécution
+// RÉELLE lue — un identifiant ou une URL de la publication, jamais « l'essai a passé » —, (2) la date ET
+// l'heure de cette lecture, (3) sa prochaine échéance ; et une échéance PASSÉE sans lecture plus récente
+// qu'elle est un constat. Une tâche est désignée par sa table, jamais devinée : titre « Tâches planifiées /
+// récurrentes », colonne « Cadence » (ou « Planification », « Récurrence ») renseignée, ou colonne « Type »
+// qui dit planifié, récurrent, cron… Le Statut « déclaré » n'est pas jugé : c'est la forme honnête d'une
+// tâche dont aucune exécution n'a encore été lue — le remède que nomment les constats.
+// Colonnes lues : Statut ; En service depuis (TF-2560 : toute lecture lui est postérieure — une exécution lue
+// avant la mise en service est un essai, pas la tâche en service) ; Première exécution lue ; Première lecture
+// le ; Prochaine échéance ; et, quand l'échéance est passée, Dernière exécution lue + Dernière lecture le
+// (la preuve plus récente).
+// Instants au format AAAA-MM-JJ HH:MM (« THH:MM », « HHhMM » acceptés), heure LOCALE du poste ; une
+// échéance sans heure vaut la fin de son jour ; `--le AAAA-MM-JJ[ HH:MM]` fixe l'instant de référence
+// (bancs reproductibles), une date seule valant la fin de son jour ; sinon, maintenant.
+const _EN_SERVICE_O22 = ["actif", "partage", "en service"];
+const _SUJET_O22 = "taches?|travail|travaux|jobs?|publications?";
+const _TITRE_PLANIFIE_O22 = new RegExp(`\\b(${_SUJET_O22})\\b.*\\b(planifie\\w*|recurrent\\w*|programme\\w*)\\b|\\b(planifie\\w*|recurrent\\w*|programme\\w*)\\b.*\\b(${_SUJET_O22})\\b`);
+const _TYPE_PLANIFIE_O22 = /planifi|recurr|cron|schedul|periodi|programm/;
+const _ESSAI_O22 = /\b(essais?|a blanc|dry-?run|simul\w*|mock|factice|fictif)\b/;
+// Un instant « AAAA-MM-JJ[ HH:MM] » → { ms, heure } ou null. Une date inexistante (31 février) est refusée.
+function _instantO22(valeur, finDeJour = false) {
+  const s = _sansAccents(_valeurCellule(valeur));
+  const m = /^(\d{4})-(\d{2})-(\d{2})(?:(?: |t)(\d{1,2}) ?[:h] ?(\d{2}))?$/.exec(s);
+  if (!m) return null;
+  const [A, Mo, J] = [+m[1], +m[2], +m[3]];
+  const heure = m[4] !== undefined;
+  const H = heure ? +m[4] : (finDeJour ? 23 : 0), Mi = heure ? +m[5] : (finDeJour ? 59 : 0);
+  const d = new Date(A, Mo - 1, J, H, Mi, finDeJour && !heure ? 59 : 0);
+  if (H > 23 || Mi > 59 || d.getFullYear() !== A || d.getMonth() !== Mo - 1 || d.getDate() !== J) return null;
+  return { ms: d.getTime(), heure };
+}
+// La cellule dit-elle une exécution RÉELLE lue ? → null si oui, sinon le motif du refus.
+function _refusPreuveO22(cellule) {
+  if (_vide(cellule)) return "cellule vide";
+  const s = _valeurCellule(cellule);
+  const essai = _ESSAI_O22.test(_sansAccents(s)) && !/\breel(le)?s?\b/.test(_sansAccents(s));
+  const aUrl = /https?:\/\/[^\s)>\]]+/i.test(s);
+  const aId = s.split(/[\s,;()]+/).some(w => w.length >= 6 && /\d/.test(w) && /^[\w:.\-\/]+$/.test(w)
+    && !/^\d{4}-\d{2}-\d{2}/.test(w) && !/^\d{1,2}[:hH]\d{2}$/.test(w));
+  if (!aUrl && !aId) return essai ? `« ${s} » est un essai, pas une exécution réelle, et ne porte ni identifiant ni URL` : `« ${s} » ne porte ni identifiant ni URL`;
+  if (essai) return `« ${s} » cite un essai (à blanc, simulé) : la preuve attendue est celle d'une exécution RÉELLE ; si c'en est une, le dire (« réelle »)`;
+  return null;
+}
+if (args.includes("--mise-en-service")) {
+  const docPath = args[args.indexOf("--mise-en-service") + 1];
+  const iLe22 = args.indexOf("--le");
+  const leArg22 = iLe22 >= 0 ? args[iLe22 + 1] : null;
+  const DOM22 = "Exploitation : « en service » d'une tâche planifiée exige la lecture d'une première exécution réelle et sa prochaine échéance (O-22)";
+  const NJ22 = [
+    "la VÉRITÉ de la preuve — l'oracle juge qu'un identifiant ou une URL de publication est écrit, avec l'heure de sa lecture ; il ne lit ni la plateforme ni la publication : un identifiant inventé passe, et c'est à la relecture humaine de l'ouvrir",
+    "une tâche planifiée déclarée en service HORS des tables lues — sans titre « Tâches planifiées / récurrentes », sans colonne Cadence ni Type qui la désigne, elle n'est pas vue (la désignation est explicite, jamais devinée du nom)",
+    "la prochaine échéance est celle DÉCLARÉE : l'oracle ne la recalcule ni de la cadence ni de la définition (O-8 lit les définitions de planification), et ne lit aucun historique d'exécution",
+    "l'ALERTE au sens d'une notification : l'oracle rend un constat quand on le rejoue, il ne tourne pas à l'échéance ; la surveillance indépendante des échéances est `scripts/surveiller-echeances.mjs` (TF-2560, G-09), lancée d'un planificateur autre que celui des tâches ; qui la lance, et quand, est une décision de run",
+    "la date de mise en service est celle DÉCLARÉE dans « En service depuis » : l'oracle ne la lit ni au planificateur ni à la plateforme, il vérifie seulement que la lecture lui est postérieure",
+    "le fuseau : les instants s'écrivent sans fuseau et se comparent à l'heure locale du poste qui joue l'oracle",
+    "la lecture des mots « essai », « à blanc », « simulé » : une preuve qui les cite sans dire « réelle » est refusée, et l'identifiant d'un essai qui ne les cite pas passe — l'oracle lit des mots, jamais le fait",
+  ];
+  const fin22 = (verdict, code) => {
+    process.stdout.write(JSON.stringify({ oracle: "oracle-ops", domaine: DOM22, artefact: docPath || null, verdict, findings: F.length ? F : [{ sev: "info", regle: "O22", msg: "chaque tâche planifiée en service porte la lecture d'une première exécution réelle, son heure de lecture et sa prochaine échéance, et aucune échéance passée n'est restée sans lecture plus récente", where: docPath }], non_juge: NJ22 }, null, jsonOnly ? 0 : 2));
+    process.exit(code);
+  };
+  if (!docPath || !fs.existsSync(docPath)) { add("bloquant", "O22", "document introuvable", String(docPath)); fin22("donnees_insuffisantes", 2); }
+  let reference = Date.now();
+  if (leArg22 !== null) {
+    const ref = _instantO22(leArg22, true);
+    if (!ref) { add("bloquant", "O22", `--le « ${leArg22} » illisible (attendu AAAA-MM-JJ ou AAAA-MM-JJ HH:MM) — aucun repli silencieux sur maintenant`, "--le"); fin22("donnees_insuffisantes", 2); }
+    reference = ref.ms;
+  }
+  const aff = ms => { const d = new Date(ms); const p = n => String(n).padStart(2, "0"); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`; };
+  const tables22 = _tablesMarkdown(fs.readFileSync(docPath, "utf8"));
+  const base22 = path.basename(docPath);
+  let tachesVues = 0, enService22 = 0;
+  for (const t of tables22) {
+    const iStatut = _colonne(t, "statut");
+    const parTitre = t.titres.some(h => _TITRE_PLANIFIE_O22.test(_norm(h)));
+    if (iStatut < 0) {
+      if (parTitre) add("bloquant", "O22", `table de tâches planifiées (ligne ${t.ligne}) sans colonne « Statut » — « en service » ne peut ni se déclarer ni se prouver (D-108 (b))`, `${base22}:${t.ligne}`);
+      continue;
+    }
+    const iNom = Math.max(0, _colonne(t, "composant", "nom", "tache", "ressource"));
+    const iCad = _colonne(t, "cadence", "planification", "recurrence");
+    const iType = _colonne(t, "type", "nature");
+    const planifiee = l => parTitre || (iCad >= 0 && !_vide(l[iCad])) || (iType >= 0 && _TYPE_PLANIFIE_O22.test(_norm(l[iType])));
+    const taches = t.lignes.filter(l => planifiee(l) && !/^aucun/.test(_norm(l[iNom])));
+    tachesVues += taches.length;
+    const enService = taches.filter(l => _EN_SERVICE_O22.includes(_norm(l[iStatut])));
+    enService22 += enService.length;
+    if (!enService.length) continue;
+    const col = {
+      pre1: _colonne(t, "premiere execution lue", "preuve de premiere execution", "premiere execution"),
+      lec1: _colonne(t, "premiere lecture le", "premiere lecture", "lue le"),
+      pre2: _colonne(t, "derniere execution lue", "derniere execution"),
+      lec2: _colonne(t, "derniere lecture le", "derniere lecture"),
+      ech: _colonne(t, "prochaine echeance", "echeance"),
+      svc: _colonne(t, "en service depuis", "en service le", "mise en service le", "mise en service"),
+    };
+    const manquantes = [col.pre1 < 0 ? "Première exécution lue" : null, col.lec1 < 0 ? "Première lecture le" : null, col.ech < 0 ? "Prochaine échéance" : null, col.svc < 0 ? "En service depuis" : null].filter(Boolean);
+    if (manquantes.length) {
+      add("bloquant", "O22", `table (ligne ${t.ligne}) : ${enService.length} tâche(s) planifiée(s) déclarée(s) en service (${enService.map(l => _valeurCellule(l[iNom])).join(", ")}) sans colonne ${manquantes.map(c => `« ${c} »`).join(" ni ")} — « en service » n'a rien à lire : la preuve d'une première exécution réelle lue, la date de mise en service et la prochaine échéance s'écrivent dans la table, ou le Statut reste « déclaré » (D-108 (b))`, `${base22}:${t.ligne}`);
+      continue;
+    }
+    for (const l of enService) {
+      const nom = _valeurCellule(l[iNom]);
+      const ko = msg => add("bloquant", "O22", `tâche « ${nom} » déclarée « ${_valeurCellule(l[iStatut])} » : ${msg} (D-108 (b))`, nom);
+      const lectures = [];
+      // La mise en service : l'instant (date ET heure) où la tâche a été déclarée en service. Une exécution lue AVANT lui n'est pas
+      // celle de la tâche en service (TF-2560, D-108 (b) du 14/11/2026 : « lue après la mise en service »).
+      const svcInst = _instantO22(l[col.svc]);
+      let enServiceMs = null;
+      if (!svcInst) ko(`mise en service : date et heure ${_vide(l[col.svc]) ? "absentes" : `illisibles (« ${_valeurCellule(l[col.svc])} »)`} — attendu AAAA-MM-JJ HH:MM dans « En service depuis » ; sans elle, rien ne dit que la lecture est postérieure à la mise en service`);
+      else if (!svcInst.heure) ko(`mise en service datée du ${_valeurCellule(l[col.svc])} SANS heure — l'heure de la mise en service se dit`);
+      else if (svcInst.ms > reference) ko(`mise en service datée du ${aff(svcInst.ms)}, après l'instant de référence ${aff(reference)}`);
+      else enServiceMs = svcInst.ms;
+      // Une lecture : preuve d'une exécution réelle + instant (date ET heure), passé par rapport à la référence.
+      const lire = (pre, lec, qui) => {
+        const refus = _refusPreuveO22(l[pre]);
+        const inst = _instantO22(l[lec]);
+        if (refus) ko(`${qui} non lue — ${refus} ; lire l'identifiant ou l'URL de la publication réelle, ou ramener le Statut à « déclaré »`);
+        if (!inst) ko(`${qui} : date et heure de lecture ${_vide(l[lec]) ? "absentes" : `illisibles (« ${_valeurCellule(l[lec])} »)`} — attendu AAAA-MM-JJ HH:MM`);
+        else if (!inst.heure) ko(`${qui} : lecture datée du ${_valeurCellule(l[lec])} SANS heure — l'heure de lecture se dit`);
+        else if (inst.ms > reference) ko(`${qui} : lecture datée du ${aff(inst.ms)}, après l'instant de référence ${aff(reference)} — une preuve datée du futur n'en est pas une`);
+        else if (enServiceMs !== null && inst.ms <= enServiceMs) ko(`${qui} : lecture datée du ${aff(inst.ms)}, AVANT la mise en service (${aff(enServiceMs)}) — une exécution lue avant que la tâche soit en service n'est pas la sienne (essai, test) ; lire une exécution réelle après la mise en service`);
+        else if (!refus) lectures.push(inst.ms);
+      };
+      lire(col.pre1, col.lec1, "première exécution réelle");
+      const dernier = col.pre2 >= 0 && !_vide(l[col.pre2]) || col.lec2 >= 0 && !_vide(l[col.lec2]);
+      if (dernier) {
+        if (col.pre2 < 0 || col.lec2 < 0) ko("une dernière exécution est citée sans colonnes « Dernière exécution lue » et « Dernière lecture le » à la fois");
+        else lire(col.pre2, col.lec2, "dernière exécution");
+      }
+      if (_vide(l[col.ech])) { ko("prochaine échéance absente — sans elle, personne ne sait quand relire l'exécution suivante ; écrire AAAA-MM-JJ HH:MM"); continue; }
+      const ech = _instantO22(l[col.ech], true);
+      if (!ech) { ko(`prochaine échéance illisible (« ${_valeurCellule(l[col.ech])} ») — attendu AAAA-MM-JJ HH:MM`); continue; }
+      if (ech.ms < reference && !(lectures.length && Math.max(...lectures) > ech.ms)) {
+        const derniere = lectures.length ? `la lecture la plus récente date du ${aff(Math.max(...lectures))}` : "aucune lecture valide";
+        ko(`échéance du ${_valeurCellule(l[col.ech])} DÉPASSÉE à ${aff(reference)} sans preuve plus récente (${derniere}) — l'exécution attendue n'a pas été lue : lire l'identifiant ou l'URL de la dernière publication (colonnes « Dernière exécution lue » et « Dernière lecture le ») et poser la prochaine échéance, ou ramener le Statut à « déclaré »`);
+      }
+    }
+  }
+  if (!enService22 && !F.length) {
+    add("info", "O22", tachesVues
+      ? `${tachesVues} tâche(s) planifiée(s) lue(s), aucune déclarée en service (« actif », « partagé », « en service ») — rien à prouver`
+      : "aucune tâche planifiée ou récurrente désignée (titre « Tâches planifiées », colonne Cadence ou Type) — rien à juger", docPath);
+    fin22("SKIP", 2);
+  }
+  const durs22 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
+  fin22(durs22.length ? "FAIL" : "PASS", durs22.length ? 1 : 0);
+}
+
+// ── O23 · un réseau Docker posé par Terraform relève les plages prises et ne dérive pas (TF-2164) ───
+//
+// LE FAIT (Produit-86, lot 20261104a RO-2, ledger seq 380, 04/11/2026). Deux réseaux Docker posés par
+// Terraform sur le démon du poste : la plage écrite à la main (172.30.0.0/24) était déjà prise (« Pool
+// overlaps »), puis le démon complétait ipam_config (passerelle, adresses auxiliaires) et chaque apply
+// réclamait le remplacement du réseau, en échec tant que des conteneurs y étaient attachés : 3 déploiements
+// en échec entre 10:12 et 10:18. Rejoué le 05/11/2026 sur Terraform 1.12.2 et Docker 29.4.2 : sans
+// `ignore_changes`, le plan qui suit l'apply rend « docker_network.lab must be replaced » (exit 2) ; avec
+// le gabarit, « No changes » (exit 0).
+//
+// CE QUI EST JUGÉ, statique sur les fichiers .tf (aucune commande Terraform, aucun appel au démon) : pour
+// chaque `resource "docker_network"` qui déclare un bloc `ipam_config` : (1) `lifecycle { ignore_changes =
+// [ipam_config] }` (ou `all`) est posé ; (2) `subnet` n'est pas un littéral CIDR : il vient d'un relevé des
+// plages prises (`data "external"` qui appelle scripts/plages-docker.mjs). Un réseau sans `ipam_config`
+// laisse le démon choisir : rien à juger. Gabarit et faits : gabarits/reseau-docker.tf,
+// references/RESEAU-ET-FRONTAL-DOCKER.md.
+const _SRC_LIFECYCLE_O23 = "developer.hashicorp.com/terraform/language/meta-arguments/lifecycle, lue le 05/11/2026";
+// Retire commentaires (#, //, /* */) sans toucher aux chaînes ; les chaînes gardent leur contenu.
+function _hclSansCommentaires(t) {
+  let sortie = "", i = 0, chaine = false;
+  while (i < t.length) {
+    const c = t[i], d = t[i + 1];
+    if (chaine) { sortie += c; if (c === "\\") { sortie += d ?? ""; i += 2; continue; } if (c === '"') chaine = false; i++; continue; }
+    if (c === '"') { chaine = true; sortie += c; i++; continue; }
+    if (c === "#" || (c === "/" && d === "/")) { while (i < t.length && t[i] !== "\n") i++; continue; }
+    if (c === "/" && d === "*") { i += 2; while (i < t.length && !(t[i] === "*" && t[i + 1] === "/")) { if (t[i] === "\n") sortie += "\n"; i++; } i += 2; continue; }
+    sortie += c; i++;
+  }
+  return sortie;
+}
+// Index de l'accolade fermante qui répond à l'accolade ouvrante posée en `ouvrante` (chaînes ignorées).
+function _accoladeFermante(t, ouvrante) {
+  let prof = 0, chaine = false;
+  for (let i = ouvrante; i < t.length; i++) {
+    const c = t[i];
+    if (chaine) { if (c === "\\") i++; else if (c === '"') chaine = false; continue; }
+    if (c === '"') { chaine = true; continue; }
+    if (c === "{") prof++;
+    else if (c === "}" && --prof === 0) return i;
+  }
+  return -1;
+}
+// Les blocs `<mot> "<type>" "<nom>" { … }` d'un texte HCL : { etiquettes, corps, ligne }.
+function _hclBlocs(texteSource, mot) {
+  const t = _hclSansCommentaires(texteSource);
+  const re = new RegExp(`^[ \\t]*${mot}[ \\t]+"([^"]+)"[ \\t]+"([^"]+)"[ \\t]*\\{`, "gm");
+  const blocs = [];
+  for (let m; (m = re.exec(t));) {
+    const ouvrante = m.index + m[0].length - 1;
+    const fermante = _accoladeFermante(t, ouvrante);
+    if (fermante < 0) continue;
+    blocs.push({ type: m[1], nom: m[2], corps: t.slice(ouvrante + 1, fermante), ligne: t.slice(0, m.index).split("\n").length });
+  }
+  return blocs;
+}
+// Les sous-blocs anonymes `<nom> { … }` d'un corps (ipam_config, lifecycle).
+function _hclSousBlocs(corps, nom) {
+  const re = new RegExp(`^[ \\t]*${nom}[ \\t]*\\{`, "gm");
+  const blocs = [];
+  for (let m; (m = re.exec(corps));) {
+    const ouvrante = m.index + m[0].length - 1;
+    const fermante = _accoladeFermante(corps, ouvrante);
+    if (fermante >= 0) blocs.push(corps.slice(ouvrante + 1, fermante));
+  }
+  return blocs;
+}
+if (args.includes("--reseau-docker")) {
+  const racine23 = args[args.indexOf("--reseau-docker") + 1];
+  const DOM23 = "Exploitation : un réseau Docker posé par Terraform relève les plages prises et ne dérive pas (O-23)";
+  const NJ23 = [
+    "la plage RÉELLEMENT libre : l'oracle lit des fichiers .tf, il n'interroge ni le démon ni Terraform ; le relevé est joué par scripts/plages-docker.mjs, à l'apply",
+    "un `subnet` venu d'une variable ou d'un local (`var.x`, `local.x`) : sa valeur se décide hors du fichier, il n'est ni jugé ni refusé",
+    "qu'un `data \"external\"` appelé relevé relève vraiment les plages : l'oracle lit le nom du programme (« plage » ou « docker »), il ne l'exécute pas",
+    "les plages IPv6 et les routes de l'hôte (VPN, réseau d'entreprise) : le relevé ne lit que les réseaux du démon Docker",
+    "un module Terraform appelé de l'extérieur (`module \"x\" { source = … }`) : ses ressources vivent dans l'autre dossier",
+  ];
+  const fin23 = (verdict, code) => {
+    process.stdout.write(JSON.stringify({ oracle: "oracle-ops", domaine: DOM23, artefact: racine23 || null, verdict, findings: F.length ? F : [{ sev: "info", regle: "O23", msg: "chaque réseau Docker à ipam_config pose ignore_changes = [ipam_config] et tient sa plage d'un relevé des plages prises", where: racine23 }], non_juge: NJ23 }, null, jsonOnly ? 0 : 2));
+    process.exit(code);
+  };
+  if (!racine23 || !fs.existsSync(racine23)) { add("info", "O23", "pile Terraform introuvable", String(racine23)); fin23("SKIP", 2); }
+  const fichiers23 = fs.statSync(racine23).isDirectory() ? listerTf(racine23) : [racine23];
+  const textes23 = fichiers23.map(f => ({ f, t: fs.readFileSync(f, "utf8") }));
+  const donneesExternes = textes23.flatMap(({ t }) => _hclBlocs(t, "data").filter(b => b.type === "external"));
+  let reseaux23 = 0;
+  for (const { f, t } of textes23) {
+    for (const b of _hclBlocs(t, "resource").filter(x => x.type === "docker_network")) {
+      const ou = `${path.basename(f)}:${b.ligne} (docker_network.${b.nom})`;
+      const ipam = _hclSousBlocs(b.corps, "ipam_config");
+      if (!ipam.length) { add("info", "O23", `docker_network.${b.nom} : aucun ipam_config, le démon choisit la plage — rien à juger`, ou); continue; }
+      reseaux23++;
+      const ignore = _hclSousBlocs(b.corps, "lifecycle").map(l => /ignore_changes\s*=\s*(\[[^\]]*\]|all)/.exec(l)?.[1] ?? "").join(" ");
+      if (!/\bipam_config\b|\ball\b/.test(ignore))
+        add("bloquant", "O23", `docker_network.${b.nom} : ipam_config sans lifecycle { ignore_changes = [ipam_config] } — le démon complète la passerelle et les adresses auxiliaires après la création, chaque apply lit un écart et réclame le REMPLACEMENT du réseau, en échec tant que des conteneurs y sont attachés (3 déploiements en échec le 04/11/2026) ; poser \`lifecycle { ignore_changes = [ipam_config] }\` comme dans gabarits/reseau-docker.tf (« Use the ignore_changes argument when a resource is created with references to data that may change in the future, but should not affect the resource after its creation. », ${_SRC_LIFECYCLE_O23}) (TF-2164)`, ou);
+      for (const c of ipam) {
+        const expr = /^[ \t]*subnet[ \t]*=[ \t]*(.+?)[ \t]*$/m.exec(c)?.[1];
+        if (!expr) { add("majeur", "O23", `docker_network.${b.nom} : ipam_config sans subnet — le bloc ne dit pas quelle plage il pose`, ou); continue; }
+        if (/^"\d{1,3}(\.\d{1,3}){3}\/\d{1,2}"$/.test(expr)) {
+          add("bloquant", "O23", `docker_network.${b.nom} : subnet écrit en dur (${expr}) — rien ne dit que la plage est libre sur le démon qui applique : « Pool overlaps » le 04/11/2026 (172.30.0.0/24 déjà prise) ; tirer la plage d'un relevé : data "external" qui appelle scripts/plages-docker.mjs, puis subnet = data.external.plage.result.subnet (gabarits/reseau-docker.tf) (TF-2164)`, ou);
+          continue;
+        }
+        const ext = /^data\.external\.([\w-]+)\./.exec(expr);
+        if (ext) {
+          const d = donneesExternes.find(x => x.nom === ext[1]);
+          if (!d) add("majeur", "O23", `docker_network.${b.nom} : subnet lit data.external.${ext[1]}, qui n'est déclaré dans aucun fichier lu sous ${racine23} — le relevé n'est pas vérifiable`, ou);
+          else if (!/plage|docker/i.test(d.corps)) add("majeur", "O23", `docker_network.${b.nom} : data.external.${ext[1]} n'appelle ni un programme de plages ni Docker (lu : « plage » ou « docker » dans son corps) — ce n'est pas un relevé des plages prises ; employer scripts/plages-docker.mjs`, ou);
+          continue;
+        }
+        add("info", "O23", `docker_network.${b.nom} : subnet = ${expr} — valeur décidée hors du fichier, non jugée`, ou);
+      }
+    }
+  }
+  if (!reseaux23) { add("info", "O23", `aucun docker_network à ipam_config parmi ${fichiers23.length} fichier(s) .tf — rien à juger`, racine23); fin23("SKIP", 2); }
+  const durs23 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
+  fin23(durs23.length ? "FAIL" : "PASS", durs23.length ? 1 : 0);
+}
+
+// ── O24 · un frontal nginx résout son amont à chaque requête, il ne le fige pas au démarrage (TF-2165) ───
+//
+// LE FAIT (Produit-86, lot 20261104a RO-3, ledger seq 400, 04/11/2026). Le frontal de la préproduction
+// portait `proxy_pass http://app:8000;` : nginx résout « app » une seule fois, au chargement de la
+// configuration. Après l'ajout de conteneurs au réseau interne, l'application recréée a changé d'adresse et
+// le frontal a rendu 502 (santé 1/3, 1 déploiement en échec à 12:31). Rejoué le 05/11/2026 sur nginx
+// 1.30-alpine et Docker 29.4.2 : amont recréé à une autre adresse, le frontal littéral rend 502, le
+// gabarit rend 200 ; et `nginx -t` sans l'amont échoue en littéral (« host not found in upstream »).
+//
+// CE QUI EST JUGÉ, statique sur les fichiers de configuration nginx (*.conf, *.conf.template), sans lancer
+// nginx : chaque `proxy_pass` qui vise un NOM d'hôte (ni IP, ni localhost, ni socket unix) (1) passe par une
+// variable (`proxy_pass $amont;`), et un `resolver` est déclaré (« if an address is specified as a domain
+// name, the name is searched among the described server groups, and, if not found, is determined using a
+// resolver. », nginx.org, ngx_http_proxy_module, lue le 05/11/2026) ; (2) ce `resolver` porte `valid=` (« By
+// default, nginx caches answers using the TTL value of a response. An optional valid parameter allows
+// overriding it », ngx_http_core_module, lue le 05/11/2026) ; (3) un `proxy_pass` qui vise un groupe
+// `upstream` dont un serveur est un nom d'hôte n'est recevable que si ce serveur porte `resolve` (nginx
+// 1.27.3 et plus : « monitors changes of the IP addresses that correspond to a domain name of the server »,
+// ngx_http_upstream_module, lue le 05/11/2026). Gabarit et faits : gabarits/frontal-nginx.conf,
+// references/RESEAU-ET-FRONTAL-DOCKER.md.
+//
+// TF-2177 (05/11/2026) : les quatre autres directives d'amont de nginx, `fastcgi_pass`, `uwsgi_pass`, `scgi_pass`
+// et `grpc_pass`, portent la même phrase de documentation sur la variable et le resolver, et se jugent par les
+// mêmes règles (1) à (3). Mesuré le 05/11/2026 sur nginx 1.30-alpine : chacune, écrite avec un nom d'hôte en
+// clair, fait échouer `nginx -t` (« host not found in upstream ») ; par une variable et un resolver, il passe.
+// Le 502 après recréation de l'amont n'est rejoué que pour `proxy_pass` (exercice du self-test).
+const _DIRECTIVES_PASSAGE_O24 = ["proxy_pass", "fastcgi_pass", "uwsgi_pass", "scgi_pass", "grpc_pass"];
+const _SRC_PROXY_O24 = "nginx.org/en/docs/http/ngx_http_proxy_module.html, lue le 05/11/2026";
+const _SRC_PASSAGE_O24 = {
+  proxy_pass: _SRC_PROXY_O24,
+  fastcgi_pass: "nginx.org/en/docs/http/ngx_http_fastcgi_module.html, lue le 05/11/2026",
+  uwsgi_pass: "nginx.org/en/docs/http/ngx_http_uwsgi_module.html, lue le 05/11/2026",
+  scgi_pass: "nginx.org/en/docs/http/ngx_http_scgi_module.html, lue le 05/11/2026",
+  grpc_pass: "nginx.org/en/docs/http/ngx_http_grpc_module.html, lue le 05/11/2026",
+};
+// Retire le schéma d'une adresse d'amont (http://, https://, grpc://, grpcs://, uwsgi://, suwsgi://) ; `unix:/…` n'en a pas.
+const _sansSchemaO24 = a => a.replace(/^[a-z][a-z0-9+.-]*:\/\//i, "");
+const _SRC_CORE_O24 = "nginx.org/en/docs/http/ngx_http_core_module.html, lue le 05/11/2026";
+const _SRC_UPSTREAM_O24 = "nginx.org/en/docs/http/ngx_http_upstream_module.html, lue le 05/11/2026";
+function _listerConfNginx(racine) {
+  const fichiers = [];
+  (function lister(dir, prof = 0) {
+    if (prof > 4 || !fs.existsSync(dir)) return;
+    for (const nom of fs.readdirSync(dir)) {
+      if (nom === ".terraform" || nom === "node_modules" || nom === ".git") continue;
+      const p = path.join(dir, nom);
+      let st; try { st = fs.statSync(p); } catch { continue; }
+      if (st.isDirectory()) lister(p, prof + 1);
+      else if (/\.conf(\.(template|tpl|j2))?$/i.test(nom)) fichiers.push(p);
+    }
+  })(racine);
+  return fichiers;
+}
+// Retire les commentaires `#` d'une configuration nginx (hors guillemets) en gardant les retours à la ligne.
+function _nginxSansCommentaires(t) {
+  return t.split("\n").map(l => {
+    let q = null;
+    for (let i = 0; i < l.length; i++) {
+      const c = l[i];
+      if (q) { if (c === "\\") i++; else if (c === q) q = null; }
+      else if (c === '"' || c === "'") q = c;
+      else if (c === "#") return l.slice(0, i);
+    }
+    return l;
+  }).join("\n");
+}
+if (args.includes("--frontal-nginx")) {
+  const racine24 = args[args.indexOf("--frontal-nginx") + 1];
+  const DOM24 = "Exploitation : un frontal nginx résout son amont à chaque requête, il ne le fige pas au démarrage (O-24)";
+  const NJ24 = [
+    "l'exécution de nginx : l'oracle lit des fichiers, il ne lance ni `nginx -t` ni le frontal ; la preuve par le geste est l'exercice FORGE_OPS_EXERCICE_DOCKER=1 de oracles/self-test.mjs",
+    "le 502 après recréation de l'amont, rejoué seulement pour `proxy_pass` (exercice du self-test) : pour `fastcgi_pass`, `uwsgi_pass`, `scgi_pass` et `grpc_pass`, lues par les mêmes règles, seul le refus de `nginx -t` (« host not found in upstream », mesuré le 05/11/2026) est établi, faute d'un serveur FastCGI, uwsgi, SCGI ou gRPC jetable dans l'exercice",
+    "un `resolver` posé dans un AUTRE fichier que le `proxy_pass` quand un seul fichier est passé : passer le dossier de la configuration pour que le résolveur de nginx.conf compte ; un fichier qui porte `include` est dit non jugé sur ce point",
+    "qu'une variable d'une directive de passage (`proxy_pass`, `fastcgi_pass`, `uwsgi_pass`, `scgi_pass`, `grpc_pass`) porte bien un nom d'hôte, et qu'elle est définie (`set`, `map`) : `proxy_pass $x;` est lu comme variable, sans suivre sa valeur",
+    "un gabarit rendu par envsubst (`${AMONT}` dans un `.conf.template`) : la forme `${nom}` est une variable nginx valide, elle est lue comme telle, alors qu'envsubst peut la remplacer par un nom littéral avant nginx",
+    "la justesse du résolveur : 127.0.0.11 est le DNS embarqué de Docker sur un réseau défini par l'utilisateur, l'oracle n'exige aucune adresse",
+  ];
+  const fin24 = (verdict, code) => {
+    process.stdout.write(JSON.stringify({ oracle: "oracle-ops", domaine: DOM24, artefact: racine24 || null, verdict, findings: F.length ? F : [{ sev: "info", regle: "O24", msg: "chaque directive de passage (proxy_pass, fastcgi_pass, uwsgi_pass, scgi_pass, grpc_pass) vers un nom d'hôte passe par une variable, avec un resolver qui porte valid=", where: racine24 }], non_juge: NJ24 }, null, jsonOnly ? 0 : 2));
+    process.exit(code);
+  };
+  if (!racine24 || !fs.existsSync(racine24)) { add("info", "O24", "configuration nginx introuvable", String(racine24)); fin24("SKIP", 2); }
+  const estDossier24 = fs.statSync(racine24).isDirectory();
+  const fichiers24 = estDossier24 ? _listerConfNginx(racine24) : [racine24];
+  const textes24 = fichiers24.map(f => ({ f, t: _nginxSansCommentaires(fs.readFileSync(f, "utf8")) }));
+  const resolveurs24 = textes24.flatMap(({ t }) => [...t.matchAll(/^[ \t]*resolver[ \t]+([^;]+);/gm)].map(m => m[1].trim()));
+  const resolveursDe = (t) => [...t.matchAll(/^[ \t]*resolver[ \t]+([^;]+);/gm)].map(m => m[1].trim());
+  const groupes24 = new Map();
+  for (const { t } of textes24) {
+    for (const m of t.matchAll(/^[ \t]*upstream[ \t]+([\w.-]+)[ \t]*\{/gm)) {
+      const ouvrante = m.index + m[0].length - 1;
+      const fermante = _accoladeFermante(t, ouvrante);
+      if (fermante < 0) continue;
+      const corps = t.slice(ouvrante + 1, fermante);
+      groupes24.set(m[1], { serveurs: [...corps.matchAll(/^[ \t]*server[ \t]+([^\s;]+)([^;]*);/gm)].map(s => ({ adresse: s[1], options: s[2] })), resolveur: /^[ \t]*resolver[ \t]/m.test(corps) });
+    }
+  }
+  const avecHttp24 = textes24.some(({ t }) => /^[ \t]*http[ \t]*\{/m.test(t));
+  const estIp = h => /^\d{1,3}(\.\d{1,3}){3}$/.test(h) || /^\[[0-9a-f:.]+\]$/i.test(h);
+  const hoteDe = adresse => _sansSchemaO24(adresse).split("/")[0].replace(/:\d+$/, "");
+  let passages24 = 0;
+  for (const { f, t } of textes24) {
+    const avecInclude = /^[ \t]*include[ \t]/m.test(t);
+    const resolveurs = estDossier24 ? resolveurs24 : resolveursDe(t);
+    for (const m of t.matchAll(new RegExp(`\\b(${_DIRECTIVES_PASSAGE_O24.join("|")})[ \\t]+([^;]+);`, "g"))) {
+      const directive = m[1];
+      const cible = m[2].trim();
+      const src = _SRC_PASSAGE_O24[directive];
+      const ligne = t.slice(0, m.index).split("\n").length;
+      const ou = `${path.basename(f)}:${ligne}`;
+      const hote = hoteDe(cible);
+      if (/^unix:/i.test(_sansSchemaO24(cible)) || estIp(hote) || /^localhost$/i.test(hote)) continue;
+      passages24++;
+      if (/\$/.test(hote) || /^\$/.test(cible)) {
+        if (!resolveurs.length) {
+          if (avecInclude) add("info", "O24", `${directive} ${cible} : variable, mais aucun resolver dans ce fichier qui porte \`include\` — le résolveur peut vivre dans un fichier inclus, non lu ici`, ou);
+          else add("bloquant", "O24", `${directive} ${cible} : l'amont est une variable et AUCUN resolver n'est déclaré — nginx n'a pas de serveur DNS pour la résoudre et ${directive === "proxy_pass" ? "répond 502 à la première requête" : "la première requête échoue"} (« ...determined using a resolver. », ${src}) ; poser \`resolver 127.0.0.11 valid=10s;\` comme dans gabarits/frontal-nginx.conf (TF-2165)`, ou);
+        } else if (!resolveurs.some(r => /\bvalid=/.test(r))) {
+          add("majeur", "O24", `resolver ${resolveurs[0]} sans valid= — nginx garde la réponse DNS pour la durée de son TTL (« By default, nginx caches answers using the TTL value of a response. An optional valid parameter allows overriding it », ${_SRC_CORE_O24}) : l'adresse d'un amont recréé n'est reprise qu'à l'expiration de ce TTL ; poser valid=10s comme dans gabarits/frontal-nginx.conf (TF-2165)`, ou);
+        }
+        continue;
+      }
+      const groupe = groupes24.get(hote);
+      if (groupe) {
+        const nommes = groupe.serveurs.filter(s => !estIp(hoteDe(s.adresse)) && !/^unix:/i.test(s.adresse) && !/^localhost$/i.test(hoteDe(s.adresse)));
+        const figes = nommes.filter(s => !/\bresolve\b/.test(s.options));
+        if (figes.length) add("bloquant", "O24", `${directive} ${cible} : le groupe upstream « ${hote} » nomme ${figes.map(s => s.adresse).join(", ")} sans le paramètre resolve — nginx résout ces noms au chargement et fige leur adresse, 502 après la recréation de l'amont (Produit-86, 04/11/2026) ; passer par une variable (\`set $amont "${directive === "proxy_pass" ? "http://" : ""}${figes[0].adresse}"; ${directive} $amont;\` avec \`resolver 127.0.0.11 valid=10s;\`) ou poser \`resolve\` et une \`zone\` (nginx 1.27.3 et plus, ${_SRC_UPSTREAM_O24}) (TF-2165)`, ou);
+        else if (nommes.length && !groupe.resolveur && !(avecHttp24 && resolveurs.length) && !avecInclude) add("bloquant", "O24", `${directive} ${cible} : le groupe upstream « ${hote} » porte resolve mais aucun resolver n'est posé dans son bloc ni dans http — un resolver de bloc server ne lui sert pas (« In order for this parameter to work, the resolver directive must be specified in the http block or in the corresponding upstream block. », ${_SRC_UPSTREAM_O24}) ; nginx -t répond « no resolver defined to resolve names at run time in upstream » ; poser \`resolver 127.0.0.11 valid=10s;\` dans le bloc upstream (TF-2165)`, ou);
+        continue;
+      }
+      const mesure = directive === "proxy_pass"
+        ? "après la recréation de l'amont à une autre adresse, le frontal rend 502 (Produit-86, 04/11/2026 ; rejoué le 05/11/2026 sur nginx 1.30 : 502, et `nginx -t` sans l'amont échoue « host not found in upstream »)"
+        : `\`nginx -t\` sans l'amont échoue « host not found in upstream » (mesuré le 05/11/2026 sur nginx 1.30-alpine : le nom est résolu au chargement ; le 502 après recréation n'est rejoué que pour proxy_pass) (${src}, TF-2177)`;
+      add("bloquant", "O24", `${directive} ${cible} : « ${hote} » est résolu UNE fois, au chargement de la configuration, et son adresse est figée — ${mesure} ; écrire \`resolver 127.0.0.11 valid=10s;\`, \`set $amont "${cible}";\` puis \`${directive} $amont;\` comme dans gabarits/frontal-nginx.conf (TF-2165)`, ou);
+    }
+  }
+  if (!passages24) { add("info", "O24", `aucune directive de passage (${_DIRECTIVES_PASSAGE_O24.join(", ")}) vers un nom d'hôte parmi ${fichiers24.length} fichier(s) de configuration — rien à juger`, racine24); fin24("SKIP", 2); }
+  const durs24 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
+  fin24(durs24.length ? "FAIL" : "PASS", durs24.length ? 1 : 0);
+}
+
+// ── O25 · les identifiants de test remis à l'humain se recopient sans erreur (TF-2167) ───
+//
+// LE FAIT (Produit-86, lot 20261104b RP-11, ledger seq 421, 04/11/2026). Le porteur n'a pas pu se connecter avec
+// les mots de passe du fichier des comptes de test : 2 refus 401 (Chrome à 14:59, Firefox à 15:01), alors que
+// les mêmes valeurs passaient par httpx et Playwright. `secrets.token_urlsafe` produisait « _ » et des sosies
+// (1, l). Un correctif et un redéploiement ont suivi.
+//
+// CE QUI EST JUGÉ, sur un fichier `forge-ops/identifiants-test@1` (JSON, aucun appel réseau) : le mot de passe de
+// chaque compte de `comptes` tient en 20 caractères au moins, tirés d'un alphabet sans sosie (0 O 1 l I) ni
+// signe. Le verdict nomme le compte et la POSITION de chaque défaut, jamais la valeur : un secret ne transite
+// pas par un rapport. Le remède est `node scripts/tirer-secret-humain.mjs`. Générateur : scripts/lib-secret-humain.mjs.
+const _FORMAT_IDENTIFIANTS_O25 = "forge-ops/identifiants-test@1";
+if (args.includes("--identifiants-test")) {
+  const fichier25 = args[args.indexOf("--identifiants-test") + 1];
+  const DOM25 = "Exploitation : les identifiants de test remis à l'humain se recopient sans erreur (O-25)";
+  const NJ25 = [
+    "la FORCE du secret au-delà de sa longueur et de son alphabet : ni entropie mesurée, ni dictionnaire de mots de passe courants",
+    "les sosies hors de la liste du lot (0 O 1 l I) : 5 et S, 8 et B, 2 et Z, u et v se confondent aussi sur certaines polices ; le générateur ne les exclut pas",
+    "que le mot de passe du fichier est celui que le produit accepte : la connexion se prouve par la chaîne (`identifiants-test.mjs verifier`), pas par la lecture du fichier",
+    "tout champ autre que `comptes.<nom>.mot_de_passe` : jetons d'API et clés, qu'une machine seule emploie, ne sont pas recopiés par un humain",
+    "TF-2166 : un renouvellement fait HORS d'identifiants-test.mjs (un mot de passe réécrit à la main ou par une autre chaîne) ne laisse aucune ligne au journal : l'oracle juge le journal, il n'a pas d'historique du fichier pour comparer ses valeurs d'un déploiement à l'autre",
+    "TF-2166 : que la commande de connexion passée à `verifier` prouve une vraie connexion : elle est celle du produit, l'oracle lit son exit 0, jamais ce qu'elle fait",
+  ];
+  const fin25 = (verdict, code) => {
+    process.stdout.write(JSON.stringify({ oracle: "oracle-ops", domaine: DOM25, artefact: fichier25 || null, verdict, findings: F.length ? F : [{ sev: "info", regle: "O25", msg: "chaque mot de passe tient en 20 caractères au moins d'un alphabet sans sosie ni signe" + (args.includes("--journal") ? " ; au journal, aucun renouvellement sans demande, aucune création hors fichier ou compte absent, chaque création ou renouvellement suivi d'une connexion réussie" : ""), where: fichier25 }], non_juge: NJ25 }, null, jsonOnly ? 0 : 2));
+    process.exit(code);
+  };
+  if (!fichier25 || !fs.existsSync(fichier25)) { add("info", "O25", "fichier des identifiants introuvable", String(fichier25)); fin25("SKIP", 2); }
+  let doc25 = null;
+  try { doc25 = JSON.parse(fs.readFileSync(fichier25, "utf8")); }
+  catch { add("bloquant", "O25", "fichier illisible (JSON invalide) : un fichier non lu ne vaut jamais PASS", String(fichier25)); fin25("FAIL", 1); }
+  if (doc25?.format !== _FORMAT_IDENTIFIANTS_O25) { add("info", "O25", `format « ${doc25?.format ?? "absent"} » : attendu ${_FORMAT_IDENTIFIANTS_O25} — rien à juger`, String(fichier25)); fin25("SKIP", 2); }
+  const comptes25 = doc25.comptes && typeof doc25.comptes === "object" ? Object.entries(doc25.comptes) : [];
+  if (!comptes25.length) { add("info", "O25", "aucun compte déclaré — rien à juger", String(fichier25)); fin25("SKIP", 2); }
+  for (const [nom, c] of comptes25) {
+    const mdp = c?.mot_de_passe;
+    if (typeof mdp !== "string" || !mdp) { add("bloquant", "O25", `compte « ${nom} » : aucun mot de passe`, `${path.basename(fichier25)} (${nom})`); continue; }
+    const defauts = defautsDuSecret(mdp);
+    if (defauts.length) add("bloquant", "O25", `compte « ${nom} » : ${defauts.length} défaut(s) — ${defauts.slice(0, 6).join(" ; ")}${defauts.length > 6 ? ` ; … ${defauts.length - 6} autre(s)` : ""} — un humain lit « l » pour « 1 » et ne dicte pas un signe ; remplacer par \`node scripts/tirer-secret-humain.mjs\` (20 caractères, sans sosie ni signe) (TF-2167)`, `${path.basename(fichier25)} (${nom})`);
+  }
+  // TF-2166 : le journal de scripts/identifiants-test.mjs. Un mot de passe existant ne change que sur demande ; ce qui
+  // est créé ou renouvelé est suivi d'une connexion réussie.
+  const iJournal25 = args.indexOf("--journal");
+  if (iJournal25 >= 0) {
+    const journal25 = args[iJournal25 + 1];
+    const ouJ = String(journal25);
+    if (!journal25 || !fs.existsSync(journal25)) add("bloquant", "O25", `journal ${ouJ} introuvable : sans lui, ni la stabilité des mots de passe ni la connexion ne se prouvent`, ouJ);
+    else {
+      const lignes25 = fs.readFileSync(journal25, "utf8").split("\n").filter(l => l.trim());
+      const TYPES25 = ["identifiants_conserves", "identifiants_crees", "identifiants_renouveles", "identifiants_verifies"];
+      const etat25 = new Map();
+      let attendu25 = 1;
+      lignes25.forEach((ligne, i) => {
+        const ou = `${path.basename(ouJ)}:${i + 1}`;
+        let e = null;
+        try { e = JSON.parse(ligne); } catch { add("bloquant", "O25", `ligne ${i + 1} du journal : JSON invalide`, ou); return; }
+        if (e.seq !== attendu25) add("bloquant", "O25", `ligne ${i + 1} du journal : seq ${e.seq}, attendu ${attendu25} (journal à ajout seul rompu)`, ou);
+        attendu25 = (typeof e.seq === "number" ? e.seq : attendu25) + 1;
+        if (!TYPES25.includes(e.type)) { add("bloquant", "O25", `ligne ${i + 1} du journal : type inconnu « ${e.type} »`, ou); return; }
+        const comptes = Array.isArray(e.comptes) ? e.comptes : [];
+        if (e.type === "identifiants_renouveles") {
+          if (e.motif !== "demande" || !String(e.demande ?? "").trim())
+            add("bloquant", "O25", `ligne ${i + 1} du journal : mot de passe renouvelé (${comptes.join(", ") || "aucun compte nommé"}) sans demande de l'humain (motif « ${e.motif ?? "absent"} », demande ${String(e.demande ?? "").trim() ? "écrite" : "vide"}) — la règle du porteur du 04/11/2026 : « arrête de changer les mdp à chaque fois que tu déploies une nouvelle version » ; un mot de passe existant ne change que sur demande (\`identifiants-test.mjs renouveler … --demande "…"\`) (TF-2166)`, ou);
+          comptes.forEach(c => etat25.set(c, "a_verifier"));
+        } else if (e.type === "identifiants_crees") {
+          if (!["fichier_absent", "compte_absent"].includes(e.motif))
+            add("bloquant", "O25", `ligne ${i + 1} du journal : mots de passe créés (${comptes.join(", ") || "aucun compte nommé"}) pour le motif « ${e.motif ?? "absent"} » — on ne crée un mot de passe que si le fichier ou le compte manque (fichier_absent, compte_absent) (TF-2166)`, ou);
+          comptes.forEach(c => etat25.set(c, "a_verifier"));
+        } else if (e.type === "identifiants_verifies") {
+          const refuses = Array.isArray(e.refuses) ? e.refuses : [];
+          comptes.forEach(c => etat25.set(c, (refuses.includes(c) || (e.ok === false && !refuses.length)) ? "echec" : "ok"));
+        }
+      });
+      if (!lignes25.length) add("bloquant", "O25", "journal vide : aucun passage d'identifiants-test.mjs n'y est tracé", ouJ);
+      const enEchec = [...etat25].filter(([, v]) => v === "echec").map(([c]) => c);
+      const sansPreuve = [...etat25].filter(([, v]) => v === "a_verifier").map(([c]) => c);
+      if (enEchec.length) add("bloquant", "O25", `la dernière vérification de connexion est en ÉCHEC pour ${enEchec.join(", ")} : le mot de passe remis à l'humain ne connecte pas (TF-2166)`, ouJ);
+      if (sansPreuve.length) add("majeur", "O25", `mots de passe créés ou renouvelés pour ${sansPreuve.join(", ")} sans vérification de connexion réussie ensuite — la chaîne ne rend pas PASS avant d'avoir joué \`identifiants-test.mjs verifier\` (TF-2166)`, ouJ);
+    }
+  }
+  const durs25 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
+  fin25(durs25.length ? "FAIL" : "PASS", durs25.length ? 1 : 0);
+}
+// ── O26 · la version servie se lit dans /healthz, elle ne se reconstitue pas (TF-2201) ───
+//
+// LE FAIT (Produit-86, lot 20261105b RP-21, ledger seq 458, 05/11/2026). L'empreinte servie (`23ea38d71963`,
+// calculée dans le code) ne correspondait à aucun des 25 derniers commits, LF et CRLF recalculés ; le dossier de
+// MEP citait deux commits servis (lignes 10 et 195) ; seule l'étiquette de l'image (`ef30cc7`) disait la version.
+// Une session a recalculé 25 commits pour dater la préproduction.
+//
+// CE QUI EST JUGÉ, sur la CAPTURE d'une réponse /healthz (JSON, aucun appel réseau ; la lecture est
+// `scripts/version-servie.mjs lire <url> --sortie capture.json`) : elle porte un champ `commit` de 7 à 40
+// caractères hexadécimaux ; avec `--depot <dossier git>`, ce commit est un commit du dépôt, et sans `--attendu` le
+// verdict dit de combien de commits l'instance est en retard sur la tête ; avec `--attendu <commit>`, c'est le commit
+// que le dossier de MEP annonce. Le remède est dans les plans azure et aws (`--build-arg COMMIT_SHA=<COMMIT>`), gcp (substitution `_COMMIT_SHA`) et railway (variable `COMMIT_SHA`), TF-2244.
+// Logique : scripts/lib-version-servie.mjs.
+if (args.includes("--version-servie")) {
+  const fichier26 = args[args.indexOf("--version-servie") + 1];
+  const valeur26 = (nom) => { const i = args.indexOf(nom); return i >= 0 ? args[i + 1] : null; };
+  const DOM26 = "Exploitation : la version servie se lit dans /healthz, elle ne se reconstitue pas (O-26)";
+  const NJ26 = [
+    "que l'image a REÇU le commit à sa construction : l'oracle juge la réponse de l'instance, il ne lit ni le Dockerfile ni la commande de construction (les plans azure, aws, gcp et railway le passent, O-5 le juge)",
+    "que la capture vient de l'instance de PRODUCTION ou de préproduction visée : le fichier est celui que l'appelant donne, `version-servie.mjs lire` cite l'URL lue dans sa sortie",
+    "un arbre de travail modifié depuis le commit servi : un commit dit le dernier état commité, jamais des fichiers modifiés non commités au moment de la construction",
+    "gcp et railway (TF-2244) : leurs plans passent le commit à la construction (gcp : fichier de construction et substitution `_COMMIT_SHA`, `gcloud builds submit --tag` n'acceptant aucun argument de construction ; railway : variable de service `COMMIT_SHA` lue par `ARG`, posée par `railway variable set … --skip-deploys`), d'après les pages de l'éditeur lues le 06/11/2026, jamais éprouvé par un déploiement réel : aucun projet Cloud Run ni Railway n'est à la disposition de la forge, et O-5 ne juge que la forme du plan",
+  ];
+  const fin26 = (verdict, code) => {
+    process.stdout.write(JSON.stringify({ oracle: "oracle-ops", domaine: DOM26, artefact: fichier26 || null, verdict, findings: F.length ? F : [{ sev: "info", regle: "O26", msg: "/healthz rend un commit de 7 à 40 caractères hexadécimaux", where: fichier26 }], non_juge: NJ26 }, null, jsonOnly ? 0 : 2));
+    process.exit(code);
+  };
+  if (!fichier26 || !fs.existsSync(fichier26)) { add("info", "O26", "capture de /healthz introuvable — la version servie n'est pas prouvée", String(fichier26)); fin26("SKIP", 2); }
+  let corps26 = null;
+  try { corps26 = JSON.parse(fs.readFileSync(fichier26, "utf8")); }
+  catch { add("bloquant", "O26", "capture illisible (JSON invalide) : un fichier non lu ne vaut jamais PASS", String(fichier26)); fin26("FAIL", 1); }
+  const jug26 = jugerVersionServie(corps26, { depot: valeur26("--depot"), attendu: valeur26("--attendu") });
+  for (const c of jug26.constats) add(c.sev, "O26", c.msg, path.basename(fichier26));
+  const durs26 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
+  fin26(durs26.length ? "FAIL" : "PASS", durs26.length ? 1 : 0);
+}
+// ── O27 · l'inventaire des composants est confronté aux sorties d'état, et « prêt » est refusé sur un composant présent non inventorié (TF-2209) ───
+//
+// LE FAIT (Produit-86, lot 20261105e RP-29, ledger seq 538, 05/11/2026). `docs/projet/COMPOSANTS-OPS.md` est resté au texte
+// du premier commit (03/11 à 11:31) pendant trois déploiements : ni la machine Azure, ni le Docker local, ni Foundry, et
+// « Aucun composant inutilisé ». Le vocabulaire des statuts était conforme (R-20 côté pilot) ; personne ne comparait le
+// document aux ressources réelles. La machine Azure est restée deux jours sans usage, trouvée par le porteur.
+//
+// CE QUI EST JUGÉ (le document, plus des CAPTURES de sorties d'état, aucun appel réseau — O-14 et O-15 jugent déjà un export
+// au format `noms`, O-27 l'établit à partir des sorties brutes des outils) : chaque composant que ces sorties nomment figure
+// LITTÉRALEMENT dans le document, comme un mot entier (un nom contenu dans un autre nom ne compte pas). Un composant
+// présent et non inventorié est un constat bloquant : le verdict est FAIL, « prêt » est refusé. Genres de sortie :
+//   terraform:<fichier>  sortie de `terraform state list` ; l'adresse (sans module ni indice) ou l'adresse complète figure
+//                        au document ; `data.*` et les types sans ressource réelle (random_, null_, time_, tls_, local_,
+//                        archive_, external, terraform_data) ne sont pas des composants ;
+//   docker:<fichier>     sortie de `docker ps --format "{{.Names}}"` (filtrée sur le produit : un autre produit du poste
+//                        n'est pas à inventorier ici) ;
+//   azure:<fichier>      sortie JSON de `az resource list -g <groupe> -o json` (tableau d'objets à `name`, ou { data: [...] }
+//                        d'`az graph query`) ;
+//   noms:<fichier>       export `{ "noms": [...] }` des autres cas, celui d'O-14.
+// Aucune sortie donnée : SKIP, l'inventaire n'est pas comparé et « prêt » ne peut pas s'appuyer sur lui.
+const _GENRES_O27 = ["terraform", "docker", "azure", "noms"];
+const _TYPES_SANS_COMPOSANT_O27 = /^(random_|null_|time_|tls_|local_|archive_|terraform_data$)/;
+const _echapper27 = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const _present27 = (texte, nom) => new RegExp(`(?<![\\w-])${_echapper27(nom)}(?![\\w-])`).test(texte);
+if (args.includes("--inventaire-a-jour")) {
+  const docPath = args[args.indexOf("--inventaire-a-jour") + 1];
+  const etats = args.map((a, i) => (a === "--etat" ? args[i + 1] : null)).filter(Boolean);
+  const DOM27 = "Exploitation : l'inventaire des composants contient chaque composant que les sorties d'état nomment (O-27)";
+  const NJ27 = [
+    "la COMPLÉTUDE des sorties d'état données : un composant qu'aucune sortie ne nomme (une pile dont on n'a pas donné `terraform state list`, un démon Docker non interrogé) n'est pas comparé — l'oracle juge ce qu'on lui montre, jamais le parc",
+    "le PÉRIMÈTRE des sorties : `docker ps` sans filtre nomme les conteneurs des autres produits du poste, que le document n'a pas à porter ; filtrer la sortie, jamais le document",
+    "`ops.mjs etat` n'est pas un genre : il rend la release courante et le journal, aucun nom de composant — le déploiement local est un composant que `docker`, `terraform` ou `noms` nomment",
+    "la fraîcheur du document au sens de sa date `verifie_le` : seule compte la présence de chaque nom, comme en O-14",
+    "le sens inverse (un composant inventorié « actif » absent des sorties) : c'est O-15 (`--statut-composants`)",
+    "la nature de la correspondance : un mot entier lu dans le texte, jamais une cellule de table (un nom cité en prose compte)",
+  ];
+  const fin27 = (verdict, code) => {
+    process.stdout.write(JSON.stringify({ oracle: "oracle-ops", domaine: DOM27, artefact: docPath || null, verdict, findings: F.length ? F : [{ sev: "info", regle: "O27", msg: "chaque composant nommé par les sorties d'état figure dans l'inventaire", where: docPath }], non_juge: NJ27 }, null, jsonOnly ? 0 : 2));
+    process.exit(code);
+  };
+  if (!docPath || !fs.existsSync(docPath)) { add("info", "O27", "document d'inventaire introuvable — rien n'est comparé", String(docPath)); fin27("SKIP", 2); }
+  if (!etats.length) { add("info", "O27", "aucune sortie d'état donnée (--etat <genre>:<fichier>) : l'inventaire n'est pas comparé aux ressources réelles, « prêt » ne peut pas s'appuyer sur lui", docPath); fin27("SKIP", 2); }
+  const doc27 = fs.readFileSync(docPath, "utf8");
+  let compares27 = 0;
+  for (const spec of etats) {
+    const m = /^([a-z]+):(.+)$/.exec(spec);
+    if (!m || !_GENRES_O27.includes(m[1])) { add("bloquant", "O27", `--etat « ${spec} » : genre inconnu — attendu ${_GENRES_O27.map(g => g + ":<fichier>").join(", ")}`, spec); continue; }
+    const [genre, fichier] = [m[1], m[2]];
+    if (!fs.existsSync(fichier)) { add("bloquant", "O27", `sortie d'état ${genre} introuvable : ${fichier} — une sortie non lue ne vaut jamais PASS`, fichier); continue; }
+    const texte = fs.readFileSync(fichier, "utf8");
+    const composants = []; // { nom, candidats: [formes acceptées au document] }
+    let ignorees = 0;
+    if (genre === "terraform") {
+      for (const brut of texte.split(/\r?\n/)) {
+        const ligne = brut.trim();
+        if (!ligne) continue;
+        const adresse = /^((?:module\.[\w-]+(?:\[[^\]]*\])?\.)*)(data\.)?([a-z][a-z0-9]*_\w+|external)\.([\w-]+)(?:\[[^\]]*\])?$/.exec(ligne);
+        if (!adresse) { ignorees++; continue; }
+        const [, module, data, type, nom] = adresse;
+        if (data || _TYPES_SANS_COMPOSANT_O27.test(type)) { ignorees++; continue; }
+        const complete = `${module}${type}.${nom}`;
+        composants.push({ nom: complete, candidats: [complete, `${type}.${nom}`] });
+      }
+    } else if (genre === "docker") {
+      for (const brut of texte.split(/\r?\n/)) {
+        const ligne = brut.trim();
+        if (!ligne) continue;
+        if (!/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(ligne)) { ignorees++; continue; }
+        composants.push({ nom: ligne, candidats: [ligne] });
+      }
+    } else {
+      let json = null;
+      try { json = JSON.parse(texte); } catch { add("bloquant", "O27", `sortie d'état ${genre} illisible (JSON invalide) : ${fichier}`, fichier); continue; }
+      const liste = genre === "noms" ? json?.noms : Array.isArray(json) ? json : json?.data;
+      if (!Array.isArray(liste)) { add("bloquant", "O27", `sortie d'état ${genre} sans liste : attendu ${genre === "noms" ? "{ \"noms\": [...] }" : "un tableau d'objets à « name » ou { \"data\": [...] }"} (${fichier})`, fichier); continue; }
+      for (const e of liste) {
+        const nom = typeof e === "string" ? e : e?.name;
+        if (typeof nom === "string" && nom.trim()) composants.push({ nom: nom.trim(), candidats: [nom.trim()] });
+        else ignorees++;
+      }
+    }
+    if (!composants.length) { add("bloquant", "O27", `sortie d'état ${genre} sans aucun composant lisible (${ignorees} ligne(s) ignorée(s)) : ${fichier} — format attendu : ${genre === "terraform" ? "`terraform state list`" : genre === "docker" ? "`docker ps --format \"{{.Names}}\"` (un nom par ligne, sans en-tête)" : "voir --inventaire-a-jour"}`, fichier); continue; }
+    compares27 += composants.length;
+    if (ignorees) add("info", "O27", `sortie d'état ${genre} : ${ignorees} ligne(s) ignorée(s) (données de lecture, types sans ressource réelle, ou forme inconnue) sur ${composants.length + ignorees}`, fichier);
+    for (const c of composants) {
+      if (!c.candidats.some(n => _present27(doc27, n)))
+        add("bloquant", "O27", `composant « ${c.nom} » PRÉSENT (sortie d'état ${genre}) mais ABSENT, mot pour mot, de l'inventaire ${path.basename(docPath)} — « prêt » est refusé : ajouter sa ligne (type, environnement, Statut) ou, s'il n'est pas à ce produit, filtrer la sortie d'état (TF-2209)`, c.nom);
+    }
+  }
+  const durs27 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
+  if (!durs27.length && !compares27) { add("info", "O27", "aucun composant comparé", docPath); fin27("SKIP", 2); }
+  fin27(durs27.length ? "FAIL" : "PASS", durs27.length ? 1 : 0);
+}
+// ── O28 · les réglages de plateforme lus se comparent à l'attendu du registre du pilot, bloquant avant la MEP (TF-2230) ───
+//
+// LA DÉCISION (D-178 (a), 06/11/2026, étude « Sécurité par défaut de bout en bout » du pilot, pièce 6, point d'injection du
+// déploiement). Le principe « réglage admissible appliqué à la création, vérifié à chaque livraison, exception décidée » devient
+// une loi transverse. Mesure de départ : le plan O5 lisait ssl-enforcement et network-restrictions de Supabase sans les comparer
+// à un attendu du registre, et ne lisait aucun réglage de GitHub ni de Cloudflare.
+//
+// CE QUI EST JUGÉ, sur un RELEVÉ déjà pris (`scripts/relever-reglages.mjs <Plateforme> --executer`, lecture seule, aucun appel
+// ici) comparé au REGISTRE `references/REGLAGES-SURS-PAR-DEFAUT.json` du pilot (`$FORGE_ROOT`, sinon le parent de ce dépôt ;
+// `--registre` pour une autre copie) : chaque réglage des plateformes que le relevé déclare est LU, et conforme à son `attendu`.
+// Un réglage non lu, une lecture en échec ou un réglage hors de son attendu sans décision enregistrée est un constat
+// bloquant : « prêt » est refusé. Un réglage classé `decision` se juge comme un `defaut` ; l'écart que l'humain a accepté se
+// déclare dans `--ecarts <fichier>` (`forge-ops/ecarts-acceptes@1`, avec ses mots, sa date et la valeur lue qu'il accepte) et
+// se vérifie TEL QUE DÉCIDÉ : si l'état lu bouge depuis la décision, l'écart n'est plus le sien. Pas d'écart nu.
+// Logique : scripts/lib-reglages.mjs.
+if (args.includes("--reglages-plateforme")) {
+  const fichier28 = args[args.indexOf("--reglages-plateforme") + 1];
+  const valeur28 = (nom) => { const i = args.indexOf(nom); return i >= 0 ? args[i + 1] : null; };
+  const DOM28 = "Exploitation : les réglages de plateforme lus sont conformes à l'attendu du registre du pilot, écarts décidés vérifiés tels que décidés (O-28)";
+  const NJ28 = [
+    "que la valeur lue est celle que la plateforme sert : le relevé est celui que `relever-reglages.mjs` a pris (ou que l'appelant donne), l'oracle ne rejoue aucune lecture",
+    "la VÉRITÉ du registre : l'attendu, le classement et les commandes sont ceux que le pilot a promus (daté, sourcé, loi n° 4) ; l'oracle ne relit pas les pages des éditeurs",
+    "les plateformes que le produit utilise sans les déclarer au relevé : un réglage n'est exigé que pour une plateforme déclarée, et une plateforme sans entrée au registre n'est pas jugée (dit à côté du verdict)",
+    "l'égalité aux plages d'adresses que le produit déclare (restriction réseau de Supabase) : elle n'est jugée que si la lecture porte `declare` ({ v4, v6 }) ; sans elle, l'oracle juge qu'il y a au moins une plage, aucune ouverte à tous, et que la restriction est appliquée",
+    "le bien-fondé d'une décision humaine : l'oracle vérifie qu'elle existe (mots, date) et que l'état lu est celui qu'elle a accepté, jamais qu'elle est sage",
+  ];
+  const fin28 = (verdict, code) => {
+    process.stdout.write(JSON.stringify({ oracle: "oracle-ops", domaine: DOM28, artefact: fichier28 || null, verdict, findings: F.length ? F : [{ sev: "info", regle: "O28", msg: "chaque réglage des plateformes déclarées est lu et conforme à l'attendu du registre, ou son écart est décidé et vérifié tel que décidé", where: fichier28 }], non_juge: NJ28 }, null, jsonOnly ? 0 : 2));
+    process.exit(code);
+  };
+  if (!fichier28 || !fs.existsSync(fichier28)) { add("info", "O28", "relevé des réglages introuvable — les réglages de plateforme ne sont pas prouvés (le prendre par `scripts/relever-reglages.mjs`)", String(fichier28)); fin28("SKIP", 2); }
+  const chemin28 = valeur28("--registre") ?? cheminRegistreDuPilot(process.env, path.dirname(path.dirname(fileURLToPath(import.meta.url))));
+  if (!chemin28 || !fs.existsSync(chemin28)) { add("info", "O28", `registre des réglages introuvable (${chemin28 ?? "aucun chemin"}) — rien n'est comparé ; le donner par --registre, ou poser FORGE_ROOT sur la racine du parc`, String(chemin28)); fin28("SKIP", 2); }
+  const reg28 = chargerRegistre(fs.readFileSync(chemin28, "utf8"));
+  for (const c of reg28.constats) add("bloquant", "O28", `${c} — le registre est illisible, aucun réglage ne se compare (un registre non lu ne vaut jamais PASS)`, path.basename(chemin28));
+  let releve28 = null, ecarts28 = [];
+  try { releve28 = JSON.parse(fs.readFileSync(fichier28, "utf8")); } catch { add("bloquant", "O28", "relevé illisible (JSON invalide) : un relevé non lu ne vaut jamais PASS", path.basename(fichier28)); }
+  const fichierEcarts28 = valeur28("--ecarts");
+  if (fichierEcarts28) {
+    try {
+      const e28 = JSON.parse(fs.readFileSync(fichierEcarts28, "utf8"));
+      if (e28?.format !== "forge-ops/ecarts-acceptes@1" || !Array.isArray(e28.ecarts)) add("bloquant", "O28", `fichier d'écarts acceptés de format « ${e28?.format} » ou sans liste \`ecarts\` (attendu forge-ops/ecarts-acceptes@1)`, path.basename(fichierEcarts28));
+      else ecarts28 = e28.ecarts;
+    } catch { add("bloquant", "O28", "fichier d'écarts acceptés introuvable ou illisible : un écart décidé qu'on ne sait pas lire ne couvre rien", String(fichierEcarts28)); }
+  }
+  let compares28 = 0;
+  if (releve28 && !reg28.constats.length) {
+    const j28 = jugerReglages({ entrees: reg28.entrees, releve: releve28, ecarts: ecarts28 });
+    compares28 = j28.compares;
+    for (const c of j28.constats) add(c.sev, "O28", c.msg, path.basename(fichier28));
+  }
+  const durs28 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
+  if (!durs28.length && !compares28) { add("info", "O28", "aucun réglage comparé : les plateformes déclarées n'ont aucune entrée au registre", fichier28); fin28("SKIP", 2); }
+  fin28(durs28.length ? "FAIL" : "PASS", durs28.length ? 1 : 0);
+}
+// ── O29 · une chaîne Terraform n'est réussie que si le plan SUIVANT son apply est vide (TF-2271) ───
+//
+// LE FAIT (Produit-86, lot 20261106a RP-44, ledger seq 609, 06/11/2026). Le fournisseur Docker annonçait à chaque plan 5
+// conteneurs « mis à jour sur place » (sondes de santé, memory_swap) et ne les appliquait jamais : « Plan: 0 to add, 5 to
+// change, 0 to destroy » sur une préproduction déployée la veille par la même chaîne, qui rendait PASS après chaque apply.
+// La sonde de WebGoat, désactivée au code depuis le 04/11, n'a jamais atteint le conteneur, « unhealthy » depuis 47 h.
+//
+// CE QUI EST JUGÉ, sur la CAPTURE du plan pris juste après l'apply (aucun appel à Terraform ; `scripts/convergence-terraform.mjs
+// verifier <pile> --sortie capture.json` la prend) : `terraform show -json <plan>` ou la sortie texte de `terraform plan`.
+// Un plan qui change encore une ressource est un constat bloquant, une ressource par constat, avec ses attributs et la
+// commande de remplacement forcé (`terraform apply -replace='<adresse>'`, éprouvé avec Terraform 1.12.2) ; un plan vide est
+// PASS. Une capture qu'on ne sait pas lire est FAIL, jamais PASS. Logique : scripts/lib-convergence.mjs.
+if (args.includes("--convergence")) {
+  const fichier29 = args[args.indexOf("--convergence") + 1];
+  const DOM29 = "Exploitation : le plan suivant l'apply est vide, la pile converge (O-29)";
+  const NJ29 = [
+    "que la capture est celle du plan pris APRÈS l'apply de la chaîne, sur la bonne pile : le fichier est celui que l'appelant donne",
+    "la CAUSE d'un écart persistant (attribut que le fournisseur ne sait pas changer sur place, dérive faite à la main, variable d'environnement différente de celle de l'apply) : l'oracle nomme les ressources et propose le remplacement forcé, il ne diagnostique pas",
+    "les modifications faites hors de Terraform que le plan ne rapporte que comme dérive (`resource_drift`) sans les changer : seules les actions du plan comptent",
+    "l'exécution du remplacement : `converger --executer` la joue (un tour) et refuse un conteneur d'image à état, l'oracle ne juge que la capture",
+  ];
+  const fin29 = (verdict, code) => {
+    process.stdout.write(JSON.stringify({ oracle: "oracle-ops", domaine: DOM29, artefact: fichier29 || null, verdict, findings: F.length ? F : [{ sev: "info", regle: "O29", msg: "le plan suivant l'apply est vide : l'infrastructure converge", where: fichier29 }], non_juge: NJ29 }, null, jsonOnly ? 0 : 2));
+    process.exit(code);
+  };
+  if (!fichier29 || !fs.existsSync(fichier29)) { add("info", "O29", "capture du plan introuvable — la convergence n'est pas prouvée", String(fichier29)); fin29("SKIP", 2); }
+  const lec29 = lireCapture(fs.readFileSync(fichier29, "utf8"));
+  const nom29 = path.basename(fichier29);
+  if (lec29.vide === null) add("bloquant", "O29", `capture illisible : ${lec29.erreur} — une capture non lue ne vaut jamais PASS`, nom29);
+  else if (!lec29.vide) {
+    if (lec29.ressources.length) {
+      for (const r of lec29.ressources)
+        add("bloquant", "O29", `« ${r.adresse} » : le plan APRÈS l'apply la change encore (${r.actions.join("+")}${r.attributs.length ? `, attributs : ${r.attributs.join(", ")}` : ""}) — l'apply a rendu PASS sans converger ; si le fournisseur ne sait pas changer cet attribut sur place, forcer le remplacement : ${commandeRemplacement([r.adresse])} (TF-2271)`, nom29);
+    } else {
+      const [aj29, ch29, de29] = lec29.decompte ?? [0, 0, 0];
+      add("bloquant", "O29", `le plan APRÈS l'apply compte ${aj29} à ajouter, ${ch29} à changer, ${de29} à détruire — l'apply a rendu PASS sans converger (TF-2271)`, nom29);
+    }
+  }
+  const durs29 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
+  fin29(durs29.length ? "FAIL" : "PASS", durs29.length ? 1 : 0);
+}
+// ── O30 · un test de mise en production relit l'état servi à sa fin, et le laisse comme il l'a trouvé (TF-2308) ───
+//
+// LE FAIT (Produit-86, lot 20261109a RP-53, ledger seq 439, mesure du 04/11/2026 à 16:50 sur le commit 40a040e). Le test
+// de mise en production jouait un arrêt de mission en dernier ; le socle posait alors le verrou global de la passerelle et
+// l'instance restait en NO_EXTERNAL_AI pour toutes les missions jusqu'au redémarrage suivant. Aucun contrôle ne relisait la
+// santé : E-119, E-116 et E-125 sont passées en FAIL au second passage. L'instance répondait 200 en mode dégradé.
+//
+// CE QUI EST JUGÉ, sur le RELEVÉ `forge-ops/etat-servi@1` du gabarit gabarits/smoke-mise-en-production.mjs (aucun appel
+// réseau) : l'état de départ est lu ; l'état servi est RELU après la dernière épreuve (une relecture absente, ou antérieure
+// à la fin de la dernière épreuve, est un constat bloquant) ; le CORPS de la réponse de santé, ou les champs que le test
+// déclare, est identique à celui du départ, un constat bloquant par champ changé, avec sa valeur d'avant et d'après. Une
+// réponse qui ne porte aucun champ comparé est un constat majeur : seul le code serait comparable. Logique :
+// scripts/lib-etat-servi.mjs. Classe : etat-servi-non-relu-apres-epreuve.
+if (args.includes("--etat-servi")) {
+  const fichier30 = args[args.indexOf("--etat-servi") + 1];
+  const DOM30 = "Exploitation : l'état servi est relu à la fin du test de mise en production et laissé comme trouvé (O-30)";
+  const NJ30 = [
+    "que le relevé vient d'un test joué contre l'instance visée : le fichier est celui que l'appelant donne (le gabarit y cite l'adresse lue)",
+    "que le ou les champs déclarés dans `sante.champs` disent TOUT l'état servi : une comparaison restreinte par le test est signalée (info), pas contestée ; un état que la réponse de santé ne rend pas (verrou interne sans champ) n'est pas vu",
+    "un état qui se rétablit seul après la relecture (délai de grâce, cache) ou qui change entre deux relectures sans épreuve : l'oracle compare deux instants",
+    "que les épreuves du produit sont suffisantes : il juge la fin du test, pas sa couverture (porte M-3 de ETAPE-MEP.md du pilot)",
+  ];
+  const fin30 = (verdict, code) => {
+    process.stdout.write(JSON.stringify({ oracle: "oracle-ops", domaine: DOM30, artefact: fichier30 || null, verdict, findings: F.length ? F : [{ sev: "info", regle: "O30", msg: "l'état servi a été relu après la dernière épreuve et il est identique à celui du départ", where: fichier30 }], non_juge: NJ30 }, null, jsonOnly ? 0 : 2));
+    process.exit(code);
+  };
+  if (!fichier30 || !fs.existsSync(fichier30)) { add("info", "O30", "relevé de l'état servi introuvable — la fin du test de mise en production n'est pas prouvée", String(fichier30)); fin30("SKIP", 2); }
+  let releve30 = null;
+  try { releve30 = JSON.parse(fs.readFileSync(fichier30, "utf8")); }
+  catch { add("bloquant", "O30", "relevé illisible (JSON invalide) : un fichier non lu ne vaut jamais PASS", String(fichier30)); fin30("FAIL", 1); }
+  for (const c of jugerEtatServi(releve30).constats) add(c.sev, "O30", c.msg, path.basename(fichier30));
+  const durs30 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
+  fin30(durs30.length ? "FAIL" : "PASS", durs30.length ? 1 : 0);
+}
+// ── O31 · une chaîne qui pose supabase_settings passe par appliquer-terraform.mjs, jamais par un terraform apply direct (TF-2397) ───
+//
+// LE FAIT (suite de TF-2312, chaîne de dev 42685313136 du 09/11/2026). L'outil scripts/appliquer-terraform.mjs sonde la santé du
+// projet avant l'apply et ne relance que sur « Project Services Unhealthy » ; une chaîne qui garde son `terraform apply` direct
+// retombe sur l'échec, après avoir posé des réglages à moitié, et rien dans la forge ne le voyait. Mesure de départ du 12/11/2026 :
+// l'oracle lisait la chaîne comme une cible de release (O1 « COURANT absent »), jamais pour son apply direct ; l'outil n'écrivait
+// aucun relevé.
+//
+// CE QUI EST JUGÉ (aucun appel réseau, aucun appel à Terraform ; logique : scripts/lib-application-chaine.mjs) :
+//   la CHAÎNE (`--application-terraform <racine ou fichier de chaîne>`) : si une pile de la racine pose `supabase_settings`
+//     (directement ou par un module local), chaque apply direct (`terraform`, `tofu`, `terragrunt`) vers cette pile, ou vers une
+//     pile qu'on ne sait pas lire, est un constat bloquant avec sa commande de remplacement ; un appel de l'outil avec
+//     `--executer` sans `--sortie` est un constat majeur (le relevé ne serait jamais écrit) ;
+//   le RELEVÉ (`--releve <application.json>`, `forge-ops/application@1`, écrit par `appliquer-terraform.mjs --sortie`) : l'apply a
+//     abouti (verdict applique, exit 0), la santé a été lue saine avant (ou `--sans-sonde` est dit, en information), les étapes
+//     sont cohérentes avec le verdict ; un projet refusé, une santé persistante ou une erreur sont des constats bloquants.
+// Aucune pile ne pose supabase_settings et aucun relevé : SKIP (sans objet).
+if (args.includes("--application-terraform")) {
+  const i31 = args.indexOf("--application-terraform");
+  const suivant31 = args[i31 + 1];
+  const chaine31 = suivant31 && !suivant31.startsWith("--") ? suivant31 : null;
+  const iReleve31 = args.indexOf("--releve");
+  const releve31 = iReleve31 >= 0 ? args[iReleve31 + 1] : null;
+  const DOM31 = "Exploitation : une chaîne qui pose supabase_settings applique par l'outil sondé, jamais par un terraform apply direct (O-31)";
+  const NJ31 = [
+    "les chaînes qui ne sont pas des fichiers de la racine donnée (service d'intégration continue configuré dans une interface, script appelé depuis un autre dépôt, étape pliée `>` d'un workflow) : la règle lit les fichiers .yml/.yaml/.sh/.bash/.ps1/.cmd/.bat/.mk et les Makefile sous la racine",
+    "une pile hors de la racine donnée : un apply vers un dossier qu'on ne lit pas est tenu pour concerné si la racine pose supabase_settings, jamais pour sain",
+    "que le relevé vient de la chaîne jugée : le fichier est celui que l'appelant donne ; l'oracle vérifie qu'il est cohérent avec lui-même (étapes, verdict, sonde), pas qu'il n'est pas forgé",
+    "le choix `--sans-sonde` : il est dit en information, il n'est pas refusé (c'est un choix écrit de la chaîne, TF-2312)",
+    "les statuts de santé servis par l'API de gestion au jour de l'apply : ceux du relevé sont lus tels quels ; leur énumération (COMING_UP, ACTIVE_HEALTHY, UNHEALTHY) a été relue sur la référence publique le 12/11/2026",
+  ];
+  const fin31 = (verdict, code) => {
+    process.stdout.write(JSON.stringify({ oracle: "oracle-ops", domaine: DOM31, artefact: chaine31 ?? releve31 ?? null, verdict, findings: F.length ? F : [{ sev: "info", regle: "O31", msg: `${chaine31 ? "aucun apply direct vers une pile qui pose supabase_settings" : ""}${chaine31 && releve31 ? ", et " : ""}${releve31 ? "le relevé de l'outil est cohérent avec son verdict" : ""}`, where: chaine31 ?? releve31 }], non_juge: NJ31 }, null, jsonOnly ? 0 : 2));
+    process.exit(code);
+  };
+  if (iReleve31 >= 0 && (!releve31 || releve31.startsWith("--"))) { add("bloquant", "O31", "--releve attend le chemin du relevé forge-ops/application@1", "--releve"); fin31("FAIL", 1); }
+  if (!chaine31 && !releve31) { add("info", "O31", "ni chaîne ni relevé donnés (--application-terraform <racine ou fichier> et/ou --releve <application.json>) : rien n'est jugé", "--application-terraform"); fin31("SKIP", 2); }
+  if (chaine31 && !fs.existsSync(chaine31)) { add("info", "O31", "chaîne introuvable — l'application des réglages n'est pas prouvée", String(chaine31)); fin31("SKIP", 2); }
+  let juge31 = false, pilesSupabase31 = 0;
+  if (chaine31) {
+    const iRacine31 = args.indexOf("--racine");
+    const ch31 = jugerChaineApplication(chaine31, { racine: iRacine31 >= 0 ? args[iRacine31 + 1] : null });
+    pilesSupabase31 = ch31.piles.length;
+    for (const c of ch31.constats) add(c.sev, "O31", c.msg, String(chaine31));
+    juge31 = pilesSupabase31 > 0 && (ch31.directs.length > 0 || ch31.outils.length > 0);
+    if (!pilesSupabase31) add("info", "O31", `aucune pile sous ${chaine31} ne pose supabase_settings (${ch31.fichiers} fichier(s) de chaîne lu(s)) : la règle est sans objet pour cette chaîne`, String(chaine31));
+  }
+  if (releve31) {
+    if (!fs.existsSync(releve31)) { add("bloquant", "O31", "relevé de l'application introuvable : l'outil n'a pas prouvé ce qu'il a fait (le prendre par `scripts/appliquer-terraform.mjs … --executer --sortie application.json`)", String(releve31)); fin31("FAIL", 1); }
+    let r31 = null, lisible31 = true;
+    try { r31 = JSON.parse(fs.readFileSync(releve31, "utf8")); } catch { lisible31 = false; add("bloquant", "O31", "relevé illisible (JSON invalide) : un fichier non lu ne vaut jamais PASS", path.basename(releve31)); }
+    if (lisible31) for (const c of jugerReleveApplication(r31).constats) add(c.sev, "O31", c.msg, path.basename(releve31));
+    juge31 = true;
+  }
+  const durs31 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
+  if (!durs31.length && !juge31) fin31("SKIP", 2);
+  fin31(durs31.length ? "FAIL" : "PASS", durs31.length ? 1 : 0);
+}
+// ── O32 · une version qui touche l'IA ou le courrier passe la porte complète, et son smoke parle au vrai fournisseur (TF-2771) ───
+//
+// LE FAIT (Produit-12, lot 20261122c RS-42, ledger seq 386, 391, 400, 423). Les versions 0.8.1 et 0.9.0 sont passées en production sur
+// un staging « oracle léger », sans audit ni qualification, alors qu'elles touchaient l'IA et le courrier ; le smoke enregistrait une
+// boîte simulée et une clé d'IA factice (il passait sans qu'aucun fournisseur ait répondu) ; le brouillon d'essai de l'activation a
+// été relu pour sa présence, jamais pour son contenu.
+//
+// CE QUI EST JUGÉ, sur le RELEVÉ `forge-ops/porte-version@1` que le run écrit depuis ses lectures (aucun appel réseau, aucun fournisseur
+// appelé : un appel réel est une dépense, donc un geste humain, R-29 ; logique : scripts/lib-porte-version.mjs) : une version qui touche
+// une fonction centrale (IA, courrier, et celles que le relevé ajoute) passe la porte COMPLÈTE, audit et qualification nommés ; le smoke
+// porte, pour chaque fonction centrale touchée, un appel RÉEL au fournisseur (mode « reel », clé « reelle », identifiant d'appel, heure
+// de lecture, statut 2xx), une boîte simulée ou une clé factice étant un constat bloquant ; si le courrier est touché, le contrôle
+// d'activation compare le CONTENU du brouillon d'essai à son modèle et la liste des écarts est vide. Une version qui ne touche aucune
+// fonction centrale peut passer la porte allégée (information). Relevé introuvable : SKIP. Classe : mise-en-production-sur-porte-allegee.
+if (args.includes("--porte-version")) {
+  const fichier32 = args[args.indexOf("--porte-version") + 1];
+  const DOM32 = "Exploitation : une version qui touche l'IA ou le courrier passe la porte complète et son smoke appelle le vrai fournisseur (O-32)";
+  const NJ32 = [
+    "la VÉRITÉ du relevé : que la porte complète ait été jouée, que l'appel réel ait eu lieu, que l'identifiant d'appel désigne ce que le fournisseur a rendu — l'oracle juge ce que le relevé dit et en refuse les formes vides, l'identifiant s'ouvre chez le fournisseur par l'humain",
+    "que `fonctions_touchees` dise TOUT ce que la version touche : un diff n'est pas lu, une version qui touche l'IA sans le déclarer passe par la porte allégée (la déclaration est celle du run, la liste des fonctions centrales se renforce par `fonctions_centrales`, jamais ne se réduit)",
+    "la pertinence de la comparaison du brouillon d'essai à son modèle (variables admises, tolérances) : elle est du produit ; l'oracle exige qu'elle compare le contenu et que la liste des écarts soit vide",
+    "le coût et le GO de l'appel réel : un appel au fournisseur dépense, il se joue sous décision humaine (R-29), la forge n'appelle aucun fournisseur",
+    "les fonctions centrales autres que l'IA et le courrier tant que le relevé ne les déclare pas : une porte allégée reste possible pour elles",
+  ];
+  const fin32 = (verdict, code) => {
+    process.stdout.write(JSON.stringify({ oracle: "oracle-ops", domaine: DOM32, artefact: fichier32 || null, verdict, findings: F.length ? F : [{ sev: "info", regle: "O32", msg: "la porte de la version est celle que sa fonction exige et le smoke a parlé au vrai fournisseur", where: fichier32 }], non_juge: NJ32 }, null, jsonOnly ? 0 : 2));
+    process.exit(code);
+  };
+  if (!fichier32 || fichier32.startsWith("--") || !fs.existsSync(fichier32)) { add("info", "O32", "relevé de la porte de version introuvable — la porte de la version n'est pas prouvée", String(fichier32)); fin32("SKIP", 2); }
+  let releve32 = null;
+  try { releve32 = JSON.parse(fs.readFileSync(fichier32, "utf8")); }
+  catch { add("bloquant", "O32", "relevé illisible (JSON invalide) : un fichier non lu ne vaut jamais PASS", String(fichier32)); fin32("FAIL", 1); }
+  for (const c of jugerPorteVersion(releve32).constats) add(c.sev, "O32", c.msg, path.basename(fichier32));
+  const durs32 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
+  fin32(durs32.length ? "FAIL" : "PASS", durs32.length ? 1 : 0);
+}
+// ── Verdict « rollback recommandé » · seuils SLO fixés par l'humain (TF-0107) ───────
+// RECOMMANDATION SEULE : compare des mesures post-bascule à des seuils que l'humain a
+// figés dans un fichier de config (latence, taux d'erreur, fenêtre minimale) — aucun défaut
+// implicite (fichier de seuils obligatoire), jamais d'exécution. Doctrine « ops outille, ne
+// décide jamais » : la bascule arrière reste un geste humain via `ops.mjs restaurer`.
+const iVR = args.indexOf("--verdict-rollback");
+const mesuresPath = iVR >= 0 ? args[iVR + 1] : null;
+const iSeuilsSlo = args.indexOf("--seuils");
+const seuilsSloPath = iSeuilsSlo >= 0 ? args[iSeuilsSlo + 1] : null;
+if (mesuresPath) {
+  const DOMR = "Exploitation : recommandation de rollback post-bascule (seuils SLO humains)";
+  const NJR = [
+    "exécution du rollback — geste humain via `ops.mjs restaurer`, jamais automatique",
+    "le choix des seuils — responsabilité humaine ; l'oracle ne fixe ni ne devine de défaut",
+    "cause racine de la dégradation observée",
+  ];
+  const finR = (verdict, code, extra = {}) => {
+    process.stdout.write(JSON.stringify({ oracle: "oracle-ops", domaine: DOMR, artefact: mesuresPath, verdict, ...extra, findings: F.length ? F : [{ sev: "info", regle: "R", msg: "mesures sous les seuils — aucune dérive", where: mesuresPath }], non_juge: NJR }, null, jsonOnly ? 0 : 2));
+    process.exit(code);
+  };
+  if (!seuilsSloPath || !fs.existsSync(seuilsSloPath)) { add("bloquant", "R", "fichier de seuils SLO introuvable — seuils obligatoirement humains, aucun défaut implicite", String(seuilsSloPath)); finR("donnees_insuffisantes", 2); }
+  if (!fs.existsSync(mesuresPath)) { add("bloquant", "R", "fichier de mesures introuvable", mesuresPath); finR("donnees_insuffisantes", 2); }
+  let mesures = null, seuilsSlo = null;
+  try { mesures = JSON.parse(fs.readFileSync(mesuresPath, "utf8")); } catch { add("bloquant", "R", "mesures illisibles (JSON invalide)", mesuresPath); finR("donnees_insuffisantes", 2); }
+  try { seuilsSlo = JSON.parse(fs.readFileSync(seuilsSloPath, "utf8")); } catch { add("bloquant", "R", "seuils illisibles (JSON invalide)", seuilsSloPath); finR("donnees_insuffisantes", 2); }
+  if (!Array.isArray(mesures) || !mesures.length) { add("bloquant", "R", "mesures vides", mesuresPath); finR("donnees_insuffisantes", 2); }
+  const requis = typeof seuilsSlo.fenetre_min_echantillons === "number" ? seuilsSlo.fenetre_min_echantillons : 1;
+  if (mesures.length < requis) { add("info", "R", `fenêtre insuffisante : ${mesures.length}/${requis} échantillon(s) — verdict non rendu`, mesuresPath); finR("donnees_insuffisantes", 2); }
+
+  const latences = mesures.map(m => m.latence_ms).filter(v => typeof v === "number").sort((a, b) => a - b);
+  const erreurs = mesures.map(m => m.erreur_pct).filter(v => typeof v === "number");
+  if (latences.length !== mesures.length || erreurs.length !== mesures.length)
+    { add("bloquant", "R", "mesure incomplète (latence_ms/erreur_pct numériques attendus sur chaque échantillon)", mesuresPath); finR("donnees_insuffisantes", 2); }
+  const p95 = latences[Math.min(latences.length - 1, Math.ceil(0.95 * latences.length) - 1)];
+  const erreurMax = Math.max(...erreurs);
+
+  if (typeof seuilsSlo.latence_p95_max_ms === "number" && p95 > seuilsSlo.latence_p95_max_ms)
+    add("bloquant", "R", `latence p95 ${p95}ms > seuil humain ${seuilsSlo.latence_p95_max_ms}ms`, mesuresPath);
+  if (typeof seuilsSlo.erreur_max_pct === "number" && erreurMax > seuilsSlo.erreur_max_pct)
+    add("bloquant", "R", `taux d'erreur ${erreurMax}% > seuil humain ${seuilsSlo.erreur_max_pct}%`, mesuresPath);
+
+  const dursR = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
+  const verdictR = dursR.length ? "rollback_recommande" : "stable";
+  finR(verdictR, dursR.length ? 1 : 0, {
+    mesures_observees: { p95_latence_ms: p95, erreur_max_pct: erreurMax, echantillons: mesures.length },
+    seuils_appliques: seuilsSlo,
+    recommandation: dursR.length ? "geste humain suggéré : `node scripts/ops.mjs restaurer <cible>` après revue" : "aucune action requise",
+  });
+}
+
+// ── O9 · TF-0607 (lot Produit-02 20260824) : UNE SOURCE DE VERITE DIT COMMENT ON S'Y
+// AUTHENTIFIE ──────────────────────────────────────────────────────────────────────────────────
+//
+// LE FAIT, verifie sur tout un depot. Un document d'exploitation donnait pour la production
+// « deploiement via <commande> » — et rien d'autre : ni la variable d'environnement attendue, ni
+// OU vit le justificatif, ni la voie de repli quand la session expire. Recherche exhaustive :
+// AUCUN fichier du depot ne nommait le jeton d'API ni le point d'entree alternatif. La procedure
+// documentee se reduisait donc a une commande qui echoue, avec rien derriere.
+//
+// PIRE, ET C'EST LE PIEGE : le meme document declarait en frontmatter ses `sources_de_verite`,
+// dont une commande d'etat. Non authentifiee, cette commande rend « Unauthorized » — une sortie
+// qu'un lecteur prend pour UN FAIT SUR L'INFRASTRUCTURE alors qu'elle est un fait sur SA PROPRE
+// SESSION. Une source de verite dont le document ne dit pas comment l'authentifier n'est pas
+// opposable, et sa sortie d'erreur se lit comme un constat.
+//
+// CE QUI EST JUGE : la PRESENCE du champ, jamais sa justesse — « un oracle peut dire que le champ
+// manque, jamais qu'il est juste », comme les six champs du cadrage design. Declarer
+// `authentification: aucune` est GRATUIT et suffit : meme patron que R-45 et R-49, l'omission ne
+// vaut pas decision mais l'aveu, lui, est honnete et se date.
+function jugerSourcesDeVerite(chemin) {
+  let texte;
+  try { texte = fs.readFileSync(chemin, "utf8"); } catch { return null; }
+  const fm = /^---\r?\n([\s\S]*?)\r?\n---/.exec(texte);
+  if (!fm) return null;
+  if (!/^sources_de_verite\s*:/m.test(fm[1])) return null;
+  const declare = /^authentification\s*:\s*\S/m.test(fm[1]);
+  return { declare, fm: fm[1] };
+}
+
+// ── O12 · TF-1115 (mesure Produit-11 du 14/09/2026) : UNE REMEDIATION DE SECURITE DIT SUR
+// QUELS ENVIRONNEMENTS ELLE A ETE REJOUEE ───────────────────────────────────────────────────
+//
+// LE FAIT. La règle de pare-feu `AllowAllAzureServicesAndResources` (0.0.0.0) a été retirée
+// d'un environnement le 25/08 ; `MATRICE-DE-FLUX.md` déclare depuis « ce document est appliqué »
+// — SANS dire DE QUEL environnement il parle. Vingt jours plus tard, la même règle était
+// toujours présente sur l'environnement suivant, devenue la SEULE voie d'accès de son API à sa
+// base — la supprimer sans remplacement aurait coupé le service. Rien ne confrontait la matrice
+// à un périmètre déclaré, parce que la matrice ne DÉCLARAIT aucun périmètre.
+//
+// CE QUI EST JUGÉ, même doctrine qu'O-9 (la PRÉSENCE du champ, jamais sa justesse) : un document
+// dont le frontmatter déclare `remediation_securite: <intitulé>` porte aussi une liste
+// `environnements:` — un environnement par ligne, le statut (rejouée/à rejouer) restant à la
+// plume humaine. Une remédiation sans cette liste ne dit rien de son périmètre : « appliquée »
+// devient une affirmation qu'aucun environnement ne peut réclamer ni exclure.
+function jugerRemediationParEnvironnement(chemin) {
+  let texte;
+  try { texte = fs.readFileSync(chemin, "utf8"); } catch { return null; }
+  const fm = /^---\r?\n([\s\S]*?)\r?\n---/.exec(texte);
+  if (!fm) return null;
+  if (!/^remediation_securite\s*:/m.test(fm[1])) return null;
+  const declare = /^environnements\s*:/m.test(fm[1]);
+  return { declare, fm: fm[1] };
+}
+
+// ── O13 · TF-1116 + TF-1118 (mesure Produit-11 du 14/09/2026) : UN GESTE DESTRUCTIF PORTE SA
+// MATURITE ET SA MESURE DE NON-REGRESSION ───────────────────────────────────────────────────
+//
+// LE FAIT (TF-1116). Le correctif « retirer la règle AllowAllAzureServicesAndResources »
+// avait réussi sur un environnement le 25/08 ; transposé tel quel à un second, il était
+// INFAISABLE — le pool de sortie de l'environnement cible portait 161 adresses contre UNE
+// seule sur le premier, deux environnements pourtant de même type et de même région. RIEN ne
+// distinguait ce geste DÉDUIT (transposé sans mesure) d'un geste ÉPROUVÉ (rejoué et vérifié).
+//
+// LE FAIT (TF-1118). Sur dix lignes d'un inventaire de suppression, AUCUNE ne portait la
+// vérification prouvant que le geste n'avait rien rompu — posée par prudence, elle a servi
+// trois fois (dont un retour arrière réel évité). Le risque propre aux suppressions
+// d'infrastructure est le DÉCALAGE : un pare-feu refermé ne casse rien tant qu'aucune
+// connexion neuve ne s'ouvre — l'incident arrive à la révision suivante, sans lien visible.
+//
+// CE QUI EST JUGÉ, contrôle STATIQUE (coïncidence de motif, aucune exécution) : dans un
+// document d'exploitation ou un carnet d'écarts, tout item de liste portant un verbe
+// destructif à l'infinitif (supprimer/retirer/fermer/purger/détruire) porte, dans la fenêtre
+// qui suit, DEUX marques distinctes — (a) sa MATURITÉ : « éprouvé sur cette cible le
+// AAAA-MM-JJ » ou « déduit d'une autre cible, à mesurer avant exécution » ; (b) sa MESURE DE
+// NON-RÉGRESSION : une ligne « Mesure de non-régression : <commande ou vérification> ». Les
+// deux marques sont jugées indépendamment — un geste peut porter l'une sans l'autre.
+const _GESTE_DESTRUCTIF = /^[ \t]*(?:[-*]|\d+[.)])\s.*\b(?:supprimer|retirer|fermer|purger|détruire|detruire)\b/gim;
+const _MARQUE_MATURITE = /éprouvé sur cette cible le \d{4}-\d{2}-\d{2}|eprouve sur cette cible le \d{4}-\d{2}-\d{2}|déduit d'une autre cible[^.\n]{0,60}mesurer avant exécution|deduit d'une autre cible[^.\n]{0,60}mesurer avant execution/i;
+const _MARQUE_NON_REGRESSION = /mesure de non[- ]r[ée]gression\s*:\s*\S/i;
+const _GESTE_WINDOW = 500;
+
+function jugerGestesDestructifs(texte) {
+  const constats = [];
+  let m;
+  _GESTE_DESTRUCTIF.lastIndex = 0;
+  while ((m = _GESTE_DESTRUCTIF.exec(texte))) {
+    const ligne = m[0].trim();
+    const fenetre = texte.slice(m.index, m.index + _GESTE_WINDOW);
+    constats.push({
+      ligne,
+      sansMaturite: !_MARQUE_MATURITE.test(fenetre),
+      sansMesure: !_MARQUE_NON_REGRESSION.test(fenetre),
+    });
+  }
+  return constats;
+}
+
+// ── O16 · TF-1120 (mesure Produit-11 du 14/09/2026) : UN NETTOYAGE D'INFRASTRUCTURE SE CLÔT
+// SUR TROIS QUESTIONS, PAS UNE ─────────────────────────────────────────────────────────────
+//
+// LE FAIT. Dix composants déclarés inutilisés, cinq supprimés, un journal daté, une restitution
+// et deux lots de retours : aucun de ces artefacts ne demandait « qu'est-ce qui crée ce
+// composant, et le recréera-t-il ailleurs ? ». Il a fallu une QUESTION HUMAINE pour qu'un audit
+// du code soit mené ; il a montré que le résultat était bon, et que personne n'était allé le
+// vérifier. Le second volet était faux : en qualification, les équivalents étaient VIVANTS.
+//
+// CE QUI EST JUGÉ, même posture qu'O-13 (coïncidence de motif, aucune exécution), sur un
+// document qui DÉCLARE un nettoyage — critère de détection explicite, et rien d'autre :
+//   - frontmatter portant la clé `nettoyage_infrastructure:` ;
+//   - OU un titre markdown (#…) portant « nettoyage » ET l'un de « infrastructure »,
+//     « composant(s) », « ressource(s) », « environnement(s) ».
+// Le document porte alors les trois questions, reconnues à leur formulation (accents ou non) :
+//   Q1 « … supprimée sur chaque environnement … » ; Q2 « ce qui la/le/les crée … » ;
+//   Q3 « le prochain environnement … la recréera … ».
+// Chacune porte sa réponse et sa preuve, non vides, sous l'une de deux formes : des lignes
+// « Réponse : … » et « Preuve : … » qui suivent la question (avant la question suivante ou le
+// titre suivant, douze lignes au plus), ou une ligne de table dont l'en-tête a les colonnes
+// « Réponse » et « Preuve ». Les trois manques sont jugés indépendamment.
+const _NETTOYAGE_FM_O16 = /^nettoyage_infrastructure\s*:/m;
+const _NETTOYAGE_TITRE_O16 = /^#{1,6} .*\bnettoyage\b.*\b(infrastructure|composants?|ressources?|environnements?)\b/;
+const _QUESTIONS_O16 = [
+  { libelle: "l'instance est-elle supprimée sur chaque environnement où elle existe ?", re: /supprim\w* sur chaque environnement/ },
+  { libelle: "ce qui la crée est-il traité ?", re: /ce qui (?:la|le|les) cree/ },
+  { libelle: "le prochain environnement la recréera-t-il ?", re: /prochain environnement\b.{0,40}recre/ },
+];
+function jugerClotureNettoyage(texte) {
+  const fm = /^---\r?\n([\s\S]*?)\r?\n---/.exec(texte);
+  const lignes = String(texte).split(/\r?\n/).map(_sansAccents);
+  const declare = (fm && _NETTOYAGE_FM_O16.test(fm[1])) || lignes.some(l => _NETTOYAGE_TITRE_O16.test(l));
+  if (!declare) return null;
+  const cellules = l => l.replace(/^\|/, "").replace(/\|$/, "").split("|").map(c => c.trim());
+  const positions = _QUESTIONS_O16.map(q => lignes.findIndex(l => q.re.test(l)));
+  return _QUESTIONS_O16.map((q, k) => {
+    const i = positions[k];
+    if (i < 0) return { libelle: q.libelle, absente: true };
+    let reponse, preuve;
+    if (lignes[i].startsWith("|")) {
+      let h = i;
+      while (h > 0 && lignes[h - 1].startsWith("|")) h--;
+      const entetes = cellules(lignes[h]).map(_norm);
+      const c = cellules(lignes[i]);
+      const iR = entetes.indexOf("reponse"), iP = entetes.indexOf("preuve");
+      reponse = iR >= 0 ? c[iR] : undefined;
+      preuve = iP >= 0 ? c[iP] : undefined;
+    } else {
+      const suivantes = positions.filter(p => p > i);
+      let fin = Math.min(i + 12, lignes.length, ...suivantes);
+      for (let j = i + 1; j < fin; j++) if (/^#{1,6} /.test(lignes[j])) { fin = j; break; }
+      for (let j = i; j < fin; j++) {
+        const r = /\breponse\s*:(.*)$/.exec(lignes[j]); if (r && reponse === undefined) reponse = r[1];
+        const p = /\bpreuve\s*:(.*)$/.exec(lignes[j]); if (p && preuve === undefined) preuve = p[1];
+      }
+    }
+    return { libelle: q.libelle, absente: false, sansReponse: _vide(reponse), sansPreuve: _vide(preuve) };
+  });
+}
+
+// ── TF-0579 (lot Produit-02 20260824) : LE VERDICT S'ARCHIVE ET DIT SON REGIME ──────
+//
+// LE FAIT, verifie a l'historique git. Un smoke de MEP controlait la presence d'un chemin de
+// feuille de style par egalite stricte. Un correctif de cache a versionne les feuilles par
+// empreinte : le chemin nu n'existe plus. `git log -S` sur cette ligne ne rend AUCUN COMMIT —
+// personne ne l'a ajustee, et personne n'a ete arrete. Le gate est donc reste ROUGE SIX JOURS
+// pendant que le deploiement avait lieu : soit il n'a pas ete rejoue, soit son echec a ete
+// ignore. Dans les deux cas, un gate dont l'echec n'empeche rien n'est pas un gate, c'est un avis.
+//
+// DEUX MANQUES, et le second explique le premier :
+//  (a) AUCUNE TRACE. Sans verdict horodate et archive, « les gates sont passes » est une
+//      affirmation invérifiable — exactement ce qu'un audit reproche a un fournisseur.
+//  (b) LE REGIME N'ETAIT PAS DIT. Les severites existaient dans le code (bloquant / majeur /
+//      info) mais le verdict ne disait pas QUELLES regles bloquent. C'est le melange des deux
+//      regimes sans le dire qui a permis de passer outre sans qu'aucune decision soit prise.
+//
+// Ce qui suit archive chaque verdict avec son horodatage, l'empreinte de ce qu'il a juge, et le
+// regime de chaque regle. L'archivage ne bloque JAMAIS : un journal qu'on ne peut pas ecrire
+// (disque plein, droits) ne doit pas empecher un deploiement — il se declare et on continue.
+const REGIME = { bloquant: "bloque", majeur: "bloque", info: "consultatif" };
+
+function empreinteCible(chemin) {
+  try {
+    const st = fs.statSync(chemin);
+    if (st.isFile()) {
+      return { [path.basename(chemin)]: hacherFichier(chemin) };   // TF-0615 : fonction partagee
+    }
+    const out = {};
+    for (const f of fs.readdirSync(chemin)) {
+      const p = path.join(chemin, f);
+      try {
+        if (fs.statSync(p).isFile()) out[f] = hacherFichier(p);   // TF-0615 : fonction partagee
+      } catch { /* illisible : absent de l'empreinte plutot que faux */ }
+    }
+    return out;
+  } catch { return null; }
+}
+
+function natureDe(c) {
+  try { return fs.statSync(c).isFile() && /\.md$/i.test(c) ? "document" : "cible"; } catch { return "cible"; }
+}
+
+function archiver(verdict, code) {
+  if (!cible) return { archive: false, motif: "aucune cible — rien a sceller" };
+  let dossier;
+  try { dossier = fs.statSync(cible).isDirectory() ? cible : path.dirname(cible); }
+  catch { return { archive: false, motif: "cible illisible" }; }
+  const journal = path.join(dossier, ".ops-journal.jsonl");
+  const empreinte = empreinteCible(cible);
+  const ligne = {
+    format: "forge-ops/verdict@1",
+    ts: new Date().toISOString(),
+    cible: String(cible),
+    verdict,
+    exit: code,
+    // TF-1804 : un document .md se juge comme document, jamais comme cible de release.
+    nature: natureDe(cible),
+    // (b) : le regime de CHAQUE regle qui a parle. « bloque » ou « consultatif », jamais implicite.
+    regles: F.map(f => ({ regle: f.regle, sev: f.sev, regime: REGIME[f.sev] || "consultatif" })),
+    bloquants: F.filter(f => REGIME[f.sev] === "bloque").length,
+    consultatifs: F.filter(f => REGIME[f.sev] !== "bloque").length,
+    // (a) : sur QUOI le verdict a ete rendu — sans quoi il vieillit en silence (meme motif que TF-0478).
+    empreinte: empreinte ? { format: "forge-ops/empreinte@1", release: String(cible), fichiers: empreinte } : null,
+  };
+  try {
+    fs.appendFileSync(journal, JSON.stringify(ligne) + "\n", "utf8");
+    return { archive: true, journal, bloquants: ligne.bloquants, consultatifs: ligne.consultatifs };
+  } catch (e) {
+    // Un journal qu'on ne peut pas ecrire ne doit pas empecher un deploiement — il se DIT.
+    return { archive: false, motif: `journal non ecrit : ${String(e.message).slice(0, 80)}` };
+  }
+}
+
+function sortir(verdict, code) {
+  process.stdout.write(JSON.stringify({
+    oracle: "oracle-ops", domaine: DOM, artefact: cible || null,
+    verdict, findings: F.length ? F : [{ sev: "info", regle: "—",
+      msg: cible && natureDe(cible) === "document" ? "O9, O12, O13, O16 sans écart" : "O1–O4 sans écart", where: cible }],
+    // TF-0579 : le verdict DIT desormais son regime et OU il est archive. Un gate dont on ne
+    // sait pas s'il bloque est un avis ; un verdict sans trace est invérifiable.
+    scellement: archiver(verdict, code),
+    non_juge: NON_JUGE,
+  }, null, jsonOnly ? 0 : 2));
+  process.exit(code);
+}
+
+// O9 — si la cible est un document portant des `sources_de_verite`, elles disent comment on s'y
+// authentifie. Un document sans ce frontmatter n'est pas concerne : la regle ne s'invente pas
+// une cible.
+if (cible && fs.existsSync(cible)) {
+  try {
+    if (fs.statSync(cible).isFile() && /\.md$/i.test(cible)) {
+      const sv = jugerSourcesDeVerite(cible);
+      if (sv && !sv.declare) {
+        add("majeur", "O9", "des `sources_de_verite` sont declarees sans dire COMMENT on s'y authentifie — "
+          + "une commande non authentifiee rend une erreur qu'un lecteur prend pour un fait sur l'infrastructure, "
+          + "alors qu'elle est un fait sur sa propre session. Ajouter `authentification:` au frontmatter — "
+          + "`authentification: aucune` suffit et est gratuit (TF-0607)", cible);
+      }
+      // O12 (TF-1115) — meme posture : une remediation de securite declaree sans lister les
+      // environnements ou elle a ete rejouee ne dit rien de son perimetre.
+      const rem = jugerRemediationParEnvironnement(cible);
+      if (rem && !rem.declare) {
+        add("majeur", "O12", "une `remediation_securite` est declaree sans lister les ENVIRONNEMENTS "
+          + "ou elle a ete rejouee — « appliquee » sans perimetre laisse un environnement suivant "
+          + "hors de portee du controle, potentiellement encore expose (TF-1115)", cible);
+      }
+      // O13 (TF-1116 + TF-1118) — tout geste destructif porte sa maturite ET sa mesure de
+      // non-regression ; les deux marques sont jugees independamment.
+      const texteCible = fs.readFileSync(cible, "utf8");
+      for (const geste of jugerGestesDestructifs(texteCible)) {
+        if (geste.sansMaturite)
+          add("bloquant", "O13", `geste destructif sans marque de MATURITE (« ${geste.ligne} ») — `
+            + "« eprouve sur cette cible le AAAA-MM-JJ » ou « deduit d'une autre cible, a mesurer "
+            + "avant execution » : un geste jamais joue sur sa cible n'est pas une procedure, "
+            + "c'est une hypothese redigee a l'imperatif (TF-1116)", cible);
+        if (geste.sansMesure)
+          add("bloquant", "O13", `geste destructif sans MESURE DE NON-REGRESSION (« ${geste.ligne} ») — `
+            + "sans elle, un decalage (pare-feu referme, image supprimee) ne se revele qu'a la "
+            + "revision suivante, sans lien visible avec le geste (TF-1118)", cible);
+      }
+      // O16 (TF-1120) — un nettoyage d'infrastructure declare se clot sur trois questions,
+      // chacune avec sa reponse et sa preuve ; les trois manques sont juges independamment.
+      for (const q of jugerClotureNettoyage(texteCible) || []) {
+        if (q.absente) {
+          add("bloquant", "O16", `nettoyage d'infrastructure declare sans la question de cloture « ${q.libelle} » — `
+            + "supprimer une instance sans traiter sa source est un nettoyage qui se defait tout seul (TF-1120)", cible);
+          continue;
+        }
+        if (q.sansReponse)
+          add("bloquant", "O16", `question de cloture « ${q.libelle} » sans REPONSE — `
+            + "« Reponse : … » sous la question, ou colonne Reponse de sa ligne de table (TF-1120)", cible);
+        if (q.sansPreuve)
+          add("bloquant", "O16", `question de cloture « ${q.libelle} » sans PREUVE — une reponse sans commande `
+            + "ni mesure citee est une affirmation ; « Preuve : … » ou colonne Preuve (TF-1120)", cible);
+      }
+    }
+  } catch { /* cible illisible : O9/O12/O13/O16 se taisent plutot que d'accuser */ }
+}
+
+// TF-1804 (lot Produit-83 du 15/10/2026) : un DOCUMENT .md se juge par ses regles de document
+// (O9, O12, O13, O16) et s'arrete la. Avant, il tombait aussi dans O1-O4 : `<doc.md>/COURANT`
+// n'existe jamais, et le document conforme que prescrit ETAPE-MEP § 3 septies sortait FAIL,
+// scelle tel quel dans .ops-journal.jsonl.
+const estDocument = (() => {
+  try { return !!cible && fs.statSync(cible).isFile() && /\.md$/i.test(cible); } catch { return false; }
+})();
+if (estDocument) {
+  const dursDoc = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
+  sortir(dursDoc.length ? "FAIL" : "PASS", dursDoc.length ? 1 : 0);
+}
+
+if (!cible || !fs.existsSync(cible)) { add("info", "—", "cible introuvable", String(cible)); sortir("SKIP", 2); }
+
+// ── O1/O3 · cible dont pointeur ET historique sont tenus par une PLATEFORME (TF-0844,
+// lot Produit-61 20260905a + seq 74) ─────────────────────────────────────────────────
+// FAIT CONSTATÉ : sur une cible déployée via un plan cloud (railway, gcp, azure, aws...),
+// c'est la PLATEFORME qui tient le pointeur de déploiement actif et son historique — jamais
+// `ops.mjs deployer/canary`, qui n'écrit COURANT et journal.jsonl que pour les cibles servies
+// EN LOCAL par cette forge. O1 (« COURANT absent ») et O3 (« journal.jsonl absent ») FAILaient
+// donc à tort sur un déploiement RÉEL, SAIN et RESTAURÉ (oracle M-4 du pilot PASS) : l'oracle
+// jugeait un contrat de fichiers que la cible ne porte pas PAR CONSTRUCTION, pas un défaut.
+// Piste retenue : SANS_OBJET déclaré, jamais un adaptateur qui appellerait l'API de la
+// plateforme (hors périmètre forge-ops — zéro credential, zéro appel réseau, TF-0844).
+// EXPLICITE, jamais déduit du nom du dossier (loi n° 3 : l'oubli n'existe pas, une cible
+// nommée « railway » par coïncidence resterait jugée normalement) : le SKIP n'existe que si
+// la cible porte elle-même un fichier PLATEFORME, écrit par le run qui l'exploite (même geste
+// que `plan` désigne déjà sa cible par ce même nom : railway | gcp | azure | aws | ...).
+const platPath = path.join(cible, "PLATEFORME");
+const plateforme = fs.existsSync(platPath) ? fs.readFileSync(platPath, "utf8").trim() : null;
+if (plateforme) {
+  add("info", "O1", `pointeur de déploiement tenu par la plateforme « ${plateforme} », hors du contrat de fichiers forge-ops (COURANT) — SANS_OBJET, pas un défaut (TF-0844)`, "PLATEFORME");
+  add("info", "O3", `historique de déploiement tenu par la plateforme « ${plateforme} » — journal.jsonl n'est pas la source de vérité de cette cible, SANS_OBJET (TF-0844)`, "PLATEFORME");
+  sortir("SKIP", 2);
+}
+
+// ── O1 · pointeur ──────────────────────────────────────────────────────────
+const cp = path.join(cible, "COURANT");
+const courant = fs.existsSync(cp) ? fs.readFileSync(cp, "utf8").trim() : null;
+if (!courant) add("bloquant", "O1", "COURANT absent — la cible n'a pas de release active désignée", "COURANT");
+const releaseDir = courant ? path.join(cible, "releases", courant) : null;
+if (courant && !fs.existsSync(releaseDir))
+  add("bloquant", "O1", `COURANT pointe une release inexistante : ${courant}`, "COURANT");
+
+// ── O2 · healthcheck réel de la release courante ──────────────────────────
+if (courant && fs.existsSync(releaseDir)) {
+  const sante = path.join(releaseDir, "sante.mjs");
+  if (!fs.existsSync(sante)) add("bloquant", "O2", "sante.mjs absent de la release courante — santé invérifiable", courant);
+  else {
+    const r = spawnSync(process.execPath, [sante], { cwd: releaseDir, encoding: "utf8", timeout: 30000 });
+    const s2 = jugerSante(r); // TF-2699 : un plantage du contrat se dit, il n'est pas une santé en échec
+    if (!s2.ok) add("bloquant", "O2", s2.plantage ? `${s2.raison} — sur la release courante` : `healthcheck en échec (exit ${r.status}) sur la release courante`, courant);
+  }
+}
+
+// ── O3 · intégrité du journal (contrat ledger : seq croissant depuis 1) ───
+const jp = path.join(cible, "journal.jsonl");
+let entrees = [];
+if (!fs.existsSync(jp)) add("bloquant", "O3", "journal.jsonl absent — exploitation non tracée", "journal.jsonl");
+else {
+  const lignes = fs.readFileSync(jp, "utf8").split("\n").filter(Boolean);
+  let attendu = 1;
+  for (let i = 0; i < lignes.length; i++) {
+    let e = null;
+    try { e = JSON.parse(lignes[i]); } catch { add("bloquant", "O3", `ligne ${i + 1} : JSON invalide`, "journal.jsonl:" + (i + 1)); continue; }
+    if (e.seq !== attendu) add("bloquant", "O3", `ligne ${i + 1} : seq ${e.seq}, attendu ${attendu} (append-only rompu)`, "journal.jsonl:" + (i + 1));
+    if (!TYPES.includes(e.type)) add("bloquant", "O3", `ligne ${i + 1} : type inconnu « ${e.type} »`, "journal.jsonl:" + (i + 1));
+    attendu = (e.seq ?? attendu) + 1;
+    entrees.push(e);
+  }
+  if (!entrees.length) add("bloquant", "O3", "journal vide — aucune exploitation tracée", "journal.jsonl");
+}
+
+// ── O4 · rollback prouvable + cohérence pointeur ↔ histoire ───────────────
+// Rollback prouvable = l'histoire n'est pas purgée : toute release citée par un
+// événement actif du journal existe encore sur disque (on peut toujours y revenir).
+// Être positionné sur la plus ancienne release après une restauration est un état sain.
+if (courant && fs.existsSync(releaseDir)) {
+  const actifs = entrees.filter(e => e.type === "deploiement" || e.type === "restauration" || e.type === "canary_promotion");
+  for (const e of actifs) {
+    if (e.release && !fs.existsSync(path.join(cible, "releases", e.release)))
+      add("majeur", "O4", `release ${e.release} citée au journal (seq ${e.seq}) mais purgée du disque — rollback impossible vers cet état`, "releases/");
+  }
+  const dernier = actifs[actifs.length - 1];
+  if (dernier && dernier.release !== courant)
+    add("bloquant", "O4", `incohérence : COURANT=${courant} mais le dernier événement actif du journal désigne ${dernier.release}`, "journal.jsonl");
+}
+
+const durs = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
+sortir(durs.length ? "FAIL" : "PASS", durs.length ? 1 : 0);

@@ -1,0 +1,94 @@
+/* tokens.css — DÉRIVÉ, ne pas éditer à la main.
+ * Source unique : corpus/tokens-factory.tokens.json (format W3C DTCG, stable 2025.10).
+ * Régénérer : node scripts/generer-tokens-css.mjs corpus/tokens-factory.tokens.json --sortie corpus/tokens-factory.css
+ * Vérifié par : node oracles/oracle-dtcg.mjs corpus/tokens-factory.tokens.json corpus/tokens-factory.css
+ *
+ * tokens-factory — mode « factory » de systeme-de-marque. SOURCE au format W3C DTCG (stable 2025.10, https://www.designtokens.org/tr/drafts/format/). corpus/tokens-factory.css est un DÉRIVÉ, régénéré par scripts/generer-tokens-css.mjs — ne pas éditer ce .css à la main, éditer ce .json puis régénérer.
+ * Réalignée le 14/09/2026 (TF-1034, constat en passant du 11/09) sur le socle factory-page-html : ~/.claude/skills/factory-page-html/assets/boilerplate.html (bloc :root clair et bascule :root[data-theme="dark"], S-G1) et references/charte-et-tokens.md (registre *-solid, TF-0910). L'empreinte de ces deux sources est scellée dans $fraicheur (oracle-dtcg D4) : un socle qui bouge sans réalignement du corpus se voit désormais, au lieu de se périmer en silence comme la date « extraite le 04/08/2026 » qui précédait ce chantier.
+ * Ajouts de ce réalignement, mesurés absents le 11/09 : (1) le registre red/red-fill/red-line (TF-0755) ; (2) les six fonds pleins de badges *-solid à encre blanche (TF-0910) — LIGHT THEME SEUL, aucune variante sombre n'est documentée par le socle à ce jour, l'écart n'est pas comblé par une valeur inventée ; (3) le groupe focus (--focus-anneau, alias de blue ; --focus-decalage, 2px) que le boilerplate prescrit et qu'oracle-tokens T8 exige, absent du corpus jusqu'ici. Le thème sombre reprend désormais À L'IDENTIQUE le bloc S-G1 réel du boilerplate (#0B1220, #121B2E, #7DA2F5…) : le corpus ne recalcule plus une projection sombre qui divergeait de celle qui s'exécute réellement (#0E1219, #171C25, #6FA0FF… avant ce chantier) — ce n'est plus une extension de la forge, c'est la valeur du socle.
+ * DEUX CONFLITS CONNUS AVEC LES ORACLES DE LA FORGE — déclarés, non masqués :
+ *  1. oracle-slop S4 se déclenche sur --card et --surface (#FFFFFF, blanc pur). La règle S4 vient d'impeccable (« pure black/white never appears in nature »). La charte Factory la contredit frontalement. Arbitrage : sur un livrable Factory, la charte gagne et le finding S4 est accepté comme exception déclarée dans la restitution. Sur un livrable client, le mode « client » s'applique et la question ne se pose pas.
+ *  2. oracle-tokens T4 (parité clair/sombre) se déclenche en bloquant sur les six *-solid : le socle ne documente AUCUNE variante sombre de ce registre (charte-et-tokens.md est light-theme only, C4), et $fraicheur ne peut sceller une valeur qui n'existe nulle part en amont. Inventer un sombre non sourcé serait pire que l'absence : arbitrage identique à S4, exception déclarée sur un livrable Factory, revue dès que le socle documente ce registre en sombre.
+ * MOUVEMENT (TF-0321) : le groupe « mouvement » PRESCRIT ce que oracles/oracle-motion.mjs juge. Ses valeurs sont dérivées des règles R1-R7, pas choisies : le plafond de 300 ms est celui de R4, l'échelle d'entrée de 0.96 est la fourchette 0.95-0.97 de R2, les trois courbes décélèrent sans dépassement (R3, et slop S8 sur le rebond déguisé). Prescription et jugement partagent donc le même seuil ; changer l'un sans l'autre est un défaut, pas un réglage. Le mouvement ne dépend pas du thème : un seul jeu, aucun jumeau sombre (T4 ne porte que sur la couleur).
+ */
+
+:root {
+  /* --- Rendu natif : le navigateur peint SES composants (top-layer dialog/popover,
+         contrôles de formulaire, barres de défilement, ::backdrop) dans le schéma
+         déclaré ici, jamais dans celui de l'OS (TF-0796) --- */
+  color-scheme: light;
+
+  /* --- Couleurs, thème clair (référence) --- */
+  --bg: #FAFBFF;
+  --card: #FFFFFF;
+  --surface: #FFFFFF;
+  --ink: #0F172A;
+  --muted: #64748B;
+  --faint: #94A3B8;
+  --line: #E6EAF2;
+  --blue: #2563EB;
+  --green: #15803D;
+  --green-fill: #F2FCF5;
+  --green-line: #CFEEDD;
+  --amber: #D97706;
+  --amber-fill: #FFFBEB;
+  --amber-line: #FDE9C8;
+  --teal: #0E9488;
+  --teal-fill: #EFFDFB;
+  --teal-line: #C7F0EA;
+  --red: #B91C1C;
+  --red-fill: #FEF2F2;
+  --red-line: #F6CFCF;
+  --green-solid: #166534;
+  --teal-solid: #0F5F8F;
+  --amber-solid: #92400E;
+  --red-solid: #B91C1C;
+  --slate-solid: #4B5563;
+  --violet-solid: #7E22CE;
+
+  /* --- Typographie --- */
+  --head: "Montserrat", "Roboto", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --sans: "Inter", "DM Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "Consolas", monospace;
+
+  /* --- Rayons --- */
+  --r: 12px;
+  --r-sm: 8px;
+
+  /* --- Alias au nommage de la forge (oracle-tokens T5 résout les paires par le nom) --- */
+  --fond: var(--bg);
+  --surface-carte: var(--card);
+  --texte: var(--ink);
+  --texte-faible: var(--muted);
+  --trait: var(--line);
+  --accent: var(--blue);
+
+  /* --- Échelle d'espacement 4pt (oracle-tokens T3) --- */
+  --espace-xs: 4px;
+  --espace-sm: 8px;
+  --espace-md: 16px;
+  --espace-lg: 24px;
+  --espace-xl: 32px;
+  --espace-2xl: 48px;
+
+  /* --- Focus : anneau et écart PRESCRITS, jamais improvisés à la consommation (RGAA 10.7, oracle-tokens T8) --- */
+  --focus-anneau: var(--blue);
+  --focus-decalage: 2px;
+
+  /* --- Mouvement : durées par taille de geste, easings nommés, seuils (oracle-motion R4/R8/R9) --- */
+  --dur-etat: 120ms;
+  --dur-local: 160ms;
+  --dur-ancre: 200ms;
+  --dur-surface: 280ms;
+  --dur-plafond: 300ms;
+  --ease-apparition: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-disparition: cubic-bezier(0.4, 0, 1, 1);
+  --ease-deplacement: cubic-bezier(0.4, 0, 0.2, 1);
+  --echelle-entree: 0.96;
+}
+
+/* --- Thème sombre, dérivé : CHOISI par la bascule (data-theme sur <html>), jamais hérité
+       du système — R-30 du pilot, clair par défaut strict (TF-0158, TF-1771) --- */
+:root[data-theme="dark"] { color-scheme: dark; --bg: #0B1220; --card: #121B2E; --surface: #121B2E; --ink: #EEF2F8; --muted: #A9B4C4; --faint: #7C8AA0; --line: #263248; --blue: #7DA2F5; --green: #7BE0A0; --green-fill: #0F2A1B; --green-line: #1C4A30; --amber: #FBBF6D; --amber-fill: #2B2210; --amber-line: #4A3A18; --teal: #5FE6D6; --teal-fill: #0E2A27; --teal-line: #164E48; --red: #F5A3A3; --red-fill: #2C1416; --red-line: #4C1F22; }
+
+:root[data-theme="light"] { color-scheme: light; --bg: #FAFBFF; --card: #FFFFFF; --surface: #FFFFFF; --ink: #0F172A; --muted: #64748B; --faint: #94A3B8; --line: #E6EAF2; --blue: #2563EB; --green: #15803D; --green-fill: #F2FCF5; --green-line: #CFEEDD; --amber: #D97706; --amber-fill: #FFFBEB; --amber-line: #FDE9C8; --teal: #0E9488; --teal-fill: #EFFDFB; --teal-line: #C7F0EA; --red: #B91C1C; --red-fill: #FEF2F2; --red-line: #F6CFCF; --green-solid: #166534; --teal-solid: #0F5F8F; --amber-solid: #92400E; --red-solid: #B91C1C; --slate-solid: #4B5563; --violet-solid: #7E22CE; }

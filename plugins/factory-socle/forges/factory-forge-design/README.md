@@ -1,0 +1,447 @@
+# Forge Design
+
+Forge spécialisée dans le design d'applications web, de sites web et d'applications
+mobiles. Un corpus, cinq verbes, cinq oracles exécutés.
+
+Elle s'arrête au design : ni spécification fonctionnelle, ni backlog, ni planning,
+ni passation développeur. Conception complète : [conception-forge-design.md](conception-forge-design.md).
+
+## Utilisation
+
+Cette forge ne se lance pas seule : la Factory la mobilise quand votre demande en a besoin.
+Ouvrez une session Claude Code dans le dossier de votre projet et collez cette phrase, la même
+pour tous les cas d'usage :
+
+```
+Utilise https://github.com/Ptitcuicui/factory pour ce projet
+```
+
+La Factory installe ce qui manque, cette forge comprise, puis vous demande ce que vous voulez
+obtenir. Détail : [README de la Factory](https://github.com/Ptitcuicui/factory#utiliser-la-factory--une-seule-phrase).
+
+## Catalogue de services
+
+> Section proposée par la campagne « catalogues » du pilot (2026-08-13) — générée depuis
+> la source unique `catalogues/catalogue.jsonl` du pilot (v1.6.0, challengée état de
+> l'art le 12/08/2026). **prouvé** = preuve exécutée ; *déclaré* = méthode documentée seulement.
+
+| Service | Intention (« je veux… ») | Point d'entrée | Statut |
+|---|---|---|---|
+| **Système de marque** | doter mon produit d'une identité et de tokens exploitables | `skills\systeme-de-marque (méthode, mode degrade)` | prouvé (experimental) |
+| **Studio de direction** | explorer et trancher une direction artistique | `skills\studio-de-direction (méthode, mode degrade)` | prouvé (experimental) |
+| **Améliorer le design (maquette)** | obtenir une maquette HTML autonome de mon interface | `skills\ameliore-le-design (méthode, mode degrade)` | prouvé (experimental) |
+| **Critiquer le design (amont et aval)** | faire critiquer une maquette ou juger le produit rendu contre sa promesse design | `skills\critique-le-design (méthode) ; mode aval : revue graphique d'implémentation (ETAPES-RUN §5 bis)` | déclaré (experimental) |
+| **Valider le design (oracles)** | vérifier mécaniquement charte, tokens, mobile, images et corpus | `node oracles\run-oracles-design.mjs <html> [--mobile] [--tokens t.css] [--json-only]` | prouvé (production) |
+| **Générer les visuels** | produire les images et visuels réels de mes maquettes | `producteur d'images (Gemini) — spécifié chez design, exercé via le pilot` | prouvé (experimental) |
+| **Tokens DTCG (source → dérivé)** | faire des tokens une source W3C interopérable, jamais éditée en CSS | `node scripts\generer-tokens-css.mjs · node oracles\oracle-dtcg.mjs <tokens.json> <css>` | prouvé (experimental) |
+| **Baseline de régression visuelle** | détecter toute régression visuelle contre une référence approuvée versionnée | `node oracles\oracle-baseline.mjs <page.html|url> --slug <nom> --racine <produit> [--approuver [--motif "…"]]` | prouvé (experimental) |
+| **Rendu comparatif d'un correctif** | voir en une commande ce qu'un correctif ad hoc a changé au rendu, avant/après, et refuser mécaniquement ce qu'il a cassé | `node oracles\rendu-comparatif.mjs --avant <fichier\|url> --apres <fichier\|url> [--zone <sélecteur>]` | prouvé (experimental) |
+
+Le catalogue consolidé des dix forges vit chez le pilot :
+[factory-pilot/catalogues/CATALOGUES.md](https://github.com/Ptitcuicui/factory/blob/main/catalogues/CATALOGUES.md).
+
+## Structure
+
+```
+corpus/            matière indexée, recherche BM25 hors ligne ; grille-viewports.json, faits-commerciaux.json
+                   porte la largeur de conception et les grilles de rendu (TF-1066)
+corpus/composants/ composants de page à poser au socle : saisie-erreurs.js et .css, l'erreur d'une saisie sous son champ (TF-2172)
+oracles/           les juges exécutés + leurs fixtures + le self-test
+baseline/          captures approuvées de régression visuelle, versionnées (TF-0102)
+skills/            les cinq verbes
+dist/              les skills empaquetés, installables
+demo/              run de validation : template, build, maquette, restitution
+.env               clé Gemini pour la génération d'images au build
+```
+
+`dist/` peut être **en retard** sur `skills/` + `oracles/` : l'empaquetage n'est
+pas automatisé (pas de hook de build), donc un correctif appliqué dans `skills/`
+ou `oracles/` sans reconstruction manuelle du `.skill` correspondant ne se
+propage pas à l'installé. Dette connue, non résolue par ce README.
+
+## Sorties, quand la forge est invoquée par un orchestrateur
+
+Les livrables (`tokens.css`, maquette HTML, `revue.md`, `MARQUE.md`, `DIRECTION.md`…)
+vont dans le dossier de travail de l'appelant, **jamais** dans ce dépôt. Ce dépôt
+ne contient que la forge elle-même (skills, oracles, corpus) — pas ses productions.
+
+## Les cinq verbes
+
+Voici les cinq points d'entrée de la forge, ce qu'il faut leur donner et ce qu'ils
+rendent. Le tableau se lit ligne à ligne : la colonne « Entrée » dit la matière
+minimale à fournir, la colonne « Sortie » le fichier produit — rien d'autre n'est
+promis, et ce qui n'y figure pas n'est pas du ressort de la forge.
+
+| Skill | Entrée | Sortie |
+|---|---|---|
+| [systeme-de-marque](skills/systeme-de-marque/) | logo, site, charte PDF, 3 mots de ton | `tokens.css` + `MARQUE.md` |
+| [studio-de-direction](skills/studio-de-direction/) | brief + marque | `DIRECTION.md` : 1 retenue, 2 écartées avec leur raison |
+| [ameliore-le-design](skills/ameliore-le-design/) | idée, design, spécification, produit existant | maquette navigable, un fichier HTML |
+| [critique-le-design](skills/critique-le-design/) | page, maquette, capture, URL | `revue.md` : verdict + top 5 corrections |
+| [clip-de-presentation](skills/clip-de-presentation/) | sujet, sources, dossier de marque du produit | `clip.html` + `STORYBOARD.md` + planches + MP4, chez le produit |
+
+Ils sont **indépendants**. On peut critiquer sans marque, maquetter sans studio.
+Aucune séquence n'est imposée : c'est ce qui distingue une forge d'un pipeline.
+
+## Les oracles
+
+```bash
+node oracles/self-test.mjs                                   # non-régression, toutes fixtures vertes/rouges
+
+node oracles/run-oracles-design.mjs <page.html> \
+  [--mobile] [--tokens tokens.css] [--json-only] [--racine <chemin>] \
+  [--instance <url|page alimentée>… [--etat-connexion etat.json] [--accepter-certificat-local] [--statut-attendu <code>]] \
+  [--maquette | --type-page application|editoriale] \
+  [--origine <url de la boucle locale>]                                  # capture d'une instance servie : ressources intégrées (TF-2309) ; point d'entrée unique ;
+# --instance : exploitabilité X0–X6 et X8–X9 (TF-1687, onglets TF-1916, visite guidée et lexique TF-2158). Sans instance : SANS OBJET dit pour une page
+# éditoriale, mais FAIL (X7) pour une page d'APPLICATION (TF-2121) ; --maquette l'exempte à voix haute
+
+node oracles/run-oracles-design.mjs --corpus <dossier-corpus>          # mode corpus (oracle-corpus seul)
+
+node oracles/run-oracles-design.mjs --dtcg <source.tokens.json> <tokens.css>  # sync DTCG → CSS
+
+node oracles/run-oracles-design.mjs --barre-externe <BARRE-EXTERNE.md> [--minimum N]   # B1–B4 : le relevé de barre externe de l'étape 0 de systeme-de-marque (TF-2466)
+node oracles/run-oracles-design.mjs --liste-demande <REVUE.md>                          # D1–D5 : la liste de contrôle de la demande de la revue de critique-le-design (TF-2466)
+
+node oracles/oracle-saisie.mjs <page.html>                    # SA1–SA7, SA8 (avertissement) : typé, proposé, borné, atteignable, compilable
+node oracles/oracle-panneau-tache.mjs <page.html>             # PA1–PA7 : choix exclusif, branches, coexistence, motif d'un écran de création
+node oracles/oracle-surcouche.mjs <page.html> [--tokens t.css] # SC1–SC4, SC5 (avertissement) : dialog, popover, ::backdrop, color-scheme ; SC4 seule dès qu'un thème sombre existe, avec ou sans sur-couche (TF-2384)
+node oracles/oracle-declencheurs.mjs <page.html>              # DE1–DE3, DE4 (avertissement) : action = bouton, navigation = lien, fantome jamais seul
+node oracles/oracle-exploitabilite.mjs <page.html|url>… \
+  [--etat-connexion etat.json] [--theme dark] [--largeur N] \
+  [--accepter-certificat-local]                               # X0–X6 : écran rendu au volume réel (TF-1654), onglets sous le premier écran (TF-1916) ; X8 visite guidée câblée, X9 lexique et infobulles (TF-2158) ;
+# URL servie derrière une connexion : état Playwright (storageState) du produit (TF-1674) ;
+# instance locale en https à certificat auto-signé : --accepter-certificat-local, hôtes de boucle locale seulement (TF-2122)
+
+node oracles/oracle-fluidite.mjs <page.html|url> [--largeur N] [--hauteur N] [--temoin-naif]  # F1–F3 : durée d'image de bout en bout d'un canevas WebGL animé (D-108 (b)) ;
+# chaque image attend la fin du travail graphique (readPixels) ; mesure impossible ⇒ SKIP motivé, jamais PASS
+
+node oracles/oracle-baseline.mjs <page.html|url> --slug <nom> --racine <produit> [--approuver [--motif "<écart voulu>"]]  # régression visuelle
+node oracles/self-test-baseline.mjs                           # verrou dédié (SKIP motivé si outillage absent)
+
+node oracles/oracle-logo-petit.mjs <logo.svg>… [--fond '#FFFFFF']… [--sortie <dossier>]   # LP1–LP5 : le logo tient-il à 16 et 32 px ? (TF-2074)
+node oracles/oracle-erreurs-formulaire.mjs <page.html|url>… [--etat-connexion etat.json] [--proximite px] [--accepter-certificat-local]   # EF0–EF5 : une saisie refusée se dit sous son champ (TF-2172)
+
+node oracles/oracle-document-imprime.mjs <fichier.pptx|.pdf|.html> [--seuil-mm 10] [--pages-libres 1,4]   # DP1–DP5 : les supports sans CSS, deck PPTX et PDF imprimé (TF-2386) ; une page HTML est imprimée en PDF par Chromium d'abord ;
+# DP4 équilibre des colonnes et DP5 vide sous le contenu se lisent sur le PDF imprimé (TF-2385) ; Python avec pymupdf et python-pptx requis, sinon SKIP motivé
+
+node oracles/oracle-clip.mjs <dossier du clip> [--mp4 <clip.mp4>] [--ffprobe <chemin>]   # CL1–CL7 : un clip du skill clip-de-presentation (TF-2405) — MP4 par ffprobe, planches,
+# budgets des textes, étiquettes de 24 px, chiffres de décor étiquetés « exemple », marque en paramètre, rendu déterministe ; sans ffprobe, CL1 rend SKIP et jamais PASS
+
+node scripts/generer-images.mjs <page.html> [--env <fichier>] [--modele <m>] [--referentiel <fichier>]   # producteur d'images (API payante, sur GO)
+node scripts/generer-images.mjs --lister-modeles [--modele <m>]    # la liste des modèles retenue, sans clé ni appel (TF-2111)
+
+node scripts/fabriquer-etat-connexion.mjs --url <page de connexion> --sortie <etat.json> --identifiant-env <VARIABLE> --secret-env <VARIABLE>   # fabrique l'état de connexion de --etat-connexion (TF-2781)
+# les valeurs viennent de variables d'ENVIRONNEMENT nommées, jamais d'un .env ni d'un argument ; l'état est refusé sous un dépôt git ; exit 1 si la connexion n'est pas établie, 2 si un prérequis manque
+
+node oracles/decouvrir-oracles.mjs [--racine <chemin>]         # TOUS les oracles de la forge, lus sur le disque (TF-1319)
+node oracles/self-test-decouverte.mjs                         # verrou dédié de la découverte, deux sens
+node oracles/self-test-regles-jouees.mjs                      # verrou dédié des plages citées à la sortie des oracles (« M1–M11 sans écart ») : dérivées de REGLES_JOUEES, jamais en dur (TF-2287), deux sens
+node oracles/self-test-exploitabilite.mjs                     # verrou dédié d'oracle-exploitabilite : X2 volume minimal (TF-2199), X9 lexique (TF-2219), plage du message « sans écart » dérivée de la liste jouée (TF-2250), deux sens
+
+node oracles/rendu-comparatif.mjs --avant <fichier|url> --apres <fichier|url> \
+  [--zone <sélecteur>] [--largeurs <grille du corpus>] [--sortie <dossier>] \
+  [--etats-ouverts] [--json-only]                             # avant/après d'un correctif ad hoc
+# états d'échec (TF-0493) : render_page.py <page> --matrice-etats — cinq états mesurés ET
+# capturés (dont filtre sans résultat et recherche sans correspondance). Un état vide muet est
+# bloquant ; un état sans déclencheur est déclaré NON JOUÉ.
+```
+
+### `rendu-comparatif.mjs` — le geste « avant / après » d'un correctif
+
+Un correctif posé hors run se vérifiait à l'œil, page fermée, sur un seul écran.
+Cette commande capture les **deux** versions sur N largeurs × 2 thèmes en
+réutilisant `render_page.py` (jamais une capture maison : outillage absent ⇒
+`SKIP` motivé, exit 2), pose les captures côte à côte dans une page de
+comparaison, et signale les constats **nouveaux** — présents après, absents
+avant. Ce que le correctif **répare** est compté et affiché, jamais porté au débit.
+
+| Constat | Sévérité | Ce qu'il dit |
+|---|---|---|
+| `V1` `V4` `V2` `L2` | bloquant | débordement, chevauchement, contraste ou largeur de texte que la version « après » introduit |
+| `RC-1` | bloquant (avertissement si `--zone`) | le rendu s'allonge à largeur constante : trace mécanique d'un retour à la ligne nouveau |
+| `RC-2` | info | part de pixels qui bougent à hauteur identique — de combien le correctif a débordé de sa zone |
+| `RC-3` | bloquant | capture MANQUANTE à une largeur de la grille, côté « avant » ou « après » (D-108 (b)) : la largeur est nommée avec le motif de `render_page.py`, elle n'est pas comparée — jamais un PASS ni un silence |
+| `V3` `V7` | avertissement | alignement et espacement nouveaux |
+
+`--zone <sélecteur>` filtre sur l'étiquette produite par `render_page.py` (tag,
+`#id` ou **première** classe) : une zone désignée par une classe secondaire n'est
+pas reconnue, et c'est dit au `non_juge`. Verdict machine : `0` aucun constat dur
+nouveau · `1` régression de rendu · `2` indéterminé.
+
+Options de `run-oracles-design.mjs` :
+
+| Option | Effet |
+|---|---|
+| `--mobile` | force `oracle-mobile` même sans marqueur de châssis détecté dans le HTML |
+| `--tokens <fichier.css>` | fait lire les tokens depuis un `.css` externe en plus de ceux du HTML, passé à `oracle-tokens` |
+| `--json-only` | sortie JSON compacte sur stdout, sans les lignes de statut sur stderr |
+| `--racine <chemin>` | force la racine de forge, prioritaire sur `$FORGE_DESIGN_ROOT` et sur le `.env` |
+| `--corpus <dossier>` | bascule en mode corpus : lance uniquement `oracle-corpus` sur le dossier donné |
+| `--dtcg <source.tokens.json> <tokens.css>` | bascule en mode pipeline de tokens : lance uniquement `oracle-dtcg`, qui régénère le CSS depuis la source DTCG et le compare au fichier livré |
+| `--barre-externe <BARRE-EXTERNE.md> [--minimum N]` | bascule en mode document : lance uniquement `oracle-barre-externe` (B1 daté, B2 au moins N références sourcées et exploitées, 5 par défaut, B3 écarts motivés, B4 arbitrage humain sur captures), l'oracle de l'étape 0 de `systeme-de-marque`. Verdict de cet oracle, exit 0/1 ; il juge la présence du relevé, jamais le beau (TF-2466) |
+| `--liste-demande <REVUE.md>` | bascule en mode document : lance uniquement `oracle-liste-demande` (D1–D5), l'oracle de la liste de contrôle de la demande de `critique-le-design`. Une revue sans section « Liste de contrôle de la demande » rend SKIP exit 2 et le dit : un contrôle sans objet ne se lit pas « vert » (TF-2466) |
+| `--instance <url\|page>` | enrôle `oracle-exploitabilite` (X0–X6, X8–X9) sur l'instance alimentée, et lit la même instance pour `oracle-faits-commerciaux` et `oracle-valeur-affichee`. Répétable. Sans elle, la page est jugée sans instance : **SANS OBJET** dit au `non_juge` si elle est éditoriale ou non classée, **FAIL** (X7) si elle est d'application (voir `--type-page`) |
+| `--origine <url>` | la page jugée est une **capture d'une instance servie** dont les feuilles de style et les scripts sont restés externes (`/assets/app.css`) : avant toute passe, chaque ressource liée qui ne se retrouve pas à côté du fichier est lue à cette origine et intégrée à une copie temporaire (`<style data-origine>`, `<script data-origine>`), puis les oracles statiques et `--rendu` jugent cette copie (TF-2309). L'origine est **de la boucle locale seulement** (`localhost`, `127.0.0.1`, `::1`) : une autre est refusée (SKIP exit 2) et une ressource d'un hôte tiers n'est jamais lue, elle reste liée et est dite au `non_juge`. Sans `--origine`, une ressource introuvable est listée au `non_juge` avec ce remède. Images, polices, `@import` et imports relatifs d'un module ne sont pas intégrés |
+| `--etat-connexion <etat.json>` | état de connexion Playwright (`storageState`) d'une instance servie derrière une connexion (TF-1674) ; le fichier se fabrique par `node scripts/fabriquer-etat-connexion.mjs` (TF-2781) |
+| `--accepter-certificat-local` | l'instance est servie en https avec un certificat auto-signé (TF-2122) : le certificat est accepté **pour les hôtes de boucle locale seulement** (`localhost`, `127.0.0.1`, `::1`) par les trois juges qui lisent l'instance. Un autre hôte avec cette option est refusé (SKIP, exit 2, rien n'est jugé), toute requête https de la page vers un hôte non local est bloquée et nommée au `non_juge`, aucun nom hors boucle locale n'est résolu. Sans l'option, un certificat non reconnu échoue comme avant, et le message nomme l'option |
+| `--statut-attendu <code>` | l'instance est un **écran d'état voulu** (TF-2432) : « Page introuvable » servie en 404, par exemple. Servie avec CE code, elle est jugée comme un écran par les quatre juges qui lisent l'instance (exploitabilité, erreurs de formulaire, faits commerciaux, valeur affichée) ; servie avec un autre code, y compris 200, elle reste refusée (X0, EF0, SKIP exit 2). Sans l'option, toute réponse en 400 ou plus est refusée. Un code de trois chiffres (100 à 599), une seule valeur par appel ; sans `--instance`, l'option est dite sans effet au `non_juge`. Un écran 404 jugé répond aux mêmes règles qu'un écran d'application : X8 et X9 lui sont dues sauf s'il se déclare éditorial ou pose leur écart motivé |
+| `--type-page application\|editoriale` | nature de la page (TF-2121), prioritaire sur la déclaration de la page. Sans lui : `<meta name="forge-type-page" content="application">` ou `data-type-page="application"` sur un élément, puis un marqueur de structure (`data-panneau-tache`, `data-branche`, `data-exigence`). Un tableau filtrable ou une recherche ne classent **pas** (les pages d'étude du pilot en portent). Une page qui porte un champ de saisie et un tableau sans être classée est dite « application probable » au `non_juge`, jamais échouée. Valeur inconnue : SKIP. La classe décide aussi si `oracle-textes-application` (T4-1…T4-4, C14 de `ameliore-le-design`) entre dans la passe : joué sur une page d'application, dit SANS OBJET sur toute autre, et sur une page d'application dont aucune chaîne n'est extractible (TF-2466) |
+| `--maquette` | la page d'application est une maquette, sans instance par nature : l'absence d'instance est dite **SANS OBJET** au `non_juge` (« ce n'est pas un PASS de l'exploitabilité ») au lieu d'échouer en X7. À ne pas passer à une critique d'implémentation |
+| `--fluidite` | force `oracle-fluidite` (durée d'image de bout en bout) sur une page dont le canevas WebGL n'est pas lisible dans le fichier (moteur 3D embarqué ailleurs). Sans l'option, il part tout seul quand le document porte un canevas WebGL ET une boucle d'animation, et est dit `SANS OBJET` sinon ; mesure impossible ⇒ `SKIP` motivé (D-108 (b)) |
+| `--rendu` | si l'outillage est détecté (interpréteur désigné par `$FORGE_DESIGN_PYTHON`, sinon `python` ou `python3` du PATH avec `playwright`, sinon `.venv` sous la racine de la forge (TF-2461), `render_page.py` et `oracle-a11y.py` aux chemins canoniques `~/.claude/skills/...`), lance `render_page.py` sur le fichier fourni ET sur une copie générée avec `data-theme="dark"`, puis `oracle-a11y.py`, et agrège leurs verdicts dans `oracles`. Le `non_juge` nomme l'interpréteur qui a joué et d'où il vient. Outillage manquant ⇒ `SKIP` motivé sur cette seule entrée, jamais une erreur. Sans l'option, comportement inchangé |
+| `--etats-visibilite [--visibilite-selecteur <css>]` | avec `--rendu` : une page dont des éléments (clips, blocs, cartes) ne s'affichent qu'à une date ou sous une condition de données se rend dans ses **deux états extrêmes** (TF-2678), aucun élément piloté visible puis tous visibles, chacun en thème clair et sombre : deux jeux de rendus, jamais le seul état forcé « tout visible ». Les éléments pilotés portent `data-visibilite-pilotee` (ou le sélecteur passé) et la page les masque par `hidden` ou un style en ligne ; une page sans marqueur n'est rendue qu'une fois et le dit. Sans l'option, une page qui porte le marqueur dit au `non_juge` que seul l'état servi a été rendu |
+
+Racine résolue dans l'ordre `--racine` → `$FORGE_DESIGN_ROOT` (env) → `FORGE_DESIGN_ROOT`
+du `.env` voisin (celui de la forge, dossier parent du script) → dossier parent du script.
+Le `.env` du **dossier courant** n'est plus lu (TF-2431) : le verdict ne dépend pas du dossier
+d'où l'on lance. Le choix de l'interpréteur de `--rendu` non plus (TF-2461) : `$FORGE_DESIGN_PYTHON`
+(choix explicite : un interpréteur sans playwright est un manque, jamais un repli), puis le PATH, puis
+`.venv` sous la racine de la forge, jamais l'environnement `uv` du dossier courant. Un produit dont
+playwright vit dans un environnement `uv` pose la variable sur son interpréteur : sans elle, `--rendu`
+rend `SKIP` (TF-2473). Depuis le dossier du produit, `uv run python -c "import sys; print(sys.executable)"`
+donne le chemin, que `$env:FORGE_DESIGN_PYTHON = '<chemin>'` (PowerShell) ou `export FORGE_DESIGN_PYTHON=<chemin>`
+(sh) pose avant de relancer ; le `SKIP` nomme la variable et cette commande. La forge n'écrit rien chez le produit :
+la variable se pose dans la session ou dans le profil de celui qui lance la critique.
+**Racine non résolue ⇒ exit 2 et verdict `SKIP`** : un contrôle qui ne trouve pas
+ses oracles ne se tait jamais.
+
+Contrat de sortie : **exit 0** = `PASS` (tous les oracles applicables verts) ·
+**exit 1** = `FAIL` (au moins un oracle en échec) · **exit 2** = indéterminé —
+`SKIP` (racine ou cible non résolue) ou un oracle non exécutable. Le JSON sur
+stdout porte toujours `verdict`, le détail par oracle, et `non_juge` : ce que
+l'orchestrateur ne couvre pas (rendu réel V1–V7 et `oracle-a11y.py` sans `--rendu`,
+parcours C13 dans tous les cas
+— voir [criteres-sortie.md](skills/ameliore-le-design/references/criteres-sortie.md)).
+
+### Les composants embarqués du socle ne sont pas imputés à l'auteur (TF-0830)
+
+Une page peut embarquer un composant du socle `factory-page-html` — un bloc
+`<!-- COMPOSANT-EMBARQUE:DEBUT … -->` scellé par l'empreinte sha256 de sa source, que la
+**parité d'asset interdit d'éditer sur place**. Le 06/09/2026, trois pages neuves et
+conformes (`check_html` PASS, `render_page` PASS aux quatre largeurs) sortaient de cet
+orchestrateur en `FAIL` avec 19 à 20 écarts durs chacune — couleurs en dur, espacements
+hors échelle 4pt, anneaux de focus posés — **tous** portés par le seul `table-filters.css`
+du socle, et aucun corrigeable par l'auteur.
+
+L'orchestrateur reconnaît donc ces blocs. Un bloc dont le sceau est **vérifié contre la
+source du socle installée** (`~/.claude/skills/<socle>/<fichier>`) sort du verdict : ses
+constats sont rendus, nommés un par un, dans `socle_exempte.findings`, et leur correction
+relève du socle (propagation R-47), pas de la page. Un bloc seulement **déclaré** — socle
+absent, empreinte fausse, copie éditée sur place — reste jugé comme le CSS de l'auteur, et
+la raison est écrite dans `non_juge` : deux commentaires n'exemptent de rien.
+
+Un composant du socle **servi** (TF-2430) n'a pas de bloc ni de sceau : sur une page capturée
+d'une instance, `--origine` intègre la feuille ou le script liés (`/assets/table-filters.css`) en
+`<style data-origine="…">`. Il est reconnu à son **contenu** : identique, `url(…)` mis à part, à la
+source du socle installée qui porte le même nom de fichier, il sort du verdict comme un bloc scellé
+juste (`socle_exempte.verifies[].reconnu_par = "contenu"`, constats rendus). Le nom seul n'exempte
+rien : un homonyme édité sur place, ou périmé, est **déclaré** avec sa raison et reste jugé comme le
+CSS de l'auteur, et un fichier dont le nom n'est pas celui d'un composant du socle (la feuille du
+produit) est jugé sans être déclaré.
+
+Mécanique : la passe complète reste la vérité, une seconde passe est jouée sur une copie
+temporaire dont les blocs vérifiés sont vidés (nombre de lignes conservé), et la différence
+donne ce qui est au compte du socle. Rien n'est effacé, rien n'est deviné.
+
+| Oracle | Règles | Domaine |
+|---|---|---|
+| `oracle-slop` | S1–S12 | marqueurs de design généré ; S11 et S12 adaptées d’unslop (CC BY 4.0), voir `oracles/regles-importees-unslop.md` |
+| `oracle-tokens` | T1–T8 | traçabilité des tokens, parité des thèmes, contraste, contraste non textuel (T7), focus prescrit et contrasté (T8) |
+| `oracle-mobile` | M1–M9, M10–M11 (avertissements) | viewport, cibles tactiles, safe areas, reflow, paysage, transparence réduite, survie de l'état saisi, coquille défilante, bandeau collé en haut d'écran ; délai de tap et `theme-color` en avertissement (TF-1911) |
+| `oracle-images` | I1–I7, I8 (avertissement) | alt, plafonds, zéro réseau, manifeste de génération, variantes déclarées qui rendent vraiment différemment ; `width` et `height` posés en avertissement (TF-1911) ; une page sans image ni manifeste rend SKIP motivé (exit 2), jamais PASS (TF-2576) |
+| `oracle-motion` | R1–R14 | mouvement d'interface : transitions ciblées, plafond de durée, propriétés de layout, survol protégé, tokens de mouvement, révocation `prefers-reduced-motion`, boucles, `animate()`, retour d'appui ; une page sans mouvement ni contrôle pressable rend SKIP motivé (exit 2), jamais PASS (TF-2576) |
+| `oracle-corpus` | C1–C7 | colonnes, sources résolues, polices réflexes, monoculture inter-clients |
+| `oracle-dtcg` | D1–D4 | pipeline de tokens : forme DTCG minimale, alias résolus, tokens.css synchronisé avec sa source, fraîcheur d'un bloc externe déclaré |
+| `oracle-bascule` | B-T1–B-T4 | bascule sombre : bouton en en-tête, câblé (attaché ou délégué), persisté, palette sombre dérivée ; un rendu figé (ni bouton, ni palette sombre, ni script de thème) n'est qu'un avertissement, comme G1 du socle (TF-1661) |
+| `oracle-caracteres-controle` | CC-P1 | aucun octet de contrôle (C0 hors tabulation et fin de ligne, DEL) dans la page ni dans ses feuilles de style locales liées : un échappement CSS lu en octal par un script, invisible à la capture (TF-1980) |
+| `oracle-valeur-affichee` | VA1–VA4 (VA0 : SKIP) | une valeur dérivée affichée (version, environnement, date) égale sa source : le produit déclare où la page l'affiche et la commande qui la donne (`valeurs-derivees.json`), l'oracle relit la page servie et rejoue la commande ; sans déclaration, SKIP dit, jamais PASS (TF-2043) |
+| `oracle-faits-commerciaux` | FC1–FC7 (avertissements), FC9 (anomalie de l'oracle) | les formes d'un fait commercial sur la page servie (données d'avis JSON-LD et microdonnées, note ou nombre d'avis, citation de client, prix barré, rareté et urgence, volume de ventes ou de clients, allégation de santé) sont listées au rapport « à faire confirmer » : jamais un échec, PASS exit 0, sans déclaration du produit ; la véracité n'est pas jugée ; table de motifs datée en donnée (`corpus/faits-commerciaux.json`) ; page illisible : SKIP (TF-2050) |
+| `oracle-logo-petit` | LP1–LP5 | logo SVG rendu à 16 et 32 px (Chromium, fond transparent) contre sa référence à 128 px : LP1 trait plus fin qu'un pixel (plus de 20 % de l'encre), LP2 pièce ou trou fusionné ou perdu, LP3 contraste sous 3:1 sur le fond déclaré (`--fond`), LP4 rien à 16 px ou marge excessive, LP5 texte vivant ; le goût et la lisibilité sémantique ne sont pas jugés (TF-2074) |
+| `oracle-erreurs-formulaire` | EF0–EF4, EF5 (avertissement) | une valeur fausse par champ d'un formulaire visible (déclarée par `data-valeur-fausse` ou dérivée de `pattern`, `type`, `min`, `max`, `minlength`, `required`), sortie du champ puis envoi tenté (les écritures sont interceptées) : EF1 le champ est désigné (`aria-invalid` et message relié, un refus affiché ailleurs est cité), EF2 le message est à 120 px au plus du champ et dans la fenêtre, EF3 il reprend la saisie ou donne la forme attendue, EF4 l'envoi est retenu, EF5 le message paraît dès la sortie du champ ; enrôlé sur `--instance` ; seule requête d'écriture laissée passer : la vérification au champ qu'un formulaire déclare sans effet (`data-verifier="/chemin"`, ou dernier segment `/verifier` ; POST en fetch ou XHR, même origine, jamais l'`action` du formulaire ni une navigation), comptée à part et dite au non_juge (TF-2307) ; le composant qui le fait passer : `corpus/composants/saisie-erreurs.js` (TF-2172) |
+| `oracle-saisie` | SA1–SA7, SA8 (avertissement) | champs de saisie : typé, proposé, borné, atteignable (surface de geste et clavier), motif `pattern` compilable sous le drapeau v ; `autocomplete` ou `inputmode` posé en avertissement (TF-1911) ; une page sans champ de saisie rend SKIP motivé (exit 2), jamais PASS (TF-2535) |
+| `oracle-panneau-tache` | PA1–PA7 | écran de création : choix exclusif avant ses champs, une seule branche rendue, panneau hors de sa liste, motif légitime de la création annoncée ; une page sans panneau de création ni écran qui annonce une création rend SKIP motivé (exit 2), jamais PASS (TF-2576) |
+| `oracle-surcouche` | SC1–SC4, SC5 (avertissement) | composant dynamique ou en sur-couche : surface, contrôles et voile habillés depuis les jetons, `color-scheme` par thème ; défilement contenu (`overscroll-behavior`) en avertissement (TF-1911) |
+| `oracle-fluidite` | F1 (bloquant), F2–F3 (avertissements) | page animée en WebGL : durée d'image mesurée de bout en bout — chaque image attend la fin du travail graphique (lecture d'un pixel du canevas), jamais un compte de rappels d'animation (D-108 (b)) ; pas de contexte WebGL, pas d'animation, synchronisation impossible ⇒ `SKIP` motivé, jamais `PASS` |
+| `oracle-declencheurs` | DE1–DE3, DE4 (avertissement) | nature du point d'entrée : une action se déclenche par un bouton, une navigation se fait par un lien, un fantôme n'est jamais l'unique accès ; un `div` ou `span` cliquable sans rôle ni `tabindex` en avertissement (TF-1911) |
+
+Ils lisent le DOM statique **et** les gabarits JS : le contrat impose un rendu
+dynamique, et un oracle aveugle au runtime se tairait sur les tables, les cartes et
+les images qu'il ne voit pas.
+
+### Les modèles d'image du producteur sont une donnée (TF-2111)
+
+`scripts/generer-images.mjs` ne tient plus sa liste de modèles Gemini de mémoire. Il lit le calendrier du
+fournisseur dans `references/MODELES-TIERS.json` du pilot (`<racine des forges>/factory-pilot/`,
+`$FORGE_ROOT` d'abord, ou `--referentiel <fichier>`) : les modèles d'image à l'état « courant », le remplaçant
+courant d'abord. Référentiel injoignable : liste en dur datée et sourcée (`scripts/lib/modeles-image.mjs`), et
+l'avertissement le dit. Un `--modele` arrêté est refusé avant tout appel (exit 2, remplaçant nommé) ; déprécié ou
+absent du calendrier, il passe avec un avertissement. `--lister-modeles` imprime la liste retenue et s'arrête, sans
+clé ni appel. Le juge croisé est `oracle-modeles-tiers.mjs` du pilot (MT1 à MT4).
+
+### « L'affordance existe » ne suffit pas — `oracle-saisie` et `oracle-panneau-tache`
+
+Trois retours utilisateur en deux semaines, sur des écrans **livrés et audités**
+(lots Produit-12, TF-0707/TF-0708 puis TF-0736/TF-0739). La campagne de tests les
+mesurait câblés — interface 233/235 — et ils l'étaient : le bouton existait, le champ
+existait, l'icône ouvrait bien le calendrier. Le défaut n'était mesurable par **aucun**
+référentiel de la forge, parce que tous jugeaient la **présence** de l'affordance,
+jamais sa **valeur**, sa **borne**, sa **surface utile** ni l'**ordre** dans lequel
+elle demande de choisir.
+
+- `oracle-saisie` (SA1–SA7, SA8 en avertissement) : un champ au format connu est typé natif, porte la
+  meilleure hypothèse du système comme valeur, des bornes posées par son sens, et une
+  cible de geste qui couvre **tout** le composant — pas l'icône de vingt pixels au
+  bord droit. Toute promesse écrite dans l'aide (« la période part de la dernière
+  lecture ») est câblée dans le champ, sinon elle n'existe pas. Un `pattern` qui ne
+  compile pas sous le drapeau `v` — celui que le navigateur applique réellement — est
+  ignoré en silence : la contrainte déclarée n'existe pas non plus (SA7, TF-1343).
+- `oracle-panneau-tache` (PA1–PA7) : un choix exclusif se pose **avant** les champs
+  qu'il commande ; un panneau de tâche ne coexiste pas avec la liste qu'il alimente ;
+  une seule branche est rendue. Deux motifs de création restent légitimes — formulaire
+  replié pour une création simple, panneau adressable pour une tâche à branches — au
+  lieu d'un seul imposé partout.
+
+Doctrine complète et balisage attendu :
+[patterns-interaction.md](skills/ameliore-le-design/references/patterns-interaction.md).
+
+### Ce que la page ne dessine pas elle-même — `oracle-surcouche`
+
+Quatrième retour du même genre, un cran plus loin (TF-0796, 01/09/2026). Une fenêtre
+`dialog` de choix de dossier, stylée aux jetons et **PASS** à sa campagne (api 483/483,
+suite 989/989), s'est affichée en boîte sombre aux boutons natifs sur le poste de
+l'utilisateur : mode sombre au niveau du système, composant rendu en top-layer,
+`color-scheme` absent du socle. « Des trucs moches sortis de nulle part. » Tous les
+oracles jugeaient ce que la **page** dessine ; aucun ne jugeait ce que le **navigateur**
+dessine à sa place — la boîte d'un `dialog`, son voile `::backdrop`, les contrôles
+natifs, les barres de défilement.
+
+`oracle-surcouche` (SC1–SC4, SC5 en avertissement) exige l'habillage complet de tout composant en sur-couche —
+surface, contrôles, voile — et `color-scheme` déclaré **par thème** : `light` au bloc de
+base, `dark` au bloc sombre. Le socle le porte à la source (`scripts/generer-tokens-css.mjs`,
+verrouillé par `oracle-dtcg` D3) ; l'oracle vérifie qu'il est arrivé jusqu'à la page.
+Volet de revue correspondant : `critique-implementation.md`, contrôle 7 « livré à l'écran ».
+
+### Deux tours de retour pour un bouton — `oracle-declencheurs`
+
+Le 31/08/2026, sur une fonctionnalité livrée et câblée : « je ne vois pas de changement ».
+Le 01/09, une fois le bouton montré du doigt : « mets-le sous forme de bouton, pas de lien —
+le lien a une signification particulière, tout comme le bouton a la sienne » (TF-0797). Le
+point d'entrée unique d'une fenêtre d'arborescence était un bouton **fantôme** : sans fond ni
+bordure, il se lisait comme du texte.
+
+`oracle-declencheurs` (DE1–DE3, DE4 en avertissement) porte le **registre des déclencheurs** : une action se
+déclenche par un bouton qui a l'air d'un bouton, une navigation se fait par un lien, et la
+variante fantôme est une action secondaire — jamais l'unique accès à une fonctionnalité. Le
+critère est mesurable et non discutable : l'oracle rend, dans le champ `registre` de son
+JSON, la **liste des points d'entrée de la page avec la nature de chacun**. La couverture par
+fonctionnalité se déclare par `data-fonctionnalite="<nom>"` ; sans elle, l'oracle rend le
+registre et dit que la couverture n'a pas été jugée, au lieu de deviner un regroupement.
+
+### Reconnaître un câblage au lieu d'exiger une convention — `oracle-bascule`
+
+`oracle-bascule` (B-T1–B-T4) ne lisait que le câblage écrit à un seul endroit : un écouteur
+attaché après sélection du bouton, une clé `localStorage` en littéral. Une bascule d'un
+produit, fonctionnelle depuis sa v0.1.0 et câblée par **délégation** (`closest`) avec sa clé
+en **constante**, était donc déclarée « bascule morte » — et la session du 01/09/2026 a
+réécrit son code pour obtenir le vert (TF-0800). Un oracle qui refuse un comportement correct
+au nom d'une convention que personne n'a écrite pousse les produits à réécrire ce qui marche,
+ou à l'ignorer.
+
+Les deux motifs sont désormais reconnus, parce qu'ils sont statiquement lisibles au même
+niveau de preuve que l'attachement direct — celui que cet oracle déclare déjà juger, la
+coprésence, jamais un suivi de flux. Ce qui doit tomber tombe toujours : un bouton sans
+écouteur, un écouteur délégué dont le sélecteur vise **autre chose** (fixture rouge dédiée),
+une clé qu'aucune lecture ne rattache au thème — ce dernier cas en avertissement qui **énonce
+la convention** plutôt qu'en refus, parce que refuser à tort et se taire sont deux façons de
+mentir.
+
+Node seul, aucune dépendance npm. Contrat commun : JSON sur stdout, exit 0/1/2,
+`non_juge` déclaré. **Injectés au registre global** le 04/08/2026 (v2.7.0, 39 oracles),
+déclenchés par contenu et non par extension — détail et sauvegardes :
+[oracles/registre-entrees.md](oracles/registre-entrees.md).
+
+## Le corpus
+
+144 entrées, toutes sourcées : 24 styles, 9 palettes OKLCH déclinées en deux thèmes
+(18 lignes), 20 appariements typographiques hors liste réflexe, 31 patterns,
+51 guidelines. Sources : WCAG 2.2, ARIA APG, Material 3, Apple HIG, NN/g,
+Google Fonts, Fontshare et `impeccable`. Les valeurs de `apple-design` d'Emil Kowalski
+(ressorts, inertie, rubber-banding, tracking optique) n'y figurent pas : ce skill n'est
+ni installé ni versé au corpus, qui s'arrête à GL45 (relevé du 19/10/2026).
+
+C'est un corpus d'amorçage, pas un catalogue exhaustif : il grandit par ajout sourcé,
+et `oracle-corpus` refuse toute entrée sans source résolue.
+
+```bash
+python corpus/recherche.py "spa bien-être réservation" --systeme-de-design
+python corpus/recherche.py "dashboard SRE dense" --domaine style --top 3
+python corpus/recherche.py "cabinet d'avocats" --systeme-de-design --persist DIRECTION.md
+```
+
+Déterministe : même requête, même sortie. Une requête sans résultat se **déclare**
+au lieu de produire une entrée inventée.
+
+## Skills tiers installés pour la forge
+
+Un skill est installé à côté de la forge, et le tableau ci-dessous dit à quoi il sert et
+sous quelle licence il est repris. Sont exclus de cette liste les outils simplement
+consultés : n'y figure que ce qui est effectivement installé et exécuté ou cité par un
+oracle.
+
+| Skill | Rôle | Licence |
+|---|---|---|
+| `factory-page-html` + `render_page.py` | juge de rendu réel V1–V7. **Le script a été installé le 04/08/2026** : le registre le déclarait sans qu'il existe | maison |
+
+`apple-design` et `review-animations` d'Emil Kowalski (MIT) ne sont **pas** installés :
+absents de `~\.claude\skills\` (`~\.claude-b\skills\` en est un lien), et aucun de leurs
+fichiers n'est dans l'arbre ni dans l'historique git de la forge (relevé du
+19/10/2026). Seule trace de `review-animations` : les règles R1 à R7 de
+`oracles/oracle-motion.mjs` (ligne 3) en sont dérivées, et le skill lui-même n'est pas
+joué.
+
+## Règle qui traverse tout
+
+**Réseau autorisé au build, interdit au runtime du livrable.** Corpus, génération
+d'images Gemini, AI Kit Motion, consultation de références : tout est résolu avant
+livraison et embarqué. Le fichier livré s'ouvre en double-clic, hors connexion,
+sans CDN.
+
+## Run de validation
+
+```bash
+node demo/build.mjs   # inline Motion vendoré, vérifie son empreinte, écrit la maquette
+```
+
+```bash
+python demo/executer-parcours.py "demo/Factory - Maquette Bailleur - Interventions - 20260804a.html"
+```
+
+Une maquette réelle produite depuis un entrant « idée ». Elle a révélé **cinq faux
+négatifs** des oracles, tous corrigés et verrouillés par fixture — voir `TODO.md`.
+Rendu réel mesuré (`render_page.py` V1–V7, 5 breakpoints × 2 thèmes, 0 bloquant),
+accessibilité structurelle PASS, et **les trois parcours sont exécutés dans un
+navigateur réel**, pas décrits. Ce qui reste dû est déclaré dans
+`demo/NOTE-partis-pris.md`.
+
+## Reste à faire
+
+`TODO.md` — ce qui attend une décision, ce qui attend un environnement, et la dette
+assumée.
+
+## Installation
+
+```bash
+cp dist/*.skill ~/.claude/skills/      # ou installer via l'interface
+```
+
+Les skills appellent les oracles via `$FORGE_DESIGN_ROOT`. Après installation hors
+de ce dépôt, poser la variable — dans l'environnement, ou dans le `.env` de la
+forge :
+
+```bash
+export FORGE_DESIGN_ROOT=c:/dev/factory-forge-design
+```
+
+Sans elle, `run-oracles-design.mjs` sort en code 2 avec le verdict `SKIP` et dit ce
+qui manque. Il ne rend jamais un PASS sans avoir trouvé ses oracles.
