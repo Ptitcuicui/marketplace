@@ -67,11 +67,11 @@
   "agents": {
     "depot": "factory-pilot",
     "chemin": ".claude/agents",
-    "commit": "98f58dc5845fc61a8c3e66e3314e79caf4dffd11"
+    "commit": "bad629b87ca283963a6edd72998505f3c28a12e9"
   },
   "forge:factory-pilot": {
     "depot": "factory-pilot",
     "chemin": ".",
-    "commit": "98f58dc5845fc61a8c3e66e3314e79caf4dffd11"
+    "commit": "bad629b87ca283963a6edd72998505f3c28a12e9"
   }
 }

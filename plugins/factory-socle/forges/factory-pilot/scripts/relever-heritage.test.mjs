@@ -590,13 +590,33 @@ try {
   // sans historique rend « inconnu » dit, jamais deviné.
   const PILOT_REEL = join(ICI, "..");
 
-  check("TF-0711 — une copie égale à une version PUBLIÉE : « le pilot a avancé », datée, sans faute produit", () => {
-    const log = spawnSync("git", ["-C", PILOT_REEL, "log", "-n", "5", "--format=%H", "--", "gabarits/RETOURS-FORGES.md"], { encoding: "utf8" });
+  // Une version PUBLIÉE antérieure de `rel` et le pilot qui la porte. Le vrai dépôt quand son
+  // historique en compte deux ; sinon (dépôt publié en un seul commit, clone superficiel) un pilot
+  // jetable à deux commits : la version d'avant, produite par `vieillir`, puis la version courante.
+  // Le cas se joue toujours : un historique court n'est ni un vert ni un rouge du code mesuré.
+  const versionAnterieure = (rel, vieillir) => {
+    const log = spawnSync("git", ["-C", PILOT_REEL, "log", "-n", "5", "--format=%H", "--", rel], { encoding: "utf8" });
     const revs = (log.stdout || "").split("\n").filter(Boolean);
-    att(revs.length >= 2, "historique trop court pour jouer le cas");
-    const ancienne = spawnSync("git", ["-C", PILOT_REEL, "show", `${revs[1]}:gabarits/RETOURS-FORGES.md`],
-      { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 }).stdout;
-    const cause = attribuerDivergence("gabarits/RETOURS-FORGES.md", ancienne, PILOT_REEL);
+    if (revs.length >= 2) {
+      const ancienne = spawnSync("git", ["-C", PILOT_REEL, "show", `${revs[1]}:${rel}`], { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 }).stdout;
+      return { racine: PILOT_REEL, ancienne };
+    }
+    const courante = readFileSync(join(PILOT_REEL, rel), "utf8");
+    const ancienne = vieillir(courante);
+    att(ancienne !== courante, `témoin mal construit : la version d'avant de ${rel} ne diffère pas de la courante`);
+    const racine = mkdtempSync(join(T, "histoire-"));
+    mkdirSync(join(racine, dirname(rel)), { recursive: true });
+    const g = (date, ...a) => spawnSync("git", ["-C", racine, "-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false", "-c", "core.autocrlf=false", ...a],
+      { encoding: "utf8", env: { ...process.env, GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date } });
+    g("2026-09-03T10:00:00", "init", "-q", "-b", "main");
+    writeFileSync(join(racine, rel), ancienne); g("2026-09-03T10:00:00", "add", "-A"); g("2026-09-03T10:00:00", "commit", "-q", "-m", "avant");
+    writeFileSync(join(racine, rel), courante); g("2026-09-05T10:00:00", "add", "-A"); g("2026-09-05T10:00:00", "commit", "-q", "-m", "courante");
+    return { racine, ancienne };
+  };
+
+  check("TF-0711 — une copie égale à une version PUBLIÉE : « le pilot a avancé », datée, sans faute produit", () => {
+    const { racine, ancienne } = versionAnterieure("gabarits/RETOURS-FORGES.md", (t) => t + "\nligne retirée depuis par le pilot\n");
+    const cause = attribuerDivergence("gabarits/RETOURS-FORGES.md", ancienne, racine);
     att(cause.qui === "pilot", `attribution « ${cause.qui} » — une version publiée n'est pas reconnue`);
     // TF-0849 : la phrase NOMME ce qu'elle mesure. Elle disait « version publiée le X » là où
     // elle mesure « état porté par le COMMIT du X » — et elle rendait systématiquement la date la
@@ -611,12 +631,9 @@ try {
     // Le cas fondateur, rejoué sur la forme qui l'a produit : un JSON à champs `version` et
     // `date`. Le produit lisait « version publiée le 05/09 » pour un fichier qui déclarait
     // 1.0.0 du 03/09, pendant que le lot de travaux écrivait « version du 03/09 ».
-    const log = spawnSync("git", ["-C", PILOT_REEL, "log", "-n", "5", "--format=%H", "--", "todo/CLASSES.json"], { encoding: "utf8" });
-    const revs = (log.stdout || "").split("\n").filter(Boolean);
-    att(revs.length >= 2, "historique trop court pour jouer le cas");
-    const ancienne = spawnSync("git", ["-C", PILOT_REEL, "show", `${revs[1]}:todo/CLASSES.json`],
-      { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 }).stdout;
-    const cause = attribuerDivergence("todo/CLASSES.json", ancienne, PILOT_REEL);
+    const { racine, ancienne } = versionAnterieure("todo/CLASSES.json",
+      (t) => t.replace(/"version": "[^"]*"/, '"version": "1.0.0"').replace(/"date": "[^"]*"/, '"date": "2026-09-03"'));
+    const cause = attribuerDivergence("todo/CLASSES.json", ancienne, racine);
     att(cause.qui === "pilot", `attribution « ${cause.qui} »`);
     att(/versions DÉCLARÉES/.test(cause.detail), `le message ne cite aucune version déclarée : ${cause.detail}`);
     att(/votre copie : \d+\.\d+\.\d+/.test(cause.detail), `la version de la COPIE n'est pas citée : ${cause.detail}`);
